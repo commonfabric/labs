@@ -15,7 +15,6 @@
  * patch row a rebuild applies.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -30,6 +29,7 @@ import {
   read,
 } from "../v2/engine.ts";
 import { SYNC_SCHEMA_REF_PREFIX } from "../v2/sync-schema-ref.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The one document every test here installs and then patches. */
 const ENTITY = "of:doc";

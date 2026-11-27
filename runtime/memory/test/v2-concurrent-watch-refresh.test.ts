@@ -24,6 +24,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
 async function drainMicrotasks(turns = 50): Promise<void> {
   for (let i = 0; i < turns; i++) await Promise.resolve();
@@ -50,7 +51,7 @@ const rootSpec = (id: string): WatchSpec => ({
   query: { roots: [{ id, selector: { path: [], schema: false } }] },
 });
 
-Deno.test("concurrent refresh preserves wire order: watch.add never overtakes watch.set", async () => {
+test("concurrent refresh preserves wire order: watch.add never overtakes watch.set", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://concurrent-refresh-order"),
@@ -74,7 +75,7 @@ Deno.test("concurrent refresh preserves wire order: watch.add never overtakes wa
   }
 });
 
-Deno.test("concurrent refresh: overlapping watch.adds resolve and later mutations deliver", async () => {
+test("concurrent refresh: overlapping watch.adds resolve and later mutations deliver", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://concurrent-refresh-loopback"),

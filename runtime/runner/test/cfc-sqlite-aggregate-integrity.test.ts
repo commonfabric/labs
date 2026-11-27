@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { labelResultSchema } from "../src/builtins/sqlite-builtins.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CFC sqlite aggregate column integrity", () => {
   // A null-origin result column (aggregate, expression, literal) takes the

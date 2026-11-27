@@ -13,6 +13,7 @@ import {
 } from "./directory-handles.ts";
 import { DIR_MODE, DIR_MODE_RW } from "./platform.ts";
 import { FsTree } from "./tree.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function countingPreparer(
   calls: bigint[],
@@ -27,7 +28,7 @@ function countingPreparer(
   };
 }
 
-Deno.test("directory preparation runs once per open handle", async () => {
+test("directory preparation runs once per open handle", async () => {
   const handles = new DirectoryHandleMap();
   const ino = 42n;
   const calls: bigint[] = [];
@@ -48,7 +49,7 @@ Deno.test("directory preparation runs once per open handle", async () => {
   assertEquals(calls, [ino, ino]);
 });
 
-Deno.test("untracked readdir calls preserve per-read preparation", async () => {
+test("untracked readdir calls preserve per-read preparation", async () => {
   const handles = new DirectoryHandleMap();
   const ino = 42n;
   const calls: bigint[] = [];
@@ -59,7 +60,7 @@ Deno.test("untracked readdir calls preserve per-read preparation", async () => {
   assertEquals(calls, [ino, ino]);
 });
 
-Deno.test("concurrent reads share one handle preparation", async () => {
+test("concurrent reads share one handle preparation", async () => {
   const handles = new DirectoryHandleMap();
   const ino = 42n;
   const fh = handles.open(ino);
@@ -76,7 +77,7 @@ Deno.test("concurrent reads share one handle preparation", async () => {
   await Promise.all([first, second]);
 });
 
-Deno.test("failed directory preparation can be retried", async () => {
+test("failed directory preparation can be retried", async () => {
   const handles = new DirectoryHandleMap();
   const ino = 42n;
   const fh = handles.open(ino);
@@ -96,7 +97,7 @@ Deno.test("failed directory preparation can be retried", async () => {
   assertEquals(attempts, 2);
 });
 
-Deno.test("directory entries remain stable for continuation offsets", () => {
+test("directory entries remain stable for continuation offsets", () => {
   const handles = new DirectoryHandleMap();
   const ino = 42n;
   const fh = handles.open(ino);
@@ -122,7 +123,7 @@ Deno.test("directory entries remain stable for continuation offsets", () => {
   );
 });
 
-Deno.test("prepared virtual entries become the open handle snapshot", async () => {
+test("prepared virtual entries become the open handle snapshot", async () => {
   const tree = new FsTree();
   const ino = tree.addDir(tree.rootIno, "entities");
   const handles = new DirectoryHandleMap();
@@ -151,7 +152,7 @@ Deno.test("prepared virtual entries become the open handle snapshot", async () =
   );
 });
 
-Deno.test("directory snapshots capture entry modes", () => {
+test("directory snapshots capture entry modes", () => {
   const tree = new FsTree(() => 0);
   const parent = tree.addDir(tree.rootIno, "parent");
   const readOnly = tree.addDir(parent, "read-only");
@@ -168,7 +169,7 @@ Deno.test("directory snapshots capture entry modes", () => {
   );
 });
 
-Deno.test("untracked directory reads use the current entries", () => {
+test("untracked directory reads use the current entries", () => {
   const handles = new DirectoryHandleMap();
   const ino = 42n;
   let name = "first";
@@ -181,7 +182,7 @@ Deno.test("untracked directory reads use the current entries", () => {
   assertEquals(handles.snapshot(0n, ino, readEntries)[0].name, "second");
 });
 
-Deno.test("FuseOperationState follows lookup and directory callback lifetimes", async () => {
+test("FuseOperationState follows lookup and directory callback lifetimes", async () => {
   const tree = new FsTree();
   const directory = tree.addDir(tree.rootIno, "directory");
   const staticFile = tree.addFile(directory, "static", "value", "string");
@@ -236,7 +237,7 @@ Deno.test("FuseOperationState follows lookup and directory callback lifetimes", 
   ]);
 });
 
-Deno.test("directory callback helpers skip stale children and stop at buffer boundaries", () => {
+test("directory callback helpers skip stale children and stop at buffer boundaries", () => {
   const tree = new FsTree();
   const directory = tree.addDir(tree.rootIno, "directory");
   const stale = tree.addFile(directory, "stale", "value", "string");
@@ -261,7 +262,7 @@ Deno.test("directory callback helpers skip stale children and stop at buffer bou
   assertEquals(visited, ["first"]);
 });
 
-Deno.test("failed FUSE replies roll back retained request state", () => {
+test("failed FUSE replies roll back retained request state", () => {
   let rollbacks = 0;
   assertEquals(
     replyWithRetainedState(() => 0, () => rollbacks++),

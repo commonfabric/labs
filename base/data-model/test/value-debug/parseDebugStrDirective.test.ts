@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { parseDebugStrDirective } from "@/value-debug/parseDebugStrDirective.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("parseDebugStrDirective()", () => {
   it("returns the one word of a one-word directive", () => {

@@ -10,6 +10,7 @@ import {
   redact,
   restore,
 } from "./redaction.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const name = (value: string): PIIEntry => ({ category: "name", value });
 
@@ -18,7 +19,7 @@ const run = (text: string, vault: PIIEntry[]) => {
   return { found, ...redact(text, found) };
 };
 
-Deno.test("two people never share a stand-in word", () => {
+test("two people never share a stand-in word", () => {
   const { redacted, substitutions } = run(
     "Jordan Rivera and Sam Ortiz met. Later Rivera yelled at Ortiz.",
     [name("Jordan Rivera"), name("Sam Ortiz")],
@@ -33,7 +34,7 @@ Deno.test("two people never share a stand-in word", () => {
   );
 });
 
-Deno.test("every word of a name gets its own stand-in", () => {
+test("every word of a name gets its own stand-in", () => {
   const { redacted } = run("Mary Ann Smith met Mary and Ann.", [
     name("Mary Ann Smith"),
   ]);
@@ -42,7 +43,7 @@ Deno.test("every word of a name gets its own stand-in", () => {
   assert(!/Mary|Ann|Smith/.test(redacted), redacted);
 });
 
-Deno.test("a reply restores name parts the draft never used alone", () => {
+test("a reply restores name parts the draft never used alone", () => {
   const { substitutions } = run("Write to Jordan Rivera about rent.", [
     name("Jordan Rivera"),
   ]);
@@ -52,7 +53,7 @@ Deno.test("a reply restores name parts the draft never used alone", () => {
   );
 });
 
-Deno.test("restore replaces whole words only", () => {
+test("restore replaces whole words only", () => {
   assertEquals(
     restore("Bobby met Bob.", [
       { category: "name", original: "Jordan", standIn: "Bob" },
@@ -61,7 +62,7 @@ Deno.test("restore replaces whole words only", () => {
   );
 });
 
-Deno.test("a stand-in reveals nothing about the value it hides", () => {
+test("a stand-in reveals nothing about the value it hides", () => {
   // "Pat Sanderson" contains "anderson"; its stand-in must not change because
   // of that, or the released draft hints at the hidden name.
   assertEquals(
@@ -70,7 +71,7 @@ Deno.test("a stand-in reveals nothing about the value it hides", () => {
   );
 });
 
-Deno.test("a vault entry the draft never mentions changes nothing", () => {
+test("a vault entry the draft never mentions changes nothing", () => {
   // The released draft may depend only on what matched: an unmentioned entry,
   // or the unmentioned surname of a mentioned first name, must not shift any
   // stand-in, or the release hints at what else the vault holds.
@@ -88,7 +89,7 @@ Deno.test("a vault entry the draft never mentions changes nothing", () => {
   );
 });
 
-Deno.test("a hidden word that reads like a stand-in restores once", () => {
+test("a hidden word that reads like a stand-in restores once", () => {
   // "Pat Alice"'s stand-in may use "Alice": restoring swaps each stand-in once,
   // so it cannot turn the restored "Alice" into "Pat" again.
   const { redacted, substitutions } = run("Pat Alice called.", [
@@ -101,14 +102,14 @@ Deno.test("a hidden word that reads like a stand-in restores once", () => {
   assertEquals(restore(redacted, substitutions), "Pat Alice called.");
 });
 
-Deno.test("an initial is not matched on its own", () => {
+test("an initial is not matched on its own", () => {
   assertEquals(
     run("Plan J is fine.", [name("John J. Smith")]).redacted,
     "Plan J is fine.",
   );
 });
 
-Deno.test("every phone number gets its own stand-in, past the pool", () => {
+test("every phone number gets its own stand-in, past the pool", () => {
   const phones = Array.from(
     { length: 120 },
     (_, i) => `415-867-${String(5000 + i)}`,
@@ -119,7 +120,7 @@ Deno.test("every phone number gets its own stand-in, past the pool", () => {
   assertEquals(restore(redacted, substitutions), draft);
 });
 
-Deno.test("a stand-in never collides with text that stays visible", () => {
+test("a stand-in never collides with text that stays visible", () => {
   const { redacted, substitutions } = run(
     "Ask Jordan Rivera, cc Alice Anderson.",
     [name("Jordan Rivera")],
@@ -132,20 +133,20 @@ Deno.test("a stand-in never collides with text that stays visible", () => {
   );
 });
 
-Deno.test("accents and case do not hide a vault value", () => {
+test("accents and case do not hide a vault value", () => {
   const { redacted } = run("JOSE GARCIA owes me money.", [
     name("José García"),
   ]);
   assert(!/jose|garcia/i.test(redacted), redacted);
 });
 
-Deno.test("a short email local part does not swallow ordinary words", () => {
+test("a short email local part does not swallow ordinary words", () => {
   const { redacted } = run("Email me at me@x.co tonight.", []);
   assert(redacted.startsWith("Email me at "), redacted);
   assert(!redacted.includes("me@x.co"), redacted);
 });
 
-Deno.test("detected formats are replaced with reserved fictional values", () => {
+test("detected formats are replaced with reserved fictional values", () => {
   const { redacted } = run(
     "SSN 123-45-6789, call 415-867-5309, card 4111 1111 1111 1111.",
     [],
@@ -156,7 +157,7 @@ Deno.test("detected formats are replaced with reserved fictional values", () => 
   );
 });
 
-Deno.test("the leak check ignores stand-ins and catches what remains", () => {
+test("the leak check ignores stand-ins and catches what remains", () => {
   const found = detections("call 415-867-5309", [], true);
   const { redacted, substitutions } = redact("call 415-867-5309", found);
   assertEquals(leaksIn(redacted, found, substitutions), []);

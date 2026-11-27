@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { buildCfHarnessBaseSystemPrompt } from "../src/cli.ts";
 import type {
@@ -7,6 +6,7 @@ import type {
   HarnessTaskTag,
 } from "../src/task-classification.ts";
 import type { HarnessRunDepth } from "../src/contracts/run-depth.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const prompt = (
   depth: HarnessRunDepth,

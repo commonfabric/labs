@@ -6,7 +6,6 @@
  * composition has an index to resolve through.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -14,6 +13,7 @@ import {
   fabricFromJsonValue,
   jsonFromFabricValue,
 } from "@commonfabric/data-model/codecs";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   dedupedObservedOutputs,
   type ObservedOutput,

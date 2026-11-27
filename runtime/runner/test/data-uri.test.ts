@@ -15,7 +15,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { hashOf } from "@commonfabric/data-model";
 import {
@@ -31,6 +30,12 @@ import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createCell } from "../src/cell.ts";
 import {

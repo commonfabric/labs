@@ -6,13 +6,13 @@
  * the notice that the check resting on it needs rewriting too.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 
 import { RUN_CHECKS } from "../checks/registry.ts";
 import { SPEC_CITATIONS } from "../citations.ts";
 import { MATRIX_RULES } from "../matrix.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = join(
   dirname(fromFileUrl(import.meta.url)),

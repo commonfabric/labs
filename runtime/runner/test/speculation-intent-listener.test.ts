@@ -53,7 +53,6 @@
 //     describe (the lunch join shape through the real path: RED on the
 //     tip, the echo stands forever).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -104,7 +103,7 @@ const scriptedDestination = () => {
   return { scripted, destination, edits: () => edits };
 };
 
-Deno.test("intent listener stops visiting hinted indices once the only pending intent is found", async () => {
+test("intent listener stops visiting hinted indices once the only pending intent is found", async () => {
   const { scripted, destination } = scriptedDestination();
   scripted.seed(SPACE, SIDECAR, {
     entries: [
@@ -1615,6 +1614,20 @@ import {
   awaitReplica,
 } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 const sidecarIdsIn = (engine: Engine.Engine): string[] =>
   (engine.database.prepare(

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
@@ -10,6 +9,12 @@ import {
   runDump,
 } from "./cause-assignments-dump.ts";
 import { movedCells } from "./cause-assignments-lib.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // Each child pattern sits in a module of its own, which every parent below
 // imports unchanged, so that a child is known by one pattern identity in

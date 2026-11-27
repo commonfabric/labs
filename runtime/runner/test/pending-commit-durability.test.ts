@@ -34,6 +34,7 @@ import type {
   IExtendedStorageTransaction,
   SchedulerTestStorageManager,
 } from "./scheduler-test-utils.ts";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 type TransactMessage = { requestId: string };
 type TransactResponse = {

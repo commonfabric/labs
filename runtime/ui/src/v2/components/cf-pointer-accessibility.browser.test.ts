@@ -6,6 +6,7 @@ import {
 import "./cf-chip/index.ts";
 import "./cf-tags/index.ts";
 import "./cf-tile/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type UpdatingElement = HTMLElement & {
   updateComplete: Promise<unknown>;
@@ -17,7 +18,7 @@ async function mount<T extends UpdatingElement>(element: T): Promise<T> {
   return element;
 }
 
-Deno.test("cf-chip exposes separate primary and remove buttons", async () => {
+test("cf-chip exposes separate primary and remove buttons", async () => {
   const chip = document.createElement("cf-chip") as UpdatingElement & {
     label: string;
     interactive: boolean;
@@ -65,7 +66,7 @@ Deno.test("cf-chip exposes separate primary and remove buttons", async () => {
   }
 });
 
-Deno.test("cf-chip leaves display-only chips out of the tab order", async () => {
+test("cf-chip leaves display-only chips out of the tab order", async () => {
   const chip = document.createElement("cf-chip") as UpdatingElement & {
     label: string;
   };
@@ -83,7 +84,7 @@ Deno.test("cf-chip leaves display-only chips out of the tab order", async () => 
   }
 });
 
-Deno.test("cf-tile exposes its title as a button without swallowing details", async () => {
+test("cf-tile exposes its title as a button without swallowing details", async () => {
   const tile = document.createElement("cf-tile") as UpdatingElement & {
     item: { title: string };
     summary: string;
@@ -120,7 +121,7 @@ Deno.test("cf-tile exposes its title as a button without swallowing details", as
   }
 });
 
-Deno.test("cf-tags exposes named edit, remove, and add buttons", async () => {
+test("cf-tags exposes named edit, remove, and add buttons", async () => {
   const tags = document.createElement("cf-tags") as UpdatingElement & {
     tags: string[];
     readonly: boolean;
@@ -168,7 +169,7 @@ Deno.test("cf-tags exposes named edit, remove, and add buttons", async () => {
   }
 });
 
-Deno.test("cf-tags add button reveals the new-tag textbox", async () => {
+test("cf-tags add button reveals the new-tag textbox", async () => {
   const tags = document.createElement("cf-tags") as UpdatingElement & {
     tags: string[];
   };

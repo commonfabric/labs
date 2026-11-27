@@ -9,6 +9,7 @@
 import { expect } from "@std/expect";
 import type { EditorView } from "@codemirror/view";
 import type { FieldAnchors } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import { CFCodeEditor } from "../index.ts";
 import { setHighlightAnchorsEffect } from "./highlights.ts";
@@ -96,7 +97,7 @@ const levelWith = (
     Math.abs(element.getBoundingClientRect().top - text.top) < 1;
 };
 
-Deno.test("the margin moves a child naming an anchor beside the text there, and the child after it with it", async () => {
+test("the margin moves a child naming an anchor beside the text there, and the child after it with it", async () => {
   // The child naming `late` comes first in the document and its anchor
   // comes later in the text, so the two anchored children change places.
 
@@ -127,7 +128,7 @@ Deno.test("the margin moves a child naming an anchor beside the text there, and 
   }
 });
 
-Deno.test("the margin returns a child to the column once it no longer names an anchor", async () => {
+test("the margin returns a child to the column once it no longer names an anchor", async () => {
   const note = block(30, "late");
   const { editor, view } = await mount("900px", [block(20), note], {
     late: lineStart(12),
@@ -147,7 +148,7 @@ Deno.test("the margin returns a child to the column once it no longer names an a
   }
 });
 
-Deno.test("the margin returns a child to the column once the child it moved with is removed", async () => {
+test("the margin returns a child to the column once the child it moved with is removed", async () => {
   const anchored = block(30, "late");
   const follower = block(10);
   const { editor, view } = await mount("900px", [anchored, follower], {
@@ -166,7 +167,7 @@ Deno.test("the margin returns a child to the column once the child it moved with
   }
 });
 
-Deno.test("the margin leaves its children unmoved, in their order, once it wraps below the text", async () => {
+test("the margin leaves its children unmoved, in their order, once it wraps below the text", async () => {
   const late = block(30, "late");
   const early = block(30, "early");
   const { editor, view } = await mount("900px", [late, early], {

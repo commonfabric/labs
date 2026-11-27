@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CycleBreaks } from "../src/scheduler/topology.ts";
 import type { Action } from "../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Actions named for the test, registered in the order given. */
 function actions(...names: string[]): Record<string, Action> {

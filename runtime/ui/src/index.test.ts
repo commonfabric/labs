@@ -2,9 +2,9 @@
 import "./v2/test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import * as ui from "./index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Tags the renderer in `runtime/html` acts on itself, which no component

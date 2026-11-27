@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
 
 import { LOCK_FILE, tryAdoptSpool } from "./spool.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // The child is `deno eval` with an inline script that imports nothing, so
 // the isolated-deno lockfile helper does not apply: there is no module

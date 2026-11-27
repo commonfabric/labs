@@ -7,7 +7,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   highlightMarkdownLines,
   markdownDocument,
@@ -21,8 +20,9 @@ import {
 } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter } from "../lib/view/diffedit.ts";
 import { spanStyle } from "../lib/view/highlight.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("markdown: language metadata recognizes markdown extensions", () => {
+test("markdown: language metadata recognizes markdown extensions", () => {
   assertEquals(languageForFile("README.md").id, "markdown");
   assertEquals(languageForFile("/a/b/AGENTS.markdown").id, "markdown");
   assertEquals(languageForFile("notes.MD").id, "markdown");
@@ -31,7 +31,7 @@ Deno.test("markdown: language metadata recognizes markdown extensions", () => {
   assertEquals(languageForFile(undefined).id, "plain-text");
 });
 
-Deno.test("markdown: headings, code, lists, quotes and prose get distinct, non-TS colors", () => {
+test("markdown: headings, code, lists, quotes and prose get distinct, non-TS colors", () => {
   const lines = highlightMarkdownLines(
     `# Title
 
@@ -69,13 +69,13 @@ deno task cf
   assertEquals(spanStyle(lines[6].spans[0]).fg, [92, 99, 112]);
 });
 
-Deno.test("markdown: a link's URL is a string, brackets/parens punctuation", () => {
+test("markdown: a link's URL is a string, brackets/parens punctuation", () => {
   const [line] = highlightMarkdownLines("see [docs](http://x) here");
   assert(line.spans.some((s) => s.cls === "string" && s.text === "http://x"));
   assert(line.spans.some((s) => s.cls === "punctuation" && s.text === "["));
 });
 
-Deno.test("markdown: headings become a nested navigation tree", () => {
+test("markdown: headings become a nested navigation tree", () => {
   const doc = markdownDocument(`# A\n\ntext\n\n## B\n\nmore\n\n## C\n`);
   assertEquals(doc.flatStructure.map((n) => n.label), ["# A", "## B", "## C"]);
   assertEquals(doc.flatStructure[0].depth, 0);
@@ -88,7 +88,7 @@ Deno.test("markdown: headings become a nested navigation tree", () => {
   );
 });
 
-Deno.test("markdown: heading-like lines inside fenced code blocks are not nav nodes", () => {
+test("markdown: heading-like lines inside fenced code blocks are not nav nodes", () => {
   // A `#` comment inside a ``` fence and a `###` line inside a ~~~ fence both
   // match the heading regex but are code, not document structure.
   const doc = markdownDocument(
@@ -116,7 +116,7 @@ Deno.test("markdown: heading-like lines inside fenced code blocks are not nav no
   ]);
 });
 
-Deno.test("markdown: languageForFile dispatches on a .md filename", () => {
+test("markdown: languageForFile dispatches on a .md filename", () => {
   const doc = languageForFile("notes.md").parseDocument(
     "# Heading\n\nplain prose\n",
     "notes.md",
@@ -133,7 +133,7 @@ Deno.test("markdown: languageForFile dispatches on a .md filename", () => {
   );
 });
 
-Deno.test("markdown: editing a line in a markdown diff recolors it as markdown", () => {
+test("markdown: editing a line in a markdown diff recolors it as markdown", () => {
   const diff = [
     "diff --git a/r.md b/r.md",
     "--- a/r.md",
@@ -154,7 +154,7 @@ Deno.test("markdown: editing a line in a markdown diff recolors it as markdown",
   );
 });
 
-Deno.test("markdown: a diff's nav tree steps through the headings it shows", () => {
+test("markdown: a diff's nav tree steps through the headings it shows", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -270,7 +270,7 @@ describe("decoded Markdown diff input", () => {
   });
 });
 
-Deno.test("markdown: a deeper-then-shallower diff window keeps a navigable depth tree", () => {
+test("markdown: a deeper-then-shallower diff window keeps a navigable depth tree", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -324,7 +324,7 @@ Deno.test("markdown: a deeper-then-shallower diff window keeps a navigable depth
   }
 });
 
-Deno.test("markdown: the last shown heading does not swallow trailing removed lines", () => {
+test("markdown: the last shown heading does not swallow trailing removed lines", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "z.md"), "# Heading\nbody\n");
@@ -360,7 +360,7 @@ Deno.test("markdown: the last shown heading does not swallow trailing removed li
   }
 });
 
-Deno.test("markdown: a .md file in a diff is highlighted as markdown", () => {
+test("markdown: a .md file in a diff is highlighted as markdown", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(

@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { FabricValue } from "@commonfabric/api";
@@ -17,6 +16,7 @@ import {
   isFabricPlainObject,
 } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/logger";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,

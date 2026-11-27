@@ -78,6 +78,9 @@ export interface LocalJobProfile extends HarnessModelLimits {
   /** The prompt-slot role a job's task binds as. */
   taskRole: PromptSlotRole;
 
+  /** Delivers the opening task to the workspace for jobs that process it as a file. */
+  taskDelivery?: "file";
+
   /**
    * What happens to a job a stop or a crash cut off. `never`: it ends
    * `interrupted` and is not run again.
@@ -327,6 +330,10 @@ const profileOf = async (
     patternIndexOrigin,
     subagentProfiles,
   } = record;
+  const delivery = record.taskDelivery;
+  if (delivery !== undefined && delivery !== "file") {
+    fail("`taskDelivery` must be file when specified");
+  }
   if (
     !Array.isArray(tools) || !tools.every((tool) => typeof tool === "string")
   ) {
@@ -517,6 +524,7 @@ const profileOf = async (
     ...(typeof maxInputBytes === "number" ? { maxInputBytes } : {}),
     ...(typeof maxOutputTokens === "number" ? { maxOutputTokens } : {}),
     taskRole: taskRole as PromptSlotRole,
+    ...(delivery === "file" ? { taskDelivery: delivery } : {}),
     retry: "never",
     ...(loomRetrievalConfig !== undefined
       ? { loomRetrievalConfig: loomRetrievalConfig as string }

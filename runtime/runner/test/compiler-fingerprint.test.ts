@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -19,6 +18,7 @@ import {
   SOURCE_COMPILE_CACHE_RUNTIME_VERSION,
 } from "../src/compilation-cache/cell-cache.ts";
 import { computeCurrentSourceCompileCacheVersion } from "../src/compilation-cache/compile-cache-output-memo.deno.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const versionModulePath = fromFileUrl(
   new URL("../src/compilation-cache/compile-cache-version.ts", import.meta.url),

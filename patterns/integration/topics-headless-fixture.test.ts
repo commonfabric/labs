@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import {
   type Cell,
@@ -14,6 +13,12 @@ import {
   parseLink,
 } from "@commonfabric/runner";
 import { maxOf } from "@commonfabric/collections/math";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   buildTopicsFixture,

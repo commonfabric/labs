@@ -14,6 +14,7 @@ import { type JSONSchema, Runtime } from "@commonfabric/runner";
 import { resolvedSchema } from "../../../../runner/test/schema-ref-helpers.ts";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "@/app.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
@@ -126,7 +127,7 @@ const serialTest = (
   name: string,
   fn: () => Promise<void>,
 ) =>
-  Deno.test(name, async () => {
+  test(name, async () => {
     const previous = routeTestQueue;
     const current = Promise.withResolvers<void>();
     routeTestQueue = current.promise;

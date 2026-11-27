@@ -5,9 +5,9 @@
  * If the types are incorrect, these tests will fail to compile.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { MustBeTrue } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import type {
   AsCell,
   Cell,

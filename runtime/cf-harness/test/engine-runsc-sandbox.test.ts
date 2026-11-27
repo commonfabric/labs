@@ -12,6 +12,7 @@ import type {
   SandboxRuntime,
   SandboxRuntimeDescription,
 } from "../src/sandbox/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 class RecordingRunner implements ProcessRunner {
   readonly calls: ProcessRunRequest[] = [];
@@ -21,7 +22,7 @@ class RecordingRunner implements ProcessRunner {
   }
 }
 
-Deno.test("CfHarnessEngine builds the runsc sandbox when asked", () => {
+test("CfHarnessEngine builds the runsc sandbox when asked", () => {
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
@@ -39,7 +40,7 @@ Deno.test("CfHarnessEngine builds the runsc sandbox when asked", () => {
   assertEquals(engine.workspaceHostPath, "/host/project");
 });
 
-Deno.test("CfHarnessEngine refuses the runsc sandbox without a workspace", () => {
+test("CfHarnessEngine refuses the runsc sandbox without a workspace", () => {
   assertThrows(
     () =>
       new CfHarnessEngine({
@@ -78,7 +79,7 @@ const closingRuntime = (
   return runtime;
 };
 
-Deno.test("CfHarnessEngine closes the sandbox on every terminal transition", async () => {
+test("CfHarnessEngine closes the sandbox on every terminal transition", async () => {
   // The three transitions that each close the sandbox themselves. An
   // interrupted run ends through `failRun` and is covered on its own below:
   // in this list it would pass on `failRun`'s close and prove nothing of its
@@ -102,7 +103,7 @@ Deno.test("CfHarnessEngine closes the sandbox on every terminal transition", asy
   }
 });
 
-Deno.test("CfHarnessEngine closes an interrupted run's sandbox once, and before it records the interruption", async () => {
+test("CfHarnessEngine closes an interrupted run's sandbox once, and before it records the interruption", async () => {
   // `terminalizeInterruptedRun` closes the sandbox and then ends the run
   // through `failRun`, which closes it too. Two things are its own:
   //
@@ -144,7 +145,7 @@ Deno.test("CfHarnessEngine closes an interrupted run's sandbox once, and before 
   assertEquals(runtime.closes, 1);
 });
 
-Deno.test("CfHarnessEngine leaves a shared, injected sandbox open when it ends", async () => {
+test("CfHarnessEngine leaves a shared, injected sandbox open when it ends", async () => {
   // A child handed its parent's runtime must not close it under the parent
   // (review, verified live: the parent's next session call threw).
   const runtime = closingRuntime(() => Promise.resolve());
@@ -157,7 +158,7 @@ Deno.test("CfHarnessEngine leaves a shared, injected sandbox open when it ends",
   assertEquals(runtime.closes, 0);
 });
 
-Deno.test("CfHarnessEngine closes the runsc runtime it built itself", async () => {
+test("CfHarnessEngine closes the runsc runtime it built itself", async () => {
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
@@ -174,7 +175,7 @@ Deno.test("CfHarnessEngine closes the runsc runtime it built itself", async () =
   );
 });
 
-Deno.test("CfHarnessEngine still ends the run when the sandbox refuses to close", async () => {
+test("CfHarnessEngine still ends the run when the sandbox refuses to close", async () => {
   const runtime = closingRuntime(() => Promise.reject(new Error("vm gone")));
   const engine = new CfHarnessEngine({
     runId: "run-1",
@@ -187,7 +188,7 @@ Deno.test("CfHarnessEngine still ends the run when the sandbox refuses to close"
   assertEquals(runtime.closes, 1);
 });
 
-Deno.test("CfHarnessEngine refuses enforcing work on the runsc sandbox without a CFC policy", async () => {
+test("CfHarnessEngine refuses enforcing work on the runsc sandbox without a CFC policy", async () => {
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
@@ -204,7 +205,7 @@ Deno.test("CfHarnessEngine refuses enforcing work on the runsc sandbox without a
   );
 });
 
-Deno.test("CfHarnessEngine owns the runsc configuration a child can build on", () => {
+test("CfHarnessEngine owns the runsc configuration a child can build on", () => {
   const engine = new CfHarnessEngine({
     runId: "run-1",
     workspaceHostPath: "/host/project",
@@ -235,7 +236,7 @@ const runscRunCommandLines = (runner: RecordingRunner): string[][] =>
     .map((call) => call.args ?? [])
     .filter((args) => args.includes("run"));
 
-Deno.test("CfHarnessEngine builds the runsc runtime from every runsc option it is given", async () => {
+test("CfHarnessEngine builds the runsc runtime from every runsc option it is given", async () => {
   // Each value differs from the default the runtime would fall back to, so
   // an option the engine dropped shows as the default and not as itself.
   const runner = new RecordingRunner();
@@ -283,7 +284,7 @@ Deno.test("CfHarnessEngine builds the runsc runtime from every runsc option it i
   }
 });
 
-Deno.test("CfHarnessEngine gives two runsc runs two run identities", () => {
+test("CfHarnessEngine gives two runsc runs two run identities", () => {
   // The run id is what keeps one run's sessions from another's. A runtime
   // built without it draws a random one, which is unique too, so uniqueness
   // alone would not show the engine dropping it: the id has to be the run's.
@@ -304,7 +305,7 @@ const ONE_PIXEL_PNG = decodeBase64(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p94AAAAASUVORK5CYII=",
 );
 
-Deno.test("CfHarnessEngine resolves a host-backed path through the runsc runtime's mounts", async () => {
+test("CfHarnessEngine resolves a host-backed path through the runsc runtime's mounts", async () => {
   // A host tool reads the file behind a sandbox path, so the engine has to
   // know the mounts of the sandbox that runs. The path is under an
   // ADDITIONAL mount: the workspace alone resolves even when the runsc

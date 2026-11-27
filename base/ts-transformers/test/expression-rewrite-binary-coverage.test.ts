@@ -9,6 +9,7 @@ import { rewriteExpression } from "../src/transformers/expression-rewrite/mod.ts
 import type { ReactiveContextKind } from "../src/ast/mod.ts";
 import type { ExpressionContainerKind } from "../src/transformers/expression-site-types.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // These tests drive the shared expression-rewrite entry point
 // (`rewriteExpression`) directly against reactive binary expressions found in
@@ -144,7 +145,7 @@ const OR = ts.SyntaxKind.BarBarToken;
 const NULLISH = ts.SyntaxKind.QuestionQuestionToken;
 const PLUS = ts.SyntaxKind.PlusToken;
 
-Deno.test(
+test(
   "emitBinaryExpression lowers a pattern-owned && with a simple reactive left to a when() call",
   () => {
     const { printed } = rewriteBinary(
@@ -164,7 +165,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression lowers a pattern-owned || with a simple reactive left to an unless() call",
   () => {
     const { printed } = rewriteBinary(
@@ -184,7 +185,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression wraps a non-simple && condition in a lift before the when() call",
   () => {
     const { printed } = rewriteBinary(
@@ -207,7 +208,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression wraps a non-simple || condition in a lift before the unless() call",
   () => {
     const { printed } = rewriteBinary(
@@ -228,7 +229,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression wraps a pattern-owned arithmetic binary in a lift compute wrapper",
   () => {
     const { printed } = rewriteBinary(
@@ -246,7 +247,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression declines to rewrite a purely-literal binary with no reactive operands",
   () => {
     const { result } = rewriteBinary(
@@ -266,7 +267,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression declines to wrap a reactive-valued binary that captures no dataflows",
   () => {
     const { result } = rewriteBinary(
@@ -288,7 +289,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression defers a reactive fallback receiver of an unlowered map()",
   () => {
     const { result } = rewriteBinary(
@@ -312,7 +313,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression rewrites a synthetic compute-owned array-method receiver without asserting compute-wrap invariants",
   () => {
     const { printed } = rewriteBinary(
@@ -336,7 +337,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression throws a compiler-bug error for a compute-owned binary that is not an array-method receiver",
   () => {
     const { sourceFile, checker, context } = createContext(

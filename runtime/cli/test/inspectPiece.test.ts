@@ -6,7 +6,6 @@
  * identity, which is what the resolvers read.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId, setSlugLink } from "@commonfabric/piece";
@@ -14,6 +13,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, createBuilder, NAME, Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { inspectPiece } from "../lib/piece.ts";
 
 const CONFIG = {

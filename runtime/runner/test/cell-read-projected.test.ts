@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 
@@ -9,6 +8,8 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

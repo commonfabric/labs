@@ -1,7 +1,8 @@
 import { assertEquals } from "@std/assert";
 import { resolveMemoryEngineStoreRootUrl } from "./memory-path.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("resolveMemoryEngineStoreRootUrl derives a sibling engine directory for DB_PATH mode", () => {
+test("resolveMemoryEngineStoreRootUrl derives a sibling engine directory for DB_PATH mode", () => {
   const file = new URL("file:///tmp/cf-memory/space.sqlite");
 
   assertEquals(
@@ -10,7 +11,7 @@ Deno.test("resolveMemoryEngineStoreRootUrl derives a sibling engine directory fo
   );
 });
 
-Deno.test("resolveMemoryEngineStoreRootUrl derives a nested engine directory for directory mode", () => {
+test("resolveMemoryEngineStoreRootUrl derives a nested engine directory for directory mode", () => {
   const root = new URL("file:///tmp/cf-memory/");
 
   assertEquals(
@@ -19,7 +20,7 @@ Deno.test("resolveMemoryEngineStoreRootUrl derives a nested engine directory for
   );
 });
 
-Deno.test("resolveMemoryEngineStoreRootUrl treats extensionless DB_PATH values as single-file mode when requested", () => {
+test("resolveMemoryEngineStoreRootUrl treats extensionless DB_PATH values as single-file mode when requested", () => {
   const file = new URL("file:///tmp/cf-memory/space");
 
   assertEquals(

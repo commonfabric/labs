@@ -1,8 +1,13 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
 import type { ClientCommit } from "@commonfabric/memory/v2";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   ALICE,

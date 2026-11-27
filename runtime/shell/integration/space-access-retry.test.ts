@@ -14,7 +14,6 @@
 
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { type DID, Identity } from "@commonfabric/identity";
 import {
@@ -29,6 +28,7 @@ import { writeTempIdentity } from "@commonfabric/integration/temp-identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { ACLManager } from "@commonfabric/runner";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import "../src/globals.ts";
 

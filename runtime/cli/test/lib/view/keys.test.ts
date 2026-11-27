@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { decodeKeys } from "../../../lib/view/keys.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The keys the terminal sent as `text`. */
 function decoded(text: string) {

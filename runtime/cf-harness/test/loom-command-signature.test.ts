@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   LOOM_COMMAND_SIGNATURE_MAX_LENGTH,
@@ -8,6 +7,7 @@ import {
   typeOfSchema,
   withoutSchemaExtensions,
 } from "../src/loom-command-signature.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A schema with one parameter of each shape a signature distinguishes. */
 const DOSSIER_SCHEMA = {

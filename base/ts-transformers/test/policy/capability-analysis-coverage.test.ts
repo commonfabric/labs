@@ -3,6 +3,7 @@ import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
 
 import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // These tests drive `analyzeFunctionCapabilities` through parameter-summary
 // branches that run today only as a side effect of patterns compiling through
@@ -120,7 +121,7 @@ type Cell<T> = {
   key(...segments: (string | number)[]): Cell<unknown>;
 };`;
 
-Deno.test("writer method set() marks the receiver path writeonly", () => {
+test("writer method set() marks the receiver path writeonly", () => {
   const input = getPaths(
     analyze(`${CELL}
       const fn = (input: Cell<{ n: number }>) => { input.set({ n: 1 }); };`),
@@ -131,7 +132,7 @@ Deno.test("writer method set() marks the receiver path writeonly", () => {
   assertEquals(input.readPaths.length, 0);
 });
 
-Deno.test("writer method update() marks the receiver path writeonly", () => {
+test("writer method update() marks the receiver path writeonly", () => {
   const input = getPaths(
     analyze(`${CELL}
       const fn = (input: Cell<{ n: number }>) => { input.update({ n: 2 }); };`),
@@ -141,7 +142,7 @@ Deno.test("writer method update() marks the receiver path writeonly", () => {
   assert(input.writePaths.includes(""));
 });
 
-Deno.test("reader method get() records a read of the receiver path", () => {
+test("reader method get() records a read of the receiver path", () => {
   const input = getPaths(
     analyze(`${CELL}
       const fn = (input: Cell<{ n: number }>) => input.get();`),
@@ -151,7 +152,7 @@ Deno.test("reader method get() records a read of the receiver path", () => {
   assert(input.readPaths.includes(""));
 });
 
-Deno.test(
+test(
   "get() chained into a member access records the narrowed path, not a blanket read",
   () => {
     const input = getPaths(
@@ -166,7 +167,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "array identity writer push() writes the receiver and reads a tracked argument element",
   () => {
     const input = getPaths(
@@ -181,7 +182,7 @@ Deno.test(
   },
 );
 
-Deno.test("removeAll() over a tracked cell writes the receiver path", () => {
+test("removeAll() over a tracked cell writes the receiver path", () => {
   const list = getPaths(
     analyze(`${CELL}
       const fn = (list: Cell<unknown[]>) => { list.removeAll(); };`),
@@ -191,7 +192,7 @@ Deno.test("removeAll() over a tracked cell writes the receiver path", () => {
   assert(list.writePaths.includes(""));
 });
 
-Deno.test(
+test(
   "splice() only reads inserted items (index >= 2), not the start/count args",
   () => {
     const input = getPaths(
@@ -205,7 +206,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque derivation map() over a tracked field records an opaque path, not a read",
   () => {
     // Without a checker the OPAQUE_DERIVATION branch fires unconditionally, so
@@ -221,7 +222,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque derivation filter() over the whole root marks the root opaque",
   () => {
     const input = getPaths(
@@ -236,7 +237,7 @@ Deno.test(
   },
 );
 
-Deno.test("equals() over a tracked field records a comparable identity path", () => {
+test("equals() over a tracked field records a comparable identity path", () => {
   // Without a checker the equals-callee recognition treats any `.equals`
   // property access as the known identity comparison.
   const input = getPaths(
@@ -249,7 +250,7 @@ Deno.test("equals() over a tracked field records a comparable identity path", ()
   assert(input.identityPaths.includes("a"));
 });
 
-Deno.test(
+test(
   "equalLinks() over a tracked field records a comparable identity path",
   () => {
     const input = getPaths(
@@ -262,7 +263,7 @@ Deno.test(
   },
 );
 
-Deno.test("key() with static string segment reads the composed path", () => {
+test("key() with static string segment reads the composed path", () => {
   const input = getPaths(
     analyze(`${CELL}
       const fn = (input: Cell<{ sub: number }>) => input.key("sub");`),
@@ -271,7 +272,7 @@ Deno.test("key() with static string segment reads the composed path", () => {
   assert(input.readPaths.includes("sub"));
 });
 
-Deno.test("key() with a dynamic segment widens the receiver to wildcard", () => {
+test("key() with a dynamic segment widens the receiver to wildcard", () => {
   const input = getPaths(
     analyze(`${CELL}
       const fn = (input: Cell<Record<string, number>>, k: string) =>
@@ -281,7 +282,7 @@ Deno.test("key() with a dynamic segment widens the receiver to wildcard", () => 
   assertEquals(input.wildcard, true);
 });
 
-Deno.test(
+test(
   "key() chained into a member access defers the read to the member handler",
   () => {
     const input = getPaths(
@@ -296,7 +297,7 @@ Deno.test(
   },
 );
 
-Deno.test("numeric element access records a numeric path segment", () => {
+test("numeric element access records a numeric path segment", () => {
   const input = getPaths(
     analyzeNoChecker(`const fn = (input) => input.items[0].name;`),
     "input",
@@ -304,7 +305,7 @@ Deno.test("numeric element access records a numeric path segment", () => {
   assert(input.readPaths.includes("items.0.name"));
 });
 
-Deno.test(
+test(
   "template-literal element access records the literal path segment",
   () => {
     const input = getPaths(
@@ -315,7 +316,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "dynamic element access reads the static prefix above the key",
   () => {
     const input = getPaths(
@@ -327,7 +328,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "object destructure with a computed key name marks the root wildcard",
   () => {
     const input = getPaths(
@@ -340,7 +341,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "object destructure rest element widens the root to wildcard",
   () => {
     const input = getPaths(
@@ -353,7 +354,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "array binding pattern destructure widens the source root to wildcard",
   () => {
     const input = getPaths(
@@ -366,7 +367,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "assignment-pattern object destructure tracks per-property reads",
   () => {
     const input = getPaths(
@@ -380,7 +381,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "assignment-pattern object spread widens the source root to wildcard",
   () => {
     const input = getPaths(
@@ -393,7 +394,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "assignment-pattern array destructure widens the source root to wildcard",
   () => {
     const input = getPaths(
@@ -406,7 +407,7 @@ Deno.test(
   },
 );
 
-Deno.test("alias chain across reassignments follows the latest source", () => {
+test("alias chain across reassignments follows the latest source", () => {
   const input = getPaths(
     analyzeNoChecker(
       `const fn = (input) => {
@@ -420,7 +421,7 @@ Deno.test("alias chain across reassignments follows the latest source", () => {
   assert(input.readPaths.includes("b.name"));
 });
 
-Deno.test("for-in over a tracked expression widens the root to wildcard", () => {
+test("for-in over a tracked expression widens the root to wildcard", () => {
   const input = getPaths(
     analyzeNoChecker(
       `const fn = (input) => { for (const k in input.map) { k; } };`,
@@ -430,7 +431,7 @@ Deno.test("for-in over a tracked expression widens the root to wildcard", () => 
   assertEquals(input.wildcard, true);
 });
 
-Deno.test(
+test(
   "for-of over a tracked array reads the element path via the iterator binding",
   () => {
     const input = getPaths(
@@ -445,7 +446,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "for-of over the whole root marks the root passthrough",
   () => {
     const input = getPaths(
@@ -458,7 +459,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "fallback with ?? between equal aliases keeps the shared path",
   () => {
     const input = getPaths(
@@ -474,7 +475,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "fallback with || between differing aliases drops to the left source",
   () => {
     const input = getPaths(
@@ -491,7 +492,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "navigateTo() over a whole tracked root records an identity-only passthrough",
   () => {
     // Without a checker the navigateTo callee is recognized by name. Passing
@@ -509,7 +510,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "prefix increment over a tracked member both reads and writes it",
   () => {
     const input = getPaths(
@@ -521,7 +522,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "spread of a tracked member into an array literal reads the member",
   () => {
     const input = getPaths(
@@ -534,7 +535,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "object spread assignment of a tracked member widens the root to wildcard",
   () => {
     const input = getPaths(
@@ -547,7 +548,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper reading a param field propagates the read path",
   () => {
     const input = getPaths(
@@ -563,7 +564,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper that writes a param field propagates the write path",
   () => {
     const input = getPaths(
@@ -582,7 +583,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "unknown method call over a tracked field reads that field",
   () => {
     const input = getPaths(
@@ -595,7 +596,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "passing a tracked root as a plain call argument widens it to wildcard",
   () => {
     const input = getPaths(
@@ -612,7 +613,7 @@ Deno.test(
 // Batch 2: checker-gated and shape-specific branches
 //
 
-Deno.test(
+test(
   "numeric destructure key records a numeric path segment",
   () => {
     // getStaticPropertyKeyText resolves a NumericLiteral property name.
@@ -626,7 +627,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "template-literal destructure key records the literal path segment",
   () => {
     const input = getPaths(
@@ -639,7 +640,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "element-access with a bracketed string method reads the composed path",
   () => {
     // getCallReceiverFromExpression / getCallMethodName over an
@@ -653,7 +654,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "equals() addressed via bracket notation records a comparable path",
   () => {
     // isKnownIdentityEqualsCallee over an ElementAccessExpression callee.
@@ -667,7 +668,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "?? fallback between two equal object-shape aliases keeps the shared read",
   () => {
     // aliasBindingEquals recurses over AliasShape properties, and both operands
@@ -687,7 +688,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "object literal alias with a computed non-static key drops that property",
   () => {
     // buildAliasBindingFromExpression skips the non-static computed key, so the
@@ -706,7 +707,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "renamed object destructure records the source property, not the alias name",
   () => {
     // assignParameterBindingAlias resolves element.propertyName via
@@ -721,7 +722,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "nested destructure with a default initializer widens the root to wildcard",
   () => {
     // The binding element carries an initializer, taking the
@@ -736,7 +737,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "find() truthiness check on the element result records no payload read",
   () => {
     // The element-result alias in a boolean condition (isBooleanConditionUsage)
@@ -758,7 +759,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "optional-presence alias truthiness check keeps the property presence-only",
   () => {
     // A truthiness check on a non-primitive optional member records presence,
@@ -778,7 +779,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "optional-presence alias truthiness check with no other use reads the property",
   () => {
     // With nothing else using the member, the check is what the value is
@@ -797,7 +798,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "increment through a nested member both reads and writes the deep path",
   () => {
     const input = getPaths(
@@ -809,7 +810,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "compound assignment to a tracked member both reads and writes it",
   () => {
     const input = getPaths(
@@ -821,7 +822,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "for-of over a dynamic member reads the static prefix above the key",
   () => {
     const input = getPaths(
@@ -835,7 +836,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "for-of with an object destructure binding reads the destructured field",
   () => {
     // The for-of initializer is a variable declaration list whose binding is a
@@ -852,7 +853,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "for-of with an assignment-target initializer aliases the element binding",
   () => {
     // The for-of initializer is an expression (not a declaration list), taking
@@ -870,7 +871,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "aliases resolved through a for-of scope are restored after the loop",
   () => {
     // aliasesWithSpecificPaths and the alias maps are saved before the loop and
@@ -890,7 +891,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper opaque field propagates an opaque path to caller",
   () => {
     // The callee derives from a cell field via map(); its opaquePaths summary
@@ -911,7 +912,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper comparable field propagates a comparable path",
   () => {
     // The callee compares a cell field with equals(); the comparable path is
@@ -932,7 +933,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper reading a param field via dynamic arg widens caller",
   () => {
     // The caller passes a dynamic member as the argument, so the propagation
@@ -952,7 +953,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "destructured parameter uses a synthetic positional summary name",
   () => {
     // A non-identifier parameter name yields a `${PARAMETER_SUMMARY_PREFIX}i`
@@ -968,7 +969,7 @@ Deno.test(
 // Batch 3: assignment patterns, opaque roots, method dispatch edges
 //
 
-Deno.test(
+test(
   "parenthesized assignment destructure target treats the source as passthrough",
   () => {
     // assignExpressionPatternAlias unwraps a ParenthesizedExpression pattern;
@@ -983,7 +984,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "renamed property in an assignment destructure records the source key",
   () => {
     // The property-assignment branch resolves the static key and reads it.
@@ -997,7 +998,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "computed key in an assignment destructure widens the source root",
   () => {
     // A non-static computed key in the assignment target has no resolvable key,
@@ -1012,7 +1013,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "nested array destructure inside an assignment target ignores its elements",
   () => {
     // The array-literal assignment pattern marks the source-ref root wildcard
@@ -1027,7 +1028,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "assignment destructure from an untracked source records no reads",
   () => {
     // With an undefined source binding, the object-assignment branch clears
@@ -1047,7 +1048,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "splice inserts only track arguments at or after the third position",
   () => {
     // isArrayIdentityWriterValueArgument requires index >= 2 for splice, so the
@@ -1067,7 +1068,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "constructing with a tracked root argument treats it as passthrough",
   () => {
     // isCallOrNewArgumentUsage recognizes NewExpression arguments, so the whole
@@ -1082,7 +1083,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "method-less call over a tracked field reads its full shape",
   () => {
     // A call whose callee resolves conservatively (no method name) tracks a
@@ -1096,7 +1097,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "elementById() over a tracked collection widens the collection root",
   () => {
     const input = getPaths(
@@ -1110,7 +1111,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural identity propagation through a dynamic arg widens the root",
   () => {
     // The callee records an identity path on its parameter; the caller passes a
@@ -1133,7 +1134,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural whole-root equals helper leaves the caller opaque passthrough",
   () => {
     // The callee's parameter is comparable-and-passthrough (equals over the
@@ -1160,7 +1161,7 @@ Deno.test(
 // Batch 4: aliased identity-writer args, nested patterns, dynamic calls
 //
 
-Deno.test(
+test(
   "aliased local pushed into a cell writer is read at its aliased path",
   () => {
     // An identifier argument to push() routes through the identity-writer
@@ -1177,7 +1178,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "aliased local at splice insert position is read at its aliased path",
   () => {
     // splice only treats arguments at index >= 2 as inserted items.
@@ -1193,7 +1194,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "parenthesized property target inside an assignment destructure is handled",
   () => {
     // The property initializer is itself parenthesized, driving the
@@ -1208,7 +1209,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "array destructure assignment with a rest element skips the spread slot",
   () => {
     // The array-literal assignment pattern marks the source root wildcard and
@@ -1223,7 +1224,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "assignment destructure from an untracked source clears nested aliases",
   () => {
     // With an undefined source, the object-assignment branch recurses into a
@@ -1243,7 +1244,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "call through a dynamically-indexed method reads the receiver conservatively",
   () => {
     // getCallMethodName returns undefined for a dynamic element-access callee,
@@ -1263,7 +1264,7 @@ Deno.test(
 // Batch 5: shape equality, dynamic markers, identity array items
 //
 
-Deno.test(
+test(
   "?? fallback between differently-shaped aliases keeps both source reads",
   () => {
     // aliasBindingEquals compares the two shapes, finds a size mismatch, and
@@ -1284,7 +1285,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "?? fallback between equal-size but differing-value shapes drops the merge",
   () => {
     // Equal property counts but a differing property value exercises the
@@ -1305,7 +1306,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "increment through a dynamic member widens the root to wildcard",
   () => {
     // markFromExpression resolves a dynamic ref and widens the whole root.
@@ -1317,7 +1318,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "identity-tracked local spread into a set payload records identity item paths",
   () => {
     // A local array built by spreading a tracked element and passed to set()
@@ -1350,7 +1351,7 @@ Deno.test(
 // Batch 6: whole-root identity, array-item identity, param array binding
 //
 
-Deno.test(
+test(
   "equals() over the whole tracked root records a root comparable passthrough",
   () => {
     // markIdentityUseRef with a zero-length path records a root comparable path
@@ -1367,7 +1368,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "equals() over a dynamic member reads the static prefix above the key",
   () => {
     // markIdentityUseRef takes a dynamic ref for a read of its whole prefix,
@@ -1383,7 +1384,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "pushing a previously identity-compared element marks the array item identity",
   () => {
     // A push argument that already has a recorded identity use drives
@@ -1405,7 +1406,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "array-binding parameter destructure widens the parameter root to wildcard",
   () => {
     // assignParameterBindingAlias marks the source root wildcard for an
@@ -1423,7 +1424,7 @@ Deno.test(
 // Batch 7: key() wrapper unwrapping, identity-only aliased arguments
 //
 
-Deno.test(
+test(
   "key() call wrapped in parentheses then chained still defers to member access",
   () => {
     // unwrapExpressionUsageSite unwraps the parenthesized key() result to see
@@ -1438,7 +1439,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "equals() over an aliased dynamic path reads the static prefix above the key",
   () => {
     // An aliased dynamic member passed to equals() is an identity-only argument;
@@ -1462,7 +1463,7 @@ Deno.test(
 // Batch 8: get()-chain specific paths restored across a for-of loop
 //
 
-Deno.test(
+test(
   "get()-chain specific-path aliases survive a for-of scope and stay narrowed",
   () => {
     // A `.get()`-resolved alias with a specific property path is saved before a

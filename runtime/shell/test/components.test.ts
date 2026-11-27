@@ -8,12 +8,17 @@
  * submit a button makes on behalf of the form around it.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type * as ComponentsModule from "../src/components/index.ts";
 import { installBrowserGlobals } from "./browser-globals.ts";
 import { templateListeners, templateMarkup } from "./lit-template-markup.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 type Components = typeof ComponentsModule;
 

@@ -1,7 +1,6 @@
 /** Sends follow-up attachments through the API and real harness prompt loop. */
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { HarnessUserTranscriptMessage } from "@commonfabric/cf-harness/contracts/transcript";
 import type { HarnessModelTurnRequest } from "@commonfabric/cf-harness/model/client";
@@ -15,6 +14,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createLocalJobApi } from "../../src/local-jobs/api.ts";
 import { LocalJobLane } from "../../src/local-jobs/lane.ts";

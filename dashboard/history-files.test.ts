@@ -1,13 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   CacheFile,
   dashboardCacheDirectory,
   dashboardCacheFile,
   replaceFile,
 } from "./history-files.ts";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 
 function environment(
   values: Record<string, string>,
@@ -15,7 +15,7 @@ function environment(
   return (name) => values[name];
 }
 
-Deno.test("dashboard cache files use fixed names in one configured directory", () => {
+test("dashboard cache files use fixed names in one configured directory", () => {
   const directory = "configured-dashboard-cache";
   const env = environment({
     DASHBOARD_CACHE_DIR: directory,
@@ -53,7 +53,7 @@ Deno.test("dashboard cache files use fixed names in one configured directory", (
   );
 });
 
-Deno.test("dashboard cache files default to the temp directory", () => {
+test("dashboard cache files default to the temp directory", () => {
   const directory = "platform-temp";
   const env = environment({ TMPDIR: directory });
   assertEquals(dashboardCacheDirectory(env), directory);
@@ -63,7 +63,7 @@ Deno.test("dashboard cache files default to the temp directory", () => {
   );
 });
 
-Deno.test("dashboard cache files recognize Windows temp variables", () => {
+test("dashboard cache files recognize Windows temp variables", () => {
   assertEquals(
     dashboardCacheDirectory(environment({ TEMP: "windows-temp" })),
     "windows-temp",

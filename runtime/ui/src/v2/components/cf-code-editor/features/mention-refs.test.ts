@@ -1,7 +1,6 @@
 // First, so that the document it installs is there when CodeMirror loads.
 import { window } from "../../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { EditorState } from "@codemirror/state";
@@ -24,6 +23,7 @@ import {
   setRefShortNames,
   shortNameQueryAt,
 } from "./mention-refs.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const KEY = "a3f9zz";
 const OTHER_KEY = "b7k2m1";

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deriveDiskHandleId, diskHandleSeed } from "../lib/sqlite-source.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ID = deriveDiskHandleId("did:key:z6MkSpaceA", "/abs/reference-data.db");
 

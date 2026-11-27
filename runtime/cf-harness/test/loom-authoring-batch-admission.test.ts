@@ -2,7 +2,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { createCfHarnessCliCapabilities } from "../src/cli.ts";
 import {
@@ -10,6 +9,7 @@ import {
   parseCfHarnessCliArgs,
 } from "./support/on-linux.ts";
 import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Tool grant used by Loom's collection-capable batch profiles. */
 const authoringTools = [

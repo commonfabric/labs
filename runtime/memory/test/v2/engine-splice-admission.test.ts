@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   type ConfirmedRead,
@@ -17,6 +16,12 @@ import {
   open,
   read,
 } from "../../v2/engine.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("applyCommit()", () => {
   // A splice names its index and its count of removals in whole numbers at or

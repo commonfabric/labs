@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { createTestProgram } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The schema `generate` emits for `code` from a fresh program, once with the

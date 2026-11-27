@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   collectDataFileNames,
@@ -9,6 +8,7 @@ import {
 } from "../typescript/resolver.ts";
 import { TARGET } from "../typescript/options.ts";
 import { InMemoryProgram } from "../program.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("typescript/resolver.ts", () => {
   describe("resolveProgram", () => {

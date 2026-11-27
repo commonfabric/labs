@@ -1,13 +1,12 @@
-/// <reference path="../clock.d.ts" />
-
 /** Exercises dialog refusal and cancellation at transaction boundaries. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { BuiltInLLMMessage, CellScope } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { LLMClient, type LLMResponse } from "@commonfabric/llm";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { llmDialog } from "../../src/builtins/llm-dialog.ts";
 import { LLMMessageSchema } from "../../src/builtins/llm-schemas.ts";

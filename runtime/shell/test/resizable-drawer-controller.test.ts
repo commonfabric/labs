@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 
@@ -7,6 +6,12 @@ import {
   ResizableDrawerController,
 } from "../src/lib/resizable-drawer-controller.ts";
 import { installGlobals } from "./browser-globals.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What a host renders of its drawer. */
 type Rendered = { height: number; resizing: boolean };

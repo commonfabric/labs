@@ -3,11 +3,11 @@
  * directly.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { resolve } from "@std/path";
 import { test as testCommand } from "../commands/test-command.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(
   import.meta.dirname!,

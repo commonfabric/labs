@@ -2,12 +2,12 @@
 import { mount } from "../../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   createMockCellHandle,
   pushUpdate,
 } from "../../../test-utils/mock-cell-handle.ts";
 import { CFDotMark } from "../index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Every `mark-update` event `target` hears from now on. */
 function markUpdatesAt(target: EventTarget): Event[] {

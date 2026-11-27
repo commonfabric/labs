@@ -13,6 +13,7 @@ import {
 } from "@commonfabric/runner/storage/cache.deno";
 import { cfcPosture, publishCfcPosture } from "@/lib/cfc-posture.ts";
 import { SERVING_RUNTIME_EXPERIMENTAL } from "@commonfabric/runner/executor/serving-runtime";
+import { test } from "@commonfabric/test-support/test";
 import {
   experimentalPosture,
   publishExperimentalPosture,
@@ -27,7 +28,7 @@ import {
   toolshedRuntimeOptions,
 } from "@/runtime-options.ts";
 
-Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env reader", () => {
+test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env reader", () => {
   // Pins toolshed's runtime wiring decisions (CT-1814): the runtime's storage
   // base is MEMORY_URL while patterns fetch against the public API_URL; the
   // storage manager passes through untouched; EXPERIMENTAL_* flags come from
@@ -67,7 +68,7 @@ Deno.test("toolshedRuntimeOptions splits MEMORY_URL/API_URL and honors the env r
   assertEquals(options.cfcEnforcementMode, "enforce-strict");
 });
 
-Deno.test("toolshedRuntimeOptions follows the posture another host publishes, under the flags set explicitly", () => {
+test("toolshedRuntimeOptions follows the posture another host publishes, under the flags set explicitly", () => {
   const env: Record<string, string> = {
     EXPERIMENTAL_FOLLOWED_POSTURE: JSON.stringify({
       serverExecution: !SERVER_EXECUTION_DEFAULT_ENABLED,
@@ -94,7 +95,7 @@ Deno.test("toolshedRuntimeOptions follows the posture another host publishes, un
   assertEquals(options.experimental?.lazyMaterialization, false);
 });
 
-Deno.test("toolshedRuntimeOptions sends self-addressed requests to API_INTERNAL_URL and changes no URL", async () => {
+test("toolshedRuntimeOptions sends self-addressed requests to API_INTERNAL_URL and changes no URL", async () => {
   // A co-hosted toolshed's own requests take the internal origin (OW55) by
   // way of the runtime's fetch, and only by way of it: the storage base
   // stays MEMORY_URL and the pattern base stays the public API_URL, so what
@@ -142,7 +143,7 @@ Deno.test("toolshedRuntimeOptions sends self-addressed requests to API_INTERNAL_
   assertEquals(unset.patternEnvironment?.apiUrl.href, "https://api.test/");
 });
 
-Deno.test("createToolshedRuntime attaches the OTel bridge only when enabled", async () => {
+test("createToolshedRuntime attaches the OTel bridge only when enabled", async () => {
   // The runtime→OTel bridge attach rides Runtime construction (CT plan: the
   // bridge is a second consumer of the RuntimeTelemetry bus). Off by default;
   // on OTEL_ENABLED it attaches and flips the preflight-telemetry gate. Without
@@ -203,7 +204,7 @@ Deno.test("createToolshedRuntime attaches the OTel bridge only when enabled", as
   );
 });
 
-Deno.test("createToolshedRuntime publishes the posture it resolved", async () => {
+test("createToolshedRuntime publishes the posture it resolved", async () => {
   // What `/api/meta` reports, and therefore what a client not built alongside
   // this server adopts (docs/development/EXPERIMENTAL_OPTIONS.md). The
   // published posture includes constructor defaults and the deployment's
@@ -256,7 +257,7 @@ Deno.test("createToolshedRuntime publishes the posture it resolved", async () =>
   }
 });
 
-Deno.test("createToolshedRuntime publishes the serverExecution the serving loop goes on to publish, so a page built before the loop starts carries it", async () => {
+test("createToolshedRuntime publishes the serverExecution the serving loop goes on to publish, so a page built before the loop starts carries it", async () => {
   // The shell takes serverExecution from the page, which is built once, from
   // the posture published here. The serving loop starts on the same
   // resolution and publishes its forced value over `/api/meta` once it is up
@@ -309,7 +310,7 @@ Deno.test("createToolshedRuntime publishes the serverExecution the serving loop 
   }
 });
 
-Deno.test("createToolshedRuntime declares dedicated connections for its own storage manager", async () => {
+test("createToolshedRuntime declares dedicated connections for its own storage manager", async () => {
   // Under routed Mode A MEMORY_URL routes by the space in the address, so the
   // toolshed's own storage manager dials dedicated connections whatever the
   // deployment's flag says (runtime-options.ts), while the posture it
@@ -356,7 +357,7 @@ Deno.test("createToolshedRuntime declares dedicated connections for its own stor
   }
 });
 
-Deno.test("createToolshedRuntime synchronizes its session state while publishing local client storage", async () => {
+test("createToolshedRuntime synchronizes its session state while publishing local client storage", async () => {
   const signer = await Identity.fromPassphrase(
     "toolshed persistent session storage",
   );

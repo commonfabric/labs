@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
@@ -8,6 +7,12 @@ import type {
   PatternLifecycleHandler,
   ServedRequestHandler,
 } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import env from "@/env.ts";
 import { STARTUP_PROBE_HEADER } from "@/lib/internal-api-origin.ts";
 import {

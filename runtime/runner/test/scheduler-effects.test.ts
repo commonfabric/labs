@@ -21,6 +21,7 @@ import type {
   ReactivityLog,
   SchedulerTestStorageManager,
 } from "./scheduler-test-utils.ts";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 describe("effect/computation tracking", () => {
   let storageManager: SchedulerTestStorageManager;

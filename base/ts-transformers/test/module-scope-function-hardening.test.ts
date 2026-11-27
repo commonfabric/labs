@@ -10,8 +10,9 @@
 import { assertEquals } from "@std/assert";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test(
+test(
   "trusted WriteAuthorizedBy function declaration gets a statement-form binding annotation",
   async () => {
     const source = `/// <cts-enable />
@@ -43,7 +44,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "untrusted function declaration is hardened without a binding annotation",
   async () => {
     const source = `/// <cts-enable />

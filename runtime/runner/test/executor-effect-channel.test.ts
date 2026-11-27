@@ -54,11 +54,17 @@
 // scheduler `onError`, the seal injector, the settle gate — for
 // everything client-side.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import {
@@ -83,6 +89,12 @@ import {
   awaitReplica,
   settleServing as settleServingIn,
 } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 /** The settle-gate seam (see executor-events-down.test.ts): holds the
  * serving loop's settle so a test can dispose a client INSIDE the

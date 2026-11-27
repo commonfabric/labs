@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { RuntimeTelemetryMarkerResult } from "@commonfabric/runtime-client";
 import type { RuntimeTelemetryOtelBridge } from "@commonfabric/runner/telemetry-otel-bridge";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { browserTelemetrySink, initBrowserOtel } from "../src/lib/otel.ts";
 

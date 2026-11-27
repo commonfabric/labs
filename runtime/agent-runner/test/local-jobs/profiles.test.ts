@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type LocalJobNarrowing,
@@ -7,6 +6,7 @@ import {
   narrowLocalJobProfile,
   readLocalJobProfiles,
 } from "../../src/local-jobs/profiles.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A profile as a host file states it. */
 const ASK = {
@@ -80,6 +80,17 @@ describe("local-jobs/profiles", () => {
         taskRole: "context",
         retry: "never",
       });
+    });
+
+    it("retains file delivery only on profiles that select it", async () => {
+      const profiles = await read({
+        normal: ASK,
+        build: { ...ASK, taskDelivery: "file" },
+      });
+      expect(profiles.get("normal")).not.toHaveProperty("taskDelivery");
+      expect(profiles.get("build")?.taskDelivery).toBe("file");
+      await expect(read({ bad: { ...ASK, taskDelivery: "/some/path" } }))
+        .rejects.toThrow("taskDelivery");
     });
 
     it("reads a command endpoint that names no relevant commands as naming none", async () => {

@@ -7,6 +7,7 @@
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import { AVATAR_PIXELS, avatarFromImage, CFAvatarInput } from "./index.ts";
 
 const RED = [255, 0, 0];
@@ -62,7 +63,7 @@ function next(element: CFAvatarInput, name: string): Promise<CustomEvent> {
   return promise;
 }
 
-Deno.test("avatarFromImage returns the image's centered square, scaled to avatar size, as WebP", async () => {
+test("avatarFromImage returns the image's centered square, scaled to avatar size, as WebP", async () => {
   const avatar = await avatarFromImage(await wideImage());
   expect(avatar.type).toBe("image/webp");
   const { width, height, corners } = await decode(
@@ -75,7 +76,7 @@ Deno.test("avatarFromImage returns the image's centered square, scaled to avatar
   }
 });
 
-Deno.test("cf-avatar-input fires cf-change with avatar bytes and the blob it stored them in for a picked image, and cf-error for a picked file that is not one", async () => {
+test("cf-avatar-input fires cf-change with avatar bytes and the blob it stored them in for a picked image, and cf-error for a picked file that is not one", async () => {
   const stored: string[] = [];
   const element = Object.assign(new CFAvatarInput(), {
     runtime: {

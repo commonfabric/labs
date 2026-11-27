@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ensureNotRenderThread,
@@ -6,6 +5,7 @@ import {
   isDeno,
   isWorkerThread,
 } from "@commonfabric/platform/env";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Each scope holds only the globals the predicates feature-test for.
 const noop = () => {};

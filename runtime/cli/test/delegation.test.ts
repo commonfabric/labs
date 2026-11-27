@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join, resolve } from "@std/path";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
@@ -28,6 +27,12 @@ import {
 } from "../lib/delegation.ts";
 import { argv, cf, stripAnsi } from "./utils.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // The key of a space that owns itself, the identity it delegated to when it
 // was created, and the key that identity delegates to.

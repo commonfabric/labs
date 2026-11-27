@@ -4,7 +4,6 @@
 // has none — so an unguarded rebuild delivers a bare `{}` to the handler, with
 // class, identity, and contents gone.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -13,6 +12,12 @@ import {
 } from "@commonfabric/data-model/fabric-primitives";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { convertCellsToLinks } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";

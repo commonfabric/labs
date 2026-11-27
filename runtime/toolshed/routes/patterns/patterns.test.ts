@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { generateETag } from "@commonfabric/static/etag";
 import env from "@/env.ts";
@@ -8,6 +7,7 @@ import {
   classifyPatternError,
   patternResponseHeaders,
 } from "@commonfabric/runner/patterns-route.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createPatternsRoute } from "@/routes/patterns/patterns-server.ts";
 
 const IDENTITY_RE = /^[A-Za-z0-9_-]{43}$/;

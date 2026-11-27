@@ -1,4 +1,3 @@
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { parseDiff } from "../../../../../lib/view/diff.ts";
@@ -9,6 +8,7 @@ import {
 import { languageForFile } from "../../../../../lib/view/languages/language.ts";
 import { goLanguage } from "../../../../../lib/view/languages/go/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 /** The source each colored line reconstructs. */
 function verbatim(lines: readonly Line[]): string {

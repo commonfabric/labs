@@ -4,10 +4,10 @@
  * here.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { codecClasses, fabricInstanceClassesByName } from "@/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("fabric-instances/impl", () => {
   describe("fabricInstanceClassesByName()", () => {

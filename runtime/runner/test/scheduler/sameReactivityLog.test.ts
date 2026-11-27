@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 import { sameReactivityLog } from "../../src/scheduler/reactivity.ts";
 import type { ReactivityLog } from "../../src/scheduler/types.ts";
 import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";

@@ -1,10 +1,15 @@
 import { createTestSpace, env } from "@commonfabric/integration";
 import { sleep } from "@commonfabric/async/sleep";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert, assertEquals } from "@std/assert";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { TEST_LLM } from "./flags.ts";
 import {
   initializePiecesController,

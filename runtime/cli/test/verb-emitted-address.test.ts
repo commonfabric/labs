@@ -10,12 +10,12 @@
  * `runtime/piece/test/verb-emitted-address.test.ts`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { VerbInputValidationError } from "../lib/callable.ts";
 import { executePieceCallable } from "../lib/piece.ts";
 

@@ -8,7 +8,6 @@
  * piece, and a board holding its members at `names`. Nothing runs.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -24,6 +23,12 @@ import {
 } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { RequestType } from "@/protocol/mod.ts";
 import { createCellRef, getCell } from "@/backends/utils.ts";

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type BreakRegistryEntry,
@@ -14,6 +13,7 @@ import {
   DEFAULT_APP_PATTERN_SOURCE,
   HOME_PATTERN_SOURCE,
 } from "../runtime/piece/src/system-pattern-url.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const entry = (overrides: Partial<BreakRegistryEntry>): BreakRegistryEntry => ({
   registry: "pattern-compat-accepted-breaks",

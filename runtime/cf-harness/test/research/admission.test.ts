@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { ensureCompilerStack } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type {
   HarnessResearchKit,

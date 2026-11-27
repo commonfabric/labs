@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import {
@@ -9,6 +8,7 @@ import {
 } from "@commonfabric/memory/v2";
 
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import { Runtime } from "../../src/runtime.ts";

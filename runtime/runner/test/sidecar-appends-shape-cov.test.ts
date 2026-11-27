@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { commutesWithTailAppends } from "../src/storage/transaction/sidecar-appends.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const mark = ["value", "entries", "0", "consequenced"];
 const sidecar = { value: { entries: [{ eventId: "first" }] } };

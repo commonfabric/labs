@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import ts from "typescript";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { asObjectSchema } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const REPO_ROOT = fromFileUrl(new URL("../../../../", import.meta.url));
 const TEST_FILE = join(REPO_ROOT, "__schema_factory_input_real_api_test.ts");

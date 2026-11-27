@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { encodeBase64Url } from "@std/encoding/base64url";
 import { Identity } from "@commonfabric/identity";
 import { OAuth2TokenSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { startFakeOAuth2Provider } from "@/test/support/fake-oauth2-provider.ts";
 import { createProviderRouters } from "@/routes/integrations/provider-routers.ts";

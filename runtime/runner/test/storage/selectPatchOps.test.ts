@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { encodePointer, isPrefixPath } from "@commonfabric/memory/v2/path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type PatchDraftCandidate,

@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   cancelTurn,
@@ -11,6 +10,7 @@ import {
   searchIndexPatterns,
   startTask,
 } from "../../../console/src/api.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const realFetch = globalThis.fetch;
 

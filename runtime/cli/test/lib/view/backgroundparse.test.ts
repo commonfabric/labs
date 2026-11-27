@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   _internal,
@@ -36,6 +35,7 @@ import {
   type ViewMode,
 } from "../../../lib/view/model.ts";
 import { gitBlobName } from "../../view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const typescript = languageForName("typescript")!;
 const SOURCE = "export const answer: number = 42; // the answer\n";

@@ -8,6 +8,7 @@ import { expect } from "@std/expect";
 
 import { CFCodeEditor } from "../cf-code-editor/index.ts";
 import { CFThemeProvider } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const OUTER_FONT = "Georgia";
 const ACCENT = "rgb(1, 2, 3)";
@@ -45,7 +46,7 @@ async function nest(
   return { outer, inner, content, done: () => outer.remove() };
 }
 
-Deno.test("a nested theme naming only an accent sets it and keeps the outer theme's font", async () => {
+test("a nested theme naming only an accent sets it and keeps the outer theme's font", async () => {
   const { content, done } = await nest(
     { fontFamily: OUTER_FONT },
     { accentColor: ACCENT },
@@ -63,7 +64,7 @@ Deno.test("a nested theme naming only an accent sets it and keeps the outer them
   }
 });
 
-Deno.test("a nested theme follows a change the outer theme makes to what it does not name", async () => {
+test("a nested theme follows a change the outer theme makes to what it does not name", async () => {
   const { outer, inner, content, done } = await nest(
     { fontFamily: OUTER_FONT },
     { accentColor: ACCENT },
@@ -80,7 +81,7 @@ Deno.test("a nested theme follows a change the outer theme makes to what it does
   }
 });
 
-Deno.test("a nested theme hands its consumers the outer theme with its own changes over it", async () => {
+test("a nested theme hands its consumers the outer theme with its own changes over it", async () => {
   const { content, done } = await nest(
     { colorScheme: "dark" },
     { accentColor: ACCENT },
@@ -108,7 +109,7 @@ function cssHost(): HTMLElement {
   return host;
 }
 
-Deno.test("a tint outside any cf-theme keeps what a CSS-only host sets and changes only its accent", async () => {
+test("a tint outside any cf-theme keeps what a CSS-only host sets and changes only its accent", async () => {
   const host = cssHost();
   try {
     const provider = new CFThemeProvider();
@@ -129,7 +130,7 @@ Deno.test("a tint outside any cf-theme keeps what a CSS-only host sets and chang
   }
 });
 
-Deno.test("a tint outside any cf-theme writes nothing for a color scheme it does not name", async () => {
+test("a tint outside any cf-theme writes nothing for a color scheme it does not name", async () => {
   const host = cssHost();
   try {
     const provider = new CFThemeProvider();
@@ -145,7 +146,7 @@ Deno.test("a tint outside any cf-theme writes nothing for a color scheme it does
   }
 });
 
-Deno.test("a tint that shrinks takes its old changes back off", async () => {
+test("a tint that shrinks takes its old changes back off", async () => {
   const host = cssHost();
   try {
     const provider = new CFThemeProvider();
@@ -163,7 +164,7 @@ Deno.test("a tint that shrinks takes its old changes back off", async () => {
   }
 });
 
-Deno.test("a theme with nothing in effect above it writes the whole theme", async () => {
+test("a theme with nothing in effect above it writes the whole theme", async () => {
   const provider = new CFThemeProvider();
   provider.theme = { accentColor: ACCENT };
   document.body.append(provider);

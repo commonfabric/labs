@@ -1,9 +1,10 @@
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { CFShareSnapshot } from "./index.ts";
 
-Deno.test("cf-share-snapshot presents the exact snapshot and verified audience", async () => {
+test("cf-share-snapshot presents the exact snapshot and verified audience", async () => {
   const element = document.createElement(
     "cf-share-snapshot",
   ) as CFShareSnapshot;
@@ -107,7 +108,7 @@ async function mountShare(overrides: Partial<{
   return { element, result, released, calls };
 }
 
-Deno.test("cf-share-snapshot rejects synthetic confirmation clicks", async () => {
+test("cf-share-snapshot rejects synthetic confirmation clicks", async () => {
   const { element, calls, result } = await mountShare();
   try {
     await element.accessForTestingOnly.prepare();
@@ -121,7 +122,7 @@ Deno.test("cf-share-snapshot rejects synthetic confirmation clicks", async () =>
   }
 });
 
-Deno.test("cf-share-snapshot invalidates confirmation when a bound prop changes", async () => {
+test("cf-share-snapshot invalidates confirmation when a bound prop changes", async () => {
   const { element, calls, result } = await mountShare();
   try {
     await element.accessForTestingOnly.prepare();
@@ -138,7 +139,7 @@ Deno.test("cf-share-snapshot invalidates confirmation when a bound prop changes"
   }
 });
 
-Deno.test("cf-share-snapshot ignores a prepared preview after the source changes", async () => {
+test("cf-share-snapshot ignores a prepared preview after the source changes", async () => {
   const deferred = Promise.withResolvers<
     Awaited<ReturnType<RuntimeClient["prepareSnapshotShare"]>>
   >();
@@ -165,7 +166,7 @@ Deno.test("cf-share-snapshot ignores a prepared preview after the source changes
   }
 });
 
-Deno.test("cf-share-snapshot reports preparation failures", async () => {
+test("cf-share-snapshot reports preparation failures", async () => {
   const { element, result } = await mountShare({
     prepareSnapshotShare: () =>
       Promise.reject(new Error("Source is unavailable")),
@@ -180,7 +181,7 @@ Deno.test("cf-share-snapshot reports preparation failures", async () => {
   }
 });
 
-Deno.test("cf-share-snapshot prepares a space audience and cancels without publishing", async () => {
+test("cf-share-snapshot prepares a space audience and cancels without publishing", async () => {
   const { element, calls, result } = await mountShare();
   try {
     element.audienceKind = "space";
@@ -202,7 +203,7 @@ Deno.test("cf-share-snapshot prepares a space audience and cancels without publi
   }
 });
 
-Deno.test("cf-share-snapshot releases a canceled preview and a late disconnected preview", async () => {
+test("cf-share-snapshot releases a canceled preview and a late disconnected preview", async () => {
   const canceled: string[] = [];
   const deferred = Promise.withResolvers<
     Awaited<ReturnType<RuntimeClient["prepareSnapshotShare"]>>

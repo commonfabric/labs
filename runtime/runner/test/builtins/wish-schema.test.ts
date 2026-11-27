@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { wishStateSchemaForResult } from "../../src/builtins/wish-schema.ts";
 import { type JSONSchema, UI } from "../../src/builder/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const stateProperties = (schema: JSONSchema | undefined) => {
   if (typeof schema !== "object") throw new Error("Expected wish state schema");

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { Identity, isCanonicalEd25519DID } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { gzipSync } from "fflate";
 import {
   compressRoutedPayload,

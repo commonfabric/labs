@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { Program } from "@commonfabric/js-compiler";
+import { describe, it } from "@commonfabric/test-support/test";
 import { computeModuleHashes } from "../src/harness/module-identity.ts";
 
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";

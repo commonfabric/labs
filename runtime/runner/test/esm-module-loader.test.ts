@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   loadModuleGraph,
   type VirtualModuleRecord,
 } from "../src/sandbox/esm-module-loader.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function record(
   imports: string[],

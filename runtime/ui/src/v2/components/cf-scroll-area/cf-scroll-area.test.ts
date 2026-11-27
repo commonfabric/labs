@@ -2,10 +2,10 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { CFScrollArea, type ScrollOrientation } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** The extents a browser would lay out, which happy-dom leaves at zero. */
 interface Extents {

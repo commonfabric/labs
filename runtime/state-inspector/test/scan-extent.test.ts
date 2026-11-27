@@ -10,7 +10,6 @@
  * rather than pieces, and the two are indistinguishable from the result.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -34,6 +33,12 @@ import { hotEntities } from "../queries.ts";
 import { contendedEntities } from "../conflicts.ts";
 import { buildSpaceGraph, subgraphAround } from "../graph.ts";
 import { buildInspectorBundle, renderInspectorHtml } from "../html.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (

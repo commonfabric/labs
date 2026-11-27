@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   authorizeLoopbackConnection,
@@ -10,6 +9,7 @@ import {
   type ConnectionAuthFields,
   signConnectionAuth,
 } from "../support/connection-auth.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const now = 1_000_000;
 const audience = bob.did();

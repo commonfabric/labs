@@ -71,6 +71,18 @@ const COMPUTED_ID_PREFIX = "computed:";
 const SUPERSEDED_SEQ = -1;
 
 /**
+ * The values of `currency_write.owned`, in the order a piece that both writes
+ * and owns an id, or owns it under two programs, keeps the lowest of:
+ * `WRITTEN`, an id a computation of the piece declares a write to;
+ * `OWNED`, a cell the piece owns, an absent instance of which refuses a root;
+ * `OWNED_ABSENT_AS_DEFAULT`, one an absent instance of which reads as the
+ * default its seed would write (`CurrencyRecord.absentAsDefault`).
+ */
+const WRITTEN = 0;
+const OWNED = 1;
+const OWNED_ABSENT_AS_DEFAULT = 2;
+
+/**
  * The scope key of the run that made the write at `opIndex` of a serving
  * loop's derivation, read off the attribution the commit stores with each
  * write (protocol.md §1): `space` for a run that acted as nobody, a user's
@@ -230,6 +242,13 @@ export type CurrencyRecord = {
 
   /** The ids of the cells the piece owns and owes a default. */
   owned: readonly string[];
+
+  /**
+   * The ids among `owned` an absent instance of which a reader reads as
+   * exactly what the piece's seed would write there. A demanded instance of
+   * one of them that the store does not hold refuses no root. Absent, none.
+   */
+  absentAsDefault?: readonly string[];
 
   /**
    * Whether the piece records a source origin (serving-loop.md §3e), which
@@ -1916,10 +1935,16 @@ export const storeCurrencyRecords = (
         statements.deleteOrigin.run({ branch, piece });
       }
       for (const id of record.writes) {
-        statements.insertWrite.run({ branch, piece, id, owned: 0 });
+        statements.insertWrite.run({ branch, piece, id, owned: WRITTEN });
       }
+      const absentAsDefault = new Set(record.absentAsDefault ?? []);
       for (const id of record.owned) {
-        statements.insertWrite.run({ branch, piece, id, owned: 1 });
+        statements.insertWrite.run({
+          branch,
+          piece,
+          id,
+          owned: absentAsDefault.has(id) ? OWNED_ABSENT_AS_DEFAULT : OWNED,
+        });
       }
       for (const slice of slices) {
         const ref = { piece, slice: slice.key };
@@ -2798,7 +2823,11 @@ export type CurrencyRefusal =
   | "other-epoch"
   /** A session demands an instance the piece writes and does not vouch for. */
   | "unvouched-instance"
-  /** A session demands an instance of an owned cell the store does not hold. */
+  /**
+   * A session demands an instance of an owned cell the store does not hold,
+   * and that the record does not name as one that reads as its default
+   * while absent.
+   */
   | "absent-owned"
   /**
    * A slice a demanded instance is resolved under, of a piece that owns it,
@@ -2875,14 +2904,15 @@ export type CurrencyJudgment = {
  * piece beneath it does, is vouched for: each slice of the owner the
  * instance is resolved under is clean and of `epoch`, and the slice at the
  * instance's own key holds a vouch row for a written id, or the store holds
- * a live document for an owned one. A written instance that a narrower
- * slice's run wrote, as a redirect at a broader key is, is answered for by
- * the slices of each demander's own chain that hold a row for it, which are
- * to be current with the slices above them, and by no other viewer's. A
- * slice no demanded instance is resolved
- * under is not read, so the stale slice of a viewer who demands nothing
- * refuses no root. A root is served for every session `rows` covers or for
- * none, so one of them with a stale slice refuses it for all.
+ * a live document for an owned one that the record does not name as one an
+ * absent instance of reads as its default. A written instance that a
+ * narrower slice's run wrote, as a redirect at a broader key is, is answered
+ * for by the slices of each demander's own chain that hold a row for it,
+ * which are to be current with the slices above them, and by no other
+ * viewer's. A slice no demanded instance is resolved under is not read, so
+ * the stale slice of a viewer who demands nothing refuses no root. A root is
+ * served for every session `rows` covers or for none, so one of them with a
+ * stale slice refuses it for all.
  * The marks are read as they stand, so a caller that needs them current
  * advances the cursor first, and brings what the index holds of each space
  * the slices read up to what that space reports.
@@ -3093,8 +3123,12 @@ export const judgeCurrencyRoots = (
         sliceChain(scopeKey).some((slice) => !isCurrent({ piece, slice }))
       ) {
         failing.set(piece, "owner-not-clean");
-      } else if (owned !== 0) {
-        if (!isLive(context, id, scopeKey)) failing.set(piece, "absent-owned");
+      } else if (owned !== WRITTEN) {
+        // An absent instance of a cell that reads as its default while
+        // absent is read as what the seed would write there.
+        if (owned === OWNED && !isLive(context, id, scopeKey)) {
+          failing.set(piece, "absent-owned");
+        }
       } else {
         const reason = unvouchedFor(piece, id, scopeKey);
         if (reason !== undefined) failing.set(piece, reason);

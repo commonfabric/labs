@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
 import { reapStore } from "@commonfabric/memory/v2/reap";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { summarizeSpace } from "../queries.ts";

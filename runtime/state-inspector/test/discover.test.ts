@@ -8,6 +8,7 @@ import * as Path from "@std/path";
 import { Database } from "@db/sqlite";
 
 import { legacySpaceDid } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   candidateRoots,
@@ -52,7 +53,7 @@ function makeSpace(path: string, entityCount: number) {
 const DID_1 = "did:key:zAlphaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
 const DID_2 = "did:key:zBetaBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
 
-Deno.test("discovery + resolution", async (t) => {
+test("discovery + resolution", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-discover-" });
   try {
     // Mimic the doubled engine-v3 cache layout under a "cache/memory" base.
@@ -191,7 +192,7 @@ Deno.test("discovery + resolution", async (t) => {
   }
 });
 
-Deno.test("candidateRoots orders env overrides before caches and cwd walk", () => {
+test("candidateRoots orders env overrides before caches and cwd walk", () => {
   const saved = {
     MEMORY_DIR: Deno.env.get("MEMORY_DIR"),
     DB_PATH: Deno.env.get("DB_PATH"),
@@ -228,7 +229,7 @@ Deno.test("candidateRoots orders env overrides before caches and cwd walk", () =
   }
 });
 
-Deno.test("discovery finds a space under a MEMORY_DIR written as a file URL", async () => {
+test("discovery finds a space under a MEMORY_DIR written as a file URL", async () => {
   // The form a server's own configuration uses: `runtime/toolshed/env.ts`
   // defaults MEMORY_DIR to a `file:` URL, and the server hands it to `new URL()`.
   // Left as a URL it names no directory, so the walk finds nothing and every

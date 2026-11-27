@@ -1,8 +1,8 @@
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { decodeJsonPointer } from "@commonfabric/json/json-pointer";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");

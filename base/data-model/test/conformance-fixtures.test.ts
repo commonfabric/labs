@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { bigintToUnpaddedBase64url } from "@commonfabric/bytes/bigint";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricInstance, FabricValue } from "@";
 import { ProblematicStateError, UnknownValue } from "@/codec-common";

@@ -1,12 +1,12 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   type CfcRefusalDetail,
   reportCfcDenial,
   resetCfcDenialAnnouncements,
 } from "@commonfabric/runner/cfc";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   formatCfcDenial,

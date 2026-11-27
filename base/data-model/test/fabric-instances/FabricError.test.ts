@@ -19,7 +19,6 @@
  * today.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -34,6 +33,7 @@ import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
 import { FabricError, FabricNativeWrapper } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
 import { dummyEnv, subFreeze, subIsDeepFrozen } from "./fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricError", () => {
   // Pure type-identity / supertype checks: they don't fit a single member and

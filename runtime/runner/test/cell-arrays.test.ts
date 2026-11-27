@@ -1,9 +1,14 @@
 // Cell array tests: element conversion plus optimized plain-schema traversal.
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import "@commonfabric/test-support/equal-ignoring-symbols";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Writable } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";

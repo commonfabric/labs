@@ -5,10 +5,10 @@
 // available, and recommends the actual escape hatches (mapWithPattern /
 // computed).
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { closureCaptureErrorMessage } from "../src/builder/closure-capture-diagnostic.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("closureCaptureErrorMessage()", () => {
   it("describes the captured cell's name, path, and scope", () => {

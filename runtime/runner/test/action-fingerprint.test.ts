@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { schedulerImplementationFingerprint } from "../src/scheduler/run.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { recordVerifiedProvenance } from "../src/harness/verified-provenance.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function makeAction(props: Record<string, unknown>): Action {
   const fn = (() => {}) as unknown as Action;

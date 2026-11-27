@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { servingRuntimeFactory } from "../src/executor/serving-runtime.ts";
 import { Runtime } from "../src/runtime.ts";
 import { newLoopbackServer } from "../src/storage/v2-emulate.ts";

@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   formatReleaseTime,
   parseReleaseTime,
 } from "../src/pattern-release-time.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("pattern-release-time", () => {
   describe("parseReleaseTime()", () => {

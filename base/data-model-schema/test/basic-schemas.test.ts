@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchemaTypes } from "@commonfabric/api";
@@ -6,6 +5,7 @@ import type { JSONSchemaTypes } from "@commonfabric/api";
 import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 
 import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-model/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 import { emptySchemaObject, schemaForValueType } from "@/basic-schemas.ts";
 import { isInternedSchema } from "@/schema-intern.ts";
 

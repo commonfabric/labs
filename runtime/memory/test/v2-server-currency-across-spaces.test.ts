@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import {
@@ -10,6 +9,12 @@ import { resolveScopeKey } from "../v2.ts";
 import { connect, loopback } from "../v2/client.ts";
 import { applyCommit } from "../v2/engine.ts";
 import { getCurrencyDelivery, Server } from "../v2/server.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-server-currency-test-space";
 const SOURCE = "did:key:z6Mk-server-currency-test-source";

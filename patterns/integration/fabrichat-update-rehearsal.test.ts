@@ -61,7 +61,6 @@ import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { fromFileUrl, join, relative } from "@std/path";
 import * as posix from "@std/path/posix";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -84,6 +83,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { moduleByteCache } from "./pieces-controller.ts";
 

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -11,6 +10,7 @@ import {
   parseModule,
   patternSchemas,
 } from "../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 async function transform(body: string): Promise<ts.SourceFile> {
   const diagnostics: TransformationDiagnostic[] = [];

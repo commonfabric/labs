@@ -9,7 +9,6 @@
  * the boundary it materializes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -21,6 +20,7 @@ import {
   read,
   readRevision,
 } from "../v2/engine.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DOC = "of:list";
 

@@ -6,10 +6,10 @@
  * fixture rather than as a hash nobody can reproduce.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
 import { sha256 } from "@commonfabric/content-hash";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { sha256Deno } from "@/sha256-deno.ts";
 import { sha256Noble } from "@/sha256-noble.ts";
 import { initWasm, initWasmOneShot, sha256Wasm } from "@/sha256-wasm.ts";

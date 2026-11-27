@@ -8,7 +8,6 @@
 
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { defer } from "@commonfabric/async/defer";
@@ -36,6 +35,12 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { registerSchemaDocument } from "../runner/src/schema-registry.ts";
 import {

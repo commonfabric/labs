@@ -1,5 +1,4 @@
 import { assert, assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -12,8 +11,9 @@ import {
   collect,
   parseModule,
 } from "../transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("createLiftAppliedCall keeps fallback refs synced when names collide", () => {
+test("createLiftAppliedCall keeps fallback refs synced when names collide", () => {
   const source = ts.createSourceFile(
     "test.tsx",
     "",

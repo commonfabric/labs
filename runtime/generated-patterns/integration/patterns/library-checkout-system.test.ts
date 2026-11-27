@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
 import type {
   HoldRecord,
   LoanRecord,
 } from "./library-checkout-system.pattern.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const expectLoans = (entries: LoanRecord[]): LoanRecord[] =>
   entries.map((entry) => ({ ...entry }));

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import * as library from "../src/library.ts";
@@ -17,6 +16,7 @@ import * as cellRep from "@commonfabric/data-model/cell-rep";
 import * as codecs from "@commonfabric/data-model/codecs";
 import * as fabricInstances from "@commonfabric/data-model/fabric-instances";
 import * as runtimeContext from "@commonfabric/ui/runtime-context";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("library", () => {
   // The bundle built from `library.ts` is the API an embedding host loads

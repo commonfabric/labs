@@ -9,7 +9,6 @@ import {
 import { encodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   createHarnessImageAttachment,
   decodeHarnessInlineImage,
@@ -17,6 +16,13 @@ import {
   materializeImageAttachmentContentPart,
   parseImageAttachmentPaths,
 } from "../src/image-attachments.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const pngBytes = (...payload: number[]): Uint8Array =>
@@ -25,7 +31,7 @@ const pngBytes = (...payload: number[]): Uint8Array =>
 const dataUrl = (bytes: Uint8Array): string =>
   `data:image/png;base64,${encodeBase64(bytes)}`;
 
-Deno.test("inline images reject noncanonical padding bits for the same bytes", () => {
+test("inline images reject noncanonical padding bits for the same bytes", () => {
   assertEquals(
     decodeHarnessInlineImage({
       mediaType: "image/png",
@@ -53,7 +59,7 @@ const makeWorkspaceImage = async (
   return { workspace, imagePath };
 };
 
-Deno.test("isRelativePathWithinWorkspace rejects escaped and absolute relative results", () => {
+test("isRelativePathWithinWorkspace rejects escaped and absolute relative results", () => {
   const cases: Array<[string, boolean]> = [
     ["", true],
     ["capture.png", true],
@@ -73,7 +79,7 @@ Deno.test("isRelativePathWithinWorkspace rejects escaped and absolute relative r
   }
 });
 
-Deno.test("snapshot attachment survives regeneration of the source image", async () => {
+test("snapshot attachment survives regeneration of the source image", async () => {
   const original = pngBytes(1, 2, 3);
   const { workspace, imagePath } = await makeWorkspaceImage(original);
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
@@ -98,7 +104,7 @@ Deno.test("snapshot attachment survives regeneration of the source image", async
   );
 });
 
-Deno.test("identical re-view reuses the content-addressed snapshot file", async () => {
+test("identical re-view reuses the content-addressed snapshot file", async () => {
   const bytes = pngBytes(4, 5, 6);
   const { workspace, imagePath } = await makeWorkspaceImage(bytes);
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
@@ -130,7 +136,7 @@ Deno.test("identical re-view reuses the content-addressed snapshot file", async 
   assertNotEquals(first.snapshotPath, changed.snapshotPath);
 });
 
-Deno.test("without a snapshot dir, source mutation still fails closed", async () => {
+test("without a snapshot dir, source mutation still fails closed", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(1));
 
   const attachment = await createHarnessImageAttachment({
@@ -149,7 +155,7 @@ Deno.test("without a snapshot dir, source mutation still fails closed", async ()
   );
 });
 
-Deno.test("tampered snapshot fails closed with a snapshot-specific error", async () => {
+test("tampered snapshot fails closed with a snapshot-specific error", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(3, 1));
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
 
@@ -171,7 +177,7 @@ Deno.test("tampered snapshot fails closed with a snapshot-specific error", async
   );
 });
 
-Deno.test("snapshot file extension follows the detected media type", async () => {
+test("snapshot file extension follows the detected media type", async () => {
   const cases: Array<{
     bytes: Uint8Array;
     mediaType: string;
@@ -230,7 +236,7 @@ Deno.test("snapshot file extension follows the detected media type", async () =>
   }
 });
 
-Deno.test("a snapshot dir blocked by a regular file surfaces the stat error itself", async () => {
+test("a snapshot dir blocked by a regular file surfaces the stat error itself", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(5));
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
   await Deno.writeTextFile(snapshotDir, "not a directory");
@@ -247,7 +253,7 @@ Deno.test("a snapshot dir blocked by a regular file surfaces the stat error itse
   );
 });
 
-Deno.test("a missing source without a snapshot surfaces the original NotFound", async () => {
+test("a missing source without a snapshot surfaces the original NotFound", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(8));
 
   const attachment = await createHarnessImageAttachment({
@@ -264,7 +270,7 @@ Deno.test("a missing source without a snapshot surfaces the original NotFound", 
   );
 });
 
-Deno.test("missing snapshot fails closed with a clear error", async () => {
+test("missing snapshot fails closed with a clear error", async () => {
   const { workspace, imagePath } = await makeWorkspaceImage(pngBytes(6));
   const snapshotDir = join(await Deno.makeTempDir(), "image-attachments");
 

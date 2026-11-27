@@ -12,7 +12,6 @@
  * against each other rather than each being checked alone.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 
@@ -30,6 +29,7 @@ import { SchemaAndHash } from "@/SchemaAndHash.ts";
 import { isDeepFrozen, taggedHashStringOf } from "@commonfabric/data-model";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { toDeepFrozenSchema } from "@/schema-copy.ts";
 
 describe("schema-intern", () => {

@@ -7,7 +7,6 @@ import {
   assertRejects,
   assertThrows,
 } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
@@ -43,6 +42,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 class FakeSandboxRuntime implements SandboxRuntime {
   readonly shellRequests: SandboxShellRequest[] = [];
@@ -135,7 +135,7 @@ class FakeProcessRunner implements ProcessRunner {
   }
 }
 
-Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apart", async () => {
+test("CfHarnessEngine numbers CFC invocation contexts prepared at once apart", async () => {
   const sandbox = new FakeSandboxRuntime([
     { stdout: "", stderr: "", exitCode: 0 },
     { stdout: "", stderr: "", exitCode: 0 },
@@ -158,7 +158,7 @@ Deno.test("CfHarnessEngine numbers CFC invocation contexts prepared at once apar
   );
 });
 
-Deno.test("CfHarnessEngine records no CFC invocation context for a bash call refused over its session", async () => {
+test("CfHarnessEngine records no CFC invocation context for a bash call refused over its session", async () => {
   // The fake runtime has no sessions, as the Docker runtime has none.
   const sandbox = new FakeSandboxRuntime([
     { stdout: "", stderr: "", exitCode: 0 },
@@ -187,7 +187,7 @@ Deno.test("CfHarnessEngine records no CFC invocation context for a bash call ref
   );
 });
 
-Deno.test("CfHarnessEngine numbers a resumed run's next CFC invocation context past the highest recorded", async () => {
+test("CfHarnessEngine numbers a resumed run's next CFC invocation context past the highest recorded", async () => {
   const first = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime([
       { stdout: "", stderr: "", exitCode: 0 },
@@ -221,7 +221,7 @@ Deno.test("CfHarnessEngine numbers a resumed run's next CFC invocation context p
   );
 });
 
-Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", async () => {
+test("CfHarnessEngine keeps the handles of two mints recorded at once", async () => {
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),
     runId: "run-mints-at-once",
@@ -249,7 +249,7 @@ Deno.test("CfHarnessEngine keeps the handles of two mints recorded at once", asy
   );
 });
 
-Deno.test("CfHarnessEngine refuses to record a table where two addresses drew one token", async () => {
+test("CfHarnessEngine refuses to record a table where two addresses drew one token", async () => {
   const constant = () => Promise.resolve(new Uint8Array(32));
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),
@@ -272,7 +272,7 @@ Deno.test("CfHarnessEngine refuses to record a table where two addresses drew on
   assertEquals(engine.handleTable?.entries.length, 1);
 });
 
-Deno.test("CfHarnessEngine lands the newest run state last when two writes overlap", async () => {
+test("CfHarnessEngine lands the newest run state last when two writes overlap", async () => {
   // The first write is held until the second has been asked for, so the
   // store would finish the second first; the state it is left holding must
   // still be the newer one.
@@ -323,7 +323,7 @@ Deno.test("CfHarnessEngine lands the newest run state last when two writes overl
   );
 });
 
-Deno.test("CfHarnessEngine builds the direct runsc sandbox when given a workspace path", () => {
+test("CfHarnessEngine builds the direct runsc sandbox when given a workspace path", () => {
   const engine = new CfHarnessEngine({
     workspaceHostPath: "/host/project",
     ...INERT_RUNSC,
@@ -355,7 +355,7 @@ Deno.test("CfHarnessEngine builds the direct runsc sandbox when given a workspac
   });
 });
 
-Deno.test("CfHarnessEngine constructs in enforce mode without a CFC policy", () => {
+test("CfHarnessEngine constructs in enforce mode without a CFC policy", () => {
   // Construction must stay cheap and inspectable; the policy floor is only
   // enforced once the run starts — at diagnostics init (capability probes) or
   // the first tool call, whichever comes first (see the run-start tests below).
@@ -377,7 +377,7 @@ const recordFor = (
   session: Parameters<typeof harnessFabricSessionPosture>[0],
 ) => harnessFabricSessionPosture(session);
 
-Deno.test("CfHarnessEngine records the fabric session's resolved CFC posture in run state", () => {
+test("CfHarnessEngine records the fabric session's resolved CFC posture in run state", () => {
   // The assertion below reads both session dials back off the run state,
   // each marked as configured.
   const configured = new CfHarnessEngine({
@@ -458,7 +458,7 @@ Deno.test("CfHarnessEngine records the fabric session's resolved CFC posture in 
   assertEquals(sessionless.getRunState().fabricSessionCfc, undefined);
 });
 
-Deno.test("CfHarnessEngine publishes no posture record when a session factory overrides the config", () => {
+test("CfHarnessEngine publishes no posture record when a session factory overrides the config", () => {
   // The factory decides which runtime executes, and the config no longer
   // describes it — so a record projected from the config would assert a
   // posture nothing honors. The two itemized dials stand alone: they still
@@ -486,7 +486,7 @@ Deno.test("CfHarnessEngine publishes no posture record when a session factory ov
   });
 });
 
-Deno.test("CfHarnessEngine records an inherited posture record when the injected session is one it was given the record for", () => {
+test("CfHarnessEngine records an inherited posture record when the injected session is one it was given the record for", () => {
   // The delegating parent's shape: the child runs on the session its parent
   // built, so its posture is that session's rather than unknown, and the
   // record says where it came from.
@@ -518,7 +518,7 @@ Deno.test("CfHarnessEngine records an inherited posture record when the injected
   });
 });
 
-Deno.test("CfHarnessEngine refuses to resume a recorded record under an overriding session factory", () => {
+test("CfHarnessEngine refuses to resume a recorded record under an overriding session factory", () => {
   // The recorded record describes a runtime this resume is not building, so
   // carrying it forward would publish a posture the executing session may not
   // be at — the mismatch this guard exists to refuse.
@@ -549,7 +549,7 @@ Deno.test("CfHarnessEngine refuses to resume a recorded record under an overridi
   );
 });
 
-Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that contradicts the recorded one", () => {
+test("CfHarnessEngine refuses to resume under a fabric-session posture that contradicts the recorded one", () => {
   const posturedSession = {
     apiUrl: "https://toolshed.example/",
     identityKeyPath: "/keys/agent.pkcs8",
@@ -685,7 +685,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric-session posture that
   );
 });
 
-Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dial that contradicts the recorded mode", () => {
+test("CfHarnessEngine refuses to resume under a harness CFC enforcement dial that contradicts the recorded mode", () => {
   // `runState.cfcEnforcementMode` is the mode the run enforces at: the
   // sandbox transport floor and the tool policy both read it. A resume that
   // states a different one cannot move it, so the run would go on enforcing
@@ -764,7 +764,7 @@ Deno.test("CfHarnessEngine refuses to resume under a harness CFC enforcement dia
   assertEquals(manifested.config.cfcEnforcementModeSource, "inherited");
 });
 
-Deno.test("CfHarnessEngine refuses to resume under a fabric session raised above the recorded CFC enforcement mode", () => {
+test("CfHarnessEngine refuses to resume under a fabric session raised above the recorded CFC enforcement mode", () => {
   // A session at enforce-strict raises the harness loop to meet it, which on
   // a resume is a mode the loop cannot move to. The recorded-posture guard
   // does not reach this pair: the run recorded no fabric session, and the new
@@ -820,7 +820,7 @@ Deno.test("CfHarnessEngine refuses to resume under a fabric session raised above
   assertEquals(resumed.config.cfcEnforcementModeSource, "inherited");
 });
 
-Deno.test("CfHarnessEngine refuses a run state recorded before the CFC enforcement mode was", () => {
+test("CfHarnessEngine refuses a run state recorded before the CFC enforcement mode was", () => {
   // The resume reads the recorded mode to resolve against, so a run state too
   // old to carry one is refused for what it is, rather than reported as a
   // mismatch against a mode it never named.
@@ -845,7 +845,7 @@ Deno.test("CfHarnessEngine refuses a run state recorded before the CFC enforceme
   assertEquals(legacy.code, "provider-mismatch");
 });
 
-Deno.test("a refused resume names the dials without publishing the posture record", () => {
+test("a refused resume names the dials without publishing the posture record", () => {
   // The refusal message leaves the harness — a host that asks for structured
   // failures puts it on stderr and in an HTTP response body — while the
   // posture record lists every sink the runtime governs and every deviation
@@ -928,7 +928,7 @@ Deno.test("a refused resume names the dials without publishing the posture recor
   assertEquals(ceiling.message.includes("did:key:"), false);
 });
 
-Deno.test("a run recorded without a working directory is refused, not reported as a fault", () => {
+test("a run recorded without a working directory is refused, not reported as a fault", () => {
   // The refusal is deliberate — such a run predates what a resume needs — so
   // the operator is told that, rather than that the harness broke.
 
@@ -954,7 +954,7 @@ Deno.test("a run recorded without a working directory is refused, not reported a
   assertEquals(refusal.code, "provider-mismatch");
 });
 
-Deno.test("CfHarnessEngine grants no well-known handles without a fabric session", async () => {
+test("CfHarnessEngine grants no well-known handles without a fabric session", async () => {
   const engine = new CfHarnessEngine({
     ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
@@ -964,7 +964,7 @@ Deno.test("CfHarnessEngine grants no well-known handles without a fabric session
   assertEquals(engine.handleTable, undefined);
 });
 
-Deno.test("CfHarnessEngine seeds the piece-registry grant once and replays the record", async () => {
+test("CfHarnessEngine seeds the piece-registry grant once and replays the record", async () => {
   const registrySpace =
     "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
   const registryId = `of:fid1:${"C".repeat(43)}`;
@@ -1008,7 +1008,7 @@ Deno.test("CfHarnessEngine seeds the piece-registry grant once and replays the r
   assertEquals(registryReads, 1);
 });
 
-Deno.test("CfHarnessEngine mints operator input cells once and replays the record", async () => {
+test("CfHarnessEngine mints operator input cells once and replays the record", async () => {
   const cellSpace = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
   const cellRef = `/of:fid1:${"D".repeat(43)}/travellerName`;
   let spaceReads = 0;
@@ -1052,7 +1052,7 @@ Deno.test("CfHarnessEngine mints operator input cells once and replays the recor
   assertEquals(spaceReads, 1);
 });
 
-Deno.test("CfHarnessEngine refuses operator input cells without a fabric session", async () => {
+test("CfHarnessEngine refuses operator input cells without a fabric session", async () => {
   const engine = new CfHarnessEngine({
     ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
@@ -1069,7 +1069,7 @@ Deno.test("CfHarnessEngine refuses operator input cells without a fabric session
   assertEquals(engine.getRunState().inputCells, undefined);
 });
 
-Deno.test("CfHarnessEngine refuses an operator input cell into another space, recording nothing", async () => {
+test("CfHarnessEngine refuses an operator input cell into another space, recording nothing", async () => {
   const engine = new CfHarnessEngine({
     ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
@@ -1100,7 +1100,7 @@ Deno.test("CfHarnessEngine refuses an operator input cell into another space, re
   assertEquals(engine.handleTable, undefined);
 });
 
-Deno.test("CfHarnessEngine resolves a named piece address through the session's own space", async () => {
+test("CfHarnessEngine resolves a named piece address through the session's own space", async () => {
   // The engine hands the mint the LIVE session's space name and the live
   // session's resolver. Both are read here: a slug is resolved against
   // this session and nothing else, so the resolution the engine wires up
@@ -1141,7 +1141,7 @@ Deno.test("CfHarnessEngine resolves a named piece address through the session's 
   assertEquals(engine.handleTable, undefined);
 });
 
-Deno.test("CfHarnessEngine resolves a piece address spelling the space by its DID, and by name only when the space has one", async () => {
+test("CfHarnessEngine resolves a piece address spelling the space by its DID, and by name only when the space has one", async () => {
   const space = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";
   const establish = async (ref: string, name: string | undefined) => {
     const asked: string[] = [];
@@ -1198,7 +1198,7 @@ Deno.test("CfHarnessEngine resolves a piece address spelling the space by its DI
   );
 });
 
-Deno.test("CfHarnessEngine refuses a piece address naming a space that is not the session's", async () => {
+test("CfHarnessEngine refuses a piece address naming a space that is not the session's", async () => {
   const engine = new CfHarnessEngine({
     ...INERT_RUNSC,
     workspaceHostPath: "/host/project",
@@ -1226,7 +1226,7 @@ Deno.test("CfHarnessEngine refuses a piece address naming a space that is not th
   assertEquals(engine.getRunState().inputCells, undefined);
 });
 
-Deno.test("CfHarnessEngine rejects only cross-model Codex resume", () => {
+test("CfHarnessEngine rejects only cross-model Codex resume", () => {
   const resumedState = (
     modelProvider: "openai-codex" | "openai-compatible-gateway",
   ): HarnessRunState => ({
@@ -1271,7 +1271,7 @@ Deno.test("CfHarnessEngine rejects only cross-model Codex resume", () => {
   });
 });
 
-Deno.test("CfHarnessEngine rejects direct subagent resume but permits new child creation", () => {
+test("CfHarnessEngine rejects direct subagent resume but permits new child creation", () => {
   const lineage = {
     role: "subagent" as const,
     rootRunId: "root-run",
@@ -1353,7 +1353,7 @@ Deno.test("CfHarnessEngine rejects direct subagent resume but permits new child 
   assertEquals(newChild.getRunState().lineage, lineage);
 });
 
-Deno.test("CfHarnessEngine refuses to run capability probes in enforce mode without a CFC policy", async () => {
+test("CfHarnessEngine refuses to run capability probes in enforce mode without a CFC policy", async () => {
   // The prompt loop initializes diagnostics before the first model turn, and
   // the capability probes execute scripts inside the sandbox — so the policy
   // floor must fire before any sandbox execution, not only at the first
@@ -1377,7 +1377,7 @@ Deno.test("CfHarnessEngine refuses to run capability probes in enforce mode with
   assertEquals(runner.calls.length, 0);
 });
 
-Deno.test("CfHarnessEngine does not apply the CFC policy floor to an injected sandbox runtime", async () => {
+test("CfHarnessEngine does not apply the CFC policy floor to an injected sandbox runtime", async () => {
   // An injected sandboxRuntime is the thing that actually executes and carries
   // its own enforcement guarantees. The engine has no configuration of its own
   // to hold to a policy, so it must not refuse an otherwise valid enforce-mode
@@ -1392,7 +1392,7 @@ Deno.test("CfHarnessEngine does not apply the CFC policy floor to an injected sa
   assertEquals(typeof result.output.outputId, "string");
 });
 
-Deno.test("CfHarnessEngine runs browser actions on the host with the configured lease", async () => {
+test("CfHarnessEngine runs browser actions on the host with the configured lease", async () => {
   const workspaceHostPath = await Deno.makeTempDir({
     prefix: "cf-harness-engine-browser-",
   });
@@ -1434,7 +1434,7 @@ Deno.test("CfHarnessEngine runs browser actions on the host with the configured 
   });
 });
 
-Deno.test("CfHarnessEngine refuses browser actions when no lease is configured", async () => {
+test("CfHarnessEngine refuses browser actions when no lease is configured", async () => {
   const workspaceHostPath = await Deno.makeTempDir({
     prefix: "cf-harness-engine-browser-noleases-",
   });
@@ -1460,7 +1460,7 @@ Deno.test("CfHarnessEngine refuses browser actions when no lease is configured",
   });
 });
 
-Deno.test("CfHarnessEngine reserves artifact roots through host realpath mapping", async () => {
+test("CfHarnessEngine reserves artifact roots through host realpath mapping", async () => {
   const workspaceHostPath = await Deno.makeTempDir({
     prefix: "cf-harness-engine-artifacts-",
   });
@@ -1524,7 +1524,7 @@ Deno.test("CfHarnessEngine reserves artifact roots through host realpath mapping
   }
 });
 
-Deno.test("CfHarnessEngine records tool outputs into run state on success", async () => {
+test("CfHarnessEngine records tool outputs into run state on success", async () => {
   const sandbox = new FakeSandboxRuntime([
     { stdout: "one\n", stderr: "", exitCode: 0 },
     { stdout: "two\n", stderr: "", exitCode: 0 },
@@ -1589,7 +1589,7 @@ Deno.test("CfHarnessEngine records tool outputs into run state on success", asyn
   );
 });
 
-Deno.test("CfHarnessEngine records prompt slot binding into run state", () => {
+test("CfHarnessEngine records prompt slot binding into run state", () => {
   const promptSlotBinding = {
     type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
     source: { type: "test.prompt-slot", subject: "engine-test" },
@@ -1617,7 +1617,7 @@ Deno.test("CfHarnessEngine records prompt slot binding into run state", () => {
   assertEquals(engine.getRunState().updatedAt, "2026-04-17T19:00:01.000Z");
 });
 
-Deno.test("CfHarnessEngine derives prompt-slot labels for model-authored sandbox invocation inputs", async () => {
+test("CfHarnessEngine derives prompt-slot labels for model-authored sandbox invocation inputs", async () => {
   const promptSlotBinding = {
     type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
     source: { type: "test.prompt-slot", subject: "engine-label-test" },
@@ -1708,7 +1708,7 @@ Deno.test("CfHarnessEngine derives prompt-slot labels for model-authored sandbox
   );
 });
 
-Deno.test("CfHarnessEngine stamps policy snapshot state changes with mutation time", async () => {
+test("CfHarnessEngine stamps policy snapshot state changes with mutation time", async () => {
   const persistedStates: HarnessRunState[] = [];
   const runRoot = "/tmp/cf-harness-artifacts/run-policy-time";
   const artifactStore: HarnessArtifactStore = {
@@ -1782,7 +1782,7 @@ Deno.test("CfHarnessEngine stamps policy snapshot state changes with mutation ti
   );
 });
 
-Deno.test("CfHarnessEngine persists skill resource read artifacts", async () => {
+test("CfHarnessEngine persists skill resource read artifacts", async () => {
   const persistedStates: HarnessRunState[] = [];
   const persistedReads: HarnessSkillResourceReads[] = [];
   const runRoot = "/tmp/cf-harness-artifacts/run-skill-resource-read";
@@ -1865,7 +1865,7 @@ Deno.test("CfHarnessEngine persists skill resource read artifacts", async () => 
   assertEquals(persistedStates.at(-1)?.skillResourceReadsPath, path);
 });
 
-Deno.test("CfHarnessEngine timestamps CFC invocation contexts with mutation time", async () => {
+test("CfHarnessEngine timestamps CFC invocation contexts with mutation time", async () => {
   const persistedStates: HarnessRunState[] = [];
   const runRoot = "/tmp/cf-harness-artifacts/run-cfc-invocation-time";
   const artifactStore: HarnessArtifactStore = {
@@ -1929,7 +1929,7 @@ Deno.test("CfHarnessEngine timestamps CFC invocation contexts with mutation time
   assertEquals(engine.getRunState().updatedAt, "2026-04-17T21:00:04.000Z");
 });
 
-Deno.test("CfHarnessEngine records a tool invocation error without ending the run", async () => {
+test("CfHarnessEngine records a tool invocation error without ending the run", async () => {
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime([], new Error("sandbox boom")),
     runId: "run-fail",
@@ -1966,7 +1966,7 @@ Deno.test("CfHarnessEngine records a tool invocation error without ending the ru
   assertEquals(engine.getRunState().primaryFailure?.kind, "unknown");
 });
 
-Deno.test("CfHarnessEngine records recoverable file-tool failures without failing the run", async () => {
+test("CfHarnessEngine records recoverable file-tool failures without failing the run", async () => {
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime([{
       stdout: "",
@@ -2020,7 +2020,7 @@ Deno.test("CfHarnessEngine records recoverable file-tool failures without failin
   assertEquals(engine.getRunState().primaryFailure?.kind, "file_not_found");
 });
 
-Deno.test("CfHarnessEngine fails an interrupted run that has recorded a tool output", async () => {
+test("CfHarnessEngine fails an interrupted run that has recorded a tool output", async () => {
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime([
       { stdout: "done\n", stderr: "", exitCode: 0 },
@@ -2057,7 +2057,7 @@ Deno.test("CfHarnessEngine fails an interrupted run that has recorded a tool out
   assertEquals(engine.getRunState().primaryFailure?.kind, "harness_error");
 });
 
-Deno.test("CfHarnessEngine getRunState returns a deep clone", () => {
+test("CfHarnessEngine getRunState returns a deep clone", () => {
   const engine = new CfHarnessEngine({
     sandboxRuntime: new FakeSandboxRuntime(),
     runState: {
@@ -2120,7 +2120,7 @@ Deno.test("CfHarnessEngine getRunState returns a deep clone", () => {
   });
 });
 
-Deno.test("CfHarnessEngine rejects legacy run state snapshots without currentDir", () => {
+test("CfHarnessEngine rejects legacy run state snapshots without currentDir", () => {
   assertThrows(
     () =>
       new CfHarnessEngine({
@@ -2141,7 +2141,7 @@ Deno.test("CfHarnessEngine rejects legacy run state snapshots without currentDir
   );
 });
 
-Deno.test("CfHarnessEngine keeps a resumed run's recorded provider authoritative", () => {
+test("CfHarnessEngine keeps a resumed run's recorded provider authoritative", () => {
   const runState: HarnessRunState = {
     runId: "run-codex-resume-provider",
     status: "completed",
@@ -2230,7 +2230,7 @@ Deno.test("CfHarnessEngine keeps a resumed run's recorded provider authoritative
   );
 });
 
-Deno.test("CfHarnessEngine records the handle table and persists run state", async () => {
+test("CfHarnessEngine records the handle table and persists run state", async () => {
   const persistedStates: HarnessRunState[] = [];
   const runRoot = "/tmp/cf-harness-artifacts/run-handle-table";
   const artifactStore: HarnessArtifactStore = {
@@ -2276,7 +2276,7 @@ Deno.test("CfHarnessEngine records the handle table and persists run state", asy
   assertEquals(persistedStates.at(-1)?.handleTable, table);
 });
 
-Deno.test("CfHarnessEngine exposes a handle table carried by a resumed run state", async () => {
+test("CfHarnessEngine exposes a handle table carried by a resumed run state", async () => {
   const { table } = await mintAddressHandle(
     createHarnessHandleTable("run-resumed-handles"),
     `/of:fid1:${"B".repeat(43)}`,
@@ -2302,7 +2302,7 @@ Deno.test("CfHarnessEngine exposes a handle table carried by a resumed run state
   assertEquals(resumed.handleTable, table);
 });
 
-Deno.test("CfHarnessEngine records the fabric session's read ceiling in run state and refuses to resume under another", () => {
+test("CfHarnessEngine records the fabric session's read ceiling in run state and refuses to resume under another", () => {
   const boundedSession = {
     apiUrl: "https://toolshed.example/",
     identityKeyPath: "/keys/agent.pkcs8",
@@ -2392,7 +2392,7 @@ Deno.test("CfHarnessEngine records the fabric session's read ceiling in run stat
   );
 });
 
-Deno.test("CfHarnessEngine records the same read ceiling in a delegated child as in its parent", () => {
+test("CfHarnessEngine records the same read ceiling in a delegated child as in its parent", () => {
   const runManifest = {
     type: "cf-harness.loom-run-manifest" as const,
     version: 1 as const,

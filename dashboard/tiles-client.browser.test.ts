@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { renderTile } from "./tile-render.ts";
 import { reconcileTiles } from "./tiles-client.ts";
 import type { TileView } from "./types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function rendering(...tiles: [string, TileView][]): HTMLElement[] {
   const template = document.createElement("template");
@@ -35,7 +36,7 @@ function runRows(titles: string[]): string {
   }</div>`;
 }
 
-Deno.test("an update keeps an unchanged tile's element and replaces a changed tile where it stands", () => {
+test("an update keeps an unchanged tile's element and replaces a changed tile where it stands", () => {
   withBoard([
     ["labs ci", { status: "good", value: "passing" }],
     ["loom ci", { status: "good", value: "passing" }],
@@ -60,7 +61,7 @@ Deno.test("an update keeps an unchanged tile's element and replaces a changed ti
   });
 });
 
-Deno.test("an update adds, removes and reorders tiles by label, keeping the elements of tiles it keeps", () => {
+test("an update adds, removes and reorders tiles by label, keeping the elements of tiles it keeps", () => {
   withBoard([
     ["labs ci", { status: "good" }],
     ["loom ci", { status: "good" }],
@@ -83,7 +84,7 @@ Deno.test("an update adds, removes and reorders tiles by label, keeping the elem
   });
 });
 
-Deno.test("an update keeps focus and scroll position in a tile when a tile before it leaves the page", () => {
+test("an update keeps focus and scroll position in a tile when a tile before it leaves the page", () => {
   withBoard([
     ["scheduled workflows", { status: "bad", value: "1 failing" }],
     ["recent commits", { status: "good", extra: runRows(["c", "b", "a"]) }],
@@ -107,7 +108,7 @@ Deno.test("an update keeps focus and scroll position in a tile when a tile befor
   });
 });
 
-Deno.test("an update moves focus from a replaced linked tile to its replacement", () => {
+test("an update moves focus from a replaced linked tile to its replacement", () => {
   withBoard([[
     "labs ci",
     { status: "good", value: "passing", href: "https://example.com/ci" },
@@ -125,7 +126,7 @@ Deno.test("an update moves focus from a replaced linked tile to its replacement"
   });
 });
 
-Deno.test("an update keeps focus on a tile's link when the chart under it gains or loses links of its own", () => {
+test("an update keeps focus on a tile's link when the chart under it gains or loses links of its own", () => {
   // A chart holding a link takes the tile's link off the whole tile and puts
   // it around the tile's text alone, and an empty chart puts it back.
   const trust = (extra: string): TileView => ({
@@ -148,7 +149,7 @@ Deno.test("an update keeps focus on a tile's link when the chart under it gains 
   });
 });
 
-Deno.test("an update moves focus inside a replaced tile to the link with the same focus key", () => {
+test("an update moves focus inside a replaced tile to the link with the same focus key", () => {
   withBoard([[
     "recent commits",
     { status: "good", extra: runRows(["b", "a"]) },
@@ -168,7 +169,7 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
   });
 });
 
-Deno.test("an update keeps focus on a row's pull request number when other rows link the same pull request", () => {
+test("an update keeps focus on a row's pull request number when other rows link the same pull request", () => {
   withBoard([[
     "recent commits",
     { status: "good", extra: runRows(["b", "a"]) },
@@ -188,7 +189,7 @@ Deno.test("an update keeps focus on a row's pull request number when other rows 
   });
 });
 
-Deno.test("an update moves focus inside a replaced tile to the element that is not a link with the same focus key", () => {
+test("an update moves focus inside a replaced tile to the element that is not a link with the same focus key", () => {
   const targets = (host: string) =>
     `<div class="tile-detail-list" role="region" tabindex="0" data-focus-key="targets">${host}</div>`;
   withBoard([[
@@ -206,7 +207,7 @@ Deno.test("an update moves focus inside a replaced tile to the element that is n
   });
 });
 
-Deno.test("an update moves focus inside a replaced tile to the link with the same href when the link has no focus key", () => {
+test("an update moves focus inside a replaced tile to the link with the same href when the link has no focus key", () => {
   const links = (hrefs: string[]) =>
     hrefs.map((href) => `<a href="https://example.com/${href}">${href}</a>`)
       .join("");
@@ -228,7 +229,7 @@ Deno.test("an update moves focus inside a replaced tile to the link with the sam
   });
 });
 
-Deno.test("an update keeps the scroll position of a replaced tile's list", () => {
+test("an update keeps the scroll position of a replaced tile's list", () => {
   withBoard([[
     "recent commits",
     { status: "good", extra: runRows(["c", "b", "a"]) },

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Window } from "happy-dom";
 import {
@@ -12,6 +11,7 @@ import {
   themedChartSeries,
 } from "../theme.ts";
 import { LIGHT_STATUS_TEXT, STATUS_COLOR } from "../palette.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 function contrastRatio(first: string, second: string): number {
   const luminance = (color: string) => {

@@ -3480,8 +3480,8 @@ export class PatternManager {
           // the transform-and-emit step (`compileToModules`: TS program build,
           // type-check, CF transform, emit). Trust by provenance: bytes a
           // runtime compiled were SES-verified then, and the cache holds only
-          // what this process or another toolshed on the host put, in a
-          // directory that belongs to the user the toolsheds run as; bytes a
+          // what this process or another toolshed or `cf` process on the host
+          // put, in a directory that belongs to the user they run as; bytes a
           // test seeded from a CI disk file are trusted via the workflow cache
           // key, which fingerprints every compile input.
           const { bodies: processBodies, endTurn } = await this

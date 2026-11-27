@@ -20,6 +20,7 @@ import {
   staleReadRefusal,
 } from "./support/refuse-event-commit.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 /**
  * Records every sync of the document `of` through the space's provider, in

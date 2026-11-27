@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   cfcConfidentialityForObservationNode,
@@ -7,6 +6,7 @@ import {
   joinCfcObservedConfidentiality,
   uniqueCfcAtoms,
 } from "../src/cfc/mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CFC observation helpers", () => {
   it("deduplicates observed confidentiality atoms by value", () => {

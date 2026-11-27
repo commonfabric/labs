@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { slowQueryThresholdMs } from "../../v2/server.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A reader that holds `value` for the one variable the threshold reads. */
 const reading = (value: string | undefined) => (name: string) =>

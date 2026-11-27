@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   findCommitMessages,
   messageAt,
@@ -13,7 +14,7 @@ import {
   SHOW,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitMessages: several commits (git log -p) each get a region", () => {
+test("findCommitMessages: several commits (git log -p) each get a region", () => {
   const lines = [
     "commit aaaaaaa",
     "Author: A",
@@ -31,7 +32,7 @@ Deno.test("findCommitMessages: several commits (git log -p) each get a region", 
   assertEquals(msgs.map((m) => [m.start, m.end]), [[3, 3], [8, 8]]);
 });
 
-Deno.test("messageAt: maps a row to its region or null", () => {
+test("messageAt: maps a row to its region or null", () => {
   const msgs = findCommitMessages(SHOW);
   assertEquals(messageAt(msgs, 4)?.start, 4, "inside");
   assertEquals(messageAt(msgs, 6)?.end, 6, "inside at the end");
@@ -39,7 +40,7 @@ Deno.test("messageAt: maps a row to its region or null", () => {
   assertEquals(messageAt(msgs, 9), null, "the diff is outside");
 });
 
-Deno.test({
+test({
   name: "realGit: hook-spawned Git uses the other repository's hooks",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -84,7 +85,7 @@ git -C ${shellQuote(other)} commit --allow-empty -q -m nested`,
   },
 });
 
-Deno.test({
+test({
   name: "realGit: rolls back a reftable amend rewritten by a hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -122,7 +123,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: commits exact pager contents while preserving staged and unstaged edits in the same file", async () => {
+test("realGit: commits exact pager contents while preserving staged and unstaged edits in the same file", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -169,7 +170,7 @@ Deno.test("realGit: commits exact pager contents while preserving staged and uns
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rejects a commit tree changed by a hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -207,7 +208,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "realGit: rejects a commit message rewritten by a hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -242,7 +243,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: rejects a selected path that HEAD does not contain", async () => {
+test("realGit: rejects a selected path that HEAD does not contain", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -271,7 +272,7 @@ Deno.test("realGit: rejects a selected path that HEAD does not contain", async (
   }
 });
 
-Deno.test({
+test({
   name:
     "realGit: uses the commit summary when hook journals and reflogs are gone",
   ignore: Deno.build.os === "windows",

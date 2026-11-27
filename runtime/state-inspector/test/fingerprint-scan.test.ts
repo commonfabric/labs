@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
 import { hashOf } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { openSpace, type SpaceDb } from "../db.ts";
 import {

@@ -1,7 +1,6 @@
 /** Tests compression negotiation on the standalone memory WebSocket host. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   decodeMemoryBoundary,
@@ -17,6 +16,7 @@ import {
   parseMemoryCompressionControlMessage,
 } from "../../v2/message-compression.ts";
 import { StandaloneMemoryServer } from "../../v2/standalone.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("standalone memory compression", () => {
   it("requires hello before accepting a compression control", async () => {

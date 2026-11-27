@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getMimeType } from "@/lib/mime-type.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mime-type", () => {
   describe("getMimeType", () => {

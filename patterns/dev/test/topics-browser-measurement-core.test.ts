@@ -15,7 +15,6 @@
  * `docs/development/BENCHMARKS.md` says how the recording is taken again.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -41,6 +40,7 @@ import {
 import fixture from "./topics-browser-measurement-core.fixture.json" with {
   type: "json",
 };
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("topics-browser-measurement-core", () => {
   const fryer = [

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stripAnsi } from "@commonfabric/cli/view/ansi";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { Canvas } from "./canvas.ts";
 import { frame, menuBar, pullDown, statusLine } from "./widgets.ts";

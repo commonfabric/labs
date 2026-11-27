@@ -1,6 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { WakeShaper } from "../../src/scheduler/wake-shaping.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 describe("WakeShaper", () => {
   describe("instance members", () => {

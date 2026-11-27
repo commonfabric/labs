@@ -25,6 +25,7 @@ import {
 import { Identity, type IdentityCreateConfig } from "@commonfabric/identity";
 import { env } from "@commonfabric/integration";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 /** A content-addressed pattern pointer. */
 type PatternRef = { identity: string; symbol: string };
@@ -449,7 +450,7 @@ async function testPatternAndDataPersistence() {
   console.log("\n=== TEST PASSED ===");
 }
 
-Deno.test({
+test({
   name: "pattern and data persistence - full reactive cycle",
   fn: testPatternAndDataPersistence,
   sanitizeResources: false,

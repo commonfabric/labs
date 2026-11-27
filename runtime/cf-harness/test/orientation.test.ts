@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   buildCfHarnessBaseSystemPrompt,
@@ -14,6 +13,7 @@ import { REVISION_VERIFICATION_GUIDANCE } from "../src/revision-verification.ts"
 import { orientContextMessages } from "../src/session-assembly.ts";
 import { WEAVER_COMMAND_GUIDANCE } from "../src/tools/weaver-action.ts";
 import { finishTaskTool } from "../src/tools/finish-task.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("orientation", () => {
   it("tells the parent which explicit selections skip opening research", () => {

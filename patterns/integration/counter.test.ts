@@ -1,6 +1,5 @@
 import { createTestSpace, env, type Page } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
 import { type DID, Identity } from "@commonfabric/identity";
@@ -12,6 +11,12 @@ import {
 } from "./pieces-controller.ts";
 import { waitForText } from "./cfc-browser-helpers.ts";
 import { defer, type Deferred } from "@commonfabric/async/defer";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const { API_URL, FRONTEND_URL } = env;
 

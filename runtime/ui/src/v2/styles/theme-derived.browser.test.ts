@@ -9,6 +9,7 @@ import { expect } from "@std/expect";
 import { CFCard } from "../components/cf-card/index.ts";
 import { CFHoverReveal } from "../components/cf-hover-reveal/index.ts";
 import { CFThemeProvider } from "../components/cf-theme/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const PAGE_SURFACE = "rgb(9, 9, 9)";
 const TINT_SURFACE = "rgb(1, 2, 3)";
@@ -53,7 +54,7 @@ async function rendered(
   for (const element of elements) await element.updateComplete;
 }
 
-Deno.test("a card under a cf-theme tint inside another component draws the tint's surface", async () => {
+test("a card under a cf-theme tint inside another component draws the tint's surface", async () => {
   const p = page();
   const tint = new CFThemeProvider();
   tint.theme = { colors: { surface: TINT_SURFACE } };
@@ -74,7 +75,7 @@ Deno.test("a card under a cf-theme tint inside another component draws the tint'
   }
 });
 
-Deno.test("a card under any element setting the theme's surface inside another component draws that surface", async () => {
+test("a card under any element setting the theme's surface inside another component draws that surface", async () => {
   const p = page();
   const tint = document.createElement("div");
   tint.style.setProperty("--cf-theme-color-surface", TINT_SURFACE);
@@ -91,7 +92,7 @@ Deno.test("a card under any element setting the theme's surface inside another c
   }
 });
 
-Deno.test("a card's own surface wins over the recipe, inside another component or not", async () => {
+test("a card's own surface wins over the recipe, inside another component or not", async () => {
   const p = page();
   const own = "rgb(4, 5, 6)";
   const inside = new CFCard();

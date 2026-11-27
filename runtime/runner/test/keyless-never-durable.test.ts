@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
@@ -11,6 +10,7 @@ import type { Engine } from "../src/harness/engine.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { getMetaLink } from "../src/link-utils.ts";
 import { getLogger } from "@commonfabric/logger";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   getPatternIdentityRef,
   getPatternSetupIdentityRef,

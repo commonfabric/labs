@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { NormalizedFullLink } from "../../src/link-utils.ts";
 import type { EnsurePieceVerdict } from "../../src/ensure-piece-running.ts";
 import { EventDroppedError } from "../../src/scheduler/backpressure.ts";

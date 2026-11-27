@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { checkSqliteWriteCeiling } from "../../../src/builtins/sqlite/write-ceiling.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type Tables = Parameters<typeof checkSqliteWriteCeiling>[2];
 

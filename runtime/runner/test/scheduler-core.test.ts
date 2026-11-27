@@ -28,6 +28,7 @@ import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
 import type { FabricValue } from "@commonfabric/data-model";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 // Seed stored CFC metadata with a path-[] full-document write, reading the

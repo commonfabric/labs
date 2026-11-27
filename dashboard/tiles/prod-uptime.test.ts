@@ -19,6 +19,7 @@ import {
   setProdUptimeHttpClientFactoryForTest,
   setProdUptimeProxyStreamOpenerForTest,
 } from "./prod-uptime.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type ProxyFetchInit = RequestInit & { client?: Deno.HttpClient };
 type DnsReply = readonly string[] | Error;
@@ -188,7 +189,7 @@ function assertTargetDetail(
   assert(nextRow < 0 || detailAt < nextRow);
 }
 
-Deno.test("prod uptime: waits for public connectivity before checking hosts", async () => {
+test("prod uptime: waits for public connectivity before checking hosts", async () => {
   let commonToolsReachable = false;
   let dnsReachable = true;
   let fetches = 0;
@@ -235,7 +236,7 @@ Deno.test("prod uptime: waits for public connectivity before checking hosts", as
   }
 });
 
-Deno.test("prod uptime: commonfabric.com uses public-site response semantics", async () => {
+test("prod uptime: commonfabric.com uses public-site response semantics", async () => {
   for (
     const [responseStatus, expectedStatus, expectedValue] of [
       [301, "good", "8/8 hosts up"],
@@ -271,7 +272,7 @@ Deno.test("prod uptime: commonfabric.com uses public-site response semantics", a
   }
 });
 
-Deno.test("prod uptime: commonfabric.com warns only above 2500 ms", async () => {
+test("prod uptime: commonfabric.com warns only above 2500 ms", async () => {
   for (
     const [latency, status, value] of [
       [2500, "good", "8/8 hosts up"],
@@ -310,7 +311,7 @@ Deno.test("prod uptime: commonfabric.com warns only above 2500 ms", async () => 
   }
 });
 
-Deno.test("prod uptime: commonfabric.com needs three missed responses to count as down", async () => {
+test("prod uptime: commonfabric.com needs three missed responses to count as down", async () => {
   let siteUp = false;
   const restoreConnectivity = setProdUptimeConnectivityForTest(true);
   const restore = stub((url) => {
@@ -347,7 +348,7 @@ Deno.test("prod uptime: commonfabric.com needs three missed responses to count a
   }
 });
 
-Deno.test("prod uptime: COMMON_FABRIC_URL replaces the public-site target", async () => {
+test("prod uptime: COMMON_FABRIC_URL replaces the public-site target", async () => {
   const fetched: string[] = [];
   const restore = stub((url) => {
     fetched.push(url);
@@ -372,7 +373,7 @@ Deno.test("prod uptime: COMMON_FABRIC_URL replaces the public-site target", asyn
   }
 });
 
-Deno.test("prod uptime: healthy server checks keep pings while other hosts disappear", async () => {
+test("prod uptime: healthy server checks keep pings while other hosts disappear", async () => {
   const fetched: string[] = [];
   const resolved: string[] = [];
   const restore = stub(
@@ -418,7 +419,7 @@ Deno.test("prod uptime: healthy server checks keep pings while other hosts disap
   }
 });
 
-Deno.test("prod uptime: every non-200 health response is a red exception", async () => {
+test("prod uptime: every non-200 health response is a red exception", async () => {
   for (const responseStatus of [301, 404, 503]) {
     const restore = stub((url) =>
       new Response(null, {
@@ -440,7 +441,7 @@ Deno.test("prod uptime: every non-200 health response is a red exception", async
   }
 });
 
-Deno.test("prod uptime: several hosts with nothing behind them are counted", async () => {
+test("prod uptime: several hosts with nothing behind them are counted", async () => {
   const restore = stub(
     (url) => {
       if (url.includes("rapids")) throw new TypeError("unreachable");
@@ -470,7 +471,7 @@ Deno.test("prod uptime: several hosts with nothing behind them are counted", asy
   }
 });
 
-Deno.test("prod uptime: one host down is named rather than counted", async () => {
+test("prod uptime: one host down is named rather than counted", async () => {
   const restore = stub(
     undefined,
     (hostname) =>
@@ -492,7 +493,7 @@ Deno.test("prod uptime: one host down is named rather than counted", async () =>
   }
 });
 
-Deno.test("prod uptime: latency is orange above 500 ms and red above 1000 ms", async () => {
+test("prod uptime: latency is orange above 500 ms and red above 1000 ms", async () => {
   const prompt = await withLatency("rapids", 500);
   assertEquals(prompt.status, "good");
   assertEquals(prompt.value, "8/8 hosts up");
@@ -514,7 +515,7 @@ Deno.test("prod uptime: latency is orange above 500 ms and red above 1000 ms", a
   assertTargetDetail(bad, "rapids", "1001 ms");
 });
 
-Deno.test("prod uptime: a missing hostname names that host as down", async () => {
+test("prod uptime: a missing hostname names that host as down", async () => {
   const restore = stub(
     undefined,
     (hostname) =>
@@ -536,7 +537,7 @@ Deno.test("prod uptime: a missing hostname names that host as down", async () =>
   }
 });
 
-Deno.test("prod uptime: a host that both errors and has no address headlines as down", async () => {
+test("prod uptime: a host that both errors and has no address headlines as down", async () => {
   const restore = stub(
     (url) => new Response(null, { status: url.includes("rapids") ? 503 : 200 }),
     (hostname) =>
@@ -557,7 +558,7 @@ Deno.test("prod uptime: a host that both errors and has no address headlines as 
   }
 });
 
-Deno.test("prod uptime: red outranks orange and HTTP outranks latency", async () => {
+test("prod uptime: red outranks orange and HTTP outranks latency", async () => {
   const restoreElapsedMs = setProdUptimeElapsedMsForTest((name) =>
     name === "rapids" ? 501 : 0
   );
@@ -580,7 +581,7 @@ Deno.test("prod uptime: red outranks orange and HTTP outranks latency", async ()
   }
 });
 
-Deno.test("prod uptime: resolver failures are orange DNS unknown exceptions", async () => {
+test("prod uptime: resolver failures are orange DNS unknown exceptions", async () => {
   const restore = stub(
     undefined,
     (hostname) =>
@@ -599,7 +600,7 @@ Deno.test("prod uptime: resolver failures are orange DNS unknown exceptions", as
   }
 });
 
-Deno.test("prod uptime: either an A or AAAA answer confirms DNS", async () => {
+test("prod uptime: either an A or AAAA answer confirms DNS", async () => {
   const restore = stub(
     undefined,
     (_hostname, recordType) =>
@@ -618,7 +619,7 @@ Deno.test("prod uptime: either an A or AAAA answer confirms DNS", async () => {
   }
 });
 
-Deno.test("prod uptime: explicit server URLs and bastion host replace their defaults", async () => {
+test("prod uptime: explicit server URLs and bastion host replace their defaults", async () => {
   const fetched: string[] = [];
   const resolved: string[] = [];
   const restore = stub(
@@ -655,7 +656,7 @@ Deno.test("prod uptime: explicit server URLs and bastion host replace their defa
   }
 });
 
-Deno.test("prod uptime: PROD_URL remains an estuary URL alias", async () => {
+test("prod uptime: PROD_URL remains an estuary URL alias", async () => {
   const fetched: string[] = [];
   const restore = stub((url) => {
     fetched.push(url);
@@ -672,7 +673,7 @@ Deno.test("prod uptime: PROD_URL remains an estuary URL alias", async () => {
   }
 });
 
-Deno.test("prod uptime: one proxy client serves both health checks and closes after them", async () => {
+test("prod uptime: one proxy client serves both health checks and closes after them", async () => {
   let options: Parameters<typeof Deno.createHttpClient>[0] | undefined;
   let closed = 0;
   let cancelled = 0;
@@ -725,7 +726,7 @@ Deno.test("prod uptime: one proxy client serves both health checks and closes af
   }
 });
 
-Deno.test("prod uptime: a proxy replaces the local resolver for tailnet names", async () => {
+test("prod uptime: a proxy replaces the local resolver for tailnet names", async () => {
   const resolved: string[] = [];
   const log = socks5Log();
   const restoreClient = stubProxyClient();
@@ -750,7 +751,7 @@ Deno.test("prod uptime: a proxy replaces the local resolver for tailnet names", 
   }
 });
 
-Deno.test("prod uptime: a tailnet host the proxy cannot reach is a red exception", async () => {
+test("prod uptime: a tailnet host the proxy cannot reach is a red exception", async () => {
   for (const reply of [1, 2, 4, 5]) {
     const restoreClient = stubProxyClient();
     const restore = stub(undefined, undefined, fakeSocks5(reply, socks5Log()));
@@ -770,7 +771,7 @@ Deno.test("prod uptime: a tailnet host the proxy cannot reach is a red exception
   }
 });
 
-Deno.test("prod uptime: a proxy that will not talk leaves the host down", async () => {
+test("prod uptime: a proxy that will not talk leaves the host down", async () => {
   for (
     const opener of [
       () => Promise.reject(new Deno.errors.ConnectionRefused("refused")),
@@ -812,7 +813,7 @@ Deno.test("prod uptime: a proxy that will not talk leaves the host down", async 
   }
 });
 
-Deno.test("prod uptime: the SOCKS5 exchange survives short reads and writes", async () => {
+test("prod uptime: the SOCKS5 exchange survives short reads and writes", async () => {
   const connects: string[] = [];
   const restoreClient = stubProxyClient();
   // A proxy that accepts and returns exactly one byte at a time.
@@ -865,7 +866,7 @@ Deno.test("prod uptime: the SOCKS5 exchange survives short reads and writes", as
   }
 });
 
-Deno.test("prod uptime: a probed host is revisited hourly, not every collection", async () => {
+test("prod uptime: a probed host is revisited hourly, not every collection", async () => {
   const log = socks5Log();
   const restoreClient = stubProxyClient();
   const restore = stub(undefined, undefined, fakeSocks5(0, log));
@@ -893,7 +894,7 @@ Deno.test("prod uptime: a probed host is revisited hourly, not every collection"
   }
 });
 
-Deno.test("prod uptime: a host that did not answer is asked again at once", async () => {
+test("prod uptime: a host that did not answer is asked again at once", async () => {
   const log = socks5Log();
   const restoreClient = stubProxyClient();
   const restore = stub(undefined, undefined, fakeSocks5(1, log));
@@ -910,7 +911,7 @@ Deno.test("prod uptime: a host that did not answer is asked again at once", asyn
   }
 });
 
-Deno.test("prod uptime: a host that starts answering clears on the next refresh", async () => {
+test("prod uptime: a host that starts answering clears on the next refresh", async () => {
   const log = socks5Log();
   const replies = [1, 0];
   const restoreClient = stubProxyClient();
@@ -936,7 +937,7 @@ Deno.test("prod uptime: a host that starts answering clears on the next refresh"
   }
 });
 
-Deno.test("prod uptime: a host that stops answering is not held up by its last visit", async () => {
+test("prod uptime: a host that stops answering is not held up by its last visit", async () => {
   const log = socks5Log();
   const replies = [0, 1];
   const restoreClient = stubProxyClient();
@@ -970,7 +971,7 @@ Deno.test("prod uptime: a host that stops answering is not held up by its last v
   }
 });
 
-Deno.test("prod uptime: a name too long for the protocol counts the host down", async () => {
+test("prod uptime: a name too long for the protocol counts the host down", async () => {
   const log = socks5Log();
   const restoreClient = stubProxyClient();
   const restore = stub(undefined, undefined, fakeSocks5(0, log));
@@ -989,7 +990,7 @@ Deno.test("prod uptime: a name too long for the protocol counts the host down", 
   }
 });
 
-Deno.test("prod uptime: a health URL carrying a port keeps it", async () => {
+test("prod uptime: a health URL carrying a port keeps it", async () => {
   const fetched: string[] = [];
   const restore = stub((url) => {
     fetched.push(url);
@@ -1011,7 +1012,7 @@ Deno.test("prod uptime: a health URL carrying a port keeps it", async () => {
   }
 });
 
-Deno.test("prod uptime: BASTION_HOST names the port the proxy connects to", async () => {
+test("prod uptime: BASTION_HOST names the port the proxy connects to", async () => {
   const log = socks5Log();
   const restoreClient = stubProxyClient();
   const restore = stub(undefined, undefined, fakeSocks5(0, log));
@@ -1029,7 +1030,7 @@ Deno.test("prod uptime: BASTION_HOST names the port the proxy connects to", asyn
   }
 });
 
-Deno.test("prod uptime: an HTTP proxy leaves a tailnet-only host gray", async () => {
+test("prod uptime: an HTTP proxy leaves a tailnet-only host gray", async () => {
   const log = socks5Log();
   const restoreClient = stubProxyClient();
   const restore = stub(undefined, undefined, fakeSocks5(0, log));
@@ -1048,7 +1049,7 @@ Deno.test("prod uptime: an HTTP proxy leaves a tailnet-only host gray", async ()
   }
 });
 
-Deno.test("prod uptime: accepted proxy schemes configure one shared client", async () => {
+test("prod uptime: accepted proxy schemes configure one shared client", async () => {
   for (
     const [proxy, expected, expectedStatus] of [
       [
@@ -1099,7 +1100,7 @@ Deno.test("prod uptime: accepted proxy schemes configure one shared client", asy
   }
 });
 
-Deno.test("prod uptime: malformed and unsafe proxies fail closed", async () => {
+test("prod uptime: malformed and unsafe proxies fail closed", async () => {
   for (
     const proxy of [
       "not a url",
@@ -1128,7 +1129,7 @@ Deno.test("prod uptime: malformed and unsafe proxies fail closed", async () => {
   }
 });
 
-Deno.test("prod uptime: a health request that never connects is a red down exception", async () => {
+test("prod uptime: a health request that never connects is a red down exception", async () => {
   const restore = stub((url) => {
     if (url.includes("rapids")) throw new TypeError("unreachable");
     return new Response(null, { status: 200 });
@@ -1145,7 +1146,7 @@ Deno.test("prod uptime: a health request that never connects is a red down excep
   }
 });
 
-Deno.test("prod uptime: body cleanup cannot hide a prompt HTTP 200", async () => {
+test("prod uptime: body cleanup cannot hide a prompt HTTP 200", async () => {
   const restore = stub(() =>
     new Response(
       new ReadableStream<Uint8Array>({
@@ -1167,7 +1168,7 @@ Deno.test("prod uptime: body cleanup cannot hide a prompt HTTP 200", async () =>
   }
 });
 
-Deno.test("prod uptime: an unparseable configured URL rejects the collection", async () => {
+test("prod uptime: an unparseable configured URL rejects the collection", async () => {
   const restore = stub();
   try {
     await assertRejects(
@@ -1179,7 +1180,7 @@ Deno.test("prod uptime: an unparseable configured URL rejects the collection", a
   }
 });
 
-Deno.test("prod uptime: identity and cadence", () => {
+test("prod uptime: identity and cadence", () => {
   assertEquals(prodUptime.label, "production");
   assertEquals(prodUptime.intervalMs, 30_000);
 });

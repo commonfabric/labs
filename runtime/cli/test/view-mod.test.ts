@@ -1,5 +1,6 @@
 import { assertRejects } from "@std/assert";
 import { ViewError, viewMain } from "../lib/view/mod.ts";
+import { test } from "@commonfabric/test-support/test";
 
 async function withTempFile(
   contents: string,
@@ -14,7 +15,7 @@ async function withTempFile(
   }
 }
 
-Deno.test("viewMain: empty input throws a clean ViewError (no stack trace)", async () => {
+test("viewMain: empty input throws a clean ViewError (no stack trace)", async () => {
   await withTempFile("", async (path) => {
     await assertRejects(
       () =>
@@ -29,7 +30,7 @@ Deno.test("viewMain: empty input throws a clean ViewError (no stack trace)", asy
   });
 });
 
-Deno.test("viewMain: whitespace-only input is treated as empty", async () => {
+test("viewMain: whitespace-only input is treated as empty", async () => {
   await withTempFile("  \n\n\t\n", async (path) => {
     await assertRejects(
       () =>

@@ -2,10 +2,10 @@
 import { mount } from "../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { ReactiveElement } from "lit";
 
 import { DebugController } from "./debug-controller.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A host carrying a {@link DebugController}, which records its animations. */
 class Host extends ReactiveElement {

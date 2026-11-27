@@ -19,6 +19,7 @@ import {
   runHarnessInteractiveChatStdio,
   type RunHarnessInteractiveChatStdioOptions,
 } from "../src/interactive-chat-stdio.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type InteractiveEnvelope = HarnessChatEventEnvelope | HarnessChatResponse;
 
@@ -171,7 +172,7 @@ const onlyRunRoot = async (artifactRoot: string): Promise<string> => {
   return join(artifactRoot, entries[0]);
 };
 
-Deno.test("local Loom interactive stdio sends Codex traffic without gateway fallback", async () => {
+test("local Loom interactive stdio sends Codex traffic without gateway fallback", async () => {
   const home = await Deno.makeTempDir();
   const workspace = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
@@ -213,7 +214,7 @@ Deno.test("local Loom interactive stdio sends Codex traffic without gateway fall
   assertEquals(completedTurn(capture.envelopes()), true);
 });
 
-Deno.test("local Loom interactive stdio reports credential loss after preflight before traffic", async () => {
+test("local Loom interactive stdio reports credential loss after preflight before traffic", async () => {
   const home = await Deno.makeTempDir();
   const workspace = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
@@ -260,7 +261,7 @@ Deno.test("local Loom interactive stdio reports credential loss after preflight 
   assertEquals(providerRequests, 0);
 });
 
-Deno.test("local Loom interactive artifacts bind their selected model and resume for both providers", async () => {
+test("local Loom interactive artifacts bind their selected model and resume for both providers", async () => {
   for (
     const provider of [
       "openai-compatible-gateway",
@@ -374,7 +375,7 @@ Deno.test("local Loom interactive artifacts bind their selected model and resume
   }
 });
 
-Deno.test("local Loom interactive stdio sends gateway traffic without credential reads", async () => {
+test("local Loom interactive stdio sends gateway traffic without credential reads", async () => {
   const home = await Deno.makeTempDir();
   const workspace = await Deno.makeTempDir();
   const credentials = new InMemoryHarnessCredentialStore();
@@ -414,7 +415,7 @@ Deno.test("local Loom interactive stdio sends gateway traffic without credential
   assertEquals(completedTurn(capture.envelopes()), true);
 });
 
-Deno.test("local Loom interactive startup blockers use protocol errors before traffic", async () => {
+test("local Loom interactive startup blockers use protocol errors before traffic", async () => {
   const reconnectCredentials = new InMemoryHarnessCredentialStore();
   await reconnectCredentials.updateRecord("local", "openai-codex", () => ({
     credential: {
@@ -503,7 +504,7 @@ Deno.test("local Loom interactive startup blockers use protocol errors before tr
   }
 });
 
-Deno.test("local Loom interactive entrypoint returns disconnected Codex on stdout protocol", async () => {
+test("local Loom interactive entrypoint returns disconnected Codex on stdout protocol", async () => {
   const home = await Deno.makeTempDir();
   await Deno.writeTextFile(
     `${home}/config.json`,
@@ -547,7 +548,7 @@ Deno.test("local Loom interactive entrypoint returns disconnected Codex on stdou
   assertEquals(new TextDecoder().decode(result.stderr), "");
 });
 
-Deno.test("local Loom interactive help does not require provider configuration or authentication", async () => {
+test("local Loom interactive help does not require provider configuration or authentication", async () => {
   const home = await Deno.makeTempDir();
   const result = await new Deno.Command(Deno.execPath(), {
     args: [
@@ -577,7 +578,7 @@ Deno.test("local Loom interactive help does not require provider configuration o
   assertEquals(stderr.includes("provider-auth-required"), false);
 });
 
-Deno.test("local Loom interactive host selects the sandbox runtime its environment names", async () => {
+test("local Loom interactive host selects the sandbox runtime its environment names", async () => {
   // The batch entrypoint derived the runsc runtime from
   // CF_HARNESS_SANDBOX_RUNTIME and its companions; the interactive host read
   // none of them. Loom's chat lane launched this host with the native
@@ -642,7 +643,7 @@ Deno.test("local Loom interactive host selects the sandbox runtime its environme
   );
 });
 
-Deno.test("local Loom interactive host finds the default CFC policy under the real home", async () => {
+test("local Loom interactive host finds the default CFC policy under the real home", async () => {
   // This host clears HOME from what it hands on, and the selection used to
   // look for the default policy under that cleared value: a runsc run from
   // Loom with no policy named ran without --cfc while the same machine's

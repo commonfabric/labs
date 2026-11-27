@@ -7,6 +7,7 @@
 
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   type BetweenButtons,
@@ -64,7 +65,7 @@ async function settled(group: CFRadioGroup, radio: Record<string, CFRadio>) {
   for (const control of Object.values(radio)) await control.updateComplete;
 }
 
-Deno.test("Tab enters the group on its checked radio, and a second Tab leaves the group", async () => {
+test("Tab enters the group on its checked radio, and a second Tab leaves the group", async () => {
   using page = await mounted({ value: "b" });
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.radio.b);
@@ -72,7 +73,7 @@ Deno.test("Tab enters the group on its checked radio, and a second Tab leaves th
   expect(document.activeElement).toBe(page.after);
 });
 
-Deno.test("Tab enters a group with no checked radio on its first enabled radio", async () => {
+test("Tab enters a group with no checked radio on its first enabled radio", async () => {
   using page = await mounted({ disabled: ["a"] });
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.radio.b);
@@ -80,7 +81,7 @@ Deno.test("Tab enters a group with no checked radio on its first enabled radio",
   expect(document.activeElement).toBe(page.after);
 });
 
-Deno.test("Shift+Tab from the button after the group returns to its checked radio", async () => {
+test("Shift+Tab from the button after the group returns to its checked radio", async () => {
   using page = await mounted({ value: "c" });
   page.after.focus();
   await pressKey("Tab", { modifiers: ["Shift"] });
@@ -89,7 +90,7 @@ Deno.test("Shift+Tab from the button after the group returns to its checked radi
   expect(document.activeElement).toBe(page.before);
 });
 
-Deno.test("ArrowDown moves focus and selection to the next enabled radio, passing a disabled one, and wraps", async () => {
+test("ArrowDown moves focus and selection to the next enabled radio, passing a disabled one, and wraps", async () => {
   using page = await mounted({ value: "a", disabled: ["b"] });
   await pressKey("Tab");
   await pressKey("ArrowDown");
@@ -107,7 +108,7 @@ Deno.test("ArrowDown moves focus and selection to the next enabled radio, passin
   expect(page.changes).toEqual(["c", "a"]);
 });
 
-Deno.test("ArrowRight selects the next radio of a group holding no value, and Tab then enters on it", async () => {
+test("ArrowRight selects the next radio of a group holding no value, and Tab then enters on it", async () => {
   using page = await mounted();
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.radio.a);
@@ -128,7 +129,7 @@ Deno.test("ArrowRight selects the next radio of a group holding no value, and Ta
   expect(document.activeElement).toBe(page.radio.b);
 });
 
-Deno.test("Tab enters on the first enabled radio once the checked radio is removed", async () => {
+test("Tab enters on the first enabled radio once the checked radio is removed", async () => {
   using page = await mounted({ value: "c", disabled: ["a"] });
   page.radio.c.remove();
   await settled(page.control, page.radio);
@@ -138,7 +139,7 @@ Deno.test("Tab enters on the first enabled radio once the checked radio is remov
   expect(document.activeElement).toBe(page.after);
 });
 
-Deno.test("ArrowUp moves focus and selection to the previous enabled radio, wrapping from the first to the last", async () => {
+test("ArrowUp moves focus and selection to the previous enabled radio, wrapping from the first to the last", async () => {
   using page = await mounted({ value: "a" });
   await pressKey("Tab");
   await pressKey("ArrowUp");
@@ -149,7 +150,7 @@ Deno.test("ArrowUp moves focus and selection to the previous enabled radio, wrap
   expect(page.changes).toEqual(["c"]);
 });
 
-Deno.test("the arrow keys move on from the focused radio of a group inside a shadow root", async () => {
+test("the arrow keys move on from the focused radio of a group inside a shadow root", async () => {
   using page = await mounted({ value: "b" });
   const host = document.createElement("div");
   using _host = { [Symbol.dispose]: () => host.remove() };
@@ -172,7 +173,7 @@ Deno.test("the arrow keys move on from the focused radio of a group inside a sha
   expect(page.changes).toEqual(["c"]);
 });
 
-Deno.test("Tab passes over a radio disabled after the group rendered, and enters on it again once it is enabled", async () => {
+test("Tab passes over a radio disabled after the group rendered, and enters on it again once it is enabled", async () => {
   using page = await mounted({ value: "b" });
   page.radio.b.disabled = true;
   await settled(page.control, page.radio);
@@ -185,7 +186,7 @@ Deno.test("Tab passes over a radio disabled after the group rendered, and enters
   expect(document.activeElement).toBe(page.radio.b);
 });
 
-Deno.test("ArrowDown in a group bound to a cell writes the next radio's value to the cell, and Tab then enters on it", async () => {
+test("ArrowDown in a group bound to a cell writes the next radio's value to the cell, and Tab then enters on it", async () => {
   const cell = createMockCellHandle<unknown>("a");
   using page = await mounted({ value: cell });
   await pressKey("Tab");

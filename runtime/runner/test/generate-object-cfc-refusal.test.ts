@@ -11,8 +11,6 @@
 
 import { expect } from "@std/expect";
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-
 import type { BuiltInLLMTool } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -21,6 +19,12 @@ import {
   setMockResponseGate,
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import type { Cell, JSONSchema } from "../src/builder/types.ts";

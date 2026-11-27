@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -12,6 +11,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import * as ops from "../../src/ops/mod.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { seedProfileOwner } from "../../../runner/test/cfc-seed-envelope.ts";

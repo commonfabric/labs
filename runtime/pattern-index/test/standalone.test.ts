@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { inputsNeededToRun } from "../src/standalone.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("standalone", () => {
   describe("inputsNeededToRun()", () => {

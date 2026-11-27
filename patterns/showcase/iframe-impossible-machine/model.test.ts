@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { machineEdgeId } from "./contract.ts";
 import type {
   IframeStateData,
@@ -17,6 +16,7 @@ import {
   machineNodePresentation,
   presentSignal,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PARAMETERS: MachineParameters = {
   active: false,

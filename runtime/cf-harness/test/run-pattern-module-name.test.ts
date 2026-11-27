@@ -3,7 +3,6 @@
  * exists, and corrects a guess at one that does not.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -13,6 +12,7 @@ import {
 import { DEFAULT_PARENT_TOOL_IDS } from "../src/contracts/tool-descriptor.ts";
 import { getBuiltinTool } from "../src/tools/registry.ts";
 import { withRuntimeModuleCorrection } from "../src/tools/run-pattern.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every tool surface a `run_pattern` caller can be given, by its name. */
 const surfacesThatCanRunPatterns = (): readonly {

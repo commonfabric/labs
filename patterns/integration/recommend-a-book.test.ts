@@ -1,7 +1,6 @@
 /** The authored book pair publishes a shelf within one dedicated space. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl, join } from "@std/path";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
@@ -23,6 +22,7 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { hostGestureProvenance } from "../../runtime/runner/src/cfc/host-review.ts";
 import {

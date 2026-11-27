@@ -1,11 +1,3 @@
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  it,
-} from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import {
@@ -14,6 +6,14 @@ import {
 } from "@commonfabric/memory/v2/currency-index";
 import { close, open } from "@commonfabric/memory/v2/engine";
 import { defaultCacheDir } from "@commonfabric/state-inspector";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   ALICE,

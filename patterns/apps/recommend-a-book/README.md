@@ -42,10 +42,10 @@ its sender and the originator.
 
 For a two-person demonstration:
 
-1. In a dedicated demo space, open `library/main.tsx`, add a book and favorite author
-   or run its agent, and click **Ask for recommendations**. Confirm the native
-   snapshot preview, then click **Open recommendation invitation**. The shelf
-   and invitation stay in that space.
+1. In a dedicated demo space, open `library/main.tsx`, add a book and favorite
+   author or run its agent, and click **Ask for recommendations**. Confirm the
+   native snapshot preview, then click **Open recommendation invitation**. The
+   shelf and invitation stay in that space.
 2. In the invitation's Access panel, grant the visitor WRITE and share the
    invitation link. The visitor opens that link under their own identity and
    sees the collapsed shelf and favorite authors.

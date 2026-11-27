@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { SKIP_LIST_VARIABLE } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { readPatternTestList } from "../integration.ts";
 import { serverExecutionCiLane } from "../server-execution-ci.ts";
 import { loadPatternSuites } from "./patterns.ts";
@@ -17,7 +17,7 @@ const pick = (from: readonly Suite[], id: string): Suite =>
   from.find((suite) => suite.id === id)!;
 const byId = (id: string): Suite => pick(suites, id);
 
-/** A directory each case writes its reports and lists into. */
+/** A directory each case writes its lists into. */
 async function outputDir(): Promise<string> {
   return await Deno.makeTempDir({ prefix: "patterns-suite-" });
 }
@@ -145,7 +145,7 @@ describe("the pattern and package suites", () => {
     );
     expect(invocation!.cwd).toBe(`${root}/patterns`);
     expect(invocation!.env?.HEADLESS).toBe("1");
-    expect(invocation!.junit?.[0]?.scope).toBe("patterns");
+    expect(invocation!.results?.scope).toBe("patterns");
   });
 
   it("gives every suite that measures a pattern somewhere to report it", async () => {
@@ -334,7 +334,7 @@ describe("the pattern and package suites", () => {
   it("runs one invocation per package the suite spans", async () => {
     // The three packages share a command shape and a server, and each
     // records under its own scope, so a batch holding files from two of
-    // them runs twice and reports twice.
+    // them runs twice and records twice.
     const suite = byId("package-integration");
     const runner = suite.units.find((u) => u.startsWith("runtime/runner/"))!;
     const shell = suite.units.find((u) => u.startsWith("runtime/shell/"))!;
@@ -343,7 +343,7 @@ describe("the pattern and package suites", () => {
       { root, outputDir: await outputDir(), spoolDir: "/spool" },
     );
     expect(made.length).toBe(2);
-    expect(made.map((i) => i.junit?.[0]?.scope).toSorted())
+    expect(made.map((i) => i.results?.scope).toSorted())
       .toEqual(["runner", "shell"]);
   });
 
@@ -357,7 +357,7 @@ describe("the pattern and package suites", () => {
       suite.units.map((unit) => ({ unit, skip: [] })),
       { root, outputDir: await outputDir(), spoolDir: "/spool" },
     );
-    expect(made.map((invocation) => invocation.junit?.[0]?.scope)).toEqual([
+    expect(made.map((invocation) => invocation.results?.scope)).toEqual([
       "cf-harness",
     ]);
   });
@@ -373,6 +373,10 @@ describe("the pattern and package suites", () => {
       { root, outputDir: "/out", spoolDir: "/spool" },
     );
     expect(invocation!.command).toContain("patterns-reload");
+    expect(invocation!.results).toEqual({
+      kind: "integration",
+      scope: "patterns",
+    });
     expect(
       await suite.command([], { root, outputDir: "/out", spoolDir: "/spool" }),
     ).toEqual([]);

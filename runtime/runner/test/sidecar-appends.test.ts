@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import { commutesWithTailAppends } from "../src/storage/transaction/sidecar-appends.ts";
 
 type Sidecar = {

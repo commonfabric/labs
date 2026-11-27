@@ -8,6 +8,7 @@
 import { expect } from "@std/expect";
 import { LitElement } from "lit";
 import * as ui from "../index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Each component class the library exports, finalized. */
 function componentClasses(): (typeof LitElement)[] {
@@ -35,7 +36,7 @@ function hostAttributesInStyles(component: typeof LitElement): Set<string> {
   return names;
 }
 
-Deno.test("a property whose attribute a component's host styles select by reflects to it", () => {
+test("a property whose attribute a component's host styles select by reflects to it", () => {
   const unreflected: string[] = [];
   for (const component of componentClasses()) {
     const selected = hostAttributesInStyles(component);

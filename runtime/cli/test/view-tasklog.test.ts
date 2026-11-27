@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   link,
@@ -12,6 +11,7 @@ import {
   type TaskRow,
   words,
 } from "../lib/view/tasklog.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const URL = "https://github.com/octo/repo/pull/7";
 
@@ -121,6 +121,85 @@ describe("view-tasklog", () => {
 
           expect(texts(log)).toEqual(["Creating...", "", "Touch the key ✗"]);
           expect(TaskLog.spinning([log])).toBe(false);
+        });
+      });
+
+      describe("securityKey()", () => {
+        /** A log whose last step waits for the touch of a security key. */
+        const touching = () =>
+          logOf((log) => log.step(say`Touch the key`, "touch"));
+
+        it("returns `null` while no step waits for the touch of a security key, even one that waits for a person", () => {
+          const log = logOf((log) => {
+            log.step(say`Pushing`);
+            log.step(say`Waiting for the pull request`, "person");
+          });
+
+          expect(log.securityKey(0)).toBe(null);
+          expect(touching().securityKey(0)).not.toBe(null);
+        });
+
+        it("returns the key at the time asked for with its light off until it is plugged in, after 350 milliseconds, and then on and off for 300 milliseconds each while the step waits", () => {
+          const log = touching();
+
+          expect(
+            [0, 349, 350, 649, 650, 949, 950].map((time) =>
+              log.securityKey(time)
+            ),
+          ).toEqual([
+            { time: 0, light: "off" },
+            { time: 349, light: "off" },
+            { time: 350, light: "on" },
+            { time: 649, light: "on" },
+            { time: 650, light: "off" },
+            { time: 949, light: "off" },
+            { time: 950, light: "on" },
+          ]);
+        });
+
+        it("returns the key plugged in and lit to show it was touched once the step is done, at the start and long after", () => {
+          const log = new TaskLog();
+          log.step(say`Touch the key`, "touch")();
+
+          expect([0, 1000].map((time) => log.securityKey(time))).toEqual([
+            { time: 350, light: "touched" },
+            { time: 350, light: "touched" },
+          ]);
+        });
+
+        it("returns the key plugged in with its light off once the step ends without being done, at the start and long after", () => {
+          const log = touching();
+          log.stop();
+
+          expect([0, 1000].map((time) => log.securityKey(time))).toEqual([
+            { time: 350, light: "off" },
+            { time: 350, light: "off" },
+          ]);
+        });
+      });
+
+      describe("keyFrameDelay()", () => {
+        it("returns 16 milliseconds while the key comes in, then what is left until it is plugged in at 350 milliseconds, and then 300 milliseconds for each blink", () => {
+          const log = logOf((log) => log.step(say`Touch the key`, "touch"));
+
+          expect(
+            [0, 16, 320, 336, 350, 650].map((time) => log.keyFrameDelay(time)),
+          ).toEqual([16, 16, 16, 14, 300, 300]);
+        });
+
+        it("returns `null` at any time once the step has ended, done or not, and while no step waits for a touch", () => {
+          const touched = new TaskLog();
+          touched.step(say`Touch the key`, "touch")();
+          const stopped = logOf((log) => log.step(say`Touch the key`, "touch"));
+          stopped.stop();
+          const person = logOf((log) => log.step(say`Waiting`, "person"));
+
+          expect(
+            [touched, stopped, person].flatMap((log) => [
+              log.keyFrameDelay(0),
+              log.keyFrameDelay(350),
+            ]),
+          ).toEqual([null, null, null, null, null, null]);
         });
       });
     });
@@ -555,6 +634,16 @@ describe("view-tasklog", () => {
           touched();
 
           expect(TaskLog.spinning([first, second])).toBe(true);
+        });
+
+        it("returns `false` while the last running step waits for the touch of a security key, which shows neither dots nor a spinner", () => {
+          const log = logOf((log) => {
+            log.step(say`Merging`);
+            log.step(say`Touch the key`, "touch");
+          });
+
+          expect(TaskLog.spinning([log])).toBe(false);
+          expect(texts(log)).toEqual(["Merging...", "", "Touch the key"]);
         });
       });
     });

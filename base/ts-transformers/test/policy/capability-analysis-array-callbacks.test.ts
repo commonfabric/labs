@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A builder's input schema is shrunk to the paths the capability analysis
 // observes the callback reading, so a property the analysis fails to see is

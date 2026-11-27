@@ -27,6 +27,7 @@ import { assertEquals, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 
 import type { FabricValue } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
 import { type EntityDocument, toDocumentPath } from "../v2.ts";
 import {
@@ -105,7 +106,7 @@ const aliceNestedPatch = (
   },
 });
 
-Deno.test("blind $value structural precondition vs a concurrent ancestor reshape", async (t) => {
+test("blind $value structural precondition vs a concurrent ancestor reshape", async (t) => {
   await t.step(
     "precondition-free: a nested patch on a retyped ancestor throws a raw non-Conflict error, rolled back",
     async () => {

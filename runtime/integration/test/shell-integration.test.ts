@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { removeDirectory } from "@commonfabric/test-support/remove-directory";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { PROFILE_DIRECTORY_PREFIX } from "../browser.ts";
 
@@ -21,7 +21,7 @@ const CLOSE_FAILURE = "the browser would not close";
 // them fail: from inside this one, the failure would be this file's.
 function failsToDispose(before = ""): string {
   return `
-    import { it } from "@std/testing/bdd";
+    import { it } from "@commonfabric/test-support/test";
     import { Browser } from ${
     JSON.stringify(new URL("../browser.ts", import.meta.url).href)
   };

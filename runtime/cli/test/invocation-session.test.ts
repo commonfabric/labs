@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   invocationSession,
   renderNewSession,
 } from "../commands/invocation-session.ts";
 import { newSessionId } from "../lib/session.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A random (version 4) UUID: the version nibble is 4 and the variant nibble is
 // one of 8/9/a/b, with every other nibble drawn from the CSPRNG.

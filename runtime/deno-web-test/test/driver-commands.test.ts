@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type KeyPresser,
@@ -12,6 +11,7 @@ import {
   runCommand,
   type SettleResult,
 } from "../driver-commands.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A keyboard that logs each call, failing the press of `failOn`. */
 function loggingKeyboard(

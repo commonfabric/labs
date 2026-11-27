@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Context } from "@lit/context";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
 import type { DID } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runtimeContext, spaceContext } from "./runtime-context.ts";
 
 describe("host embedding contract: runtime/space contexts", () => {

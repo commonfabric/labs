@@ -10,7 +10,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { hashStringOf, isValidFabricValue } from "@";
 import {
@@ -29,6 +28,7 @@ import {
   realmFromFabricValue,
 } from "@/codecs.ts";
 import { FabricBytes, FabricKeyPair } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Fixed public-key bytes for deterministic tests. */
 const PUBLIC_BYTES = new Uint8Array([1, 2, 3]);

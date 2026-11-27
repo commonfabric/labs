@@ -2,11 +2,16 @@
  * The write receipt `cf piece repair` prints on standard error.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 
 import type { RepairReport } from "@commonfabric/piece/ops";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { repairFromCommand, setQuietMode } from "../commands/piece.ts";
 import { resetUnreportedRunGuardsForTest } from "../lib/unreported-run.ts";

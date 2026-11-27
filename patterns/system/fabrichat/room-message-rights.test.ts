@@ -6,7 +6,6 @@
  * room starts and before anything pulls its computations.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
@@ -14,6 +13,12 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const PATTERNS_ROOT = fromFileUrl(new URL("../..", import.meta.url));
 const ROOM_MAIN = fromFileUrl(new URL("./room.tsx", import.meta.url));

@@ -28,6 +28,7 @@ import {
 } from "@commonfabric/memory/v2";
 import { compactStore } from "@commonfabric/memory/v2/compact";
 import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
+import { test } from "@commonfabric/test-support/test";
 import { entityConflicts } from "../conflicts.ts";
 import { openSpace } from "../db.ts";
 import { readCoherence } from "../oracle.ts";
@@ -79,7 +80,7 @@ const seedContendedStore = async (storeReadsDigest = false) => {
   return { engine, path };
 };
 
-Deno.test("oracle: a contended engine run yields zero anomalies", async () => {
+test("oracle: a contended engine run yields zero anomalies", async () => {
   const { engine, path } = await seedContendedStore();
   try {
     // Disjoint-key writers on the same container: both accepted thanks to
@@ -202,7 +203,7 @@ const forge = (path: string, original: string) => {
   }
 };
 
-Deno.test("oracle: flags a forged commit that bypassed validation", async () => {
+test("oracle: flags a forged commit that bypassed validation", async () => {
   const { engine, path } = await seedContendedStore();
   close(engine);
   forge(path, JSON.stringify(forgedCommit));
@@ -221,7 +222,7 @@ Deno.test("oracle: flags a forged commit that bypassed validation", async () => 
   }
 });
 
-Deno.test("oracle: reports a store whose commits keep only a digest of their reads as unchecked", async () => {
+test("oracle: reports a store whose commits keep only a digest of their reads as unchecked", async () => {
   // Bob's seq-2 commit reads the title, so an engine storing digests keeps
   // only its digest.
   const { engine, path } = await seedContendedStore(true);
@@ -236,7 +237,7 @@ Deno.test("oracle: reports a store whose commits keep only a digest of their rea
   }
 });
 
-Deno.test("oracle: does not certify a store when a forged commit's reads are stored as a digest", async () => {
+test("oracle: does not certify a store when a forged commit's reads are stored as a digest", async () => {
   const { engine, path } = await seedContendedStore();
   close(engine);
   forge(path, encodeStoredCommit(forgedCommit, false));
@@ -252,7 +253,7 @@ Deno.test("oracle: does not certify a store when a forged commit's reads are sto
   }
 });
 
-Deno.test("oracle: scans the log for unchecked commits once per report", async () => {
+test("oracle: scans the log for unchecked commits once per report", async () => {
   const { engine, path } = await seedContendedStore(true);
   close(engine);
 
@@ -276,7 +277,7 @@ Deno.test("oracle: scans the log for unchecked commits once per report", async (
   }
 });
 
-Deno.test("oracle: parses read sets once per report, whatever the values hold", async () => {
+test("oracle: parses read sets once per report, whatever the values hold", async () => {
   // Eight commits each read of:base and write a value holding a newline,
   // which JSON escapes. The read ids are spelled as written, so no entity's
   // search parses any commit's read set.
@@ -336,7 +337,7 @@ Deno.test("oracle: parses read sets once per report, whatever the values hold", 
   }
 });
 
-Deno.test("oracle: does not certify a store whose write history compaction squashed", async () => {
+test("oracle: does not certify a store whose write history compaction squashed", async () => {
   // The forged seq-10 read missed Bob's seq-2 write. Compaction keeps every
   // payload (its default window) but squashes entity:doc's history into its
   // own commit, so write 2 is gone.
@@ -363,7 +364,7 @@ Deno.test("oracle: does not certify a store whose write history compaction squas
   }
 });
 
-Deno.test("oracle: counts a commit whose payload breaks off before it names the entity", async () => {
+test("oracle: counts a commit whose payload breaks off before it names the entity", async () => {
   const { engine, path } = await seedContendedStore();
   close(engine);
   const whole = JSON.stringify(forgedCommit);
@@ -379,7 +380,7 @@ Deno.test("oracle: counts a commit whose payload breaks off before it names the 
   }
 });
 
-Deno.test("oracle: counts a commit whose payload is JSON that does not show its reads", async () => {
+test("oracle: counts a commit whose payload is JSON that does not show its reads", async () => {
   // Valid JSON naming neither the entity nor a digest, which the codec
   // cannot decode: a payload shaped like no commit, and a read set whose
   // read names no entity in text.
@@ -413,7 +414,7 @@ Deno.test("oracle: counts a commit whose payload is JSON that does not show its 
   }
 });
 
-Deno.test("oracle: does not count a commit whose reads it sees, whatever else it cannot decode", async () => {
+test("oracle: does not count a commit whose reads it sees, whatever else it cannot decode", async () => {
   // The reads name no entity, so no read was hidden, though an operation's
   // value carries a tag the codec does not know.
   const { engine, path } = await seedContendedStore();
@@ -442,7 +443,7 @@ Deno.test("oracle: does not count a commit whose reads it sees, whatever else it
   }
 });
 
-Deno.test("oracle: counts a read below what compaction kept of the instance it read, and no other", async () => {
+test("oracle: counts a read below what compaction kept of the instance it read, and no other", async () => {
   // User-scoped of:x is written at 1 and space-scoped of:x at 2, 4 and 5.
   // Commit 3 reads space of:x at 2, commit 6 user of:x at 1, and commit 7
   // space of:x at 5. Compacting the space scope alone, keeping two revisions
@@ -506,7 +507,7 @@ Deno.test("oracle: counts a read below what compaction kept of the instance it r
   }
 });
 
-Deno.test("oracle: finds a stale read whose entity id the JSON spells with an escape", async () => {
+test("oracle: finds a stale read whose entity id the JSON spells with an escape", async () => {
   // Bob's seq-2 write is missed by a seq-10 read at seq 1, of an id holding
   // a quotation mark (which JSON escapes), and of `entity:doc` spelled
   // `entity:doc`.
@@ -574,7 +575,7 @@ Deno.test("oracle: finds a stale read whose entity id the JSON spells with an es
   }
 });
 
-Deno.test("oracle: reads a history of escaped reads longer than SQLite binds parameters for", async () => {
+test("oracle: reads a history of escaped reads longer than SQLite binds parameters for", async () => {
   // 32,767 commits each read entity:doc at seq 2, its current revision, by
   // the spelling `entity:doc`: one more than the 32,766 parameters a
   // statement may bind.
@@ -605,7 +606,7 @@ Deno.test("oracle: reads a history of escaped reads longer than SQLite binds par
   }
 });
 
-Deno.test("oracle: reads a store with more compaction runs than SQLite binds parameters for", async () => {
+test("oracle: reads a store with more compaction runs than SQLite binds parameters for", async () => {
   // 32,767 compaction commits, one more than the 32,766 parameters a statement
   // may bind, so the lookup of what compaction truncated sees them all.
   const { engine, path } = await seedContendedStore();
@@ -633,7 +634,7 @@ Deno.test("oracle: reads a store with more compaction runs than SQLite binds par
   }
 });
 
-Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the report", async () => {
+test("oracle: counts a read it cannot replay as unchecked, and finishes the report", async () => {
   // A read of entity:doc with a basis that is not a seq, one with a scope
   // that is none, two with no path (at seq 2, current, and at seq 1, below
   // Bob's patch: a missing path is not the whole document), and a read set
@@ -672,7 +673,7 @@ Deno.test("oracle: counts a read it cannot replay as unchecked, and finishes the
   }
 });
 
-Deno.test("oracle: does not count a digest of pending reads only", async () => {
+test("oracle: does not count a digest of pending reads only", async () => {
   // The audit replays confirmed reads, and the digest records none.
   const { engine, path } = await seedContendedStore();
   close(engine);
@@ -701,7 +702,7 @@ Deno.test("oracle: does not count a digest of pending reads only", async () => {
   }
 });
 
-Deno.test("oracle: looks up first writes only when some reads go unchecked, and then once", async () => {
+test("oracle: looks up first writes only when some reads go unchecked, and then once", async () => {
   /** Counts the first-write queries one report prepares. */
   const firstWriteQueries = (space: ReturnType<typeof openSpace>) => {
     let queries = 0;

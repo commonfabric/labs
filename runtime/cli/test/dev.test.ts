@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { argv, bytesToLines, cf, checkStderr, stripAnsi } from "./utils.ts";
 import { InMemoryProgram } from "@commonfabric/js-compiler";
 import {

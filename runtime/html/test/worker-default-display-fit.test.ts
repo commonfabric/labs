@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import {
   CFC_LABEL_READ_FAILED_ATOM,
   type IFCLabel,
 } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { defaultDisplayFit } from "../src/worker/display-fit.ts";
 

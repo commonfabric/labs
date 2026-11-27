@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ReactiveControllerHost } from "lit";
 import { NAME } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   failResolutions,

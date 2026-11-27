@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import type { JSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { createTestProgram } from "./utils.ts";
 

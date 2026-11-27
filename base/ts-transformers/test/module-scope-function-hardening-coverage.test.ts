@@ -3,6 +3,7 @@ import ts from "typescript";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, collect, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The single default-export assignment's expression, if any. */
 function defaultExportExpression(
@@ -76,7 +77,7 @@ async function transform(source: string): Promise<string> {
   return await transformSource(source, { types: COMMONFABRIC_TYPES });
 }
 
-Deno.test(
+test(
   "anonymous default-exported function declaration is hardened in place on the export assignment",
   async () => {
     const output = await transform(
@@ -113,7 +114,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "anonymous default-exported async function keeps its async modifier through the in-place rewrite",
   async () => {
     const output = await transform(
@@ -143,7 +144,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "trusted arrow bound to a non-exported name gets a statement-form annotation and a separate hardening call",
   async () => {
     const output = await transform(
@@ -201,7 +202,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "trusted named function is annotated before it is hardened",
   async () => {
     const output = await transform(
@@ -236,7 +237,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "exported trusted direct function nests annotation inside hardening",
   async () => {
     const output = await transform(

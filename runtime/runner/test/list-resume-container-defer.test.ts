@@ -1,11 +1,17 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { runningClock } from "@commonfabric/test-support/fake-clock";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";
@@ -662,18 +668,6 @@ describe("list builtin resume container defer", () => {
     }
   }
 
-  // The fake clock the preload installs per test; absent on a real-clock run.
-  // Read through globalThis so this file also type-checks as a standalone
-  // program (the ambient declaration in clock.d.ts is in scope only when the
-  // package directory is checked as one).
-  function fakeClock():
-    | { settle(): Promise<void>; tick(ms: number): Promise<void> }
-    | undefined {
-    return (globalThis as {
-      clock?: { settle(): Promise<void>; tick(ms: number): Promise<void> };
-    }).clock;
-  }
-
   // Collect every document id a raw value references (link sigils, data URIs).
   // Entity link schemes come from the runtime's registry; `data:` is the
   // inline-literal scheme a slot can hold directly.
@@ -994,7 +988,7 @@ describe("list builtin resume container defer", () => {
         for (let k = 0; k < 40 && !wroteAggregateOnHold(); k++) {
           await new Promise((resolve) => setTimeout(resolve, 0));
         }
-        const holdClock = fakeClock();
+        const holdClock = runningClock();
         if (holdClock !== undefined && !wroteAggregateOnHold()) {
           await holdClock.settle();
           await holdClock.tick(1_000);
@@ -1111,7 +1105,7 @@ describe("list builtin resume container defer", () => {
           await rc2.pull();
           await rt2.idle();
         }
-        const churnClock = fakeClock();
+        const churnClock = runningClock();
         if (churnClock !== undefined) {
           await churnClock.tick(60_000);
           await rt2.idle();

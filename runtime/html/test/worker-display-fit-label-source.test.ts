@@ -4,13 +4,13 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { readProjected, Runtime } from "@commonfabric/runner";
 import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { readRefusal } from "../src/worker/display-fit.ts";
 import type { RenderPolicy } from "../src/worker/types.ts";

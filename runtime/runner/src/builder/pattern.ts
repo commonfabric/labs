@@ -1413,6 +1413,7 @@ export function pushFrameFromCause(
     unsafe_binding?: UnsafeBinding;
     inHandler?: boolean;
     frameKind?: "lift" | "handler";
+    builtinRun?: boolean;
     eventTime?: number;
     eventKey?: string;
     implementationIdentity?: ImplementationIdentity;
@@ -1426,6 +1427,7 @@ export function pushFrameFromCause(
     unsafe_binding,
     inHandler,
     frameKind,
+    builtinRun,
     eventTime,
     eventKey,
     runtime,
@@ -1455,6 +1457,7 @@ export function pushFrameFromCause(
     ...(parent?.moduleEvaluation && { moduleEvaluation: true as const }),
     ...(inHandler && { inHandler: true }),
     ...(frameKind && { frameKind }),
+    ...(builtinRun && { builtinRun: true }),
     ...(eventTime !== undefined && { eventTime }),
     ...(eventKey !== undefined && { eventKey }),
     ...(unsafe_binding ? { unsafe_binding } : {}),

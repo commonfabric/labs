@@ -2,8 +2,8 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { getLogger, getLoggerCountsBreakdown } from "@commonfabric/logger";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { defaultTheme, themeProperties } from "../theme-context.ts";
 import { CFButton } from "./index.ts";
 

@@ -5,10 +5,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { type Delegation, issueDelegation } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { Server } from "../v2/server.ts";
 import {

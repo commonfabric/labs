@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -10,6 +9,7 @@ import {
   extractedCallbackBody,
   parseModule,
 } from "../../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Transforms a pattern over `items` whose body binds `result` to `call`. */
 async function transform(call: string): Promise<ts.SourceFile> {

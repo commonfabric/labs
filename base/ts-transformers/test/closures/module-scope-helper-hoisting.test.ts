@@ -1,5 +1,6 @@
 import { assert, assertMatch, assertNotMatch } from "@std/assert";
 import { StaticCache } from "@commonfabric/static";
+import { test } from "@commonfabric/test-support/test";
 import { transformSource } from "../utils.ts";
 
 const staticCache = StaticCache.fromFileSystem();
@@ -14,7 +15,7 @@ const options = {
   },
 };
 
-Deno.test("Closure Transformer hoists nested computed callbacks that close over module-scoped helpers", async () => {
+test("Closure Transformer hoists nested computed callbacks that close over module-scoped helpers", async () => {
   const source = `    import { computed, pattern, UI } from "commonfabric";
 
     const formatDateShort = (dateStr: string) => dateStr.toUpperCase();
@@ -58,7 +59,7 @@ Deno.test("Closure Transformer hoists nested computed callbacks that close over 
   );
 });
 
-Deno.test("Closure Transformer does not hoist nested handler callbacks that also capture factory parameters", async () => {
+test("Closure Transformer does not hoist nested handler callbacks that also capture factory parameters", async () => {
   const source = `    import { handler } from "commonfabric";
 
     const normalize = (value: string) => value.trim();
@@ -85,7 +86,7 @@ Deno.test("Closure Transformer does not hoist nested handler callbacks that also
   );
 });
 
-Deno.test("CT-1655: whole synthesized mapWithPattern pattern() call is hoisted to module scope", async () => {
+test("CT-1655: whole synthesized mapWithPattern pattern() call is hoisted to module scope", async () => {
   // Source shape: a .map() callback whose body invokes a module-level
   // pattern factory (`EntryRow`) and reads a module-level constant
   // (`UI`). After the closure transformer rewrites .map() to

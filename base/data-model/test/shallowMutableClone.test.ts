@@ -12,12 +12,12 @@
  * mutable, the caller being handed something it is expected to write to.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, isDeepFrozen, shallowMutableClone } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes, FabricHash } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("shallowMutableClone()", () => {
   it("returns a fresh, mutable, top-level object copy", () => {

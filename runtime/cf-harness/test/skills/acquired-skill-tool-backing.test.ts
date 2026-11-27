@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type HarnessToolBackingAvailability,
@@ -18,6 +17,7 @@ import {
 import type { HarnessAcquiredSkill } from "../../src/contracts/skill.ts";
 import type { RunscSandboxConfig } from "../../src/sandbox/runsc.ts";
 import { acquiredSkillScriptBacking } from "../../src/skills/acquired-skill-mount.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const backing = (
   overrides: Partial<HarnessToolBackingAvailability> = {},

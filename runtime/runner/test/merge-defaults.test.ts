@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import {
@@ -12,6 +11,7 @@ import {
   isInternedSchema,
   isNontrivialSchema,
 } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { mergeDefaults } from "../src/schema.ts";

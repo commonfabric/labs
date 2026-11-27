@@ -1,8 +1,8 @@
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { parseLink, Runtime, UI } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { getResultCellWithSourceSchema } from "../../runner/src/piece-helpers.ts";
 import {
   renderCachedResultFields,

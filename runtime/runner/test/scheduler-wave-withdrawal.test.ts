@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { expect } from "@std/expect";
@@ -8,6 +7,12 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";

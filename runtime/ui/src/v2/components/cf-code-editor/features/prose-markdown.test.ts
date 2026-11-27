@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { EditorState } from "@codemirror/state";
 import { markdown } from "@codemirror/lang-markdown";
@@ -6,6 +5,7 @@ import { GFM } from "@lezer/markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { Decoration } from "@codemirror/view";
 import { buildProseDecorations } from "./prose-markdown.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 //
 // Helpers
@@ -238,7 +238,7 @@ describe("buildProseDecorations", () => {
   });
 
   describe("blockquotes", () => {
-    it("hides > marker when inactive but always applies line decoration", () => {
+    it("hides the `>` marker when inactive but always applies line decoration", () => {
       // Cursor elsewhere: marker hidden, line class present
       const far = createState("> quote\nnext", 10);
       const farDecos = buildProseDecorations(far, true);

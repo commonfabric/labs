@@ -7,7 +7,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { deepFreeze } from "@commonfabric/data-model";
@@ -41,6 +40,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const owner = await Identity.fromPassphrase("Home interface state retention");
 

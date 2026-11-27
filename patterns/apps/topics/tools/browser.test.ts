@@ -1,8 +1,8 @@
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stripAnsi } from "@commonfabric/cli/view/ansi";
 import { palette as C, ui } from "@commonfabric/cli/view/theme";
 import type { CfcConfClause } from "@commonfabric/runner/cfc";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   Browser,

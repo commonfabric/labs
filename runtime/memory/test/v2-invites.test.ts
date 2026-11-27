@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
 import { Identity } from "@commonfabric/identity";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { type ACL, aclDocId } from "../acl.ts";
 import {
   createInviteCredentials,

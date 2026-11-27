@@ -11,9 +11,9 @@
 // clock already stands at — the second of two armed together, once the first
 // has fired — is due, not past.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { sleep } from "@commonfabric/async/sleep";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("clock-preload auto-advance", () => {
   it("runs a chain of zero-delay turns to its end before jumping to a production timer", async () => {

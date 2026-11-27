@@ -10,6 +10,7 @@
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 
 import { CFMarkdown } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 interface Rendered {
   content: HTMLElement;
@@ -53,7 +54,7 @@ const HOSTILE = [
   "<style>@import url(https://example.invalid/x.css);</style>",
 ].join("\n\n");
 
-Deno.test("cf-markdown renders no element that can run script", async () => {
+test("cf-markdown renders no element that can run script", async () => {
   const { content, done } = await render(HOSTILE);
   try {
     for (const forbidden of ["script", "iframe", "img", "svg", "style"]) {
@@ -68,7 +69,7 @@ Deno.test("cf-markdown renders no element that can run script", async () => {
   }
 });
 
-Deno.test("cf-markdown renders no event-handler attribute", async () => {
+test("cf-markdown renders no event-handler attribute", async () => {
   const { content, done } = await render(HOSTILE);
   try {
     for (const element of elementsOf(content)) {
@@ -84,7 +85,7 @@ Deno.test("cf-markdown renders no event-handler attribute", async () => {
   }
 });
 
-Deno.test("cf-markdown renders no URL that runs script", async () => {
+test("cf-markdown renders no URL that runs script", async () => {
   const { content, done } = await render(HOSTILE);
   try {
     for (const element of elementsOf(content)) {
@@ -102,7 +103,7 @@ Deno.test("cf-markdown renders no URL that runs script", async () => {
   }
 });
 
-Deno.test("cf-markdown renders a hostile document's text as text", async () => {
+test("cf-markdown renders a hostile document's text as text", async () => {
   const { content, done } = await render("A <b>bold</b> word and <script>");
   try {
     assertEquals(content.querySelectorAll("b").length, 0);
@@ -112,7 +113,7 @@ Deno.test("cf-markdown renders a hostile document's text as text", async () => {
   }
 });
 
-Deno.test("cf-markdown drops a block of raw HTML along with its text", async () => {
+test("cf-markdown drops a block of raw HTML along with its text", async () => {
   const { content, done } = await render(
     "<div>text inside the block</div>\n\nA paragraph after it.",
   );
@@ -128,7 +129,7 @@ Deno.test("cf-markdown drops a block of raw HTML along with its text", async () 
   }
 });
 
-Deno.test("cf-markdown keeps a link whose target it cannot follow as text", async () => {
+test("cf-markdown keeps a link whose target it cannot follow as text", async () => {
   const { content, done } = await render("[the label](javascript:alert(1))");
   try {
     assertEquals(content.querySelectorAll("a").length, 0);
@@ -138,7 +139,7 @@ Deno.test("cf-markdown keeps a link whose target it cannot follow as text", asyn
   }
 });
 
-Deno.test("cf-markdown renders emphasis, strong text and a code span", async () => {
+test("cf-markdown renders emphasis, strong text and a code span", async () => {
   const { content, done } = await render(
     "Hello **world**, *now* with `code`",
   );
@@ -151,7 +152,7 @@ Deno.test("cf-markdown renders emphasis, strong text and a code span", async () 
   }
 });
 
-Deno.test("cf-markdown renders an ordinary link", async () => {
+test("cf-markdown renders an ordinary link", async () => {
   const { content, done } = await render(
     '[example](https://example.com/a "the title")',
   );
@@ -165,7 +166,7 @@ Deno.test("cf-markdown renders an ordinary link", async () => {
   }
 });
 
-Deno.test("cf-markdown renders an image with an allowed source", async () => {
+test("cf-markdown renders an image with an allowed source", async () => {
   const { content, done } = await render(
     "![the alt](https://example.com/a.png)",
   );
@@ -178,7 +179,7 @@ Deno.test("cf-markdown renders an image with an allowed source", async () => {
   }
 });
 
-Deno.test("cf-markdown renders a code block with a copy button holding the code", async () => {
+test("cf-markdown renders a code block with a copy button holding the code", async () => {
   const { content, done } = await render(
     "```js\nconst a = 1 < 2 && 3 > 2;\n```",
   );
@@ -195,7 +196,7 @@ Deno.test("cf-markdown renders a code block with a copy button holding the code"
   }
 });
 
-Deno.test("cf-markdown wraps each table in its own scroll container", async () => {
+test("cf-markdown wraps each table in its own scroll container", async () => {
   const { content, done } = await render([
     "| A | B |",
     "| --- | ---: |",
@@ -227,7 +228,7 @@ Deno.test("cf-markdown wraps each table in its own scroll container", async () =
   }
 });
 
-Deno.test("cf-markdown renders a cell link as a cf-cell-link", async () => {
+test("cf-markdown renders a cell link as a cf-cell-link", async () => {
   const { content, done } = await render("Check this [Link](/of:bafyabc/path)");
   try {
     const link = content.querySelector("cf-cell-link") as
@@ -240,7 +241,7 @@ Deno.test("cf-markdown renders a cell link as a cf-cell-link", async () => {
   }
 });
 
-Deno.test("cf-markdown gives a fragment link a heading to land on", async () => {
+test("cf-markdown gives a fragment link a heading to land on", async () => {
   const { content, done } = await render(
     "# Section One\n\n[Jump](#section-one)",
   );
@@ -255,7 +256,7 @@ Deno.test("cf-markdown gives a fragment link a heading to land on", async () => 
   }
 });
 
-Deno.test("cf-markdown reports which task-list checkbox was toggled", async () => {
+test("cf-markdown reports which task-list checkbox was toggled", async () => {
   const { content, element, done } = await render(
     "- [ ] first\n- [ ] second\n- [x] third",
   );
@@ -277,7 +278,7 @@ Deno.test("cf-markdown reports which task-list checkbox was toggled", async () =
   }
 });
 
-Deno.test("cf-markdown puts a toggled checkbox back to what the document says", async () => {
+test("cf-markdown puts a toggled checkbox back to what the document says", async () => {
   const { content, element, done } = await render("- [ ] first");
   try {
     const box = content.querySelector("input") as HTMLInputElement;
@@ -298,7 +299,7 @@ Deno.test("cf-markdown puts a toggled checkbox back to what the document says", 
   }
 });
 
-Deno.test("cf-markdown resolves character references in text", async () => {
+test("cf-markdown resolves character references in text", async () => {
   const { content, done } = await render("Tips &amp; tricks &copy; AT&T");
   try {
     assertEquals(
@@ -310,7 +311,7 @@ Deno.test("cf-markdown resolves character references in text", async () => {
   }
 });
 
-Deno.test("cf-markdown leaves character references in a code span as written", async () => {
+test("cf-markdown leaves character references in a code span as written", async () => {
   const { content, done } = await render("Write `&amp;` for an ampersand");
   try {
     assertEquals(content.querySelector("code")?.textContent, "&amp;");

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   memberTasks,
   memberTestFiles,
@@ -14,6 +13,7 @@ import {
   unquote,
   walkTestFiles,
 } from "./deno-task.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Every directory a case made, removed when the case is done. */
 const made: string[] = [];
@@ -117,9 +117,6 @@ describe("reading a member's test task", () => {
   });
 
   it("refuses a task naming its own import map", () => {
-    // That map governs every module of the invocation, the preload
-    // included, so a specifier the preload needs and the map does not
-    // carry would fail the whole run rather than the preload alone.
     expect(parseTestTask("deno test -A --import-map ./map.json .")).toBe(
       undefined,
     );

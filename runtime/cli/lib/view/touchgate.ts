@@ -414,7 +414,7 @@ async function send(
       );
       const touched = step(
         say`Touch the “${name}” security key to ${action}.`,
-        "person",
+        "touch",
       );
       const approval = await keys.sign(device, hash, credential);
       touched();

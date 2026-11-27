@@ -6,8 +6,9 @@ import {
   trailingPath,
   WORKTREE_TAIL_CHARACTER_COUNT,
 } from "./presentation.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("conversation state keeps provider lifecycle separate from sync", () => {
+test("conversation state keeps provider lifecycle separate from sync", () => {
   assertEquals(
     conversationState({
       archived: true,
@@ -42,7 +43,7 @@ Deno.test("conversation state keeps provider lifecycle separate from sync", () =
   );
 });
 
-Deno.test("idle time uses compact relative units", () => {
+test("idle time uses compact relative units", () => {
   const now = new Date("2026-07-21T12:00:00.000Z").getTime();
   assertEquals(formatIdleFor("2026-07-21T11:59:30.000Z", now), "<1m");
   assertEquals(formatIdleFor("2026-07-21T11:15:00.000Z", now), "45m");
@@ -55,7 +56,7 @@ Deno.test("idle time uses compact relative units", () => {
   assertEquals(formatIdleFor("not-a-date", now), "—");
 });
 
-Deno.test("worktree paths show a stable trailing segment", () => {
+test("worktree paths show a stable trailing segment", () => {
   assertEquals(WORKTREE_TAIL_CHARACTER_COUNT, 10);
   assertEquals(trailingPath("/work", 8), "/work");
   assertEquals(trailingPath("/very/long/worktree/path", 8), "…ree/path");
@@ -63,7 +64,7 @@ Deno.test("worktree paths show a stable trailing segment", () => {
   assertEquals(trailingPath(null, 8), "—");
 });
 
-Deno.test("session rows sort by title, idle time, and worktree", () => {
+test("session rows sort by title, idle time, and worktree", () => {
   const rows = [
     {
       title: "Session 10",
@@ -104,7 +105,7 @@ Deno.test("session rows sort by title, idle time, and worktree", () => {
   );
 });
 
-Deno.test("session rows without a sort value stay last in their input order", () => {
+test("session rows without a sort value stay last in their input order", () => {
   const rows = [
     { title: "first untimed", updatedAt: null, gitWorktreeRoot: null },
     {

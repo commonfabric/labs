@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { UnknownCfcMetadataVersionError } from "../src/cfc/metadata.ts";
 import { processedClaimJoinIsForeign } from "../src/cfc/prepare.ts";
 import { runOutcomeIsWithheld } from "../src/executor/processed-claim.ts";

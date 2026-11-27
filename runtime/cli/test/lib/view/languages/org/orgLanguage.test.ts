@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +7,7 @@ import {
 import { orgLanguage } from "../../../../../lib/view/languages/org/language.ts";
 import { shellLanguage } from "../../../../../lib/view/languages/shell/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Source blocks are colored through their languages' synchronous entry
 // points, which show plain text until the language's parser has loaded.

@@ -12,13 +12,19 @@
  * installed from the policy. The posture off is the control.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -43,6 +49,12 @@ import {
   TEST_MEMORY_SERVER_AUTH,
 } from "./memory-v2-test-utils.ts";
 import { waitUntil } from "./support/wait-until.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   /**

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { isErasedAtEmit } from "../../src/ast/erased-syntax.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The first node in `source`, depth first, that `matches` accepts. */
 function findNode(

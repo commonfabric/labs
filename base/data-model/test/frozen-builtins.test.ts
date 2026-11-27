@@ -11,10 +11,10 @@
  * -- which an immutable receiver can only express by producing a new set.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FrozenMap, FrozenSet } from "@/frozen-builtins.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type MutableMapExtensions<K, V> = {
   getOrInsert(key: K, defaultValue: V): V;

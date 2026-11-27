@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   deepFreeze,
@@ -13,6 +12,7 @@ import {
   FabricBytes,
   FabricEpochDay,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("forEachFabricContainerValue", () => {
   it("weighs payloads and instance state without copying frozen graphs", () => {

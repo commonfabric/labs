@@ -1,4 +1,3 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import {
@@ -11,6 +10,12 @@ import {
   runFixture,
   shouldUpdateGoldens,
 } from "./fixture-runner.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Writes `files`, keyed by path relative to `root`, creating directories. */
 function writeTreeSync(root: string, files: Record<string, string>): void {

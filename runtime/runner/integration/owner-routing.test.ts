@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { defer } from "@commonfabric/async/defer";
 import type { FabricPlainObject } from "@commonfabric/data-model";
@@ -23,6 +22,12 @@ import {
   withServerExecutionDefault,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The passphrase a toolshed derives its service identity from. */
 type PassphraseOf = (name: ToolshedName) => string;

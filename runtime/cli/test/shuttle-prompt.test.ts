@@ -18,12 +18,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { PiecesController } from "@commonfabric/piece/ops";
 
 import { UI } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";

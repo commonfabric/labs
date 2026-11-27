@@ -16,7 +16,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   optionFlag,
@@ -27,6 +26,7 @@ import {
   readsAsOption,
   type VerbOption,
 } from "../lib/shuttle/options.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A verb that declares one option taking a value, for the cases that need one. */
 const SELECT: VerbOption = {

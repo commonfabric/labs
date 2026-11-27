@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type * as Config from "../config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The variables that name the cfs and weaver repositories. */
 const VARIABLES = [

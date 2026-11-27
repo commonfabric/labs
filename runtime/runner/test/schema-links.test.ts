@@ -2,9 +2,14 @@
 // and validateAndTransform with redirect links.
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import "@commonfabric/test-support/equal-ignoring-symbols";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
 import { registerSchemaDocument } from "../src/schema-registry.ts";

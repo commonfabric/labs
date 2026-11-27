@@ -172,6 +172,10 @@ export const NEXT_RUN_STATE_FIELDS = {
   policyTrace: sourceRunEvidence,
   policyTracePath: sourceRunEvidence,
   cfcModelContext: carriedContext,
+  observedImageFrames: {
+    kind: "excluded",
+    reason: "A new root run admits its own image output IDs.",
+  },
   cfcInvocationContexts: carriedContext,
   cellLabels: carriedContext,
   cellLabelsPath: sourceRunEvidence,

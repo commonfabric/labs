@@ -9,12 +9,21 @@
  * the task is doing, ends in "...", saying to wait for the viewer, unless it
  * waits for someone's action, and once it ends, in a mark that shows how.
  * The last step running has a spinner at its end, unless it waits for
- * someone's action.
+ * someone's action. Once a step waits for the touch of a security key, the
+ * dialog draws the key coming in from past the screen's edge and plugging
+ * into its side, the light along the key's edges blinking until it is
+ * touched.
  */
 
 import { cpLen } from "./ansi.ts";
 import { drawnCharacters, shownCells } from "./display.ts";
-import { type DialogSpan, type DialogTone, webAddresses } from "./render.ts";
+import {
+  type DialogSpan,
+  type DialogTone,
+  KEY_PLUG_MS,
+  type SecurityKey,
+  webAddresses,
+} from "./render.ts";
 
 /** What a piece of the task dialog's text is: the viewer's own words, a
  * name they interpolate, or text another program wrote. */
@@ -106,9 +115,10 @@ export function plainText(text: TaskText): string {
   ).join("");
 }
 
-/** What a step waits for: work the viewer does, or someone's action, such
- * as the touch of a security key. */
-export type StepKind = "work" | "person";
+/** What a step waits for: work the viewer does, someone's action, such as
+ * opening a pull request, or the touch of a security key, which the task
+ * dialog draws beside itself. */
+export type StepKind = "work" | "person" | "touch";
 
 /** Shows `text` as a step of a task, of `kind`, saying what it is doing,
  * until the function it returns is called, which shows that the step is
@@ -160,6 +170,14 @@ const ENDED: Readonly<Record<Exclude<StepState, "busy">, string>> = {
 /** What a step that waits for work the viewer does ends in, saying that the
  * person should wait. */
 const WAIT = "...";
+
+/** How often the security key is drawn anew as it comes in, in
+ * milliseconds. */
+const KEY_FRAME_MS = 16;
+
+/** How long the security key's light stays on, and then off, while it
+ * blinks, in milliseconds. */
+const KEY_BLINK_MS = 300;
 
 /** A task's log: what it said, and what the programs it ran wrote. */
 export class TaskLog {
@@ -222,6 +240,48 @@ export class TaskLog {
         entry.state = i === last ? "failed" : "left";
       }
     });
+  }
+
+  /**
+   * The security key that the task dialog showing this log draws beside
+   * itself, `time` milliseconds after the last step that waits for its
+   * touch began, or null when no step waits for one. While the step waits,
+   * the key comes in from past the screen's edge and plugs in over the first
+   * {@link KEY_PLUG_MS} milliseconds, and then its light blinks. Once the
+   * step has ended, the key is plugged in, its light showing that it was
+   * touched when the step is done, and off otherwise.
+   */
+  securityKey(time: number): SecurityKey | null {
+    const state = this.#touchState();
+    if (state === null) return null;
+    if (state !== "busy") {
+      return {
+        time: KEY_PLUG_MS,
+        light: state === "done" ? "touched" : "off",
+      };
+    }
+    const blink = Math.floor((time - KEY_PLUG_MS) / KEY_BLINK_MS);
+    return { time, light: blink >= 0 && blink % 2 === 0 ? "on" : "off" };
+  }
+
+  /** How long after `time` the security key that {@link securityKey} gives
+   * is next drawn anew, in milliseconds, or null when it holds still: every
+   * {@link KEY_FRAME_MS} milliseconds until it is plugged in, and then each
+   * time its light blinks on or off. */
+  keyFrameDelay(time: number): number | null {
+    if (this.#touchState() !== "busy") return null;
+    return time < KEY_PLUG_MS
+      ? Math.min(KEY_FRAME_MS, KEY_PLUG_MS - time)
+      : KEY_BLINK_MS;
+  }
+
+  /** How the last step that waits for the touch of a security key stands,
+   * or null when none does. */
+  #touchState(): StepState | null {
+    return this.#entries.findLast(
+      (entry): entry is Extract<TaskEntry, { kind: "step" }> =>
+        entry.kind === "step" && entry.waits === "touch",
+    )?.state ?? null;
   }
 
   /** Whether `logs`, one after the other, show a spinner. */

@@ -1,7 +1,6 @@
 /** Tests the three line-count policies used by the diff jump list. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   commentOnlyFiles,
@@ -18,7 +17,9 @@ import {
   languageForFile,
   prepareLanguages,
 } from "../lib/view/languages/language.ts";
+import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
 import { rustLanguage } from "../lib/view/languages/rust/language.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function contextLines(path: string, lines: readonly string[]) {
   return languageForFile(path).highlightLines(lines.join("\n"), path);
@@ -176,6 +177,35 @@ describe("diffcounts", () => {
     const counts = countsFor(diff);
 
     expect(counts.comments.totals).toEqual({ adds: 0, dels: 0 });
+  });
+
+  it("discounts a SQL block comment that spans hunks, and counts SQL code, in a .sql file read as plain text", () => {
+    const diff = [
+      "diff --git a/query.sql b/query.sql",
+      "--- a/query.sql",
+      "+++ b/query.sql",
+      "@@ -1 +1 @@",
+      "-/* old",
+      "+/* new",
+      "@@ -9 +9 @@",
+      "-old */",
+      "+new */",
+      "@@ -20 +20 @@",
+      "-select 1;",
+      "+select 2;",
+      "",
+    ].join("\n");
+    const plain = {
+      languages: {
+        oldLanguage: plainTextLanguage,
+        newLanguage: plainTextLanguage,
+      },
+    };
+
+    expect(countsFor(diff, [plain]).comments.totals).toEqual({
+      adds: 1,
+      dels: 1,
+    });
   });
 
   it("recognizes fallback comment syntax across supported file families", () => {
@@ -1210,6 +1240,33 @@ describe("diffcounts", () => {
           },
         ),
       ).toEqual([false, false, true]);
+    });
+
+    it("returns true for comment lines added to or removed from JSONC, and false for one added to strict JSON or for a changed JSONC value", async () => {
+      expect(
+        await commentOnly(
+          {
+            path: "deno.jsonc",
+            before: ["{", "  // a", '  "x": 1', "}"],
+            after: ["{", "  // b", "  /* c */", '  "x": 1', "}"],
+          },
+          {
+            path: "deno.json",
+            before: ["{", "  // a", '  "x": 1', "}"],
+            after: ["{", '  "x": 1', "}"],
+          },
+          {
+            path: "package.json",
+            before: ["{", '  "x": 1', "}"],
+            after: ["{", "  // a", '  "x": 1', "}"],
+          },
+          {
+            path: "settings.jsonc",
+            before: ["{", "  // a", '  "x": 1', "}"],
+            after: ["{", "  // a", '  "x": 2', "}"],
+          },
+        ),
+      ).toEqual([true, true, false, false]);
     });
 
     it("returns false for a Rust change inside a raw string that holds comment markers", async () => {

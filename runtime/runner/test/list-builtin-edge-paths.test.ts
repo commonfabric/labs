@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { OpaqueCell } from "@commonfabric/api";
@@ -7,6 +6,14 @@ import type { Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import {
@@ -772,7 +779,7 @@ describe("cross-space link load kick", () => {
   });
 });
 
-Deno.test("resume-settle run kind: bookkeeping ONLY on the serving posture; derivation on clients (r3756175819 — the shared decision all three list builtins stamp)", () => {
+test("resume-settle run kind: bookkeeping ONLY on the serving posture; derivation on clients (r3756175819 — the shared decision all three list builtins stamp)", () => {
   // The settle writes DERIVED content (result := f(input)): stamped
   // bookkeeping on a flag-ON client it committed authored-class — a
   // by-construction violation of the client derivation-commit removal.

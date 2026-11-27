@@ -15,10 +15,15 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { AgentRunRecordSchema } from "../src/builtins/agent-schemas.ts";
 import type { AgentRunRecord } from "../src/builtins/agent.ts";

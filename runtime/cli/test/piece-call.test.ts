@@ -1,6 +1,5 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { ValidationError } from "@cliffy/command";
 import type { JSONSchema } from "@commonfabric/api";
@@ -25,6 +24,12 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { withheldStatusTxViewForTestingOnly } from "@commonfabric/runner/for-testing-only";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   boundedSettlement,

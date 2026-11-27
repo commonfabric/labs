@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { validateAndSanitizeSchemaValueWithOpaqueLinks } from "../../src/cfc/structured-result.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("structured-result", () => {
   describe("validateAndSanitizeSchemaValueWithOpaqueLinks()", () => {

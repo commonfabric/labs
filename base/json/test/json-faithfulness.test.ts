@@ -18,10 +18,10 @@
  * surface directly, and the third spot-checks the delegation.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { findJsonUnfaithfulValues, isPureJson } from "@commonfabric/json";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("json-faithfulness", () => {
   describe("findJsonUnfaithfulValues()", () => {

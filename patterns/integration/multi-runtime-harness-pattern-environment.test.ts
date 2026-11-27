@@ -8,10 +8,10 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { getPatternEnvironment } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";
 
 const PROGRAM_PATH = join(

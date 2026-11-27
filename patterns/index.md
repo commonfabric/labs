@@ -106,17 +106,14 @@ Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
 `apps/bookmarks/main.tsx`, `system/chatbot/main.tsx`,
 `apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
 `apps/deep-research/main.tsx`, `showcase/dice/main.tsx` (+
-`showcase/dice/dice-handlers.ts`),
-`examples/group-chat-lobby/main.tsx`,
+`showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
 `examples/group-chat-room/group-chat-room.tsx`, `examples/image/main.tsx`,
-`apps/image-analysis/main.tsx`,
-`examples/link-preview/main.tsx`, `examples/map-demo/main.tsx`,
-`examples/mobile-app-demo/main.tsx`,
+`apps/image-analysis/main.tsx`, `examples/link-preview/main.tsx`,
+`examples/map-demo/main.tsx`, `examples/mobile-app-demo/main.tsx`,
 `examples/pattern-index/main.tsx`,
 `examples/profile-roster-live-demo/profile-roster-live-demo.tsx` (demo: live
 multi-user profile roster — every participant's cross-space profile badge),
-`system/self/self.tsx`,
-`apps/self-improving-classifier/main.tsx`,
+`system/self/self.tsx`, `apps/self-improving-classifier/main.tsx`,
 `apps/shopping-list/main.tsx`, `apps/store-mapper/main.tsx`,
 `examples/text-swapper/main.tsx`.
 
@@ -1131,13 +1128,13 @@ interface AssumptionSurfacerOutput {
 
 Ask a language model about something personal without sending it anything
 personal. Names, emails, phone numbers, SSNs, card numbers and addresses in a
-draft, from the embedded PII vault (`apps/redactor/main.tsx`) or found by format, are swapped
-for realistic stand-ins; only that redacted draft may be sent to the model, and
-the reply comes back with the originals restored for the owner. CFC enforces the
-boundary: the draft and vault are `Confidential` under `policy.tsx`, whose one
-exchange rule releases only what the `redactDraft` lift computes, and the
-model's prompt is a `MaxConfidentiality` store. See the README's CFC design and
-CFC debt sections.
+draft, from the embedded PII vault (`apps/redactor/main.tsx`) or found by
+format, are swapped for realistic stand-ins; only that redacted draft may be
+sent to the model, and the reply comes back with the originals restored for the
+owner. CFC enforces the boundary: the draft and vault are `Confidential` under
+`policy.tsx`, whose one exchange rule releases only what the `redactDraft` lift
+computes, and the model's prompt is a `MaxConfidentiality` store. See the
+README's CFC design and CFC debt sections.
 
 **Keywords:** privacy, PII, redaction, pseudonymization, llm, CFC, exchangeRule,
 TransformedBy, MaxConfidentiality

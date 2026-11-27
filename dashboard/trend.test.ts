@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { levelChanges } from "./trend.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A source of normally distributed numbers that gives the same sequence for
 // the same seed, so a series reads the same on every run.

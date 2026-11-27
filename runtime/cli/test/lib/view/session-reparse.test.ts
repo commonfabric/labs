@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { EditableSource } from "../../../lib/view/editsource.ts";
 import type { FileGateway } from "../../../lib/view/filegateway.ts";
 import type { Document } from "../../../lib/view/model.ts";
 import { Session } from "../../../lib/view/session.ts";
 import { parseDocument } from "../../view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEXT = Array.from({ length: 60 }, (_, i) => `const n${i} = ${i};`)
   .join("\n");

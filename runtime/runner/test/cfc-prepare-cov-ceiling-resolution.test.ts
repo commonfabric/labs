@@ -1,10 +1,13 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import { buildCfcPolicyArtifactManifest } from "../src/cfc/policy.ts";
+import {
+  buildCfcPolicyArtifactManifest,
+  cfcPolicyManifestDocId,
+} from "../src/cfc/policy.ts";
 import { isVerdictReason } from "../src/cfc/verdict-reason.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -40,13 +43,15 @@ const POLICY = {
   subject: space,
 };
 
-const TARGET_SCHEMA = {
-  type: "object",
-  properties: {
-    out: { type: "string", ifc: { maxConfidentiality: [] } },
-  },
-  required: ["out"],
-} as JSONSchema;
+/** A target whose `out` field admits the clauses in `ceiling`. */
+const targetSchema = (ceiling: readonly unknown[]): JSONSchema =>
+  ({
+    type: "object",
+    properties: {
+      out: { type: "string", ifc: { maxConfidentiality: ceiling } },
+    },
+    required: ["out"],
+  }) as JSONSchema;
 
 describe("prepare", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate> | undefined;
@@ -64,8 +69,12 @@ describe("prepare", () => {
   // `installed` says so, then copies the source into a field whose ceiling
   // admits no clause, with policy evaluation enforced. Returns the reasons
   // the preparation refused it for, each with whether it is a verdict, and
-  // the diagnostics naming a module policy.
-  const copyUnderCeiling = async (installed: boolean) => {
+  // the diagnostics naming a module policy. `ceiling` widens the field's
+  // ceiling.
+  const copyUnderCeiling = async (
+    installed: boolean,
+    ceiling: readonly unknown[] = [],
+  ) => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
@@ -113,7 +122,7 @@ describe("prepare", () => {
     expect((await seed.commit().settled).error).toBeUndefined();
     const tx = runtime.edit();
     const value = source.withTx(tx).get();
-    runtime.getCell(space, "target", TARGET_SCHEMA, tx).set(
+    runtime.getCell(space, "target", targetSchema(ceiling), tx).set(
       { out: value } as never,
     );
     tx.prepareCfc();
@@ -156,6 +165,95 @@ describe("prepare", () => {
       expect(diagnostics).toEqual([
         `policy-evaluation(enforce): module policy missing-manifest digest ${artifact.policyDigest} at input requirement /out`,
       ]);
+    });
+  });
+
+  describe("a ceiling the unrewritten clause fits", () => {
+    // A manifest's rules may drop an alternative, so a label its rules never
+    // saw can fit a ceiling the rewritten label would not. A manifest that does
+    // not resolve fails the gate, retryably (spec §5.3.2; §4.4.1,
+    // commonfabric/specs#109, pending).
+
+    it("passes the ceiling where the manifest resolves", async () => {
+      const { reasons } = await copyUnderCeiling(true, [POLICY]);
+      expect(
+        reasons.filter(({ reason }) => reason.includes("maxConfidentiality")),
+      ).toEqual([]);
+    });
+
+    it("refuses the write, as no verdict, where the manifest does not resolve", async () => {
+      const { reasons, diagnostics } = await copyUnderCeiling(false, [POLICY]);
+      expect(reasons).toEqual([{
+        reason: "maxConfidentiality failed at /out",
+        verdict: false,
+      }]);
+      expect(diagnostics).toEqual([
+        `policy-evaluation(enforce): module policy missing-manifest digest ${artifact.policyDigest} at input requirement /out`,
+      ]);
+    });
+  });
+
+  describe("a cold copy from the space that holds the manifest", () => {
+    // The gate resolves a read's module references where the read's label
+    // came from. The destination receives the manifest only from the commit
+    // the gate decides, so looking there alone would refuse every attempt.
+
+    it("passes the ceiling with the manifest only in the source space", async () => {
+      storageManager = StorageManager.emulate({ as: signer });
+      runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+        cfcPolicyEvaluation: "enforce",
+      });
+      const destination = (await Identity.fromPassphrase(
+        "runner-cfc-prepare-cov-ceiling-resolution destination",
+      )).did();
+      const raw = storageManager.edit();
+      raw.write({
+        space,
+        id: cfcPolicyManifestDocId(artifact.policyDigest),
+        type: "application/json",
+        path: ["value"],
+      }, artifact as never);
+      expect((await raw.commit().settled).ok).toBeDefined();
+      const source = runtime.getCell(space, "cold-source");
+      const seed = runtime.edit();
+      writeSeedEnvelopeDoc(seed, space);
+      seedStoredEnvelope(
+        seed,
+        { ...source.getAsNormalizedFullLink(), path: [] },
+        {
+          value: "secret",
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: {
+                  confidentiality: [POLICY],
+                  integrity: [{ type: "Evidence" }],
+                },
+                origin: "derived",
+                observes: "value",
+              }],
+            },
+          },
+        },
+      );
+      expect((await seed.commit().settled).error).toBeUndefined();
+
+      const tx = runtime.edit();
+      const value = source.withTx(tx).get();
+      runtime.getCell(destination, "cold-target", targetSchema([POLICY]), tx)
+        .set({ out: value } as never);
+      tx.prepareCfc();
+      const prepared = tx.getCfcState().prepare;
+      const reasons = prepared.status === "invalidated" ? prepared.reasons : [];
+      tx.abort();
+      expect(reasons.filter((reason) => reason.includes("maxConfidentiality")))
+        .toEqual([]);
     });
   });
 });

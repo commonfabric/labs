@@ -1,10 +1,10 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   PatternIndexListedPattern,
   PatternIndexPattern,
   PatternIndexSearchResult,
 } from "@commonfabric/pattern-index/client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import type { TemplateResult } from "lit";
 import { ConsoleIndexView } from "../../../console/src/index-view.ts";
 import { bindingOn, handlerOn, templateText } from "./lit-template.ts";

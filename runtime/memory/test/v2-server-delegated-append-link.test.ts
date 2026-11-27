@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import * as Engine from "../v2/engine.ts";
 import { Server } from "../v2/server.ts";
@@ -10,6 +9,12 @@ import {
   type StreamEventsDocValue,
 } from "../v2.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-delegated-append-link-space";
 const STREAM = { id: "of:delegated-append-link-stream", path: ["stream"] };

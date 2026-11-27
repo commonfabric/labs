@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -8,6 +7,7 @@ import {
   unionNodeMembersInOrder,
 } from "../../src/typescript/source-order.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The type each member of the interface `W` declares, by the member's name,

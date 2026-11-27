@@ -4,6 +4,7 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { CellHandle } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   clearPieceBoundary,
@@ -33,7 +34,7 @@ function createOpsCollector() {
   };
 }
 
-Deno.test("worker reconciler - space stamping across transclusion", async (t) => {
+test("worker reconciler - space stamping across transclusion", async (t) => {
   const signer = await Identity.fromPassphrase("test space stamp");
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -131,7 +132,7 @@ Deno.test("worker reconciler - space stamping across transclusion", async (t) =>
   await storageManager.close();
 });
 
-Deno.test("element render contexts share the standard context protocol", () => {
+test("element render contexts share the standard context protocol", () => {
   const target = new EventTarget();
   provideElementSpace(target, "did:key:z6Mk-ctx");
   let received: string | undefined;

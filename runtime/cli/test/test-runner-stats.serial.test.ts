@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import {
   getLogger,
@@ -12,6 +11,12 @@ import {
   resetAllTimingStats,
 } from "@commonfabric/logger";
 import type { SchedulerGraphNode, SettleStats } from "@commonfabric/runner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   printActionStatsTable,

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { LogCounts, LoggerBreakdown } from "@commonfabric/logger";
 import type {
@@ -6,6 +5,7 @@ import type {
   RuntimeTelemetryMarkerResult,
   TimingStats,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   activeSubtopicCount,

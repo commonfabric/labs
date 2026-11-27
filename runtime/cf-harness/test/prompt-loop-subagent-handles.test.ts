@@ -5,7 +5,6 @@
  * produces comes back to the parent as a token the parent can resolve.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -15,6 +14,7 @@ import { type Cell, isCell, Runtime } from "@commonfabric/runner";
 import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { join, normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";

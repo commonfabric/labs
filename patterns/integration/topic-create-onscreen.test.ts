@@ -30,7 +30,12 @@ import { type DID, Identity } from "@commonfabric/identity";
 import { createTestSpace, env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 import {
   collectBrowserLoadSummary,

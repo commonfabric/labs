@@ -6,7 +6,6 @@
  * boundary.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import type {
@@ -15,6 +14,12 @@ import type {
   RetargetOptions,
 } from "@commonfabric/piece/ops/bulk-retarget";
 import { decode } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { runRetarget } from "../lib/bulk.ts";
 import { resetUnreportedRunGuardsForTest } from "../lib/unreported-run.ts";

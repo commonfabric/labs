@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fabricAwareEqual } from "@commonfabric/data-model";
 import { FabricEpochDay } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { mergeCfcSchemaEnvelopes } from "../../src/cfc/schema-merge.ts";
 import { droppedStoredClaim } from "../../src/cfc/claim-preservation.ts";

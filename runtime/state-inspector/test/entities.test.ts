@@ -22,6 +22,7 @@ import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 import { FabricLink } from "@commonfabric/data-model/fabric-instances";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { listCommits } from "../queries.ts";
@@ -318,7 +319,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("unified entity model + encoded commit decode", async (t) => {
+test("unified entity model + encoded commit decode", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-model-" });
   const dbPath = `${dir}/space.sqlite`;
   try {

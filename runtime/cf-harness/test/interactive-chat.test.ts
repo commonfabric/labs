@@ -20,6 +20,7 @@ import {
   resolveHarnessChatCapabilities,
   resolveHarnessChatPolicy,
 } from "../src/contracts/interactive-chat.ts";
+import { test } from "@commonfabric/test-support/test";
 
 class InMemoryInteractiveChatContract {
   readonly events: HarnessChatEventEnvelope[] = [];
@@ -137,7 +138,7 @@ class InMemoryInteractiveChatContract {
   }
 }
 
-Deno.test("interactive chat capabilities are explicit about v1 limits", () => {
+test("interactive chat capabilities are explicit about v1 limits", () => {
   assertEquals(DEFAULT_HARNESS_CHAT_CAPABILITIES.partialTextStream, false);
   assertEquals(DEFAULT_HARNESS_CHAT_CAPABILITIES.toolTelemetry, true);
   assertEquals(DEFAULT_HARNESS_CHAT_CAPABILITIES.fileMutationEvents, true);
@@ -153,7 +154,7 @@ Deno.test("interactive chat capabilities are explicit about v1 limits", () => {
   });
 });
 
-Deno.test("interactive chat request envelopes bind methods to params", () => {
+test("interactive chat request envelopes bind methods to params", () => {
   const request = {
     type: HARNESS_CHAT_REQUEST_TYPE,
     protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
@@ -171,7 +172,7 @@ Deno.test("interactive chat request envelopes bind methods to params", () => {
   assertEquals(request.params.workspace.hostPath, "/workspace");
 });
 
-Deno.test("interactive chat request envelopes carry a typed settlement on resolve_client_action", () => {
+test("interactive chat request envelopes carry a typed settlement on resolve_client_action", () => {
   const typed = {
     type: HARNESS_CHAT_REQUEST_TYPE,
     protocolVersion: HARNESS_CHAT_PROTOCOL_VERSION,
@@ -204,7 +205,7 @@ Deno.test("interactive chat request envelopes carry a typed settlement on resolv
   assertEquals(answer.params.outcome, "done");
 });
 
-Deno.test("interactive chat contract supports reusable turn cancel", () => {
+test("interactive chat contract supports reusable turn cancel", () => {
   const service = new InMemoryInteractiveChatContract();
   const browserAccess: HarnessChatBrowserAccessLease = {
     type: "cf-harness.chat.browser-access-lease",
@@ -258,7 +259,7 @@ Deno.test("interactive chat contract supports reusable turn cancel", () => {
   );
 });
 
-Deno.test("interactive chat contract forces comment threads into read-only policy", () => {
+test("interactive chat contract forces comment threads into read-only policy", () => {
   const service = new InMemoryInteractiveChatContract();
   const session = service.startSession({
     sessionId: "comment-session-1",
@@ -293,7 +294,7 @@ Deno.test("interactive chat contract forces comment threads into read-only polic
   );
 });
 
-Deno.test("interactive chat contract keeps file events structured", () => {
+test("interactive chat contract keeps file events structured", () => {
   const service = new InMemoryInteractiveChatContract();
   service.startSession({
     sessionId: "chat-session-2",
@@ -348,7 +349,7 @@ Deno.test("interactive chat contract keeps file events structured", () => {
   );
 });
 
-Deno.test("interactive chat responses carry protocol version and errors", () => {
+test("interactive chat responses carry protocol version and errors", () => {
   assertEquals(createHarnessChatOkResponse("req-1", { accepted: true }), {
     type: "cf-harness.chat.response",
     protocolVersion: 1,

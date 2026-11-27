@@ -46,6 +46,7 @@ import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   type CollectedMemory,
@@ -374,7 +375,7 @@ async function runTest() {
 
 // The test runs without a per-test deadline. See
 // docs/development/waiting-in-tests.md.
-Deno.test({
+test({
   name: "derive array leak test",
   fn: runTest,
   sanitizeResources: false,

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { readEnv } from "../v2/sqlite/column-origin.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("readEnv()", () => {
   // The read a denied `--allow-env` refuses is covered by the subprocess

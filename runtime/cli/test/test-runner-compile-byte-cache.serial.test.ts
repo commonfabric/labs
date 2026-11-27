@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import type { CompiledModuleArtifact } from "@commonfabric/runner";
@@ -7,6 +6,7 @@ import {
   restoreCompileByteCacheForTesting,
   writeCompileByteCacheForTesting,
 } from "@commonfabric/test-support/compile-byte-cache";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runMultiUserTestPattern } from "../lib/multi-user-test-runner.ts";
 import type * as compileByteCacheModule from "../lib/compile-byte-cache.ts";
 import { runTests } from "../lib/test-runner.ts";

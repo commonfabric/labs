@@ -4,11 +4,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { transformFiles } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A pattern whose `computed()` reads `name` from a captured cell of `value`. */
 const readContact = (value: string) =>

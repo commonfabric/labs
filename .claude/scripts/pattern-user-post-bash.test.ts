@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   parseShellCommandSegments,
   suggestionForPatternUserCommand,
 } from "./pattern-user-post-bash.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("pattern-user-post-bash", () => {
   describe("suggestionForPatternUserCommand()", () => {

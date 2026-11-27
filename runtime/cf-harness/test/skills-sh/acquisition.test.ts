@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessFetch } from "../../src/contracts/http-fetch.ts";
 import {
@@ -25,6 +24,7 @@ import buildgreatTree from "./fixtures/buildgreatproducts-plaid-002ea.tree.json"
 import membraneTree from "./fixtures/membranedev-application-skills-f484c.tree.json" with {
   type: "json",
 };
+import { describe, it } from "@commonfabric/test-support/test";
 
 const MEMBRANE_SHA = "f484c8265e70ec910a57342389cca5c5de7d8167";
 const MEMBRANE_PIN: SkillsShPinnedAddress = {

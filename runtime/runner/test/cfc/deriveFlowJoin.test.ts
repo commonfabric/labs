@@ -1,12 +1,12 @@
 /** Checks flow labels per observation against a linear longest-prefix oracle. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
 import { maxOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { atomPropagationClass } from "../../src/cfc/atom-classes.ts";
 import { uniqueCfcAtoms } from "../../src/cfc/observation.ts";

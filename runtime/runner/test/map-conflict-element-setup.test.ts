@@ -18,7 +18,6 @@
 // a timing accident. Releasing the frames delivers the catch-up the
 // rejection's retry gate waits on.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
@@ -26,6 +25,12 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
 import type { FabricValue } from "@commonfabric/api";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { StorageNotification } from "../src/storage/interface.ts";

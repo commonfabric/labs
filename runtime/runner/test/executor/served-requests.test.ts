@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { encodeMemoryBoundary, ProtocolError } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
@@ -8,6 +7,12 @@ import type {
   ServedRequestCall,
   ServedRequestOutcome,
 } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   type ServedAppendEntry,
   servedRequestHandler,

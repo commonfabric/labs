@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { FabricInstance } from "@commonfabric/data-model";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -36,6 +35,12 @@ import {
   PiecesController,
 } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 // The route that ref resolves to.

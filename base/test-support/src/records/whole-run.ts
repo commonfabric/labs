@@ -14,8 +14,7 @@
 
 import { join } from "@std/path";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
-import { type Environment, recordsDir } from "./paths.ts";
-import { writableSpool } from "./registration.ts";
+import { type Environment, recordsDir, writableSpool } from "./paths.ts";
 
 /** What a mark's file name starts with, inside the spool. */
 const WHOLE_RUN_PREFIX = "whole-run-";

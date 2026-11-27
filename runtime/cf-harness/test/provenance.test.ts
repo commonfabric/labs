@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   currentProvenance,
@@ -15,6 +14,7 @@ import {
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { cfHarnessCliCommandName } from "../src/cli.ts";
 import { runCfHarnessCli } from "./support/on-linux.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 function envFrom(values: Record<string, string>): EnvReader {
   return (name) => values[name];

@@ -2,8 +2,8 @@
 import { mount, window } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFAutoLayout } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** An element for `slot`, or for the content area when `slot` is empty. */
 function pane(text: string, slot = ""): HTMLElement {

@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "@commonfabric/api";
 
 import { hashStringOf } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { hashSchema } from "@/hashSchema.ts";
 
 describe("hashSchema()", () => {

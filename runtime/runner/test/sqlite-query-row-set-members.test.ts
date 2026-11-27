@@ -17,7 +17,6 @@
  * is distinguishable from one the projected rows brought.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -33,6 +32,12 @@ import {
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef, SqliteParamsWire } from "@commonfabric/memory/v2";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { encodeCfLinkValue } from "../src/builtins/sqlite/cf-link.ts";
 import { SQLITE_ROW_SALT } from "../src/builtins/sqlite/row-identity.ts";

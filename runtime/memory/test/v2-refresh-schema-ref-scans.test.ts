@@ -5,10 +5,10 @@
  * scans again are the ones that changed.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 import { applyCommit, close, type Engine, open } from "../v2/engine.ts";
 import {
   refreshTrackedGraph,

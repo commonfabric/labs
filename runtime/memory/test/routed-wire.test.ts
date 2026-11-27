@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   readRoutedBase64,
   routedStatementPayload,

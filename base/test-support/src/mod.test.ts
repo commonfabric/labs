@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -11,6 +10,7 @@ import {
   runDenoCommandWithTemporaryLock,
   shouldUpdateGoldens,
 } from "./mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("test-support module exports", () => {
   it("exposes the runtime helpers from the public module", () => {

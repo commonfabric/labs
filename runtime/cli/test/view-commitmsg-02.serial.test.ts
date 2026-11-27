@@ -1,7 +1,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import {
   commitSubjects,
   findCommitMessages,
@@ -14,7 +14,7 @@ import {
   shellQuote,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitMessages: a SHA-256 repository's 64-character object id", () => {
+test("findCommitMessages: a SHA-256 repository's 64-character object id", () => {
   const sha = "a".repeat(64);
   const lines = [`commit ${sha}`, "Author: A B <a@b>", "", "    Subject", ""];
   const msgs = findCommitMessages(lines);
@@ -23,7 +23,7 @@ Deno.test("findCommitMessages: a SHA-256 repository's 64-character object id", (
   assertEquals([msgs[0].start, msgs[0].end], [3, 3]);
 });
 
-Deno.test("commitSubjects: an email Subject wrapped over continuation lines", () => {
+test("commitSubjects: an email Subject wrapped over continuation lines", () => {
   const full = "0123456789abcdef0123456789abcdef01234567";
   const subjects = commitSubjects([
     `From ${full} Mon Sep 17 00:00:00 2001`,
@@ -40,7 +40,7 @@ Deno.test("commitSubjects: an email Subject wrapped over continuation lines", ()
   );
 });
 
-Deno.test({
+test({
   name: "realGit: preserves whitespace in a relative core.hooksPath",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -164,7 +164,7 @@ describe("realGit binary input", () => {
   });
 });
 
-Deno.test("realGit: amends reftable commits and preserves staged state", async () => {
+test("realGit: amends reftable commits and preserves staged state", async () => {
   const root = await Deno.makeTempDir();
   try {
     if (!await initReftable(root)) return;
@@ -214,7 +214,7 @@ Deno.test("realGit: amends reftable commits and preserves staged state", async (
   }
 });
 
-Deno.test("realGit: preserves pager insertion order around a workspace insertion", async () => {
+test("realGit: preserves pager insertion order around a workspace insertion", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -234,7 +234,7 @@ Deno.test("realGit: preserves pager insertion order around a workspace insertion
   }
 });
 
-Deno.test("realGit: reads and writes selected files through clean filters", async () => {
+test("realGit: reads and writes selected files through clean filters", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -261,7 +261,7 @@ Deno.test("realGit: reads and writes selected files through clean filters", asyn
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rolls back a nested commit made by a post-commit hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -304,7 +304,7 @@ fi`,
   },
 });
 
-Deno.test("realGit: rejects a stale expected HEAD", async () => {
+test("realGit: rejects a stale expected HEAD", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -326,7 +326,7 @@ Deno.test("realGit: rejects a stale expected HEAD", async () => {
   }
 });
 
-Deno.test({
+test({
   name: "realGit: rejects two journal claims for the amended commit",
   ignore: Deno.build.os === "windows",
   async fn() {

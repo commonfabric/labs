@@ -28,7 +28,12 @@ export type HarnessSkillResourceKind =
 
 export type HarnessSkillResourceContentKind = "text" | "binary";
 
-export type HarnessSkillCfcPromptRole = "context";
+/**
+ * The prompt-slot role a skill's text holds in the run it is loaded into:
+ * `context` for a skill the operator configured, and `quote` for one delivered
+ * through a handle, whose author nothing vouches for.
+ */
+export type HarnessSkillCfcPromptRole = "context" | "quote";
 
 export type HarnessSkillScriptRuntime = "deno" | "shebang" | "unknown";
 export type HarnessSkillScriptExecutionTarget = "sandbox" | "host";
@@ -82,7 +87,7 @@ export interface HarnessSkillResourceRead {
   path: string;
   status: HarnessSkillResourceReadStatus;
   readAt: string;
-  cfcPromptRole: HarnessSkillCfcPromptRole;
+  cfcPromptRole: "context";
   kind?: HarnessSkillResourceKind;
   resourcePath?: string;
   sandboxResourcePath?: string;
@@ -355,6 +360,70 @@ export interface HarnessAcquiredSkill {
   sandboxRoot: string;
 
   scripts: HarnessAcquiredSkillScript[];
+}
+
+/** One reviewed bundle, as a reviewed-skills file lists it. */
+export interface HarnessReviewedSkillEntry {
+  /** Who vouches for the bundle: the organization whose set holds it. */
+  verifier: string;
+
+  /**
+   * The skill's discovery id, `owner/repo/slug`, compared without regard to
+   * case as the host resolving it does.
+   */
+  registryId: string;
+
+  /**
+   * The commit the reviewer read the bundle at. A record of the review, not
+   * part of the match: acquisition pins whatever commit the default branch
+   * points at, and the same bytes at a later commit are the same bundle.
+   */
+  reviewedCommit?: string;
+
+  /** {@link skillBundleDigest} over every file the bundle holds. */
+  bundleDigest: string;
+
+  /** The version of the review checklist the bundle was read against. */
+  checklist?: string;
+
+  /** When the review stops counting: an ISO 8601 time with an offset. */
+  validUntil?: string;
+}
+
+/**
+ * The reviewed bundles a run knows of, and whose reviews it accepts.
+ *
+ * Entries and acceptance travel in one file for now, so the operator who
+ * supplies the file is the one who accepts its verifiers. A verifier in no
+ * `acceptedVerifiers` entry vouches for nothing, and a bundle digest in
+ * `revoked` is covered by no entry.
+ */
+export interface HarnessReviewedSkills {
+  entries: HarnessReviewedSkillEntry[];
+  acceptedVerifiers: string[];
+  revoked: string[];
+}
+
+/** One file of a bundle, keyed by its path relative to the bundle root. */
+export interface HarnessSkillBundleFile {
+  path: string;
+  valueDigest: string;
+}
+
+/** What a review that covers a delegated skill's bundle is recorded as. */
+export interface HarnessReviewedSkillEvidence {
+  /** The concept the review statement implements. */
+  concept: string;
+  verifier: string;
+  registryId: string;
+
+  /** The commit the child's bundle was acquired at. */
+  commitSha: string;
+  reviewedCommit?: string;
+  bundleDigest: string;
+  files: HarnessSkillBundleFile[];
+  checklist?: string;
+  validUntil?: string;
 }
 
 /** Every skill this run acquired scripts for. */

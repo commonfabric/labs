@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 import {
@@ -15,6 +14,12 @@ import {
   computeCompilerVersion,
   VERSION_NAMESPACE,
 } from "../src/compilation-cache/compiler-fingerprint.deno.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const REPO_ROOT = fromFileUrl(new URL("../../../", import.meta.url));
 

@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { BuiltInLLMMessage } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import createApp from "@/lib/create-app.ts";
 import { createLLMRouter } from "./llm.router.ts";

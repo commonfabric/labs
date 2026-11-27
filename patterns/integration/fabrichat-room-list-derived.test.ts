@@ -14,12 +14,17 @@
  * `fabrichat-room-list-*` files share.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, normalizeSpaceHost } from "@commonfabric/runner";
 import { sendVerbEvent } from "@commonfabric/piece/verb-call";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   CHAT_START,
   closeMember,

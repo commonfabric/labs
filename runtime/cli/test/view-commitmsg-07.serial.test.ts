@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   extractMessage,
   findCommitHeaders,
@@ -13,7 +14,7 @@ import {
   shellQuote,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitHeaders: email message text is not a compact header", () => {
+test("findCommitHeaders: email message text is not a compact header", () => {
   const full = "0123456789abcdef0123456789abcdef01234567";
   const lines = [
     `From ${full} Mon Sep 17 00:00:00 2001`,
@@ -34,7 +35,7 @@ Deno.test("findCommitHeaders: email message text is not a compact header", () =>
   assertEquals(findCommitHeaders(lines), [{ sha: full, line: 0 }]);
 });
 
-Deno.test("commit messages ignore CRLF transport carriage returns", () => {
+test("commit messages ignore CRLF transport carriage returns", () => {
   const lines = [
     "commit 0123456789abcdef0123456789abcdef01234567",
     "Author: A B <a@b.example>",
@@ -54,7 +55,7 @@ Deno.test("commit messages ignore CRLF transport carriage returns", () => {
   );
 });
 
-Deno.test({
+test({
   name: "realGit: hook-spawned Git uses a linked worktree's hooks",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -126,7 +127,7 @@ git -C ${shellQuote(linked)} commit --allow-empty -q -m nested
   },
 });
 
-Deno.test({
+test({
   name: "realGit: accepts an amend after a hook expires its reflog entry",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -165,7 +166,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: refuses to merge content into a staged file type change", async () => {
+test("realGit: refuses to merge content into a staged file type change", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -214,7 +215,7 @@ Deno.test("realGit: refuses to merge content into a staged file type change", as
   }
 });
 
-Deno.test({
+test({
   name: "realGit: a concurrent branch update wins the compare-and-swap",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -261,7 +262,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: headSha is null outside a repository", () => {
+test("realGit: headSha is null outside a repository", () => {
   const root = Deno.makeTempDirSync();
   try {
     assertEquals(realGit(root).headSha(), null);
@@ -270,7 +271,7 @@ Deno.test("realGit: headSha is null outside a repository", () => {
   }
 });
 
-Deno.test("realGit: fallback merge handles insertions around added and empty content", async () => {
+test("realGit: fallback merge handles insertions around added and empty content", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -299,7 +300,7 @@ Deno.test("realGit: fallback merge handles insertions around added and empty con
   }
 });
 
-Deno.test({
+test({
   name:
     "realGit: reports a reference lock created after Git publishes the amend",
   ignore: Deno.build.os === "windows",

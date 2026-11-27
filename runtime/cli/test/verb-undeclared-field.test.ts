@@ -11,13 +11,13 @@
  * back what this file assumed.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { resolvedSchema } from "../../runner/test/schema-ref-helpers.ts";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { verbInputSchemaError } from "@commonfabric/piece/verb-input";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   eventSchemaJudgesRootFields,
   executeResolvedCallable,

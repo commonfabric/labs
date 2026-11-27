@@ -45,6 +45,7 @@ import {
   type SessionEffectsDocValue,
   setServerExecutionConfig,
 } from "../v2.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-effects-doc-test-space";
 const SERVICE = `service:${SPACE}`;
@@ -179,7 +180,7 @@ const ackCommit = (
     } as ClientCommit,
   });
 
-Deno.test("effects doc: issuedIn stamping, nonce dedupe, per-instance addressing", async (t) => {
+test("effects doc: issuedIn stamping, nonce dedupe, per-instance addressing", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -278,7 +279,7 @@ Deno.test("effects doc: issuedIn stamping, nonce dedupe, per-instance addressing
   }
 });
 
-Deno.test("effects doc: the retirement scan (protocol §5's next-wave retirement)", async (t) => {
+test("effects doc: the retirement scan (protocol §5's next-wave retirement)", async (t) => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {

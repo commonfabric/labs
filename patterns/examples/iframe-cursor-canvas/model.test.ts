@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { CanvasShape } from "./contract.ts";
 import {
@@ -20,6 +19,7 @@ import {
   shapeIndex,
   visitorName,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("model", () => {
   describe("clampToBoard()", () => {

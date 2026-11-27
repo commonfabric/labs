@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createBindingIdentityHelperSource } from "@commonfabric/pattern-contract/sandbox-contract";
+import { describe, it } from "@commonfabric/test-support/test";
 import { verifyCompiledModuleBody } from "../src/sandbox/module-record-verifier.ts";
 
 // These tests guard the format-agnostic SES module-item classification rules

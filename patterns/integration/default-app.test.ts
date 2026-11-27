@@ -23,8 +23,8 @@ import {
   clickButtonWithText,
   clickButtonWithTitle,
 } from "./note-button-helpers.ts";
-import { describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { assert, assertEquals } from "@std/assert";
 
 // Every step in this file runs under both server-execution postures: no step
@@ -83,7 +83,7 @@ export function parseCaptureSeriesCount(raw: string | undefined): number {
   return Math.floor(value);
 }
 
-Deno.test("parseCaptureSeriesCount clamps invalid capture env values", () => {
+test("parseCaptureSeriesCount clamps invalid capture env values", () => {
   assertEquals(parseCaptureSeriesCount(undefined), 0);
   assertEquals(parseCaptureSeriesCount(""), 0);
   assertEquals(parseCaptureSeriesCount("foo"), 0);

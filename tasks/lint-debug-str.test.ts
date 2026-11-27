@@ -1,8 +1,8 @@
 /// <reference lib="deno.unstable" />
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-debug-str.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function diagnose(source: string): string[] {
   return Deno.lint.runPlugin(plugin, "sample.ts", source)

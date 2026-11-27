@@ -17,7 +17,6 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { FabricInstance } from "@commonfabric/data-model";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -25,10 +24,11 @@ import {
   FabricBytes,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 import { applyPatch, applyPatchToDocument } from "../v2/patch.ts";
 
-Deno.test("memory v2 patch preserves `FabricInstance` values with full fidelity", () => {
+test("memory v2 patch preserves `FabricInstance` values with full fidelity", () => {
   const placements = [
     () =>
       applyPatch({ a: { x: 1 } }, [
@@ -71,7 +71,7 @@ Deno.test("memory v2 patch preserves `FabricInstance` values with full fidelity"
   });
 });
 
-Deno.test("memory v2 patch keeps `FabricInstance` values as `FabricInstance`s (not demoted to plain objects)", () => {
+test("memory v2 patch keeps `FabricInstance` values as `FabricInstance`s (not demoted to plain objects)", () => {
   const patched = applyPatch({}, [
     {
       op: "add",
@@ -88,7 +88,7 @@ Deno.test("memory v2 patch keeps `FabricInstance` values as `FabricInstance`s (n
   assertEquals(Object.getPrototypeOf(out) === Object.prototype, false);
 });
 
-Deno.test("memory v2 patch round-trips `FabricInstance` values across replayed patch passes", () => {
+test("memory v2 patch round-trips `FabricInstance` values across replayed patch passes", () => {
   const first = applyPatch({ box: {} }, [
     {
       op: "add",
@@ -109,7 +109,7 @@ Deno.test("memory v2 patch round-trips `FabricInstance` values across replayed p
   assertEquals(typeof out.stack, "string");
 });
 
-Deno.test("memory v2 patch preserves `FabricPrimitive` values with full fidelity", () => {
+test("memory v2 patch preserves `FabricPrimitive` values with full fidelity", () => {
   const bytes = new Uint8Array([1, 2, 3, 4]);
   const patchedBytes = applyPatch({ a: ["keep"] }, [
     {
@@ -133,7 +133,7 @@ Deno.test("memory v2 patch preserves `FabricPrimitive` values with full fidelity
   assertEquals(outEpoch.value, 1_234n);
 });
 
-Deno.test("memory v2 patch keeps `FabricPrimitive` values as `FabricPrimitive`s (not demoted to plain objects)", () => {
+test("memory v2 patch keeps `FabricPrimitive` values as `FabricPrimitive`s (not demoted to plain objects)", () => {
   const patched = applyPatch({}, [
     { op: "add", path: "/b", value: new FabricBytes(new Uint8Array([9, 9])) },
   ]) as { b: unknown };
@@ -145,7 +145,7 @@ Deno.test("memory v2 patch keeps `FabricPrimitive` values as `FabricPrimitive`s 
   assertEquals((out as FabricBytes).length, 2);
 });
 
-Deno.test("memory v2 patch round-trips `FabricPrimitive` values across replayed patch passes", () => {
+test("memory v2 patch round-trips `FabricPrimitive` values across replayed patch passes", () => {
   const first = applyPatch({ box: {} }, [
     {
       op: "add",
@@ -162,7 +162,7 @@ Deno.test("memory v2 patch round-trips `FabricPrimitive` values across replayed 
   assertEquals([...out.slice()], [7, 8, 9]);
 });
 
-Deno.test("memory v2 patch applies multiple operations without mutating the input", () => {
+test("memory v2 patch applies multiple operations without mutating the input", () => {
   const original = {
     profile: { name: "Alice" },
     tags: ["one"],
@@ -190,7 +190,7 @@ Deno.test("memory v2 patch applies multiple operations without mutating the inpu
   });
 });
 
-Deno.test("memory v2 patch can replace the root and continue patching the replacement", () => {
+test("memory v2 patch can replace the root and continue patching the replacement", () => {
   const original = {
     stale: true,
   };
@@ -204,7 +204,7 @@ Deno.test("memory v2 patch can replace the root and continue patching the replac
   assertEquals(patched, { items: ["next"] });
 });
 
-Deno.test("memory v2 patch move updates the cloned document without mutating the input", () => {
+test("memory v2 patch move updates the cloned document without mutating the input", () => {
   const original = {
     from: { value: 1 },
     to: {},
@@ -224,7 +224,7 @@ Deno.test("memory v2 patch move updates the cloned document without mutating the
   });
 });
 
-Deno.test("memory v2 patch rejects moves into a descendant path", () => {
+test("memory v2 patch rejects moves into a descendant path", () => {
   const original = {
     a: { child: { keep: true } },
   };
@@ -244,7 +244,7 @@ Deno.test("memory v2 patch rejects moves into a descendant path", () => {
   });
 });
 
-Deno.test("memory v2 patch rejects invalid array indices", () => {
+test("memory v2 patch rejects invalid array indices", () => {
   const original = {
     items: ["a"],
   };
@@ -266,7 +266,7 @@ Deno.test("memory v2 patch rejects invalid array indices", () => {
   }
 });
 
-Deno.test("memory v2 patch rejects missing array indices in parent traversal", () => {
+test("memory v2 patch rejects missing array indices in parent traversal", () => {
   const original = {
     items: [{}],
   };
@@ -286,7 +286,7 @@ Deno.test("memory v2 patch rejects missing array indices in parent traversal", (
   });
 });
 
-Deno.test("memory v2 patch rejects add through a missing key into an array index", () => {
+test("memory v2 patch rejects add through a missing key into an array index", () => {
   // The intermediate `0` would land inside a freshly-created (empty) array,
   // which has no element 0 to traverse into -- so this must be rejected, not
   // silently fabricated.
@@ -305,7 +305,7 @@ Deno.test("memory v2 patch rejects add through a missing key into an array index
   assertEquals(original, {});
 });
 
-Deno.test("memory v2 patch rejects add through a missing key into an array append marker", () => {
+test("memory v2 patch rejects add through a missing key into an array append marker", () => {
   const original = {};
 
   let error: Error | null = null;
@@ -321,7 +321,7 @@ Deno.test("memory v2 patch rejects add through a missing key into an array appen
   assertEquals(original, {});
 });
 
-Deno.test("memory v2 patch appends via the `-` marker on an existing array", () => {
+test("memory v2 patch appends via the `-` marker on an existing array", () => {
   const original = { items: ["a"] };
 
   const out = applyPatch(original, [
@@ -333,7 +333,7 @@ Deno.test("memory v2 patch appends via the `-` marker on an existing array", () 
   assertEquals(original, { items: ["a"] });
 });
 
-Deno.test("memory v2 patch reuses unchanged branches across sibling updates", () => {
+test("memory v2 patch reuses unchanged branches across sibling updates", () => {
   const original = {
     left: {
       stable: {
@@ -371,14 +371,14 @@ Deno.test("memory v2 patch reuses unchanged branches across sibling updates", ()
 // precedes them.
 //
 
-Deno.test("memory v2 append lands at the live tail", () => {
+test("memory v2 append lands at the live tail", () => {
   const out = applyPatch({ value: ["a", "b"] }, [
     { op: "append", path: "/value", values: ["c"] },
   ]) as { value: string[] };
   assertEquals(out.value, ["a", "b", "c"]);
 });
 
-Deno.test("memory v2 appends compose to land at successive tails", () => {
+test("memory v2 appends compose to land at successive tails", () => {
   const out = applyPatch({ value: ["a"] }, [
     { op: "append", path: "/value", values: ["b"] },
     { op: "append", path: "/value", values: ["c"] },
@@ -386,7 +386,7 @@ Deno.test("memory v2 appends compose to land at successive tails", () => {
   assertEquals(out.value, ["a", "b", "c"]);
 });
 
-Deno.test("memory v2 append creates the array when absent", () => {
+test("memory v2 append creates the array when absent", () => {
   const fromEmptyDoc = applyPatch({}, [
     { op: "append", path: "/value", values: ["x"] },
   ]) as { value: string[] };
@@ -398,7 +398,7 @@ Deno.test("memory v2 append creates the array when absent", () => {
   assertEquals(nested, { value: { items: [1, 2] } });
 });
 
-Deno.test("memory v2 append and splice take more values than one call's arguments can hold", () => {
+test("memory v2 append and splice take more values than one call's arguments can hold", () => {
   const values = Array.from({ length: 200_000 }, (_, i) => i);
 
   const appended = applyPatch({ value: [-1] }, [
@@ -453,7 +453,7 @@ describe("memory v2 append onto a slot holding `undefined`", () => {
   });
 });
 
-Deno.test("memory v2 append rejects a non-array target", () => {
+test("memory v2 append rejects a non-array target", () => {
   let threw = false;
   try {
     applyPatch({ value: "not-an-array" }, [
@@ -472,21 +472,21 @@ Deno.test("memory v2 append rejects a non-array target", () => {
 // creates the array if absent. It is idempotent against durable state.
 //
 
-Deno.test("memory v2 add-unique adds only absent elements", () => {
+test("memory v2 add-unique adds only absent elements", () => {
   const out = applyPatch({ value: ["a", "b"] }, [
     { op: "add-unique", path: "/value", values: ["b", "c", "c"] },
   ]) as { value: string[] };
   assertEquals(out.value, ["a", "b", "c"]);
 });
 
-Deno.test("memory v2 add-unique on a present element is a no-op", () => {
+test("memory v2 add-unique on a present element is a no-op", () => {
   const out = applyPatch({ value: ["a"] }, [
     { op: "add-unique", path: "/value", values: ["a"] },
   ]) as { value: string[] };
   assertEquals(out.value, ["a"]);
 });
 
-Deno.test("memory v2 add-unique creates the array when absent", () => {
+test("memory v2 add-unique creates the array when absent", () => {
   const out = applyPatch({}, [
     { op: "add-unique", path: "/value", values: ["x", "x"] },
   ]) as { value: string[] };
@@ -501,14 +501,14 @@ describe("memory v2 add-unique onto a slot holding `undefined`", () => {
   });
 });
 
-Deno.test("memory v2 add-unique compares by stored value (objects)", () => {
+test("memory v2 add-unique compares by stored value (objects)", () => {
   const out = applyPatch({ value: [{ id: 1 }] }, [
     { op: "add-unique", path: "/value", values: [{ id: 1 }, { id: 2 }] },
   ]) as { value: { id: number }[] };
   assertEquals(out.value, [{ id: 1 }, { id: 2 }]);
 });
 
-Deno.test("memory v2 add-unique compares special objects by content", () => {
+test("memory v2 add-unique compares special objects by content", () => {
   // A `FabricSpecialObject` keeps its state in private `#fields`, so its
   // content is what distinguishes two instances, not its (empty) own-property
   // set.
@@ -530,7 +530,7 @@ Deno.test("memory v2 add-unique compares special objects by content", () => {
   ]);
 });
 
-Deno.test("memory v2 add-unique adds only absent elements when adding many", () => {
+test("memory v2 add-unique adds only absent elements when adding many", () => {
   // Enough distinct values that elements are looked up in a set of them
   // rather than compared one by one; the result is the same.
   const incoming = Array.from({ length: 20 }, (_, i) => ({ id: i }));
@@ -553,7 +553,7 @@ Deno.test("memory v2 add-unique adds only absent elements when adding many", () 
   assert(Object.is(out.value[out.value.length - 3], -0));
 });
 
-Deno.test("memory v2 add-unique adds a hole among the values as `undefined`", () => {
+test("memory v2 add-unique adds a hole among the values as `undefined`", () => {
   const out = applyPatch({ value: ["a"] }, [
     // deno-lint-ignore no-sparse-arrays
     { op: "add-unique", path: "/value", values: ["b", , "b"] },
@@ -566,7 +566,7 @@ Deno.test("memory v2 add-unique adds a hole among the values as `undefined`", ()
   ]);
 });
 
-Deno.test("memory v2 add-unique on the weird numbers", () => {
+test("memory v2 add-unique on the weird numbers", () => {
   // `NaN` is the same value as `NaN`; `-0` and `+0` are different values.
   const nan = applyPatch({ value: [NaN] }, [
     { op: "add-unique", path: "/value", values: [NaN] },
@@ -588,14 +588,14 @@ Deno.test("memory v2 add-unique on the weird numbers", () => {
 // creates the path if absent, and sums when composed.
 //
 
-Deno.test("memory v2 increment adds to an existing number", () => {
+test("memory v2 increment adds to an existing number", () => {
   const out = applyPatch({ value: { count: 5 } }, [
     { op: "increment", path: "/value/count", by: 3 },
   ]) as { value: { count: number } };
   assertEquals(out.value.count, 8);
 });
 
-Deno.test("memory v2 increments compose by summing", () => {
+test("memory v2 increments compose by summing", () => {
   const out = applyPatch({ value: 0 }, [
     { op: "increment", path: "/value", by: 1 },
     { op: "increment", path: "/value", by: 1 },
@@ -603,7 +603,7 @@ Deno.test("memory v2 increments compose by summing", () => {
   assertEquals(out.value, 2);
 });
 
-Deno.test("memory v2 increment treats an absent value as zero and creates it", () => {
+test("memory v2 increment treats an absent value as zero and creates it", () => {
   const created = applyPatch({}, [
     { op: "increment", path: "/value", by: 4 },
   ]) as { value: number };
@@ -615,7 +615,7 @@ Deno.test("memory v2 increment treats an absent value as zero and creates it", (
   assertEquals(nested, { value: { count: -2 } });
 });
 
-Deno.test("memory v2 increment rejects a non-number target", () => {
+test("memory v2 increment rejects a non-number target", () => {
   let threw = false;
   try {
     applyPatch({ value: { count: "five" } }, [
@@ -627,7 +627,7 @@ Deno.test("memory v2 increment rejects a non-number target", () => {
   assert(threw, "increment onto a non-number must throw");
 });
 
-Deno.test("memory v2 increment rejects a zero amount", () => {
+test("memory v2 increment rejects a zero amount", () => {
   let threw = false;
   try {
     applyPatch({ value: { count: 1 } }, [
@@ -639,7 +639,7 @@ Deno.test("memory v2 increment rejects a zero amount", () => {
   assert(threw, "a zero increment must throw");
 });
 
-Deno.test("memory v2 increment rejects a non-finite amount", () => {
+test("memory v2 increment rejects a non-finite amount", () => {
   // A non-finite `by` is meaningless for a concurrent-sum counter and would set
   // the counter to an absorbing `NaN`/`±Infinity`, so it is rejected alongside
   // a zero amount. (`-0 === 0`, so negative zero is already caught by the zero
@@ -664,14 +664,14 @@ Deno.test("memory v2 increment rejects a non-finite amount", () => {
 // value), idempotently, and is a no-op on a missing/non-array target.
 //
 
-Deno.test("memory v2 remove-by-value removes matching elements", () => {
+test("memory v2 remove-by-value removes matching elements", () => {
   const out = applyPatch({ value: ["a", "b", "a", "c"] }, [
     { op: "remove-by-value", path: "/value", value: "a" },
   ]) as { value: string[] };
   assertEquals(out.value, ["b", "c"]);
 });
 
-Deno.test("memory v2 remove-by-value matches by stored value (links/objects)", () => {
+test("memory v2 remove-by-value matches by stored value (links/objects)", () => {
   const link = { "/": { "link@1": { path: [], id: "of:fid1:vote-x" } } };
   const other = { "/": { "link@1": { path: [], id: "of:fid1:vote-y" } } };
   const out = applyPatch({ value: [link, other] }, [
@@ -684,7 +684,7 @@ Deno.test("memory v2 remove-by-value matches by stored value (links/objects)", (
   assertEquals(out.value, [other]);
 });
 
-Deno.test("memory v2 remove-by-value matches special objects by content", () => {
+test("memory v2 remove-by-value matches special objects by content", () => {
   const out = applyPatch({
     value: [
       new FabricBytes(new Uint8Array([1, 2])),
@@ -700,7 +700,7 @@ Deno.test("memory v2 remove-by-value matches special objects by content", () => 
   assertEquals(out.value, [new FabricBytes(new Uint8Array([3, 4]))]);
 });
 
-Deno.test("memory v2 remove-by-value on the weird numbers", () => {
+test("memory v2 remove-by-value on the weird numbers", () => {
   const nan = applyPatch({ value: [NaN, 1] }, [
     { op: "remove-by-value", path: "/value", value: NaN },
   ]) as { value: number[] };
@@ -713,7 +713,7 @@ Deno.test("memory v2 remove-by-value on the weird numbers", () => {
   assert(Object.is(zero.value[0], -0), "only the +0 may be removed");
 });
 
-Deno.test("memory v2 remove-by-value keeps holes, closing up only removed slots", () => {
+test("memory v2 remove-by-value keeps holes, closing up only removed slots", () => {
   // deno-lint-ignore no-sparse-arrays
   const out = applyPatch({ value: ["a", , "b", "a", , "c"] }, [
     { op: "remove-by-value", path: "/value", value: "a" },
@@ -724,7 +724,7 @@ Deno.test("memory v2 remove-by-value keeps holes, closing up only removed slots"
   assertEquals([out.value[1], out.value[3]], ["b", "c"]);
 });
 
-Deno.test("memory v2 remove-by-value is a no-op when absent", () => {
+test("memory v2 remove-by-value is a no-op when absent", () => {
   const original = { value: ["a", "b"] };
   const out = applyPatch(original, [
     { op: "remove-by-value", path: "/value", value: "z" },
@@ -746,7 +746,7 @@ Deno.test("memory v2 remove-by-value is a no-op when absent", () => {
 // reaches the op's own array-shape check. The root path is refused outright.
 //
 
-Deno.test("memory v2 append rejects a non-array object target", () => {
+test("memory v2 append rejects a non-array object target", () => {
   let threw = false;
   try {
     applyPatch({ value: {} }, [
@@ -758,7 +758,7 @@ Deno.test("memory v2 append rejects a non-array object target", () => {
   assert(threw, "append onto an object must throw");
 });
 
-Deno.test("memory v2 add-unique rejects a non-array object target", () => {
+test("memory v2 add-unique rejects a non-array object target", () => {
   let threw = false;
   try {
     applyPatch({ value: {} }, [
@@ -770,7 +770,7 @@ Deno.test("memory v2 add-unique rejects a non-array object target", () => {
   assert(threw, "add-unique onto an object must throw");
 });
 
-Deno.test("memory v2 increment rejects the root path", () => {
+test("memory v2 increment rejects the root path", () => {
   let threw = false;
   try {
     applyPatch({ count: 0 }, [
@@ -789,7 +789,7 @@ Deno.test("memory v2 increment rejects the root path", () => {
 // names nothing.
 //
 
-Deno.test("memory v2 increment updates a numeric array element by index", () => {
+test("memory v2 increment updates a numeric array element by index", () => {
   // Both `increment` and `remove-by-value` read the current value by walking
   // the path through array indices as well as object keys. Incrementing a
   // numeric array element addresses it positionally and writes back into the
@@ -800,7 +800,7 @@ Deno.test("memory v2 increment updates a numeric array element by index", () => 
   assertEquals(out.scores, [10, 25, 30]);
 });
 
-Deno.test("memory v2 remove-by-value is a no-op through a missing array index", () => {
+test("memory v2 remove-by-value is a no-op through a missing array index", () => {
   // A path segment that names an out-of-range array index resolves to absent,
   // so remove-by-value finds no array there and leaves the document untouched.
   const original = { items: [["a"]] };
@@ -821,14 +821,14 @@ Deno.test("memory v2 remove-by-value is a no-op through a missing array index", 
 // EntityDocument would let an invalid shape reach envelope-assuming code.
 //
 
-Deno.test("memory v2 applyPatchToDocument replays over an absent base as the empty envelope", () => {
+test("memory v2 applyPatchToDocument replays over an absent base as the empty envelope", () => {
   const patched = applyPatchToDocument(undefined, [
     { op: "add", path: "/value", value: { items: { mine: "hello" } } },
   ]);
   assertEquals(patched, { value: { items: { mine: "hello" } } });
 });
 
-Deno.test("memory v2 applyPatchToDocument rejects a patched root that is not an entity document", () => {
+test("memory v2 applyPatchToDocument rejects a patched root that is not an entity document", () => {
   assertThrows(
     () =>
       applyPatchToDocument({ value: { count: 1 } }, [

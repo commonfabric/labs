@@ -2,10 +2,10 @@
 import { settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFToggle } from "../cf-toggle/index.ts";
 import { CFToggleGroup } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Mounts `html`, a group of toggles, and resolves with the group, its

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { presenceFailureCategory } from "./presence-failure.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("presenceFailureCategory()", () => {
   it("maps a relay refusal, an unsupported server, and anything else", () => {

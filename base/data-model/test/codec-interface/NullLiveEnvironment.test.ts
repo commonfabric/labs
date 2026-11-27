@@ -10,10 +10,10 @@
  * supply.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { NULL_LIVE_ENVIRONMENT, NullLiveEnvironment } from "@/codec-common";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("NullLiveEnvironment", () => {
   describe("NULL_LIVE_ENVIRONMENT", () => {

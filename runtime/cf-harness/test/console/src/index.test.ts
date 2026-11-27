@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import "../../../console/src/index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("console/src/index", () => {
   it("registers the app and every view it draws", () => {

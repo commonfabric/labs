@@ -5,6 +5,7 @@ import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
 import type { CaptureTreeNode } from "../../src/utils/capture-tree.ts";
 import { PatternBuilder } from "../../src/closures/utils/pattern-builder.ts";
 import { collect, parseModule } from "../transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgramAndContext(source: string): {
   sourceFile: ts.SourceFile;
@@ -74,7 +75,7 @@ function findFirstNode<T extends ts.Node>(
   return found;
 }
 
-Deno.test("PatternBuilder avoids capture collisions with nested explicit bindings", () => {
+test("PatternBuilder avoids capture collisions with nested explicit bindings", () => {
   const { sourceFile, context } = createProgramAndContext(`
     const callback = ({ isExpanded }) => !isExpanded;
   `);

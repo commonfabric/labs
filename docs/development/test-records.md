@@ -17,7 +17,7 @@ how to opt a workstation in, and how to read the data.
 A test's identity has three required parts: **kind** (`unit`, `browser`,
 `pattern`, `integration`, `typecheck`, `lint`, `format`, `gate`), **scope**
 (the owning workspace member, or `repo`), and **name** (whatever the test's
-own runner reports — a bdd describe chain, a pattern file path, a task name,
+own runner reports — a describe chain, a pattern file path, a task name,
 a script step). An optional **variant** separates the same test running
 in a non-default configuration. The default configuration is unmarked. The
 server-execution deployed-topology lanes use stable `default` and `opposite`
@@ -98,17 +98,22 @@ that is when none is named. The same rename applies to every variant.
   there is left alone. Anything else — a bash workstation whose agents run
   non-interactive shells, a harness nothing here knows — puts the variable
   in whatever starts the agent.
-- `CF_TEST_SKIP_LIST` — a file naming the tests this invocation is not to
-  run, keyed by test file and by name. The registration preload
-  reads it and registers a listed test as ignored rather than dropping it,
-  so a skipped test appears in the run's output and its JUnit report as
-  skipped instead of disappearing. A lane ships no record of a test it
-  listed because its plan gave the test to another lane, or to none. A
-  test a configuration declares unavailable is listed by every lane that
-  opens its file, and its skip is recorded by the lane its plan gave it
-  to. An identity the file does not name runs, so a test added
-  or renamed since the list was built runs. A file that is missing or
-  malformed runs everything.
+- `CF_TEST_SKIP_LIST` — a file naming the tests this invocation is not to run,
+  keyed by test file and by name. The test module,
+  `@commonfabric/test-support/test`, reads it as each test file loads and
+  registers a listed test as ignored rather than dropping it, so a skipped test
+  appears in the run's output and its results as skipped instead of
+  disappearing. A name enclosing others, such as a `describe`, skips every test
+  it encloses, and a `describe` none of whose tests will run does not run its
+  `beforeAll` or `afterAll`. A step the list names runs anyway wherever its test
+  runs, since the steps before it may have set up what it reads. The results
+  mark what the list named as listed, and a lane ships no record of a test it
+  listed because its plan gave the test to another lane, or to none. A test a
+  configuration declares unavailable is listed by every lane that opens its
+  file, and its skip is recorded by the lane its plan gave it to. An identity
+  the file does not name runs, so a test added or renamed since the list was
+  built runs. A list that cannot be read, or that is not a skip list, stops the
+  test file from loading, since running everything is not what was asked.
 - `CF_TEST_AGENT` — an opaque label for the operating agent, recorded
   verbatim in the run context. Set it to tell one agent from another, or
   one checkout of a fleet from the next; it is never required. Left
@@ -290,10 +295,10 @@ area holds some second copies from before the relay dated each attempt by its
 own start; [the specification](../specs/test-records.md#the-store) says how a
 reader recognizes one.
 
-In CI, jobs hold no record-store credential. A lane gathers each batch's records
-and JUnit reports into its spool as the batch finishes, marking each record with
-its suite's variant. Each suite declares its JUnit outputs in the topology, so
-the lane finds them itself, and its ship step names no JUnit files. The lane
+In CI, jobs hold no record-store credential. A lane gathers each batch's records,
+and its tests' results, into its spool as the batch finishes, marking each record
+with its suite's variant. Each suite declares in the topology what its tests'
+results are recorded as, so the lane needs nothing from the workflow. The lane
 ends with that credential-free step, which packs the spool into a
 `test-records-tests-<lane>-a<attempt>` artifact. A lane's records leave out
 the siblings of the tests it was asked to run, which it registers as ignored
@@ -313,7 +318,7 @@ The shared `test-records-ship` action accepts an optional `variant` input and
 also reads the CI-only `CF_TEST_RECORDS_VARIANT` fallback. An explicit input
 wins. This lets a workflow resolve a stable role to a variant once at job scope
 without duplicating that expression at every shipping step. The action applies
-the resolved value to every spooled and JUnit-derived record in that job; leave
+the resolved value to every spooled record in that job; leave
 both surfaces unset for the default configuration. The lanes set neither, since
 a lane's batches can run in different configurations and the lane has already
 marked each one.
@@ -357,7 +362,14 @@ validating reader; the readers built on it:
   credentials. It writes from `.github/workflows/test-records-compact.yml`
   on a daily schedule, which is the only place its identity can be
   assumed; there is no key for it and no way to run the writing half by
-  hand.
+  hand. A day closes seven days after its date, to leave room for late
+  arrivals, so each run rolls up the CI days from one to two weeks back
+  that have no rollup yet, and the newest seven days exist only as raw
+  objects under `submissions/ci/`. A day left without a rollup for longer
+  than that stays without one until a dispatched run is given a wider
+  `days` input, and a day with no records never gets one. A reader that
+  uses rollups, such as the test-selection publisher, reads a day without
+  one from its objects under `submissions/ci/`.
 - `dashboard/test-records-history.ts` — the dashboard's collector:
   cached per-identity daily series shaped for `trend.ts`.
 
@@ -419,62 +431,42 @@ is the record of who minted what for whom.
 
 A new test surface is a suite of the test topology, `tasks/test-topology.ts` and
 the modules under `tasks/test-topology/`, and never a new job: the lanes run
-what the topology declares and ship its records. A suite whose runner emits
-JUnit declares each report, with its kind, scope and file prefix, in the
-invocations its `command()` returns, and passes a `--preload` naming
-`base/test-support/src/records/preload.ts` where the surface is `deno test`.
-`preloadArgument()` from `@commonfabric/test-support/records` returns that flag;
-Deno resolves `--preload` as a path rather than through the import map, so it
-must be absolute and no caller writes it out.
+what the topology declares and ship its records. A suite whose runner is
+`deno test` declares, in each invocation its `command()` returns, the kind and
+scope its tests' results are recorded as (`Invocation.results`).
 
-The preload does two things, and it only installs itself when it has one
-of them to do: it captures the test file each test belongs to and
-leaves the map in the spool, and it applies `CF_TEST_SKIP_LIST`. Wrapping
-`Deno.test` costs a JUnit report the file attribution it carries on its
-own, so a process with nothing to skip and no spool it may write leaves
-`Deno.test` alone and the report's own class names are read instead.
+A test file registers its tests through `@commonfabric/test-support/test`, which
+does what recording needs of a test process. It reads the skip list, it writes
+each test's result into the spool as the test finishes, and it names each test's
+file: the test file its realm runs, which Deno exposes as `Deno.mainModule`
+whichever module registers the test. So a file that registers its cases through
+a shared module, such as `defineFixtureSuite`, is the file its records carry and
+the file its skip list is keyed by, which is the path the command named and the
+one a topology suite knows as its unit. The `cf-test/registration` lint rule
+reports a test registered any other way, since a lane could neither skip nor
+record it.
 
-The preload writes each test file's names into the spool as soon as the file
-has registered them, before any of that file's tests run, because a `deno test`
-interrupted by SIGINT exits without unloading. Such a run reports the test it
-was in the middle of as cancelled, and the ingestion records that test as
-skipped when the lane interrupted the run, since it neither passed nor failed.
-`deno test` also reports a test as cancelled when an error the test did not
-catch stops it, and in a run nothing interrupted the ingestion records that
-test as failed.
+Recording needs permissions. Reading `CF_TEST_RECORDS_DIR` and
+`CF_TEST_SKIP_LIST` needs `--allow-env`, and that one the test task grants:
+a task naming a restricted list of variables names those two among them —
+`readEnv` swallows the refusal, so a task that leaves them out records
+nothing and skips nothing, silently.
 
-Both of those need permissions. Reading `CF_TEST_RECORDS_DIR` and
-`CF_TEST_SKIP_LIST` needs `--allow-env`, and that one the test task
-grants: a task naming a restricted list of variables names those two
-among them — `readEnv` swallows the refusal, so a task that leaves them
-out records nothing and skips nothing, silently.
+The rest the task cannot grant, because it cannot name the paths. The test
+module reads the skip list and writes its results into the spool, and each
+of those is a path only the run owner knows: `deno task` expands `$VAR` but
+not `${VAR:-default}`, `--allow-write=` with an unset variable ends the run
+with `Empty values are not allowed`, and a `$` costs its member the file
+granularity `tasks/test-topology/deno-task.ts` reads its task for — every
+`$` but the one command substitution that file resolves, which is the
+`deno eval` naming the executable that several tasks already carry. So the
+caller that asks an invocation to record appends the permissions.
+`recordingArguments()` from `@commonfabric/test-support/records` builds them,
+given the invocation's own flags, the spool, and the skip list where there
+is one. The module opens its results file before any test of the file runs,
+so a test that narrows its own permissions still has its result written.
 
-The rest the task cannot grant, because it cannot name the paths. The
-preload reads the skip list. It reads the repository's `.git` as it
-climbs from the test file to the repository root, since that climb is
-what names the file each test is keyed by, in the skip list and in the
-name map alike. And it writes the name map into the spool. Each of
-those is a path only the run owner knows: `deno task` expands `$VAR` but
-not `${VAR:-default}`, `--allow-write=` with an unset variable ends the
-run with `Empty values are not allowed`, and a `$` costs its member the
-file granularity `tasks/test-topology/deno-task.ts` reads its task for —
-every `$` but the one command substitution that file resolves, which is
-the `deno eval` naming the executable that several tasks already carry.
-So the caller that appends the preload appends the permissions beside
-it. `recordingArguments()` from `@commonfabric/test-support/records`
-builds the preload argument and those permissions together, given the
-invocation's own flags, the spool, the repository root, and the skip
-list where there is one.
-
-The preload also listens for the `error` and `unhandledrejection` events,
-without handling them. Either event before a file's hooks and tests begin can
-mean the file's module stopped part way through loading, after registering only
-some of its tests, so the preload marks that file's names as interrupted. A lane
-then does not read them as everything the file holds. The preload registers a
-`Deno.test.beforeAll` hook of its own, which Deno runs once the module has
-settled, to know when that is.
-
-It grants the reads as one `--allow-read` list and the write as one
+It grants the read as an `--allow-read` list and the write as an
 `--allow-write` list, and leaves out a list for a permission the flags
 already hold everywhere. Deno merges two path lists for one permission,
 so an invocation naming a list of its own takes these on top of it. A
@@ -485,58 +477,25 @@ and a bare `--allow-read` or `--allow-write`, or `-R` or `-W`, is cut
 down to whatever list joins it. Short flags cluster, so `-RW` is a
 blanket grant of both, and `-A` is one of everything.
 
-It grants `.git` under the root as given and, where that differs, under
-the root with every symbolic link resolved. Deno names the main module
-by the path the command gave it, resolved against the working directory
-where it is relative, and the working directory is always canonical, so
-the climb starts from either. Deno checks each read against a grant
-exactly as the grant writes it.
-
-A member whose task reads and writes nothing of its own, such as one
-granting `--allow-env` alone, is the case this is for. Given those
-three paths it skips what its skip list names and leaves a name map
-carrying each test's file, the same as a member reading everything.
-
-Four callers append the preload, and three of them go through
-`recordingArguments()`. `tasks/workspace-tests.ts` appends its result to
-each member's `deno task test`, and a `CF_TEST_SKIP_LIST` the run
-inherits reaches each member resolved to an absolute path and granted
-beside the rest. The two topology suites — `fileSuite` in
+Three callers go through `recordingArguments()`. `tasks/workspace-tests.ts`
+appends its result to each member's `deno task test`, with the member's own
+records directory as the spool and a `CF_TEST_SKIP_LIST` the run inherits
+resolved to an absolute path. The two topology suites — `fileSuite` in
 `tasks/test-topology/suite.ts` and `unitSuite` in
 `tasks/test-topology/unit.ts` — reach it through `denoTestCommand()`,
 which builds every `deno test` command line they run and is handed the
-skip list `writeBatchSkipList()` wrote into the batch's own directory. The fourth, `tasks/integration.ts`, appends
-the preload alone, because every invocation it builds runs under `-A`
-and would be granted nothing. A task there that ever narrows its
-permissions needs the permissions too.
+skip list `writeBatchSkipList()` wrote into the batch's own directory.
+`tasks/integration.ts` appends nothing, because every invocation it builds
+runs under `-A`. A task there that ever narrows its permissions needs them.
 
-A test task naming its own `--import-map` does not take the preload. That
-map governs every module of the invocation, the preload included, so a
-specifier the preload needs and the map does not carry fails the whole
-run rather than the preload alone. Such a member keeps its JUnit path,
-and its files come from the report's own class names instead — from the
-ones that are a relative source path, joined onto the directory the
-caller names, since a runtime or remote class name resolves to no file
-and a report ingested without that directory records none.
-
-What a class name reaches is the test file that registered the test
-itself. A module of ours that registers on a file's behalf — a fixture
-runner handed a directory of cases, a harness that replaces `Deno.test`
-to give each test a clock — is the nearest frame below the runner, so
-the class names it instead. Such a module's path tail goes in
-`MACHINERY_MODULE_SUFFIXES`, so ingestion declines the class name rather
-than recording the module as every test's file, and takes the file from
-the preload's map. A surface that registers this way and cannot write a
-map records no file.
-
-The map needs nothing from such a module, or from any other helper that
-registers tests. Deno runs each test file in a realm of its own with
-that file as `Deno.mainModule`, and the preload names every test the
-process registers after it, whichever module made the call. So, in a
-run that takes the preload, a file that registers its cases through a
-shared module is the file its records carry and the file its skip list
-is keyed by, which is the path the command named and the one a topology
-suite knows as its unit.
+`tasks/workspace-tests.ts` gives each member a records directory of its own
+beside its log, reads that member's results and spooled records from it, and
+appends them to the run's spool where the run records. `tasks/integration.ts`
+has each package's tests write into the run's spool, or into a scratch
+directory of its own where the run has no spool. It reads each package's
+summary from the results files that appeared while the package ran. Where it
+owns the run, it appends those results to the spool as records; where it
+joined another run, such as a lane's, it leaves them for that run to read.
 
 A harness with per-result callbacks
 appends records through `FragmentWriter` (see the hooks in
@@ -573,10 +532,13 @@ since the child reads its own environment: the test hands the child an
 empty `CF_TEST_RECORDS_DIR`, which is recording off. `tasks/integration.ts`
 does that for the `cf` children whose files it times itself, and
 `runtime/deno-web-test/test/utils.ts` for the fixture projects it runs the
-browser harness over.
+browser harness over. `runDenoCommandWithTemporaryLock` from
+`@commonfabric/test-support/isolated-deno`, which a test starting Deno uses,
+hands every child an empty `CF_TEST_RECORDS_DIR` and `CF_TEST_SKIP_LIST`
+unless the caller names them.
 
-Two narrower checks back the rule up. The pattern runner and the browser
-harness record nothing for a test file that no repository holds, which is
+Two narrower checks back the rule up. The test module, the pattern runner and
+the browser harness record nothing for a test file that no repository holds, which is
 what a fixture in a temporary directory is, whatever spool the run
 inherited. And the record parser every reader shares drops a record whose
 `file`, or whose pattern test name, is absolute or climbs above the
@@ -587,20 +549,16 @@ the repository, such as those under `runtime/cli/test/fixtures`. For those,
 the caller's decision not to record is the only thing that keeps them out of
 the store.
 
-The child inherits every variable the test's own process carries, so a
-test that starts one names each recording variable it cares about,
-including the ones the child is meant not to have. `CF_TEST_SKIP_LIST` is
+A child started any other way inherits every variable the test's own
+process carries, so a test that starts one names each recording variable
+it cares about, including the ones the child is meant not to have. `CF_TEST_SKIP_LIST` is
 the one to name deliberately. A lane runs a package's tests with a skip
 list naming everything inside it that lane did not select, so a child
-started from such a run is handed a skip list nobody asked it to carry.
-Two things then follow from a list the child's own test never wrote. The
-preload wraps `Deno.test` for a child whose test set up a run that wraps
-nothing. And where the bdd re-export loaded before the preload, a skip
-list is what makes the preload end the run rather than warn and carry on.
-An empty value is unset for that variable too, so naming it beside
-`CF_TEST_RECORDS_DIR` is the whole of it.
-`base/test-support/test/records/preload.test.ts` starts a recording
-child on purpose, and names both.
+started from such a run is handed a skip list nobody asked it to carry,
+and skips whatever in it the list happens to name. An empty value is
+unset for that variable too, so naming it beside `CF_TEST_RECORDS_DIR` is
+the whole of it. `base/test-support/test/registration.test.ts` starts a
+recording child on purpose, and names both.
 
 Every test must finish within sixty seconds in CI, not counting setup; a
 check that cannot is a container to split, and the report's over-60s list

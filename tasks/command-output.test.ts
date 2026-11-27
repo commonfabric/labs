@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { type CommandOutput, emit } from "./command-output.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("command-output", () => {
   describe("emit()", () => {

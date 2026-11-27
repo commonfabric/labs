@@ -12,6 +12,7 @@ import {
   getStoredCredential,
   saveCredential,
 } from "@commonfabric/lib-shell/credentials";
+import { test } from "@commonfabric/test-support/test";
 
 class MemoryStorage implements Storage {
   #values = new Map<string, string>();
@@ -57,7 +58,7 @@ function withMockLocalStorage(fn: () => void | Promise<void>): Promise<void> {
   });
 }
 
-Deno.test("keyfile credentials persist the imported DID and auth method", () =>
+test("keyfile credentials persist the imported DID and auth method", () =>
   withMockLocalStorage(() => {
     const did = "did:key:z6MkTest";
     const credential = createKeyFileCredential(did);
@@ -73,7 +74,7 @@ Deno.test("keyfile credentials persist the imported DID and auth method", () =>
     assertEquals(getStoredCredential(), null);
   }));
 
-Deno.test("malformed stored credentials are ignored", () =>
+test("malformed stored credentials are ignored", () =>
   withMockLocalStorage(() => {
     localStorage.setItem("storedCredential", "{not-json");
     assertEquals(getStoredCredential(), null);
@@ -85,7 +86,7 @@ Deno.test("malformed stored credentials are ignored", () =>
     assertEquals(getStoredCredential(), null);
   }));
 
-Deno.test("malformed passkey credential IDs are ignored", () =>
+test("malformed passkey credential IDs are ignored", () =>
   withMockLocalStorage(() => {
     assertEquals(
       getPublicKeyCredentialDescriptor(createPasskeyCredential("not base64!")),
@@ -93,7 +94,7 @@ Deno.test("malformed passkey credential IDs are ignored", () =>
     );
   }));
 
-Deno.test("passkey credential IDs decode from base64url into descriptor bytes", () => {
+test("passkey credential IDs decode from base64url into descriptor bytes", () => {
   // "-_8" is unpadded base64url for the bytes 0xfb 0xff, spelled "+/8=" in
   // base64.
   expect(
@@ -101,14 +102,14 @@ Deno.test("passkey credential IDs decode from base64url into descriptor bytes", 
   ).toEqual({ id: new Uint8Array([0xfb, 0xff]), type: "public-key" });
 });
 
-Deno.test("non-passkey credentials have no public key descriptor", () => {
+test("non-passkey credentials have no public key descriptor", () => {
   expect(getPublicKeyCredentialDescriptor(null)).toBeUndefined();
   expect(
     getPublicKeyCredentialDescriptor(createKeyFileCredential("did:key:z6Mk")),
   ).toBeUndefined();
 });
 
-Deno.test("passphrase credentials carry a fresh random ID each", () => {
+test("passphrase credentials carry a fresh random ID each", () => {
   const first = createPassphraseCredential();
   const second = createPassphraseCredential();
 
@@ -119,7 +120,7 @@ Deno.test("passphrase credentials carry a fresh random ID each", () => {
   expect(second.id).not.toBe(first.id);
 });
 
-Deno.test("PKCS8 keyfile import primitives round-trip into stored keyfile credential", () =>
+test("PKCS8 keyfile import primitives round-trip into stored keyfile credential", () =>
   withMockLocalStorage(async () => {
     const identity = await Identity.generate({ implementation: "noble" });
     const imported = await Identity.fromPkcs8(identity.toPkcs8());

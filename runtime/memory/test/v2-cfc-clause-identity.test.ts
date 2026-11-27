@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   cfcCanonicalClauseDigest,
@@ -7,6 +6,7 @@ import {
   normalizeClause,
   uniqueCfcAtoms,
 } from "../v2/cfc-clause-identity.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const user = (subject: string) => ({ type: "User", subject });
 

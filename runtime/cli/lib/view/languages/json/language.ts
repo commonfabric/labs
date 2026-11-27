@@ -2,14 +2,15 @@
  * The JSON, JSONC, and JSON Lines languages for the pager. Coloring and
  * structure live in {@link ./json.ts}; this module adapts them to the
  * {@link Language} contract. JSON Lines uses the same tokenizer with fresh
- * lexical state for each record.
+ * lexical state for each record. JSONC is the JSON adapter for the files whose
+ * readers accept comments, where a line holding only a comment changes
+ * nothing; in strict JSON that line is a syntax error.
  *
  * The JSON language also claims the surveyed JSON-shaped names that no `.json`
- * suffix announces: web manifests, TLDraw documents, Deno lock files, editor
- * workspace files, Swift package resolutions and their per-platform copies,
- * Xcode string catalogs, CPU profiles, Firebase project aliases, and the
- * `.cfg`, `.conf`, `.config`, and `.lock` files whose source shows a JSON
- * object.
+ * suffix announces: web manifests, TLDraw documents, Deno lock files, Swift
+ * package resolutions and their per-platform copies, Xcode string catalogs, CPU
+ * profiles, Firebase project aliases, and the `.cfg`, `.conf`, `.config`, and
+ * `.lock` files whose source shows a JSON object.
  *
  * JSON has no semantic layer (no types or cross-file definitions to resolve),
  * so it omits `createSemantics`/`createDiffSemantics`. A single JSON or JSONC
@@ -52,16 +53,14 @@ export const jsonLanguage: Language = {
   metadata: {
     extensions: [
       ".json",
-      ".jsonc",
       ".webmanifest",
       ".tldr",
-      ".code-workspace",
       ".xcstrings",
       ".cpuprofile",
     ],
     filenames: ["deno.lock", "Package.resolved", ".firebaserc"],
-    filenamePatterns: [/\.jsonc?\.example$/i, /^Package\.resolved\.[\w-]+$/],
-    aliases: ["jsonc"],
+    filenamePatterns: [/\.json\.example$/i, /^Package\.resolved\.[\w-]+$/],
+    aliases: [],
     interpreters: [],
     signatures: [],
     sharedExtensions: [
@@ -81,6 +80,34 @@ export const jsonLanguage: Language = {
   createHighlighter: (text) => createJsonHighlighter(text),
 
   hunkStructure: (ctx) => remapStructure(ctx),
+};
+
+/**
+ * JSON with comments, for the files whose readers accept comments: `.jsonc`
+ * files, editor workspace files, and the Deno, TypeScript, and JavaScript
+ * project configurations and their `.example` templates, which their `.json`
+ * suffix would otherwise claim for JSON. A line holding only a comment leaves
+ * the value as it was.
+ */
+export const jsoncLanguage: Language = {
+  ...jsonLanguage,
+
+  id: "jsonc",
+
+  commentLinesAreInert: true,
+
+  metadata: {
+    extensions: [".jsonc", ".code-workspace"],
+    filenames: ["deno.json", "tsconfig.json", "jsconfig.json"],
+    filenamePatterns: [
+      /\.jsonc\.example$/i,
+      /^(?:deno|tsconfig|jsconfig)\.json\.example$/,
+    ],
+    aliases: [],
+    interpreters: [],
+    signatures: [],
+    sharedExtensions: [],
+  },
 };
 
 /** JSON Lines and NDJSON with lexical state isolated to each record. */

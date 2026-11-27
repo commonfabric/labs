@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -14,6 +13,12 @@ import {
   setServerExecutionConfig,
   streamEntriesDocId,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { PostCommitSideEffect } from "../../src/cfc/types.ts";
 import { ExtendedStorageTransaction } from "../../src/storage/extended-storage-transaction.ts";
 import { StoreObjectManager } from "../../src/storage/query.ts";

@@ -18,7 +18,6 @@
  * confidential argument reaches a module's declared result schema.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { BuiltInLLMMessage } from "@commonfabric/api";
@@ -34,6 +33,7 @@ import {
   resetMockMode,
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import type {

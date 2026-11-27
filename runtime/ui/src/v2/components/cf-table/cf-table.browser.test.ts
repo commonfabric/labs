@@ -3,13 +3,14 @@
  * reach the rows and cells beneath a table through the spans a renderer wraps
  * lists in, and stop at the content of a cell, where a `cf-table` takes only
  * its own. happy-dom scopes such rules to the outermost table alone, so these
- * run in a browser. deno-web-test registers tests through `Deno.test`, so the
- * functions from `@std/testing/bdd` are not available here.
+ * run in a browser. deno-web-test registers tests through `Deno.test` alone,
+ * so they use `test()` and steps rather than `describe()`.
  */
 
 import { expect } from "@std/expect";
 
 import { CFTable } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * A `display: contents` span holding `children`, as the renderer wraps the
@@ -41,7 +42,7 @@ function tableWithRows(...names: string[]): CFTable {
 
 const cells = (element: CFTable) => [...element.querySelectorAll("td")];
 
-Deno.test("cf-table pads the cells and shades the even rows a renderer wraps in spans", async () => {
+test("cf-table pads the cells and shades the even rows a renderer wraps in spans", async () => {
   const element = document.body.appendChild(
     Object.assign(tableWithRows("Ada", "Grace"), { striped: true }),
   );
@@ -59,7 +60,7 @@ Deno.test("cf-table pads the cells and shades the even rows a renderer wraps in 
   }
 });
 
-Deno.test("cf-table styles a `cf-table` inside a cell by its own variants", async () => {
+test("cf-table styles a `cf-table` inside a cell by its own variants", async () => {
   const element = document.body.appendChild(
     Object.assign(tableWithRows("Ada"), { size: "sm", bordered: true }),
   );

@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   type CoverageBaseline,
   coverageRecords,
   type RunContext,
   type StoredReportGroup,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { baselinesOf, mergeBaselines, splitMeasuredSet } from "./baselines.ts";
 import { LOCAL_COVERAGE_BASELINE_DAYS } from "./policy.ts";
 

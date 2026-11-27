@@ -23,6 +23,9 @@ router.use(
 
 router.get("/static/*", async (c) => {
   const reqPath = c.req.path.substring("/static/".length);
+  if (!cache.has(reqPath)) {
+    return c.notFound();
+  }
   const ifNoneMatch = c.req.header("If-None-Match");
 
   // Get the asset with its ETag

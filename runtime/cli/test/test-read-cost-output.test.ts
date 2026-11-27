@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { argv, cf, checkStderr } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("test-read-cost-output", () => {
   it("reports initialization, render, and assertion costs with authored sites", async () => {

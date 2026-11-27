@@ -1,9 +1,9 @@
 /** Tests the stable server-execution CI role mapping. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   assertServerExecutionCiPosture,
   serverExecutionCiLane,

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { checkoutEntries } from "../src/fabric.ts";
 import type { GitContext } from "../src/git-context.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function observation(overrides: Partial<GitContext> = {}): GitContext {
   return {

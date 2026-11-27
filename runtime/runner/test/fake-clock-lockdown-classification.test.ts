@@ -1,4 +1,3 @@
-/// <reference path="./clock.d.ts" />
 // The fake-clock harness (auto-advance mode) sorts every positive-delay
 // `setTimeout` into a `src/` timer, which auto-advances so the runtime's own
 // throttle/backoff windows elapse instantly, or a `test/` timer, which freezes
@@ -15,9 +14,10 @@
 // own error mapping uses). These tests pin the classification across the
 // lockdown boundary and the SES contract it stands on.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { sleep } from "@commonfabric/async/sleep";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 
 // One real macrotask turn. A zero-delay `setTimeout` fires on a real macrotask

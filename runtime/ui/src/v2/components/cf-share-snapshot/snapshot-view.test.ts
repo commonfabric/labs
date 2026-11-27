@@ -1,9 +1,9 @@
 /** The trusted dialog's line-by-line reading of a reviewed snapshot. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { audienceId, audienceWords, snapshotLines } from "./snapshot-view.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("snapshot view", () => {
   it("shows field names exactly as stored, never as prose", () => {

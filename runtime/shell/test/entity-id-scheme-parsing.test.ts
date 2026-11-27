@@ -7,10 +7,10 @@
  * graph's side, `extractEntityId()`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { normalizeEntityId } from "../src/lib/debug-utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("entity-id-scheme-parsing", () => {
   describe("normalizeEntityId()", () => {

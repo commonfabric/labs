@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 import { Runtime } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runTestPattern } from "../lib/test-runner.ts";
 
 const fixtures = resolve(import.meta.dirname!, "fixtures");

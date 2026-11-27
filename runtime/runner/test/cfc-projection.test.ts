@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -6,6 +5,7 @@ import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import { storedLabelEntries } from "./cfc-stored-labels.ts";
 

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   coverageGateSelection,
   measuredCost,
@@ -24,6 +23,7 @@ import { duration } from "./duration.ts";
 import { sampleEntry, sampleManifest } from "./testing.ts";
 import type { MeasuredSet, Suite } from "../test-topology/suite.ts";
 import { withoutPackageParent } from "../package-layout.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A suite carrying only what the coverage selection reads. */
 function suite(

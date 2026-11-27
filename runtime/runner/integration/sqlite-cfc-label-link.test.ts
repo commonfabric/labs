@@ -9,6 +9,7 @@
  */
 
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
@@ -134,7 +135,7 @@ async function runTest(base: URL) {
   }
 }
 
-Deno.test({
+test({
   name: "sqlite db.query labeled column + asCell link column (end to end)",
   fn: async () => {
     const server = Deno.serve({ port: 0 }, app.fetch);

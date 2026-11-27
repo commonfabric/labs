@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import router from "./whoami.index.ts";
 import { createTestApp } from "@/lib/create-app.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("whoami", () => {
   const app = createTestApp(router);

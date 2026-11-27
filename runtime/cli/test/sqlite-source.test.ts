@@ -7,22 +7,23 @@ import {
   diskHandleSeed,
   parseSqliteSource,
 } from "../lib/sqlite-source.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkSpaceA";
 const SPACE_B = "did:key:z6MkSpaceB";
 
-Deno.test("parseSqliteSource recognizes an absolute sqlite: source", () => {
+test("parseSqliteSource recognizes an absolute sqlite: source", () => {
   assertEquals(parseSqliteSource("sqlite:/abs/reference-data.db"), {
     path: "/abs/reference-data.db",
   });
 });
 
-Deno.test("parseSqliteSource returns null for a non-sqlite ref", () => {
+test("parseSqliteSource returns null for a non-sqlite ref", () => {
   assertEquals(parseSqliteSource("bafypiece1/field"), null);
   assertEquals(parseSqliteSource("baedreiahv63wxwgaem"), null);
 });
 
-Deno.test("parseSqliteSource throws on a non-absolute path", () => {
+test("parseSqliteSource throws on a non-absolute path", () => {
   assertThrows(
     () => parseSqliteSource("sqlite:relative/path.db"),
     Error,
@@ -30,24 +31,24 @@ Deno.test("parseSqliteSource throws on a non-absolute path", () => {
   );
 });
 
-Deno.test("parseSqliteSource throws on an empty path", () => {
+test("parseSqliteSource throws on an empty path", () => {
   assertThrows(() => parseSqliteSource("sqlite:"), Error, "missing a path");
 });
 
-Deno.test("deriveDiskHandleId is idempotent for the same (space, path)", () => {
+test("deriveDiskHandleId is idempotent for the same (space, path)", () => {
   const a = deriveDiskHandleId(SPACE, "/data/ref.db");
   const b = deriveDiskHandleId(SPACE, "/data/ref.db");
   assertEquals(a, b);
   assertEquals(typeof a, "string");
 });
 
-Deno.test("deriveDiskHandleId differs by path", () => {
+test("deriveDiskHandleId differs by path", () => {
   const a = deriveDiskHandleId(SPACE, "/data/ref.db");
   const b = deriveDiskHandleId(SPACE, "/data/other.db");
   assertEquals(a === b, false);
 });
 
-Deno.test("deriveDiskHandleId differs by space", () => {
+test("deriveDiskHandleId differs by space", () => {
   const a = deriveDiskHandleId(SPACE, "/data/ref.db");
   const b = deriveDiskHandleId(SPACE_B, "/data/ref.db");
   assertEquals(a === b, false);
@@ -55,11 +56,11 @@ Deno.test("deriveDiskHandleId differs by space", () => {
 
 const ID = "fid1:handle";
 
-Deno.test("diskHandleSeed seeds an empty contract on a first link", () => {
+test("diskHandleSeed seeds an empty contract on a first link", () => {
   assertEquals(diskHandleSeed(ID, undefined), { id: ID, tables: {}, rev: 0 });
 });
 
-Deno.test("diskHandleSeed leaves a declared contract alone on a re-link", () => {
+test("diskHandleSeed leaves a declared contract alone on a re-link", () => {
   // The downgrade this guards: `tables[].ifc` carries the per-column read
   // labels, so re-seeding `{}` over a declared contract lowers every column's
   // label to nothing. A contract-less query still returns its rows, so nothing
@@ -76,7 +77,7 @@ Deno.test("diskHandleSeed leaves a declared contract alone on a re-link", () => 
   assertEquals(diskHandleSeed(ID, prior), undefined);
 });
 
-Deno.test("diskHandleSeed leaves the fixed handle properties alone too", () => {
+test("diskHandleSeed leaves the fixed handle properties alone too", () => {
   // `owner` resolves dbOwner() row admission, `scope` partitions the db, and
   // `rev` is what a handle hasher reads to decide a query has new inputs.
   const prior = {
@@ -89,14 +90,14 @@ Deno.test("diskHandleSeed leaves the fixed handle properties alone too", () => {
   assertEquals(diskHandleSeed(ID, prior), undefined);
 });
 
-Deno.test("diskHandleSeed leaves an already-committed empty contract alone", () => {
+test("diskHandleSeed leaves an already-committed empty contract alone", () => {
   // An empty-but-committed handle is still a committed handle: nothing about
   // it is weaker than a fresh seed, so leaving it alone is the same outcome
   // and keeps the rule one sentence long.
   assertEquals(diskHandleSeed(ID, { id: ID, tables: {}, rev: 0 }), undefined);
 });
 
-Deno.test("diskHandleSeed repairs a handle whose id is an empty string", () => {
+test("diskHandleSeed repairs a handle whose id is an empty string", () => {
   // `""` is a string, so a presence check on `id` reads this doc as committed.
   // It is not a handle any query can use — `readDbRef` needs an id that names
   // this source — so leaving it alone points the link at a handle that can
@@ -108,7 +109,7 @@ Deno.test("diskHandleSeed repairs a handle whose id is an empty string", () => {
   });
 });
 
-Deno.test("diskHandleSeed repairs an id that names a different source, carrying only the labels", () => {
+test("diskHandleSeed repairs an id that names a different source, carrying only the labels", () => {
   // A stored `id` that names another source means the value came from
   // somewhere else. `tables[].ifc` still travels: a store's effective label may
   // strengthen but never weaken, so carrying labels can only over-label, while
@@ -133,7 +134,7 @@ Deno.test("diskHandleSeed repairs an id that names a different source, carrying 
   );
 });
 
-Deno.test("diskHandleSeed keeps every field of a handle that lost its id", () => {
+test("diskHandleSeed keeps every field of a handle that lost its id", () => {
   // No id at all names no other source: this is THIS path's handle with its
   // one derived field missing, so the repair rewrites that field and preserves
   // the rest — `owner`, `scope` and `rev` survive exactly as they do a re-link.
@@ -159,7 +160,7 @@ Deno.test("diskHandleSeed keeps every field of a handle that lost its id", () =>
   );
 });
 
-Deno.test("diskHandleSeed refuses a repair whose contract it cannot copy", () => {
+test("diskHandleSeed refuses a repair whose contract it cannot copy", () => {
   // The contract must be written inline, so the repair copies it. A copy that
   // fails is not an empty contract: writing `{}` in its place would lower every
   // column's read label to nothing, silently — the downgrade the whole
@@ -172,7 +173,7 @@ Deno.test("diskHandleSeed refuses a repair whose contract it cannot copy", () =>
   );
 });
 
-Deno.test("diskHandleSeed drops a malformed contract when it repairs", () => {
+test("diskHandleSeed drops a malformed contract when it repairs", () => {
   // Only a well-formed contract is worth carrying: a `tables` that is not an
   // object declares no column labels, so keeping it would preserve nothing and
   // write back a value no query-side load can read.

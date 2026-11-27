@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 export const counterRichLabelScenario: PatternIntegrationScenario<
   { value?: number; prefix?: string; step?: number; unit?: string }

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { resolveHarnessFabricSessionConfig } from "../src/fabric-session-options.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("fabric-session-options", () => {
   describe("resolveHarnessFabricSessionConfig()", () => {

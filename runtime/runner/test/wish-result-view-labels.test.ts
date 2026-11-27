@@ -8,7 +8,6 @@
  * still consumes what it finds there.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -19,6 +18,12 @@ import {
   type CfcConfClause,
   clauseAlternatives,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

@@ -1,10 +1,11 @@
 import { assertEquals } from "@std/assert";
 import { join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
 
-Deno.test("scoped group chat pattern schema generates scoped input cells", async () => {
+test("scoped group chat pattern schema generates scoped input cells", async () => {
   const output = await runDenoCommandWithTemporaryLock({
     root: ROOT,
     cwd: ROOT,

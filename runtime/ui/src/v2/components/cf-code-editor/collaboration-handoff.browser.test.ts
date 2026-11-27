@@ -9,6 +9,7 @@ import {
   type OperationFieldSnapshot,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   createMockCellHandle,
@@ -17,7 +18,7 @@ import {
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFCodeEditor } from "./index.ts";
 
-Deno.test("a failed collaboration startup keeps displaying Cell updates read-only", async () => {
+test("a failed collaboration startup keeps displaying Cell updates read-only", async () => {
   const cell = createMockCellHandle("initial", { schema: { type: "string" } });
   const querying = Promise.withResolvers<void>();
   const queried = Promise.withResolvers<OperationFieldSnapshot>();
@@ -87,7 +88,7 @@ for (
     ],
   ] as const
 ) {
-  Deno.test(name, async () => {
+  test(name, async () => {
     const cell = createMockCellHandle("toggle", { schema: { type: "string" } });
     const ref = cell.ref();
     const address = {

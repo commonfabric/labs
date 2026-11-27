@@ -3,6 +3,7 @@ import { CFChip } from "./cf-chip/index.ts";
 import { CFMessageBeads } from "./cf-message-beads/index.ts";
 import { CFTags } from "./cf-tags/index.ts";
 import { CFTile } from "./cf-tile/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type TemplateValue = {
   strings?: readonly string[];
@@ -25,7 +26,7 @@ function renderedMarkup(value: unknown): string {
   ).join("");
 }
 
-Deno.test("cf-chip unit paths keep primary and remove actions separate", () => {
+test("cf-chip unit paths keep primary and remove actions separate", () => {
   const chip = new CFChip();
   chip.label = "Roadmap";
   const internals = chip as unknown as {
@@ -61,7 +62,7 @@ Deno.test("cf-chip unit paths keep primary and remove actions separate", () => {
   assertStringIncludes(markup, "Remove");
 });
 
-Deno.test("cf-tile unit paths preserve nested details", () => {
+test("cf-tile unit paths preserve nested details", () => {
   const tile = new CFTile();
   const internals = tile as unknown as { handleClick(): void };
   assertStringIncludes(renderedMarkup(tile.render()), "No item data");
@@ -85,7 +86,7 @@ Deno.test("cf-tile unit paths preserve nested details", () => {
   assertStringIncludes(markup, "Project notes");
 });
 
-Deno.test("cf-tags unit paths render semantic edit, remove, and add states", () => {
+test("cf-tags unit paths render semantic edit, remove, and add states", () => {
   const tags = new CFTags();
   tags.tags = ["alpha"];
   const internals = tags as unknown as {
@@ -117,7 +118,7 @@ Deno.test("cf-tags unit paths render semantic edit, remove, and add states", () 
   assertStringIncludes(markup, "tag-text");
 });
 
-Deno.test("cf-message-beads unit paths render a named list and refine control", () => {
+test("cf-message-beads unit paths render a named list and refine control", () => {
   const beads = new CFMessageBeads();
   const internals = beads as unknown as {
     _onRefineClick(): void;

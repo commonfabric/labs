@@ -5,8 +5,8 @@ import type {
   BuiltInLLMToolCallPart,
   BuiltInLLMToolResultPart,
 } from "@commonfabric/api";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { defaultTheme, themeProperties } from "../theme-context.ts";
 import { CFToolCall } from "./index.ts";

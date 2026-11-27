@@ -2,7 +2,6 @@
 // `new Date()` / `Date.now()` / `Math.random()` are the safe API — coarse in a
 // handler, throw in a lift/pattern-body, and the deterministic `new Date(arg)`
 // form passes straight through. Runs with the capability gate on.
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -10,6 +9,7 @@ import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROOT = join(import.meta.dirname!, "..");
 

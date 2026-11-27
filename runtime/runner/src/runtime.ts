@@ -19,7 +19,6 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import {
   acquireServerExecutionEnabler,
   type CellScope,
-  commitPreconditionValueHash,
   type GenesisRoot,
   getCommitPreconditionsConfig,
   getServerExecutionConfig,
@@ -124,6 +123,7 @@ import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
+  type SupersededOutput,
   waveRunActorOf,
   waveRunContextOf,
 } from "./executor/wave.ts";
@@ -191,6 +191,7 @@ import {
 } from "./scheduler/backpressure.ts";
 import { entityKey, entityNameKey } from "./scheduler/keys.ts";
 import { InSpaceTargetUnresolved } from "./scheduler/retry-immediately.ts";
+import { supersedingCommitsTaken } from "./scheduler/superseded-output.ts";
 import {
   getContentAddressedSchemasConfig,
   setContentAddressedSchemasConfig,
@@ -1625,6 +1626,12 @@ export class Runtime {
   readonly spaceHostMap?: Record<string, string>;
 
   /**
+   * The deployment this runtime's patterns talk to, where its host named one
+   * ({@link RuntimeOptions.patternEnvironment}); see {@link llmEndpointFor}.
+   */
+  readonly #patternApiUrl?: URL;
+
+  /**
    * The memory URL Memory opens on, when it is not `apiUrl`
    * ({@link RuntimeOptions.memoryUrl}).
    */
@@ -1961,33 +1968,21 @@ export class Runtime {
     reference: unknown,
     tx?: IExtendedStorageTransaction,
     destinationSpace?: MemorySpace,
-    bindCommit = true,
   ): PolicyArtifactManifestV1 | undefined {
     if (tx === undefined) return this.#registeredCfcPolicyManifest(reference);
     if (destinationSpace !== undefined) {
-      return this.#readCfcPolicyManifest(
-        destinationSpace,
-        reference,
-        tx,
-        bindCommit,
-      );
+      return this.#readCfcPolicyManifest(destinationSpace, reference, tx);
     }
-    let artifact: PolicyArtifactManifestV1 | undefined;
     const spaces = new Set<MemorySpace>();
     const log = tx.getReactivityLog();
     for (const address of [...log.writes, ...log.reads]) {
       spaces.add(address.space);
     }
     for (const space of spaces) {
-      artifact = this.#readCfcPolicyManifest(space, reference, tx);
-      if (artifact !== undefined) {
-        if (bindCommit) {
-          artifact = this.#readCfcPolicyManifest(space, reference, tx, true);
-        }
-        break;
-      }
+      const artifact = this.#readCfcPolicyManifest(space, reference, tx);
+      if (artifact !== undefined) return artifact;
     }
-    return artifact;
+    return undefined;
   }
 
   #registeredCfcPolicyManifest(
@@ -2076,11 +2071,18 @@ export class Runtime {
     return true;
   }
 
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
+  // A consultation is an ordinary read, which adds no precondition of its own
+  // (spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is pending). A
+  // present manifest is verified against its digest here, so a later read finds
+  // this body or none. An absent one fails the label's resolution, which fails
+  // the write and sink gates (prepare.ts), and a reactive run reads it again
+  // when the manifest arrives. Neither releases more than the manifest at its
+  // digest allows.
   #readCfcPolicyManifest(
     space: MemorySpace,
     reference: unknown,
     tx: IExtendedStorageTransaction,
-    bindCommit = false,
   ): PolicyArtifactManifestV1 | undefined {
     if (
       !reference || typeof reference !== "object" || Array.isArray(reference)
@@ -2095,35 +2097,6 @@ export class Runtime {
       tx,
     );
     const stored = snapshotQueryResult(cell.get());
-    if (bindCommit) {
-      const link = cell.getAsNormalizedFullLink();
-      const rawStored = tx.readOrThrow({
-        space: link.space,
-        id: link.id,
-        scope: link.scope,
-        type: "application/json",
-        path: ["value"],
-      });
-      const alreadyWritten = tx.getReactivityLog().writes.some((address) =>
-        address.space === link.space && address.id === link.id &&
-        address.scope === link.scope
-      );
-      if (!alreadyWritten) {
-        if (!tx.addCommitPrecondition) {
-          throw new Error(
-            "cfcPolicyManifest: storage cannot bind manifest consultation",
-          );
-        }
-        tx.addCommitPrecondition(space, {
-          kind: "entity-value-hash",
-          id: link.id,
-          scope: link.scope,
-          valueHash: rawStored === undefined
-            ? null
-            : commitPreconditionValueHash(rawStored),
-        });
-      }
-    }
     if (stored === undefined) return undefined;
     let artifact: PolicyArtifactManifestV1;
     try {
@@ -2264,6 +2237,9 @@ export class Runtime {
 
       this.id = options.storageManager.id;
       this.apiUrl = new URL(options.apiUrl);
+      this.#patternApiUrl = options.patternEnvironment
+        ? new URL(options.patternEnvironment.apiUrl)
+        : undefined;
       this.memoryUrl = parseMemoryUrl(options.memoryUrl, this.apiUrl);
       // Validate eagerly, mirroring the storage layer's resolver: a
       // malformed host should fail at configuration time naming the
@@ -3088,18 +3064,8 @@ export class Runtime {
           );
         assertCfcReadCeiling(readingTx, address, ceiling, options);
       },
-      resolvePolicyManifest: (
-        reference,
-        tx,
-        destinationSpace,
-        bindCommit,
-      ) =>
-        this.resolveCfcPolicyManifest(
-          reference,
-          tx,
-          destinationSpace,
-          bindCommit,
-        ),
+      resolvePolicyManifest: (reference, tx, destinationSpace) =>
+        this.resolveCfcPolicyManifest(reference, tx, destinationSpace),
       hasPolicyManifest: (space, reference, tx) =>
         this.hasCfcPolicyManifest(space, reference, tx),
       installPolicyManifest: (space, reference, tx) =>
@@ -4073,7 +4039,10 @@ export class Runtime {
    * concurrently in their declared scopes. The gate covers the watched view;
    * a validation dependency outside that view needs its own pull. Entries
    * without scope use the space instance. If no array entry names a usable
-   * address, the singular conflict supplies the recovery target.
+   * address, the singular conflict supplies the recovery target. With
+   * `superseded`, the documents a wave dropped writes to over concurrent
+   * commits, the wait also lasts until the replica has taken each such
+   * commit, so that the retry reads what its write lost to.
    *
    * A policy manifest is pulled with the documents its rules live in, since
    * a retry verifies the whole artifact.
@@ -4089,6 +4058,7 @@ export class Runtime {
   async awaitCommitRetryReadiness(
     error: unknown,
     teardownSignal?: AbortSignal,
+    superseded: readonly SupersededOutput[] = [],
   ): Promise<CommitRetryPullFailure[]> {
     const waitUnlessTeardown = async (
       operation: PromiseLike<unknown>,
@@ -4122,6 +4092,8 @@ export class Runtime {
       }
     }
     if (teardownSignal?.aborted) return [];
+    const taking = supersedingCommitsTaken(this, superseded, teardownSignal);
+    if (taking !== undefined && !await waitUnlessTeardown(taking)) return [];
     type ConflictAddress = { space: MemorySpace; of: URI; scope?: CellScope };
     const isPullableConflict = (value: unknown): value is ConflictAddress => {
       const conflict = value as Partial<ConflictAddress> | null | undefined;
@@ -5652,7 +5624,8 @@ export class Runtime {
    * "no per-space fact" — callers choose their own default (storage
    * uses the host it was opened on, which for a deployed client is
    * `memoryUrl` where one is set and apiUrl otherwise; hostForSpace uses
-   * apiUrl; LLM/fetch keep their module-level defaults, which may
+   * apiUrl; LLM calls use the pattern-facing deployment through
+   * llmEndpointFor; fetch keeps its module-level default; the last two may
    * deliberately differ from apiUrl).
    */
   mappedHostFor(space: MemorySpace): string | undefined {
@@ -5660,13 +5633,28 @@ export class Runtime {
   }
 
   /**
-   * The host that serves a space's space-bound work (LLM, fetch, blob).
-   * A mapped space resolves to its host; everything else to the
-   * default `apiUrl`. The single compute-side analog of the storage
-   * layer's per-space address resolver.
+   * The host that serves a space's space-bound work other than its model
+   * calls (fetch, blob; LLM calls go through {@link llmEndpointFor}, whose
+   * fallback is the pattern-facing deployment). A mapped space resolves to
+   * its host; everything else to the default `apiUrl`. The compute-side
+   * analog of the storage layer's per-space address resolver.
    */
   hostForSpace(space: MemorySpace): URL {
     return new URL(this.mappedHostFor(space) ?? this.apiUrl);
+  }
+
+  /**
+   * The LLM endpoint a pattern in `space` sends its model calls to: the
+   * space's mapped host where it has one, else the deployment this runtime's
+   * patterns talk to ({@link RuntimeOptions.patternEnvironment}, which the
+   * deployment-facing presets set from their `apiUrl`). Undefined for a
+   * runtime whose host named neither, whose calls go to the process's
+   * default (`setLLMUrl`). Not `apiUrl`: a deployment may serve memory on a
+   * different host than the one its patterns talk to.
+   */
+  llmEndpointFor(space: MemorySpace): URL | undefined {
+    const host = this.mappedHostFor(space) ?? this.#patternApiUrl;
+    return host === undefined ? undefined : new URL("/api/ai/llm", host);
   }
 
   /**
