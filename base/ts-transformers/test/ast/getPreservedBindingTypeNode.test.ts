@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
@@ -7,6 +6,7 @@ import {
   cloneTypeNodeDeepForEmission,
   getPreservedBindingTypeNode,
 } from "../../src/ast/type-building.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A wrapper counts only where its name resolves to the declaration
 // `commonfabric` exports, so the wrappers are declared in that module and each

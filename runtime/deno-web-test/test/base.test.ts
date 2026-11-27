@@ -9,6 +9,7 @@ import {
   runDenoWebTest,
   sanitizeDenoWebTestOutput,
 } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // A run built from output written out here rather than from a subprocess. It
 // takes no process to make, and it can carry an ending no real run in this
@@ -25,7 +26,7 @@ function runWith(output: Partial<Deno.CommandOutput> = {}): HarnessRun {
   });
 }
 
-Deno.test("smoke test", async function () {
+test("smoke test", async function () {
   const run = await runDenoWebTest("success-project");
 
   run.assert(run.success, "test successful");
@@ -54,7 +55,7 @@ Deno.test("smoke test", async function () {
 // that reported only its own words left the reason nowhere.
 //
 
-Deno.test("a failed assertion carries the whole run", function () {
+test("a failed assertion carries the whole run", function () {
   const run = runWith();
   const error = assertThrows(
     () => run.assert(run.success, "test successful"),
@@ -68,11 +69,11 @@ Deno.test("a failed assertion carries the whole run", function () {
   assertStringIncludes(error.message, "Task test deno run cli.ts *.test.ts");
 });
 
-Deno.test("an assertion that holds says nothing", function () {
+test("an assertion that holds says nothing", function () {
   runWith().assert(true, "test successful");
 });
 
-Deno.test("a run the kernel killed names the signal", function () {
+test("a run the kernel killed names the signal", function () {
   // No real run in this suite is killed by a signal, so this states one. The
   // transcript names the signal rather than only the exit code it comes with.
 
@@ -89,7 +90,7 @@ Deno.test("a run the kernel killed names the signal", function () {
 // wrote stays, control sequences included.
 //
 
-Deno.test("dependency downloads before the harness boundary are removed", function () {
+test("dependency downloads before the harness boundary are removed", function () {
   const encoder = new TextEncoder();
   const boundary = "deno-web-test:test-boundary";
   for (const colorized of [false, true]) {
@@ -150,7 +151,7 @@ Deno.test("dependency downloads before the harness boundary are removed", functi
   }
 });
 
-Deno.test("non-SGR control sequences remain before the boundary", function () {
+test("non-SGR control sequences remain before the boundary", function () {
   const encoder = new TextEncoder();
   const boundary = "deno-web-test:test-boundary";
   for (const sequence of ["\x1b[>4;2m", "\x1b[ 31m"]) {
@@ -178,7 +179,7 @@ Deno.test("non-SGR control sequences remain before the boundary", function () {
   }
 });
 
-Deno.test("application download lines remain in harness stderr", function () {
+test("application download lines remain in harness stderr", function () {
   const encoder = new TextEncoder();
   const boundary = "deno-web-test:test-boundary";
   for (const colorized of [false, true]) {

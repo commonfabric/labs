@@ -3,7 +3,6 @@
  * tree out of, and answering honestly when there is none.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, toFileUrl } from "@std/path";
 
@@ -11,6 +10,7 @@ import {
   harnessCheckoutRoot,
   harnessCheckoutRootFrom,
 } from "../src/checkout.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("harnessCheckoutRootFrom()", () => {
   it("finds the checkout above a module inside one", () => {

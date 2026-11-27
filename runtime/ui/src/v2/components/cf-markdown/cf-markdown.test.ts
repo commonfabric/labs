@@ -2,7 +2,6 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import {
@@ -13,6 +12,7 @@ import {
 } from "../../test-utils/mock-cell-handle.ts";
 import { defaultTheme } from "../theme-context.ts";
 import { CFMarkdown } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A markdown element mounted with `properties`. */
 function markdownWith(properties: Partial<CFMarkdown>): Promise<CFMarkdown> {

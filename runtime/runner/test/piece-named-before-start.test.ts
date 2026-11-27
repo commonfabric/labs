@@ -1,3 +1,8 @@
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   afterAll,
   afterEach,
@@ -5,12 +10,7 @@ import {
   beforeEach,
   describe,
   it,
-} from "@std/testing/bdd";
-import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/logger";
-import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+} from "@commonfabric/test-support/test";
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {

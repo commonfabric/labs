@@ -16,7 +16,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { ConsoleEvent } from "@astral/astral";
 import type { DID, Identity } from "@commonfabric/identity";
@@ -26,6 +25,12 @@ import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value"
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import type { Cell } from "@commonfabric/runner";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   fillCfInput,

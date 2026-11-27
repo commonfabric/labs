@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   agentInspectionAction,
@@ -8,6 +7,7 @@ import {
   formatAgentRun,
 } from "../commands/agent.ts";
 import type { AgentRunInspection } from "../lib/agent-inspection.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const queued: AgentRunInspection = {
   id: "run-queued",

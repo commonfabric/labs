@@ -19,11 +19,16 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

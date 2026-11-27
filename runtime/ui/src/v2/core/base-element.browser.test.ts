@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 
 import { CFVStack } from "../components/cf-vstack/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * A `cf-vstack`, whose own styles give its host `display: block`, set up by
@@ -17,7 +18,7 @@ const attachedStack = async (
   return element;
 };
 
-Deno.test("BaseElement leaves a host without `hidden` displayed as its own styles say", async () => {
+test("BaseElement leaves a host without `hidden` displayed as its own styles say", async () => {
   const element = await attachedStack(() => {});
   try {
     expect(getComputedStyle(element).display).toBe("block");
@@ -26,7 +27,7 @@ Deno.test("BaseElement leaves a host without `hidden` displayed as its own style
   }
 });
 
-Deno.test("BaseElement gives a host carrying `hidden` a display of `none`", async () => {
+test("BaseElement gives a host carrying `hidden` a display of `none`", async () => {
   const element = await attachedStack((stack) => {
     stack.hidden = true;
   });
@@ -37,7 +38,7 @@ Deno.test("BaseElement gives a host carrying `hidden` a display of `none`", asyn
   }
 });
 
-Deno.test("BaseElement gives a host carrying `hidden` the display its inline style names", async () => {
+test("BaseElement gives a host carrying `hidden` the display its inline style names", async () => {
   const element = await attachedStack((stack) => {
     stack.hidden = true;
     stack.style.display = "flex";
@@ -49,7 +50,7 @@ Deno.test("BaseElement gives a host carrying `hidden` the display its inline sty
   }
 });
 
-Deno.test('BaseElement leaves a host carrying `hidden="until-found"` displayed as its own styles say', async () => {
+test('BaseElement leaves a host carrying `hidden="until-found"` displayed as its own styles say', async () => {
   const element = await attachedStack((stack) => {
     stack.setAttribute("hidden", "until-found");
   });

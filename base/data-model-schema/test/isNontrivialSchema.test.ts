@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 
 import { deepFreeze } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { isNontrivialSchema } from "@/isNontrivialSchema.ts";
 
 describe("isNontrivialSchema()", () => {

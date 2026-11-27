@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -10,6 +9,7 @@ import type {
   CachedCiGanttJob,
   CachedCiRunReference,
 } from "../ci-job-cache.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const SOURCE = { repo: "owner/repo", workflow: "ci.yml" };
 const OTHER = { repo: "owner/other", workflow: "ci.yml" };

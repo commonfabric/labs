@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { toDocumentPath } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { Runtime } from "../../src/runtime.ts";
 import { txToReactivityLog } from "../../src/scheduler.ts";

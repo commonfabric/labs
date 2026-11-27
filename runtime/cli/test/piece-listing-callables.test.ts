@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { listCallableKeys } from "../lib/piece.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CONFIG = {
   apiUrl: "http://localhost:8000",

@@ -8,11 +8,11 @@
  * download in place for a machine with neither.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import { astralBinaryPath } from "../astral-adapter.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Runs the body with `ASTRAL_BIN_PATH` set as given, then puts it back. */
 function withEnvironmentOverride(value: string | undefined, body: () => void) {

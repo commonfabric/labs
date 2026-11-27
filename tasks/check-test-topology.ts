@@ -874,7 +874,4 @@ export async function main(
   return report(findings, suites) ? 0 : 1;
 }
 
-// `Deno.exitCode` rather than `Deno.exit`, which would end the process
-// before the unload handlers run — and one of those is what writes a
-// test run's name map into its spool.
 if (import.meta.main) Deno.exitCode = await main();

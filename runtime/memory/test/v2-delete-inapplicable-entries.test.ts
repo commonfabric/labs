@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { resolveScopeKey } from "../v2.ts";
 import { deleteInapplicableEntries } from "../v2/server.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ALICE = "did:key:z6Mk-inapplicable-alice";
 const BOB = "did:key:z6Mk-inapplicable-bob";

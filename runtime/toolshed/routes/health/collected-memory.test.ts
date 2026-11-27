@@ -1,11 +1,16 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { exposeGarbageCollector } from "@commonfabric/runner/collected-memory";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import env from "@/env.ts";
 import { createTestApp } from "@/lib/create-app.ts";

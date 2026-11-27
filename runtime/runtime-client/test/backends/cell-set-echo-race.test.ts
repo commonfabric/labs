@@ -18,7 +18,6 @@
  *     order and the handle converges to green.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fabricFromRealmValue,
@@ -32,6 +31,7 @@ import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "@commonfabric/runner";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
 import { newLoopbackServer } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { RuntimeProcessor } from "@/backends/runtime-processor.ts";
 import { createCellRef } from "@/backends/utils.ts";

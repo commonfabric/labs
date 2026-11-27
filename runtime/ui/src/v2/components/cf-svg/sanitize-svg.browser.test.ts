@@ -11,6 +11,7 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { sanitizeSvg } from "./sanitize-svg.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The sanitized drawing, which each test here expects to exist. */
 function sanitized(svg: string): Element {
@@ -26,7 +27,7 @@ function elementNames(root: Element): string[] {
   );
 }
 
-Deno.test("sanitizeSvg keeps a style element and a style attribute", function () {
+test("sanitizeSvg keeps a style element and a style attribute", function () {
   const root = sanitized(
     "<svg><style>.cls { fill: red; }</style>" +
       '<circle class="cls" style="stroke: blue;" cx="5" cy="5" r="4"/></svg>',
@@ -39,7 +40,7 @@ Deno.test("sanitizeSvg keeps a style element and a style attribute", function ()
   );
 });
 
-Deno.test("sanitizeSvg drops a script element", function () {
+test("sanitizeSvg drops a script element", function () {
   const root = sanitized(
     "<svg><script>alert('xss')</script><circle cx='5' cy='5' r='4'/></svg>",
   );
@@ -47,7 +48,7 @@ Deno.test("sanitizeSvg drops a script element", function () {
   assertEquals(elementNames(root), ["svg", "circle"]);
 });
 
-Deno.test("sanitizeSvg drops a script element nested in a group or in defs", function () {
+test("sanitizeSvg drops a script element nested in a group or in defs", function () {
   const root = sanitized(
     "<svg><g><script>alert(1)</script><circle cx='5' cy='5' r='4'/></g>" +
       "<defs><script>alert(2)</script></defs></svg>",
@@ -56,7 +57,7 @@ Deno.test("sanitizeSvg drops a script element nested in a group or in defs", fun
   assertEquals(elementNames(root), ["svg", "g", "circle", "defs"]);
 });
 
-Deno.test("sanitizeSvg drops an element from outside the SVG namespace", function () {
+test("sanitizeSvg drops an element from outside the SVG namespace", function () {
   // `desc` and `title` are the two places a drawing may hold HTML, and an
   // element that arrives there shares a local name with a drawing element it
   // is not.
@@ -68,13 +69,13 @@ Deno.test("sanitizeSvg drops an element from outside the SVG namespace", functio
   assertEquals(elementNames(root), ["svg", "desc", "circle"]);
 });
 
-Deno.test("sanitizeSvg recovers from an unclosed element", function () {
+test("sanitizeSvg recovers from an unclosed element", function () {
   const root = sanitized("<svg><circle cx='5' cy='5' r='4'></svg>");
 
   assertEquals(elementNames(root), ["svg", "circle"]);
 });
 
-Deno.test("sanitizeSvg puts a drawing that declares no namespace in the SVG namespace", function () {
+test("sanitizeSvg puts a drawing that declares no namespace in the SVG namespace", function () {
   // The source a drawing arrives in often omits the declaration, and an
   // element outside the SVG namespace draws nothing.
   const root = sanitized("<svg viewBox='0 0 10 10'><rect width='5'/></svg>");

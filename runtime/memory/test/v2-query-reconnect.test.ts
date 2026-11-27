@@ -1,7 +1,6 @@
 /** Exercises ordinary queries while a connected transport restores its session. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   connect,
@@ -15,6 +14,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("v2-query-reconnect", () => {
   const cases: {

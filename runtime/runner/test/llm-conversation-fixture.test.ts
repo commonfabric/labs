@@ -8,7 +8,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type {
   BuiltInLLMMessage,
@@ -23,6 +22,12 @@ import {
   loadConversationFixtureFile,
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";

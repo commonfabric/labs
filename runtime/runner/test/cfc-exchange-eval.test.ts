@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
@@ -8,6 +7,7 @@ import {
   type CfcOrClause,
   clauseAlternatives,
 } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { AtomPattern } from "../src/cfc/atom-pattern.ts";
 import { clausesEqual, normalizeClause } from "../src/cfc/clause.ts";

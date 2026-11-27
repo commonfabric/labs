@@ -2,11 +2,11 @@
  * Exercises the retrieval scoring command against file and HTTP boundaries.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { main } from "../scripts/score-retrieval.ts";
 
 const readEnv = (

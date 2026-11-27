@@ -18,6 +18,8 @@ import { Runtime, UI } from "@commonfabric/runner";
 import type { Cell } from "@commonfabric/runner";
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
@@ -83,7 +85,7 @@ function applyOps(ops: readonly VDomOp[]) {
   return { childrenOf, parentOf };
 }
 
-Deno.test("worker reconciler - cell child optimization", async (t) => {
+test("worker reconciler - cell child optimization", async (t) => {
   // Setup minimal runtime to get CellImpl
   const signer = await Identity.fromPassphrase("test reconciler");
   const storageManager = StorageManager.emulate({ as: signer });
@@ -201,7 +203,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
             children.withTx(tx).set([value]);
             expect((await tx.commit().settled).error).toBeUndefined();
             await runtime.idle();
-            await t.settle();
+            await clock.settle();
           };
           await write("initial");
           const root = new MockCell({
@@ -212,7 +214,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           });
           const cancel = reconciler.mount(root as unknown as Cell<unknown>);
           try {
-            await t.settle();
+            await clock.settle();
             const element = collector.getOps().find((op) =>
               op.op === "create-element" && op.tagName === "div"
             );
@@ -227,7 +229,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
               children,
             });
             await runtime.idle();
-            await t.settle();
+            await clock.settle();
             expect(collector.getOpsOfType("create-element")).toEqual([]);
             const expectRendered = (value: string) => {
               expect(collector.getOps()).toContainEqual({
@@ -256,7 +258,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
                 children: [],
               });
             }
-            await t.settle();
+            await clock.settle();
             collector.clear();
             await write("ignored");
             expect(collector.getOps()).toEqual([]);
@@ -291,7 +293,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         children: ["static child"],
       });
       const cancel = reconciler.mount(root as unknown as Cell<unknown>);
-      await t.settle();
+      await clock.settle();
       const element = collector.getOpsOfType("create-element")[0];
       expect(element?.op).toBe("create-element");
       const elementId = "nodeId" in element ? element.nodeId : undefined;
@@ -310,7 +312,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           children,
         });
         await runtime.idle();
-        await t.settle();
+        await clock.settle();
         expect(collector.getOpsOfType("create-element")).toEqual([]);
         expect(collector.getOpsOfType("set-prop")).toContainEqual({
           op: "set-prop",
@@ -333,7 +335,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         children.withTx(update).set(["second child"]);
         expect((await update.commit().settled).error).toBeUndefined();
         await runtime.idle();
-        await t.settle();
+        await clock.settle();
         expect(collector.getOpsOfType("set-prop")).toContainEqual({
           op: "set-prop",
           nodeId: elementId,
@@ -354,14 +356,14 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           props: { title: "static again" },
           children: ["static again"],
         });
-        await t.settle();
+        await clock.settle();
         collector.clear();
         const afterReplacement = runtime.edit();
         title.withTx(afterReplacement).set("ignored title");
         children.withTx(afterReplacement).set(["ignored child"]);
         expect((await afterReplacement.commit().settled).error).toBeUndefined();
         await runtime.idle();
-        await t.settle();
+        await clock.settle();
         expect(collector.getOps()).toEqual([]);
       } finally {
         cancel();
@@ -385,7 +387,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
       const cancel = reconciler.mount(root as unknown as Cell<unknown>);
       try {
-        await t.settle();
+        await clock.settle();
         collector.clear();
         root.set({
           type: "vnode",
@@ -393,7 +395,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           props: { onClick: handler },
           children: ["click"],
         });
-        await t.settle();
+        await clock.settle();
         expect(collector.getOpsOfType("create-element")).toEqual([]);
         const first = collector.getOpsOfType("set-event");
         expect(first).toHaveLength(1);
@@ -403,7 +405,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
         collector.clear();
         handler.set(() => seen.push("second"));
-        await t.settle();
+        await clock.settle();
         expect(collector.getOpsOfType("remove-event")).toHaveLength(1);
         const second = collector.getOpsOfType("set-event");
         expect(second).toHaveLength(1);
@@ -418,11 +420,11 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           props: {},
           children: ["click"],
         });
-        await t.settle();
+        await clock.settle();
         expect(collector.getOpsOfType("remove-event")).toHaveLength(1);
         collector.clear();
         handler.set(() => seen.push("removed"));
-        await t.settle();
+        await clock.settle();
         expect(collector.getOps()).toEqual([]);
         expect(seen).toEqual(["first", "second"]);
       } finally {
@@ -446,7 +448,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       const cancel = reconciler.mount(
         rootCell as unknown as Cell<unknown>,
       );
-      await t.settle();
+      await clock.settle();
 
       const initialText = collector.getOpsOfType("create-text");
       assertEquals(
@@ -461,7 +463,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       collector.clear();
       textCell.set("after");
       nestedTextCell.set("nested after");
-      await t.settle();
+      await clock.settle();
 
       const updatedText = collector.getOpsOfType("update-text");
       assertEquals(
@@ -477,7 +479,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       collector.clear();
       textCell.set("ignored");
       nestedTextCell.set("nested ignored");
-      await t.settle();
+      await clock.settle();
       assertEquals(collector.getOps(), []);
     },
   );
@@ -508,7 +510,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       const rowsOf = (ops: VDomOp[]) =>
         ops.filter((op) => "tagName" in op && op.tagName === "li");
@@ -518,7 +520,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       collector.clear();
       listCell.set([row("a"), row("b"), row("c")]);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").length,
@@ -570,7 +572,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       const idOfRow = new Map<string, number>();
       for (const op of collector.getOpsOfType("create-element")) {
@@ -583,7 +585,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       collector.clear();
       listCell.set([row("c"), row("b"), row("a")]);
-      await t.settle();
+      await clock.settle();
 
       // Reversing keys nothing differently -- each row still hashes to what it
       // did -- so a keyed reconciler moves rows and builds none.
@@ -640,7 +642,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       const wrapperOps = collector.getOpsOfType("create-element").filter((op) =>
         "tagName" in op && op.tagName === "span"
@@ -660,7 +662,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       collector.clear();
       listCell.set([row("a"), row("b")]);
-      await t.settle();
+      await clock.settle();
 
       const appended = collector.getOpsOfType("create-element").filter((op) =>
         "tagName" in op && op.tagName === "li"
@@ -699,7 +701,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       // Rows are created in array order, so the nth `li` created is the nth id.
       const nodeIdOf = new Map<string, number>();
@@ -721,7 +723,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         ]
       ) {
         listCell.set(order.map(row));
-        await t.settle();
+        await clock.settle();
 
         const { childrenOf, parentOf } = applyOps(collector.getOps());
         const wrapper = parentOf.get(nodeIdOf.get(order[0])!);
@@ -766,11 +768,11 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       listCell.set([row("a"), row("c")]);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").length,
@@ -791,7 +793,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       // Emptying the list keeps the wrapper, so refilling it reuses that too.
       collector.clear();
       listCell.set([]);
-      await t.settle();
+      await clock.settle();
       assertEquals(
         collector.getOpsOfType("remove-node").length,
         2,
@@ -800,7 +802,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       collector.clear();
       listCell.set([row("a")]);
-      await t.settle();
+      await clock.settle();
       assertEquals(
         collector.getOpsOfType("create-element").filter((op) =>
           "tagName" in op && op.tagName === "span"
@@ -835,7 +837,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       const authored = collector.getOpsOfType("create-element").find((op) =>
         "tagName" in op && op.tagName === "span"
@@ -851,7 +853,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: {},
         children: ["a"],
       }]);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").some((op) =>
@@ -885,7 +887,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       // The wrapper is a span, so this authored span takes it over in place.
       childCell.set({
@@ -894,7 +896,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { id: "authored" },
         children: ["one"],
       });
-      await t.settle();
+      await clock.settle();
 
       const adopted = collector.getOpsOfType("create-element").find((op) =>
         "tagName" in op && op.tagName === "span"
@@ -908,7 +910,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: {},
         children: ["b"],
       }]);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").some((op) =>
@@ -950,7 +952,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       // Mount
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
 
       const createOps = collector.getOpsOfType("create-element");
       const spanCreate = createOps.find((op: any) => op.tagName === "span");
@@ -969,7 +971,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { id: "child-span-updated" },
         children: ["Updated"],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       // VNode in-place update: span element should NOT be removed/recreated
       const removeOps = collector.getOpsOfType("remove-node");
@@ -1025,7 +1027,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       // Re-set the reused child VNode with IDENTICAL props but changed children,
@@ -1038,7 +1040,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { id: "tab", "data-role": "tab" },
         children: ["B"],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       const unchangedPropOps = collector.getOpsOfType("set-prop").filter((op) =>
         "key" in op && (op.key === "id" || op.key === "data-role")
@@ -1064,7 +1066,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { id: "tab-2", "data-role": "tab" },
         children: ["B"],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       const idOps = collector.getOpsOfType("set-prop").filter((op) =>
         "key" in op && op.key === "id"
@@ -1114,7 +1116,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       // Reuse the same input VNode with IDENTICAL props. The worker can't see
@@ -1127,7 +1129,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { ...liveProps },
         children: [],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       const keys = collector.getOpsOfType("set-prop")
         .filter((op) => "key" in op)
@@ -1170,7 +1172,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       // Same object reference, changed child to force the reconcile. Object
@@ -1181,7 +1183,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { id: "s", style: styleObj },
         children: ["B"],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       const keys = collector.getOpsOfType("set-prop")
         .filter((op) => "key" in op)
@@ -1221,7 +1223,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       // Text-integrity sink props have policy-dependent transforms and must
@@ -1232,7 +1234,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { id: "m1", name: "Alice", content: "hi" },
         children: [],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       const keys = collector.getOpsOfType("set-prop")
         .filter((op) => "key" in op)
@@ -1273,7 +1275,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       rootCell.set({
@@ -1282,7 +1284,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: {},
         children: [secondChild as unknown as Cell<WorkerRenderNode>],
       } as WorkerVNode);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").length > 0,
@@ -1318,7 +1320,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       );
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       rootCell.set(
@@ -1329,7 +1331,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           children: ["literal text"],
         } satisfies WorkerVNode,
       );
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").length > 0,
@@ -1346,7 +1348,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       collector.clear();
       oldChild.set("stale cell update");
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOps().length,
@@ -1402,13 +1404,13 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       firstChildren.set([voteSpan("Alice")]);
       middleChildren.set([null, voteSpan("Alice")]);
       lastChildren.set([null, null, voteSpan("Alice")]);
-      await t.settle();
+      await clock.settle();
 
       const spanCreates = collector.getOpsOfType("create-element").filter(
         (op) => "tagName" in op && op.tagName === "span",
@@ -1460,7 +1462,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as unknown as Cell<WorkerRenderNode>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       mappedChildren.set([
@@ -1468,13 +1470,13 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         middleMappedResult,
         lastMappedResult,
       ]);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       firstMappedResult.set(voteSpan("Alice"));
       middleMappedResult.set(voteSpan("Alice"));
       lastMappedResult.set(voteSpan("Alice"));
-      await t.settle();
+      await clock.settle();
 
       const spanCreates = collector.getOpsOfType("create-element").filter(
         (op) => "tagName" in op && op.tagName === "span",
@@ -1522,7 +1524,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
     });
 
     reconciler.mount(rootCell as any);
-    await t.settle();
+    await clock.settle();
 
     const createSpanOp = collector.getOpsOfType("create-element").find(
       (op: any) => op.tagName === "span",
@@ -1538,7 +1540,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       children: ["Button"],
     };
     childCell.set(buttonVNode);
-    await t.settle();
+    await clock.settle();
 
     const removeOps = collector.getOpsOfType("remove-node");
     const spanRemoved = removeOps.some((op: any) => op.nodeId === spanNodeId);
@@ -1566,12 +1568,12 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
     });
 
     reconciler.mount(rootCell as any);
-    await t.settle();
+    await clock.settle();
     collector.clear();
 
     // Update text
     childCell.set("World");
-    await t.settle();
+    await clock.settle();
 
     const removeOps = collector.getOpsOfType("remove-node");
     assertEquals(removeOps.length, 0, "Should not remove text node");
@@ -1613,7 +1615,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       );
 
       reconciler.mount(rootCell as unknown as Cell<unknown>);
-      await t.settle();
+      await clock.settle();
       const screenCreate = collector.getOpsOfType("create-element").find(
         (op) => "tagName" in op && op.tagName === "cf-screen",
       );
@@ -1636,7 +1638,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           }],
         } satisfies WorkerVNode,
       );
-      await t.settle();
+      await clock.settle();
 
       const textOps = collector.getOps().filter((op) =>
         (op.op === "update-text" || op.op === "create-text") &&
@@ -1694,7 +1696,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       );
 
       reconciler.mount(rootCell as unknown as Cell<unknown>);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       summary.set(
@@ -1712,7 +1714,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           ],
         } satisfies WorkerVNode,
       );
-      await t.settle();
+      await clock.settle();
 
       // A text child is keyed by its own content, so the one that changed is a
       // different child rather than the same child holding new text: it is
@@ -1769,7 +1771,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       );
 
       reconciler.mount(rootCell as unknown as Cell<unknown>);
-      await t.settle();
+      await clock.settle();
 
       const spanCreate = collector.getOpsOfType("create-element").find(
         (op) => "tagName" in op && op.tagName === "span",
@@ -1788,7 +1790,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           children: [afterChild],
         } satisfies WorkerVNode,
       );
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.getOpsOfType("remove-node").some((op) =>
@@ -1831,7 +1833,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
 
       const setEventOps = collector.getOpsOfType("set-event");
       assertEquals(setEventOps.length, 1, "Should emit initial set-event");
@@ -1849,7 +1851,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           children: ["Click me"],
         }],
       });
-      await t.settle();
+      await clock.settle();
 
       const newSetEventOps = collector.getOpsOfType("set-event");
       assertEquals(
@@ -1876,7 +1878,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       rootCell.set({
@@ -1885,7 +1887,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: {},
         children: ["Click me"],
       });
-      await t.settle();
+      await clock.settle();
 
       const removeEventOps = collector.getOpsOfType("remove-event");
       assertEquals(removeEventOps.length, 1, "Should emit remove-event");
@@ -1923,7 +1925,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       rootCell.set({
@@ -1932,7 +1934,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: { onClick: undefined },
         children: ["Click me"],
       });
-      await t.settle();
+      await clock.settle();
 
       const removeEventOps = collector.getOpsOfType("remove-event");
       assertEquals(removeEventOps.length, 1, "Should emit remove-event");
@@ -1963,11 +1965,11 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       handlerCell.set(undefined);
-      await t.settle();
+      await clock.settle();
 
       const removeEventOps = collector.getOpsOfType("remove-event");
       assertEquals(removeEventOps.length, 1, "Should emit remove-event");
@@ -1998,7 +2000,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
 
       const initialTextOps = collector.getOpsOfType("create-text");
       assertEquals(
@@ -2013,7 +2015,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       collector.clear();
       childrenCell.set("");
-      await t.settle();
+      await clock.settle();
 
       const emptyStringTextOps = collector.getOpsOfType("create-text");
       assertEquals(
@@ -2052,7 +2054,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       rootCell.set({
@@ -2061,7 +2063,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         props: {},
         children: [],
       });
-      await t.settle();
+      await clock.settle();
 
       const removePropOps = collector.getOpsOfType("remove-prop");
       const hasValueRemove = removePropOps.some((op) =>
@@ -2104,7 +2106,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       const rootCell = new MockCell(view(first));
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       const boundIds = () =>
         collector.getOpsOfType("set-binding").map((op) =>
           (op as { cellRef: { id: string } }).cellRef.id
@@ -2113,7 +2115,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       collector.clear();
 
       rootCell.set(view(second));
-      await t.settle();
+      await clock.settle();
 
       expect(boundIds()).toEqual([second.getAsNormalizedFullLink().id]);
       expect(collector.getOpsOfType("create-element")).toEqual([]);
@@ -2137,19 +2139,19 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       // Emit exact SAME value
       childCell.set("Hello");
-      await t.settle();
+      await clock.settle();
 
       const ops = collector.getOps();
       assertEquals(ops.length, 0, "Should emit NO ops for identical value");
 
       // Emit DIFFERENT value
       childCell.set("World");
-      await t.settle();
+      await clock.settle();
 
       const updateOps = collector.getOpsOfType("update-text");
       assertEquals(
@@ -2194,7 +2196,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       const rootCell = new MockCell(rootVNode);
 
       reconciler.mount(rootCell as any);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       // Update parent with SAME children order
@@ -2205,7 +2207,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         children: [child1, child2], // Same objects, same keys
       };
       rootCell.set(rootVNodeUpdated);
-      await t.settle();
+      await clock.settle();
 
       const insertOps = collector.getOpsOfType("insert-child");
       assertEquals(insertOps.length, 0, "Should skip inserts if order is same");
@@ -2218,7 +2220,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         children: [child2, child1], // Swap
       };
       rootCell.set(rootVNodeSwapped);
-      await t.settle();
+      await clock.settle();
 
       const swapInserts = collector.getOpsOfType("insert-child");
       // Naive reorder: remove/insert or move.
@@ -2299,7 +2301,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       );
 
       reconciler.mount(rootCell as unknown as Cell<unknown>);
-      await t.settle();
+      await clock.settle();
       const spanCreate = collector.getOps().find((op) =>
         op.op === "create-element" && "tagName" in op &&
         op.tagName === "span"
@@ -2322,7 +2324,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
 
       resolvedOutputId = "of:fid1:retargeted-with-same-ui";
       outputCell.set(initialOutput);
-      await t.settle();
+      await clock.settle();
 
       const unchangedUiBinding = collector.getOps().find((op) =>
         op.op === "set-piece-boundary" && op.nodeId === spanNodeId
@@ -2353,7 +2355,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           children: ["two"],
         }),
       );
-      await t.settle();
+      await clock.settle();
 
       const retargetedBinding = collector.getOps().find((op) =>
         op.op === "set-piece-boundary" && op.nodeId === spanNodeId
@@ -2406,7 +2408,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
           children: ["plain vnode"],
         } satisfies WorkerVNode,
       );
-      await t.settle();
+      await clock.settle();
       assertEquals(
         collector.getOps().some((op) =>
           op.op === "clear-piece-boundary" && op.nodeId === spanNodeId
@@ -2423,16 +2425,16 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       });
       resolvedOutputId = deniedOutputId;
       outputCell.set(blockedCandidate);
-      await t.settle();
+      await clock.settle();
 
       resolvedOutputId = "of:fid1:allowed-after-block";
       outputCell.set(blockedCandidate);
-      await t.settle();
+      await clock.settle();
       collector.clear();
 
       resolvedOutputId = deniedOutputId;
       outputCell.set(blockedCandidate);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.hasOp("set-piece-boundary"),
@@ -2477,7 +2479,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
       } as unknown as WorkerVNode);
 
       reconciler.mount(rootCell as unknown as Cell<unknown>);
-      await t.settle();
+      await clock.settle();
 
       assertEquals(
         collector.hasOp("set-piece-boundary"),
@@ -2508,7 +2510,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
     );
 
     reconciler.mount(rootCell as unknown as Cell<unknown>);
-    await t.settle();
+    await clock.settle();
     const spanCreate = collector.getOpsOfType("create-element").find((op) =>
       "tagName" in op && op.tagName === "span"
     );
@@ -2531,7 +2533,7 @@ Deno.test("worker reconciler - cell child optimization", async (t) => {
         }],
       } satisfies WorkerVNode,
     );
-    await t.settle();
+    await clock.settle();
 
     assertEquals(
       collector.getOpsOfType("remove-node").some((op) =>

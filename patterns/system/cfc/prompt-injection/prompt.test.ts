@@ -1,8 +1,9 @@
 import { assertEquals } from "@std/assert";
 import { promptInputMessage } from "./prompt.ts";
 import { parseResultSchemaInput } from "./result-schema.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("promptInputMessage replaces repeated clipboard attachment tokens", () => {
+test("promptInputMessage replaces repeated clipboard attachment tokens", () => {
   const message = promptInputMessage({
     detail: {
       text: "Use [Notes](#clip-1), then compare [Notes](#clip-1).",
@@ -24,7 +25,7 @@ Deno.test("promptInputMessage replaces repeated clipboard attachment tokens", ()
   });
 });
 
-Deno.test("parseResultSchemaInput fails closed for malformed schema strings", () => {
+test("parseResultSchemaInput fails closed for malformed schema strings", () => {
   assertEquals(parseResultSchemaInput("{not json"), false);
   assertEquals(
     parseResultSchemaInput('["array-is-not-a-schema-object"]'),
@@ -36,7 +37,7 @@ Deno.test("parseResultSchemaInput fails closed for malformed schema strings", ()
   });
 });
 
-Deno.test("parseResultSchemaInput accepts direct schemas and rejects other values", () => {
+test("parseResultSchemaInput accepts direct schemas and rejects other values", () => {
   const schema = { type: "object", properties: {} } as const;
   assertEquals(parseResultSchemaInput(true), true);
   assertEquals(parseResultSchemaInput(schema), schema);

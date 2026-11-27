@@ -7,7 +7,6 @@
 // Spec: docs/specs/sqlite-builtin/06-cfc.md ("Write — the runner gate").
 
 import { assert, assertEquals, assertStringIncludes } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   all,
@@ -19,6 +18,7 @@ import {
   whenMatches,
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { checkSqliteRowLabelWrite } from "../src/builtins/sqlite/row-label-write.ts";
 

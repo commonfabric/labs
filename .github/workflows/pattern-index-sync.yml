@@ -7,7 +7,8 @@ name: Pattern Index Sync
 on:
   push:
     branches: [main]
-    paths: ["patterns/**"]
+    # The moves table decides which lineage a moved pattern keeps.
+    paths: ["patterns/**", "runtime/runner/src/pattern-key-moves.ts"]
   workflow_dispatch:
 
 permissions:
@@ -42,6 +43,8 @@ jobs:
         with:
           step: plan
           program-root: patterns
+          # A pattern Labs records as moved keeps its index history.
+          moves-table: runtime/runner/src/pattern-key-moves.ts
           include: |
             patterns/**
           # Development fixtures, regression scaffolding and personal variants

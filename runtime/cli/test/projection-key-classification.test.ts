@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, type JSONSchema, Runtime } from "@commonfabric/runner";
@@ -8,6 +7,12 @@ import {
   isObjectNotArray,
   isObjectOrArray,
 } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   deriveSelectedValue,
   outputSchemaWithSourceRequired,

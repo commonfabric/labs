@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   assignName,
@@ -21,6 +20,7 @@ import {
   type NamesMapCell,
   nextNameAmong,
 } from "./allocator.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A stand-in for the namespace cell a verb holds: `get()` reads the map back

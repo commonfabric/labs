@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isErrorNotification } from "@/protocol/guards.ts";
@@ -11,6 +10,7 @@ import {
   RequestType,
   RuntimeErrorCode,
 } from "@/protocol/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The runtime the rest of the repository describes has pieces, not pages. The
 // protocol enums are the one place a wire value can drift away from that

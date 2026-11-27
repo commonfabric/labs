@@ -7,7 +7,6 @@
 // These tests drive the real protocol path (transact write fold + sqlite.query
 // read) so they exercise `#cellDbPath` / `#attachCommitSqliteDbs` end to end.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Server } from "../v2/server.ts";
 import { connect, loopback } from "../v2/client.ts";
@@ -15,6 +14,12 @@ import { table } from "../v2/sqlite/schema.ts";
 import type { CellScope, SqliteDbRef } from "../v2.ts";
 import { testSessionOpenAuth } from "./v2-auth-test-helpers.ts";
 import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-sqlite-scope-test";
 const ALICE = "did:key:z6Mk-alice";

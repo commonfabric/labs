@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { cfcLabelViewIsPublic, ownerPrincipalFromLabel } from "./cfc-label.ts";
 
 const DID = "did:key:z6MkhaXgBZDvotDkL5257faiztiGiC2QtKLGpbnnEGta2doK";

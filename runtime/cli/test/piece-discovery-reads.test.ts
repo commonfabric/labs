@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
@@ -10,6 +9,7 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   describePiece,

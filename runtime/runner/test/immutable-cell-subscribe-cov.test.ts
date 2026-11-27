@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { subscribeWhileHeld } from "../src/immutable-cell.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("subscribeWhileHeld()", () => {
   // A hand-rolled notifier stands in for the schema registry, so each case

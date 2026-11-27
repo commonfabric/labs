@@ -6,7 +6,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   CFC_HARNESS_ATOM_CLASS,
@@ -26,6 +25,12 @@ import {
   rankSections,
   splitMarkdownSections,
 } from "../src/docs-corpus/sections.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const document = {
   path: "docs/example.md",

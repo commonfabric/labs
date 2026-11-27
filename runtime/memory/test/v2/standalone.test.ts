@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,

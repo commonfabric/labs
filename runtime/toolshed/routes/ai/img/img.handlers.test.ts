@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { QueueStatus } from "@fal-ai/client";
 
 import type { ImageClient } from "./img.handlers.ts";
 import { createImageRouter } from "./img.index.ts";
 import { createTestApp } from "@/lib/create-app.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const IMAGE_BYTES = new Uint8Array([0x52, 0x49, 0x46, 0x46, 1, 2, 3]);
 const IMAGE_URL = "https://fal.example/generated.webp";

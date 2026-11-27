@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -10,6 +9,7 @@ import {
   type StructuredFileToolErrorCode,
 } from "../../src/tools/file-errors.ts";
 import { createToolsSmallContext } from "../support/tools-small-context.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const shellFailure = (exitCode: number, stderr = "", stdout = "") => ({
   exitCode,

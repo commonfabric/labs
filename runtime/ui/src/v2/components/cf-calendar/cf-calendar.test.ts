@@ -13,7 +13,6 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { CFCalendar } from "./index.ts";
 import {
@@ -21,6 +20,7 @@ import {
   pushUpdate,
   writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("CFCalendar", () => {
   it("should be defined", () => {

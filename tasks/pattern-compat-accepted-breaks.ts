@@ -835,7 +835,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The second pattern of the same ruling. Its baseline appears in no other
     // entry, so the pairs stay disjoint.
-    pattern: "apps/deep-research/deep-research.tsx",
+    pattern: "apps/deep-research/main.tsx",
     baselines: [
       "20260729T022742Z-6PInVAlNOHThJNGH",
     ],
@@ -923,7 +923,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat, same record.
-    pattern: "examples/scoped-group-chat/main-plain-inputs.tsx",
+    pattern: "examples/scoped-group-chat/plain-inputs/main.tsx",
     baselines: [
       "20260729T022742Z-Z-pkp9K1p6P_byR_",
       "20260909T184756Z-M530BSuyTtIuZ_9J",
@@ -935,7 +935,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat's writable-input variant, same record.
-    pattern: "examples/scoped-group-chat/main-with-writable-inputs.tsx",
+    pattern: "examples/scoped-group-chat/writable-inputs/main.tsx",
     baselines: [
       "20260729T022742Z-_XyScfA2QEj14JnS",
       "20260909T184756Z-NMt89YDsQnt_urES",

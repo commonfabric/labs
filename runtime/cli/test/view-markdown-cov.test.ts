@@ -13,8 +13,9 @@ import {
   highlightMarkdownLines,
   markdownDocument,
 } from "../lib/view/languages/markdown/markdown.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("markdown: createMarkdownHighlighter exposes lines and re-highlights on update", () => {
+test("markdown: createMarkdownHighlighter exposes lines and re-highlights on update", () => {
   const hl = createMarkdownHighlighter("# First\n\nplain prose\n");
   // The getter returns the initial highlighting: the heading is a section
   // header span, matching a direct highlightMarkdownLines call.
@@ -31,7 +32,7 @@ Deno.test("markdown: createMarkdownHighlighter exposes lines and re-highlights o
   assertEquals(hl.lines, updated, "the getter tracks the last update");
 });
 
-Deno.test("markdown: oneSpan yields an empty span list for a blank fence-closing line and a span for a non-empty one", () => {
+test("markdown: oneSpan yields an empty span list for a blank fence-closing line and a span for a non-empty one", () => {
   // A fenced block whose closing fence is the empty string is impossible, so
   // drive both oneSpan branches through the fence path: an opener line is
   // non-empty (one punctuation span), and an empty line *inside* the open fence
@@ -49,7 +50,7 @@ Deno.test("markdown: oneSpan yields an empty span list for a blank fence-closing
   assertEquals(lines[3].spans.map((s) => s.cls), ["punctuation"]);
 });
 
-Deno.test("markdown: a horizontal rule line is a single punctuation span", () => {
+test("markdown: a horizontal rule line is a single punctuation span", () => {
   for (const rule of ["---", "***", "___", "- - -", "  ***  "]) {
     const [line] = highlightMarkdownLines(rule);
     assertEquals(
@@ -68,7 +69,7 @@ Deno.test("markdown: a horizontal rule line is a single punctuation span", () =>
   );
 });
 
-Deno.test("markdown: inline code with an interior backtick run of a different length still closes correctly", () => {
+test("markdown: inline code with an interior backtick run of a different length still closes correctly", () => {
   // Opener is a single backtick (n=1). Inside there is a run of two backticks
   // (m=2, mismatched, so the scan steps past it via `j += m`). The closing
   // single backtick (m=1==n) ends the span. Everything from the opener through
@@ -84,7 +85,7 @@ Deno.test("markdown: inline code with an interior backtick run of a different le
   );
 });
 
-Deno.test("markdown: an unclosed inline backtick run does not color the rest of the line", () => {
+test("markdown: an unclosed inline backtick run does not color the rest of the line", () => {
   // A lone opening backtick with no matching close: the scan finds no close,
   // advances past the run (`i += n`), and the rest of the line stays plain.
   const [line] = highlightMarkdownLines("an `unclosed run of prose");
@@ -106,7 +107,7 @@ Deno.test("markdown: an unclosed inline backtick run does not color the rest of 
   );
 });
 
-Deno.test("markdown: a document that opens on a deeper heading attaches it at the top depth", () => {
+test("markdown: a document that opens on a deeper heading attaches it at the top depth", () => {
   // The first heading is level 2 with no level-1 parent above it. The tree
   // builder's "deeper heading with no parent at this level" branch attaches it
   // at depth 0 rather than nesting it under a phantom level-1 section.
@@ -130,7 +131,7 @@ Deno.test("markdown: a document that opens on a deeper heading attaches it at th
   );
 });
 
-Deno.test("markdown: a deeper-then-shallower opening keeps each heading navigable at the same depth", () => {
+test("markdown: a deeper-then-shallower opening keeps each heading navigable at the same depth", () => {
   // Open even deeper: a level-3 heading first, then a level-2, then a level-1.
   // The orphan-attachment branch recurses for the deeper-than-current heads and
   // keeps the structure flat at the root.

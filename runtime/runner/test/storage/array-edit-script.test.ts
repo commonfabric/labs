@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { spliceAll } from "@commonfabric/collections/splice";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type ArrayEditHunk,

@@ -3,7 +3,6 @@
  * surfaced, and the trust limits stated in its prompt-visible descriptor.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 
@@ -21,6 +20,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class FakeSandboxRuntime implements SandboxRuntime {
   describe(): SandboxRuntimeDescription {

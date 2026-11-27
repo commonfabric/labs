@@ -2,6 +2,7 @@ import { assert, assertEquals, assertStringIncludes } from "@std/assert";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // End-to-end pipeline regression for the compute-wrap invariant conversion:
 // a reactive computation written inline in a builder call's arguments (e.g. a
@@ -23,7 +24,7 @@ function getCallArgumentComputationErrors(
   );
 }
 
-Deno.test("Builder-argument computation diagnostic", async (t) => {
+test("Builder-argument computation diagnostic", async (t) => {
   await t.step(
     "reports the hoist diagnostic for `??` over a wish read in bound-handler builder args",
     async () => {

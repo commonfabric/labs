@@ -6,9 +6,9 @@
  * spelling that cannot work.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isMisnamedPropName } from "@commonfabric/pattern-contract/jsx-prop-names";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("jsx.d.ts", () => {
   it("declares no prop by a name that names no property", async () => {

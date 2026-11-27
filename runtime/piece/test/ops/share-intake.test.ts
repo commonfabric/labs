@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -16,6 +15,12 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import {
   type ShareIntake,

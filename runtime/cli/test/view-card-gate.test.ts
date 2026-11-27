@@ -2,6 +2,7 @@ import { assert } from "@std/assert";
 import { parseDocument } from "./view-helpers.ts";
 import { buildPeekCard } from "../lib/view/card.ts";
 import type { Document, Line, StructureNode } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function infoText(doc: Document, node: StructureNode): string {
   const card = buildPeekCard(doc, node);
@@ -9,7 +10,7 @@ function infoText(doc: Document, node: StructureNode): string {
     .join("\n");
 }
 
-Deno.test("card: a comment child is hoisted through, never listed in the outline", () => {
+test("card: a comment child is hoisted through, never listed in the outline", () => {
   // Probe: try every way a `"comment"`-kind node could reach the outline's
   // `glyph(child.kind)` call. The outline hoists through node/comment children
   // rather than listing them, so a comment kind should never reach `glyph`.
@@ -99,7 +100,7 @@ Deno.test("card: a comment child is hoisted through, never listed in the outline
   assert(!text.includes("# nested comment"), "nested comment not listed");
 });
 
-Deno.test("card: real source comments stay out of the outline glyph list", () => {
+test("card: real source comments stay out of the outline glyph list", () => {
   // Drive a parsed document with real comments to confirm the same behavior on
   // the production parse path: comments thread in as their own nodes but the
   // outline never lists them with a glyph.

@@ -308,6 +308,10 @@ export interface GitHubApi extends PullRequestService {
     signal: AbortSignal,
   ): Promise<PullRequest | null>;
 
+  /** Resolves with the default branch of `repository`, an `owner/name`.
+   * Rejects when GitHub cannot say. */
+  defaultBranch(repository: string, signal: AbortSignal): Promise<string>;
+
   /** Resolves with the method GitHub's page for a pull request in
    * `repository` would merge it by: the one the token's account last used,
    * or else the repository's default. Rejects when there is no token, or
@@ -379,6 +383,22 @@ export function githubApi(
       return typeof number === "number"
         ? { number, url: pullRequestUrl(target.repository, number) }
         : null;
+    },
+    defaultBranch: async (repository, signal) => {
+      const reply = await call(
+        "GET",
+        `/repos/${repository}`,
+        signal,
+        undefined,
+        false,
+      );
+      const branch = isObjectNotArray(reply) ? reply.default_branch : undefined;
+      if (typeof branch !== "string" || branch === "") {
+        throw new Error(
+          `GitHub did not say which branch is ${repository}'s default`,
+        );
+      }
+      return branch;
     },
     // GitHub's merge API merges by "merge" unless told otherwise, which a
     // repository that allows only squashing or rebasing refuses, so the

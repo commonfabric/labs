@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type Constructor,
@@ -24,6 +23,7 @@ import {
   typeOfIncludingNull,
   unsafeObjectKeyIn,
 } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type ImmutableObj<T> = {
   readonly prop: T;

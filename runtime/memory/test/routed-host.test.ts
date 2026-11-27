@@ -3,9 +3,15 @@
 import type WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 import { getMemoryProtocolFlags } from "../v2.ts";
 import { RoutedEpochStore } from "../v2/routed-epochs.ts";
 import { RoutedMemoryHost } from "../v2/routed-host.ts";
@@ -54,7 +60,7 @@ class Socket extends EventTarget {
     return this.output.shift()!;
   }
 }
-Deno.test("toolshed independently refuses context/epoch/proof replay and isolates router revocation", async () => {
+test("toolshed independently refuses context/epoch/proof replay and isolates router revocation", async () => {
   const root = Deno.makeTempDirSync(), now = Math.floor(Date.now() / 1000);
   const [toolshed, router, other, client, space] = await Promise.all(
     [91, 92, 93, 94, 95].map((seed) =>
@@ -283,7 +289,7 @@ Deno.test("toolshed independently refuses context/epoch/proof replay and isolate
   }
 });
 
-Deno.test("a closed context ID may open again at once", async () => {
+test("a closed context ID may open again at once", async () => {
   const root = Deno.makeTempDirSync();
   const clock = Math.floor(Date.now() / 1000);
   const [toolshed, router, client, space] = await Promise.all(

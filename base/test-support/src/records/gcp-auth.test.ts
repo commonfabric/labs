@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { encodeBase64 } from "@std/encoding/base64";
@@ -8,6 +7,7 @@ import {
   saAssertion,
   type ServiceAccountKey,
 } from "./gcp-auth.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 async function generateKey(): Promise<
   { key: ServiceAccountKey; publicKey: CryptoKey }

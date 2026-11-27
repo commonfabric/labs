@@ -1,8 +1,9 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { createAgentDriver } from "../src/create-driver.ts";
 import type { AgentSourceConfig } from "../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("bundled drivers normalize their source identities", () => {
+test("bundled drivers normalize their source identities", () => {
   for (
     const driver of ["claude-agent-sdk", "codex-app-server", "acp"] as const
   ) {
@@ -16,7 +17,7 @@ Deno.test("bundled drivers normalize their source identities", () => {
   }
 });
 
-Deno.test("driver creation rejects unknown runtime driver kinds", () => {
+test("driver creation rejects unknown runtime driver kinds", () => {
   assertThrows(
     () =>
       createAgentDriver({
@@ -29,7 +30,7 @@ Deno.test("driver creation rejects unknown runtime driver kinds", () => {
   );
 });
 
-Deno.test("driver creation rejects invalid source identities", () => {
+test("driver creation rejects invalid source identities", () => {
   assertThrows(
     () =>
       createAgentDriver({

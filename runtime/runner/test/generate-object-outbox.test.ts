@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { BuiltInGenerateObjectParams } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
@@ -12,6 +11,12 @@ import {
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createBuilder } from "../src/builder/factory.ts";
 import { generateObject as rawGenerateObject } from "../src/builtins/llm.ts";

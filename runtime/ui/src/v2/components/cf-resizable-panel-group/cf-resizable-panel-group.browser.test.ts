@@ -7,6 +7,7 @@
 
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
 import { CFResizableHandle } from "../cf-resizable-handle/index.ts";
 import { CFResizablePanel } from "../cf-resizable-panel/index.ts";
@@ -52,7 +53,7 @@ async function mounted(direction?: PanelGroupDirection): Promise<Mounted> {
   return page;
 }
 
-Deno.test("a vertical group's handle resizes with Up and Down, not Left and Right", async () => {
+test("a vertical group's handle resizes with Up and Down, not Left and Right", async () => {
   using page = await mounted("vertical");
   expect(page.group.hasAttribute("direction")).toBe(false);
   page.handle.focus();
@@ -66,7 +67,7 @@ Deno.test("a vertical group's handle resizes with Up and Down, not Left and Righ
   expect(page.first.style.height).toBe("36%");
 });
 
-Deno.test("a horizontal group's handle resizes with Left and Right, not Up and Down", async () => {
+test("a horizontal group's handle resizes with Left and Right, not Up and Down", async () => {
   using page = await mounted();
   page.handle.focus();
   await pressKey("ArrowRight");
@@ -79,7 +80,7 @@ Deno.test("a horizontal group's handle resizes with Left and Right, not Up and D
   expect(page.first.style.width).toBe("36%");
 });
 
-Deno.test("a direction changed after the panels are in place carries to the handle and the panels", async () => {
+test("a direction changed after the panels are in place carries to the handle and the panels", async () => {
   using page = await mounted("horizontal");
   expect(page.handle.dataset.orientation).toBe("horizontal");
   expect(page.first.style.width).toBe("36%");
@@ -95,7 +96,7 @@ Deno.test("a direction changed after the panels are in place carries to the hand
   expect(page.first.style.height).toBe("37%");
 });
 
-Deno.test("a direction assigned after the group is attached, before its first render, carries to the handle and the panels", async () => {
+test("a direction assigned after the group is attached, before its first render, carries to the handle and the panels", async () => {
   using page = built();
   document.body.append(page.group);
   page.group.direction = "vertical";
@@ -105,7 +106,7 @@ Deno.test("a direction assigned after the group is attached, before its first re
   expect(page.first.style.width).toBe("");
 });
 
-Deno.test("a direction change during a drag ends the drag, and a stationary pointer leaves the split alone", async () => {
+test("a direction change during a drag ends the drag, and a stationary pointer leaves the split alone", async () => {
   using page = await mounted("horizontal");
   page.handle.dispatchEvent(
     new MouseEvent("mousedown", { bubbles: true, clientX: 100, clientY: 160 }),
@@ -132,7 +133,7 @@ async function laidOut(group: CFResizablePanelGroup): Promise<void> {
   await group.updateComplete;
 }
 
-Deno.test("a group narrower than its stackBelow stacks its panels, and one as wide or wider keeps its direction", async () => {
+test("a group narrower than its stackBelow stacks its panels, and one as wide or wider keeps its direction", async () => {
   using narrow = built("horizontal");
   narrow.group.stackBelow = 401;
   document.body.append(narrow.group);
@@ -153,7 +154,7 @@ Deno.test("a group narrower than its stackBelow stacks its panels, and one as wi
   expect(wide.first.getBoundingClientRect().height).toBe(400);
 });
 
-Deno.test("a group with no stackBelow keeps its direction however narrow it is", async () => {
+test("a group with no stackBelow keeps its direction however narrow it is", async () => {
   using page = built("horizontal");
   page.group.style.width = "100px";
   document.body.append(page.group);
@@ -162,7 +163,7 @@ Deno.test("a group with no stackBelow keeps its direction however narrow it is",
   expect(page.first.style.width).toBe("36%");
 });
 
-Deno.test("a group that narrows past its stackBelow stacks its panels, keeping their split, and turns back when it widens", async () => {
+test("a group that narrows past its stackBelow stacks its panels, keeping their split, and turns back when it widens", async () => {
   using page = await mounted("horizontal");
   page.group.stackBelow = 300;
   await laidOut(page.group);
@@ -189,7 +190,7 @@ Deno.test("a group that narrows past its stackBelow stacks its panels, keeping t
   expect(page.first.style.height).toBe("");
 });
 
-Deno.test("a width change that crosses no stackBelow leaves a drag in progress alone", async () => {
+test("a width change that crosses no stackBelow leaves a drag in progress alone", async () => {
   using page = await mounted("horizontal");
   page.group.stackBelow = 300;
   await laidOut(page.group);
@@ -207,7 +208,7 @@ Deno.test("a width change that crosses no stackBelow leaves a drag in progress a
   document.dispatchEvent(new MouseEvent("mouseup"));
 });
 
-Deno.test("panel sizes a renderer assigns as properties after the panels are in place reach the group", async () => {
+test("panel sizes a renderer assigns as properties after the panels are in place reach the group", async () => {
   const group = new CFResizablePanelGroup();
   group.style.width = "400px";
   group.style.height = "400px";
@@ -234,7 +235,7 @@ Deno.test("panel sizes a renderer assigns as properties after the panels are in 
   }
 });
 
-Deno.test("a size a person dragged to stays when the group reads its panels again", async () => {
+test("a size a person dragged to stays when the group reads its panels again", async () => {
   using page = await mounted("horizontal");
   page.handle.focus();
   await pressKey("ArrowRight");
@@ -250,7 +251,7 @@ Deno.test("a size a person dragged to stays when the group reads its panels agai
   expect(page.second.style.width).toBe("64%");
 });
 
-Deno.test("a dragged size outside a panel's new bounds returns every panel to its default", async () => {
+test("a dragged size outside a panel's new bounds returns every panel to its default", async () => {
   using page = await mounted("horizontal");
   page.handle.focus();
   await pressKey("Home");
@@ -262,7 +263,7 @@ Deno.test("a dragged size outside a panel's new bounds returns every panel to it
   expect(page.second.style.width).toBe("64%");
 });
 
-Deno.test("a re-read of the panels during a drag ends the drag", async () => {
+test("a re-read of the panels during a drag ends the drag", async () => {
   using page = await mounted("horizontal");
   page.handle.dispatchEvent(
     new MouseEvent("mousedown", { bubbles: true, clientX: 100, clientY: 160 }),
@@ -276,7 +277,7 @@ Deno.test("a re-read of the panels during a drag ends the drag", async () => {
   expect(page.first.style.width).toBe("36%");
 });
 
-Deno.test("the group and its handle name their orientation, the handle's for assistive technology as the line it draws", async () => {
+test("the group and its handle name their orientation, the handle's for assistive technology as the line it draws", async () => {
   using page = await mounted("horizontal");
   expect(page.group.dataset.orientation).toBe("horizontal");
   expect(page.handle.getAttribute("aria-orientation")).toBe("vertical");
@@ -287,7 +288,7 @@ Deno.test("the group and its handle name their orientation, the handle's for ass
   expect(page.handle.getAttribute("aria-orientation")).toBe("horizontal");
 });
 
-Deno.test("a stackBelow that is not a positive width is refused, and a removed one stops stacking", async () => {
+test("a stackBelow that is not a positive width is refused, and a removed one stops stacking", async () => {
   for (const bad of [Number.NaN, 0, -10]) {
     using page = await mounted("horizontal");
     page.group.stackBelow = bad;
@@ -304,7 +305,7 @@ Deno.test("a stackBelow that is not a positive width is refused, and a removed o
   expect(page.first.style.width).toBe("36%");
 });
 
-Deno.test("a panel marked hideWhenStacked steps aside while the group is stacked, with its handle, and the others take its room", async () => {
+test("a panel marked hideWhenStacked steps aside while the group is stacked, with its handle, and the others take its room", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 300;
   page.second.hideWhenStacked = true;
@@ -334,7 +335,7 @@ Deno.test("a panel marked hideWhenStacked steps aside while the group is stacked
   expect(page.second.style.width).toBe("64%");
 });
 
-Deno.test("hideWhenStacked assigned or cleared while stacked takes effect at once", async () => {
+test("hideWhenStacked assigned or cleared while stacked takes effect at once", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 500;
   document.body.append(page.group);
@@ -356,7 +357,7 @@ Deno.test("hideWhenStacked assigned or cleared while stacked takes effect at onc
   expect(page.first.style.height).toBe("36%");
 });
 
-Deno.test("a group that is vertical by its direction is not stacked, and hides nothing", async () => {
+test("a group that is vertical by its direction is not stacked, and hides nothing", async () => {
   using page = built("vertical");
   page.group.stackBelow = 500;
   page.second.hideWhenStacked = true;
@@ -367,7 +368,7 @@ Deno.test("a group that is vertical by its direction is not stacked, and hides n
   expect(page.first.style.height).toBe("36%");
 });
 
-Deno.test("when every panel is marked hideWhenStacked, every panel is drawn", async () => {
+test("when every panel is marked hideWhenStacked, every panel is drawn", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 500;
   page.first.hideWhenStacked = true;
@@ -379,7 +380,7 @@ Deno.test("when every panel is marked hideWhenStacked, every panel is drawn", as
   expect(page.first.style.height).toBe("36%");
 });
 
-Deno.test("a display the host set on a panel is left alone", async () => {
+test("a display the host set on a panel is left alone", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 300;
   page.first.style.display = "flex";
@@ -390,7 +391,7 @@ Deno.test("a display the host set on a panel is left alone", async () => {
   expect(page.first.style.display).toBe("flex");
 });
 
-Deno.test("with a panel hidden, a handle between two drawn panels moves as far as the pointer and the keys say", async () => {
+test("with a panel hidden, a handle between two drawn panels moves as far as the pointer and the keys say", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 500;
   for (const panel of [page.first, page.second]) {
@@ -426,7 +427,7 @@ Deno.test("with a panel hidden, a handle between two drawn panels moves as far a
   expect(parseFloat(page.first.style.height)).toBeCloseTo(61);
 });
 
-Deno.test("a hidden panel gets back the display the host gave it", async () => {
+test("a hidden panel gets back the display the host gave it", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 300;
   page.second.style.display = "flex";
@@ -441,7 +442,7 @@ Deno.test("a hidden panel gets back the display the host gave it", async () => {
   expect(page.second.style.display).toBe("flex");
 });
 
-Deno.test("marking a panel while the group is side by side hides nothing", async () => {
+test("marking a panel while the group is side by side hides nothing", async () => {
   using page = await mounted("horizontal");
   page.group.stackBelow = 300;
   await laidOut(page.group);
@@ -452,7 +453,7 @@ Deno.test("marking a panel while the group is side by side hides nothing", async
   expect(page.first.style.width).toBe("36%");
 });
 
-Deno.test("marking a panel leaves a drag in progress alone", async () => {
+test("marking a panel leaves a drag in progress alone", async () => {
   using page = await mounted("horizontal");
   page.handle.dispatchEvent(
     new MouseEvent("mousedown", { bubbles: true, clientX: 144, clientY: 10 }),
@@ -463,7 +464,7 @@ Deno.test("marking a panel leaves a drag in progress alone", async () => {
   document.dispatchEvent(new MouseEvent("mouseup"));
 });
 
-Deno.test("a panel taken out of the group while hidden is drawn again", async () => {
+test("a panel taken out of the group while hidden is drawn again", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 500;
   page.second.hideWhenStacked = true;
@@ -477,7 +478,7 @@ Deno.test("a panel taken out of the group while hidden is drawn again", async ()
   expect(page.handle.style.display).toBe("");
 });
 
-Deno.test("a stacked group taken out of the page draws its hidden panel and handle again", async () => {
+test("a stacked group taken out of the page draws its hidden panel and handle again", async () => {
   const page = built("horizontal");
   page.group.stackBelow = 500;
   page.second.hideWhenStacked = true;
@@ -489,7 +490,7 @@ Deno.test("a stacked group taken out of the page draws its hidden panel and hand
   expect(page.handle.style.display).toBe("");
 });
 
-Deno.test("a panel marked in the same turn the group starts stacking still turns the handles", async () => {
+test("a panel marked in the same turn the group starts stacking still turns the handles", async () => {
   using page = await mounted("horizontal");
   await laidOut(page.group);
   // The panel updates before the group does.
@@ -502,7 +503,7 @@ Deno.test("a panel marked in the same turn the group starts stacking still turns
   expect(page.first.style.display).toBe("none");
 });
 
-Deno.test("a group nested in a panel sizes its own panels, and the outer group sizes only its own", async () => {
+test("a group nested in a panel sizes its own panels, and the outer group sizes only its own", async () => {
   using outer = built("horizontal");
   const inner = new CFResizablePanelGroup();
   inner.direction = "vertical";
@@ -552,7 +553,7 @@ function wrapped(...children: HTMLElement[]): HTMLSpanElement {
   return span;
 }
 
-Deno.test("panels and a handle wrapped in an element, as an array's items are, belong to the group and lay out as direct children do", async () => {
+test("panels and a handle wrapped in an element, as an array's items are, belong to the group and lay out as direct children do", async () => {
   const group = new CFResizablePanelGroup();
   group.style.width = "400px";
   group.style.height = "400px";
@@ -576,7 +577,7 @@ Deno.test("panels and a handle wrapped in an element, as an array's items are, b
   }
 });
 
-Deno.test("a wrapped panel removed with its wrapper leaves the group, and the rest return to their defaults", async () => {
+test("a wrapped panel removed with its wrapper leaves the group, and the rest return to their defaults", async () => {
   using page = built("horizontal");
   const third = new CFResizablePanel();
   third.defaultSize = 20;
@@ -597,7 +598,7 @@ Deno.test("a wrapped panel removed with its wrapper leaves the group, and the re
   expect(page.second.style.width).toBe("63%");
 });
 
-Deno.test("a size change in a nested group leaves a drag in the outer group going", async () => {
+test("a size change in a nested group leaves a drag in the outer group going", async () => {
   using outer = built("horizontal");
   const inner = new CFResizablePanelGroup();
   inner.direction = "vertical";
@@ -622,7 +623,7 @@ Deno.test("a size change in a nested group leaves a drag in the outer group goin
   expect(top.style.height).toBe("40%");
 });
 
-Deno.test("a nested group's resize is heard on that group alone", async () => {
+test("a nested group's resize is heard on that group alone", async () => {
   using outer = built("horizontal");
   const inner = new CFResizablePanelGroup();
   inner.direction = "vertical";
@@ -640,7 +641,7 @@ Deno.test("a nested group's resize is heard on that group alone", async () => {
   expect(heard).toEqual([inner]);
 });
 
-Deno.test("a press on a nested group's handle starts no drag in the outer group", async () => {
+test("a press on a nested group's handle starts no drag in the outer group", async () => {
   using outer = built("horizontal");
   const inner = new CFResizablePanelGroup();
   inner.direction = "vertical";
@@ -658,7 +659,7 @@ Deno.test("a press on a nested group's handle starts no drag in the outer group"
   document.dispatchEvent(new MouseEvent("mouseup"));
 });
 
-Deno.test("a handle taken out of the group no longer starts a drag in it", async () => {
+test("a handle taken out of the group no longer starts a drag in it", async () => {
   using page = await mounted("horizontal");
   page.handle.remove();
   document.body.append(page.handle);
@@ -672,7 +673,7 @@ Deno.test("a handle taken out of the group no longer starts a drag in it", async
   }
 });
 
-Deno.test("a handle moves the nearest panel on each side of it, and one at an end moves nothing", async () => {
+test("a handle moves the nearest panel on each side of it, and one at an end moves nothing", async () => {
   using page = built("horizontal");
   const leading = new CFResizableHandle();
   page.group.prepend(leading);
@@ -687,14 +688,14 @@ Deno.test("a handle moves the nearest panel on each side of it, and one at an en
   expect(page.second.style.width).toBe("63%");
 });
 
-Deno.test("a handle that leaves takes none of the group's orientation with it", async () => {
+test("a handle that leaves takes none of the group's orientation with it", async () => {
   using page = await mounted("horizontal");
   page.handle.remove();
   expect(page.handle.dataset.orientation).toBe(undefined);
   expect(page.handle.hasAttribute("aria-orientation")).toBe(false);
 });
 
-Deno.test("a member moved to another group belongs to that group alone", async () => {
+test("a member moved to another group belongs to that group alone", async () => {
   using a = await mounted("horizontal");
   using b = await mounted("vertical");
   b.group.append(a.second);
@@ -707,7 +708,7 @@ Deno.test("a member moved to another group belongs to that group alone", async (
   expect(a.first.style.width).toBe("36%");
 });
 
-Deno.test("a group taken out and put back with its panels lays them out again", async () => {
+test("a group taken out and put back with its panels lays them out again", async () => {
   using page = await mounted("horizontal");
   page.group.remove();
   document.body.append(page.group);
@@ -718,7 +719,7 @@ Deno.test("a group taken out and put back with its panels lays them out again", 
   expect(page.first.style.width).toBe("37%");
 });
 
-Deno.test("a handle at an end steps aside with the hidden panel beside it", async () => {
+test("a handle at an end steps aside with the hidden panel beside it", async () => {
   using page = built("horizontal");
   page.group.stackBelow = 500;
   const trailing = new CFResizableHandle();
@@ -730,7 +731,7 @@ Deno.test("a handle at an end steps aside with the hidden panel beside it", asyn
   expect(trailing.style.display).toBe("none");
 });
 
-Deno.test("a handle leaving keeps the size its author gave it", async () => {
+test("a handle leaving keeps the size its author gave it", async () => {
   using page = await mounted("vertical");
   page.handle.style.height = "12px";
   page.handle.remove();

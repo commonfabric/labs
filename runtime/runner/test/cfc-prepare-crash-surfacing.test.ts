@@ -32,7 +32,6 @@
  * (register row OW49). This file pins only detectability — the S-J seat.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -43,10 +42,23 @@ import { transactionFailureMessage } from "../src/storage/transaction-errors.ts"
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import { resolveLink } from "../src/link-resolution.ts";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
+
+// This file runs on the real clock because it drives a live memory server and
+// waits on transport edges with bounded timeouts; its retry path's catch-up
+// rides those edges, not logical time, and auto-advance would fire the retry
+// backoff as fast as it arms.
+useRealClock();
 
 const signer = await Identity.fromPassphrase("cfc prepare crash surfacing");
 const space = signer.did();
@@ -396,9 +408,9 @@ describe("wish commit-prep failure surfacing (OW50 seat S-J)", () => {
           await rt.runtime.idle();
           // Let the failure-surfacing bookkeeping transaction (spawned from a
           // commit callback, with its own bounded retries) land. This file is
-          // on the REAL clock (clock-preload.ts realClockFiles): the
-          // two-writer journey drives live cross-runtime storage transport,
-          // the class the fake clock's auto-advance mode cannot pace.
+          // on the REAL clock (`useRealClock()` above): the two-writer
+          // journey drives live cross-runtime storage transport, the class
+          // the fake clock's auto-advance mode cannot pace.
           await new Promise((resolve) => setTimeout(resolve, 200));
           await rt.runtime.idle();
           const readTx = rt.runtime.edit();

@@ -1,13 +1,14 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { CFCodeEditor } from "../components/cf-code-editor/cf-code-editor.ts";
 import { mentionIdFromCellId } from "./mention-id.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("mentionIdFromCellId strips of: and passes bare ids through", () => {
+test("mentionIdFromCellId strips of: and passes bare ids through", () => {
   assertEquals(mentionIdFromCellId("of:fid1:abc"), "fid1:abc");
   assertEquals(mentionIdFromCellId("fid1:abc"), "fid1:abc");
 });
 
-Deno.test("mentionIdFromCellId rejects computed: ids", () => {
+test("mentionIdFromCellId rejects computed: ids", () => {
   // The scheme is part of the identity; stripping it would silently embed
   // the of: sibling into persisted note content.
   assertThrows(
@@ -17,7 +18,7 @@ Deno.test("mentionIdFromCellId rejects computed: ids", () => {
   );
 });
 
-Deno.test("cf-code-editor derives mention pieceIds in the bare embed form", () => {
+test("cf-code-editor derives mention pieceIds in the bare embed form", () => {
   const proto = CFCodeEditor.prototype as unknown as {
     _getPieceId(index: number): string;
   };

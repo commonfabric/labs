@@ -7,10 +7,10 @@
  * turning on the load, and each case here puts a key on one side of it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isPerfDiagnosticWarnKey } from "../lib/perf-diagnostic-logs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isPerfDiagnosticWarnKey()", () => {
   it("returns `true` for the key a slow traversal reports under", () => {

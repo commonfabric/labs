@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { argv, cf } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A value holding everything a shell or a whitespace split would act on.
 const AWKWARD = ` it's "quoted" 🐱 $HOME\\n`;

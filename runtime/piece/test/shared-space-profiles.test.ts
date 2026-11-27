@@ -8,7 +8,6 @@
  * store, as a person's second device is.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -37,6 +36,12 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import {

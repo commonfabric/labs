@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Server } from "../v2/server.ts";
 import {
@@ -11,6 +10,12 @@ import {
   toDirtyKey,
   type TransactRequest,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const TEST_AUDIENCE = "did:key:z6Mk-memory-v2-miss-interest-audience";
 

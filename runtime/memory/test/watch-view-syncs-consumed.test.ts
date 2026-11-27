@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { WatchView } from "../v2/client.ts";
 import type { SessionSync } from "../v2.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const emptySync = (toSeq: number): SessionSync => ({
   type: "sync",

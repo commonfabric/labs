@@ -1,9 +1,9 @@
 /** Exercises request acceptance, withdrawal, and refusal without model I/O. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
 import {

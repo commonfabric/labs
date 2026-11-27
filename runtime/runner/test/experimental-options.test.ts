@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   getModernCellRepConfig,
@@ -21,6 +20,7 @@ import {
 import { ExecutorHost } from "../src/executor/host.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { Runtime } from "../src/runtime.ts";
 import {
@@ -54,6 +54,7 @@ describe("ExperimentalOptions", () => {
           computedCellIds: false,
           lazyMaterialization: false,
           readerSchemaPrecedence: false,
+          cfcCommittedSubjectCandidates: false,
         },
       });
       expect(runtime.experimental).toEqual({
@@ -61,6 +62,7 @@ describe("ExperimentalOptions", () => {
         agentBuiltin: false,
         localFold: false,
         pieceCreatorRecord: false,
+        cfcCommittedSubjectCandidates: false,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: false,
@@ -90,6 +92,7 @@ describe("ExperimentalOptions", () => {
         agentBuiltin: true,
         localFold: false,
         pieceCreatorRecord: false,
+        cfcCommittedSubjectCandidates: true,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,
@@ -117,6 +120,7 @@ describe("ExperimentalOptions", () => {
         agentBuiltin: true,
         localFold: false,
         pieceCreatorRecord: false,
+        cfcCommittedSubjectCandidates: true,
         instanceNames: false,
         contentAddressedSchemas: true,
         commitPreconditions: true,

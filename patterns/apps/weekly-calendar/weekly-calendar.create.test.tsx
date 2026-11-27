@@ -32,7 +32,7 @@ import {
   todayBadges,
   weekdayOf,
 } from "./view-walk.ts";
-import WeeklyCalendar, { addDays } from "./weekly-calendar.tsx";
+import WeeklyCalendar, { addDays } from "./main.tsx";
 
 export default pattern(() => {
   const cal = WeeklyCalendar({ events: [] });

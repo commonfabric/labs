@@ -1,9 +1,14 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { CellScope, JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";

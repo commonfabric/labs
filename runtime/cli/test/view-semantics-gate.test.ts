@@ -22,6 +22,7 @@ import {
 import type { DiffMaps } from "../lib/view/diffdoc.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import type { Document } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const CWD = Deno.cwd();
 
@@ -37,7 +38,7 @@ function nameOffsetOf(doc: Document, name: string): number {
 // createSemantics: build's own isolation, which the !program guard backstops
 //
 
-Deno.test("semantics: a healthy build returns a Program (the !program guard is a backstop)", () => {
+test("semantics: a healthy build returns a Program (the !program guard is a backstop)", () => {
   // build() runs createLanguageService + getProgram and returns a real Program,
   // so the subsequent query answers a concrete type. The `if (!program)` latch
   // exists only for a host that yields no Program, which this one never does.
@@ -54,7 +55,7 @@ const y = x;`;
 // createSemantics: the host file cache (populated once, never re-hit)
 //
 
-Deno.test("semantics: the host reads each real file once (cache populated, not re-hit)", () => {
+test("semantics: the host reads each real file once (cache populated, not re-hit)", () => {
   // Under Bundler resolution the host loads each resolved file a single time;
   // the file cache is filled on that read. The cache-hit return is a backstop
   // for resolution modes that probe the same path repeatedly.
@@ -88,7 +89,7 @@ const b = ext();`;
   }
 });
 
-Deno.test("semantics: a nearer config's import wins over the same key in a config above it", () => {
+test("semantics: a nearer config's import wins over the same key in a config above it", () => {
   // Both configs map `ext`, to modules whose function returns different types,
   // so the type the name resolves to says which config supplied the mapping.
 
@@ -131,7 +132,7 @@ const a = ext();`;
 // within()/realDir: the child resolves first, and the root only after
 //
 
-Deno.test("semantics: within() resolves a real child under a real root (realDir succeeds)", () => {
+test("semantics: within() resolves a real child under a real root (realDir succeeds)", () => {
   // realDir(root) is only reached after the child's realPathSync succeeds; the
   // child sits under the root, so the root resolves too and realDir's catch is
   // never taken. The read therefore succeeds.
@@ -150,7 +151,7 @@ const x = 1;`;
   }
 });
 
-Deno.test("semantics: a child whose realpath fails is rejected before realDir runs", () => {
+test("semantics: a child whose realpath fails is rejected before realDir runs", () => {
   // When the child itself cannot be realpath-resolved, within() throws on the
   // child read and is caught before realDir(root) is consulted — the read
   // degrades to null. (This is the path that pre-empts realDir's own catch.)
@@ -187,7 +188,7 @@ function diffMapsFor(file: string): DiffMaps {
   };
 }
 
-Deno.test("diff semantics: build succeeds over real root files, so typeAt's !prog guard is a backstop", () => {
+test("diff semantics: build succeeds over real root files, so typeAt's !prog guard is a backstop", () => {
   // The diff factory passes its containment check, build() makes a host over
   // the real root file and returns a Program. typeAt's `if (!prog) return null`
   // never triggers on the build itself; a null here comes from the offset map,
@@ -210,7 +211,7 @@ Deno.test("diff semantics: build succeeds over real root files, so typeAt's !pro
   }
 });
 
-Deno.test("diff semantics: a hostile cwd is rejected by containment before build runs", () => {
+test("diff semantics: a hostile cwd is rejected by containment before build runs", () => {
   // The diff factory filters root files through the workspace-containment check
   // first; a cwd the path helpers reject makes that check throw out of the
   // factory, so build()'s own failure arms are never the thing that fires.
@@ -232,7 +233,7 @@ Deno.test("diff semantics: a hostile cwd is rejected by containment before build
   }
 });
 
-Deno.test("diff semantics: no in-workspace root file means no service (not a failed build)", () => {
+test("diff semantics: no in-workspace root file means no service (not a failed build)", () => {
   // With every root file filtered out, the factory returns undefined up front —
   // the service is never constructed, so build()'s failure guards are not in
   // play.
@@ -249,7 +250,7 @@ Deno.test("diff semantics: no in-workspace root file means no service (not a fai
 // lazyProgram: the shared build, cache and latch
 //
 
-Deno.test("lazyProgram: caches a success and latches a failed build", () => {
+test("lazyProgram: caches a success and latches a failed build", () => {
   // lazyProgram is the shared build/cache/latch both factories use. The
   // configured host never makes it fail, so its failure isolation is exercised
   // directly: a build is cached after the first success, and a throwing or
@@ -289,7 +290,7 @@ Deno.test("lazyProgram: caches a success and latches a failed build", () => {
 // makeHost: the readReal memo
 //
 
-Deno.test("makeHost: a repeated read of the same file is served from the cache", () => {
+test("makeHost: a repeated read of the same file is served from the cache", () => {
   // makeHost's readReal memoizes real-file reads. Under the pager's module
   // resolution TypeScript reads each file once, so the cache hit never fires
   // there; reading the same path twice through the host exercises it directly.
@@ -314,7 +315,7 @@ Deno.test("makeHost: a repeated read of the same file is served from the cache",
 // signedNumericElementDefinitions: which positions name a key
 //
 
-Deno.test("signed numeric definitions reject positions that do not name a supported key", () => {
+test("signed numeric definitions reject positions that do not name a supported key", () => {
   const fileName = "/signed-numeric.ts";
   const text = `const key = 1;
 const value = { [-1](): void {} };

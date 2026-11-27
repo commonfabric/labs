@@ -2,9 +2,14 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { PatternChange, SpaceHistoryStep } from "../src/lib/runtime.ts";
 import type { Command } from "../src/views/BaseView.ts";

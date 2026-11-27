@@ -10,29 +10,30 @@ import {
   parseWorkspaceMembers,
   scan,
 } from "./check-unused-deps.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // importsAlias: the specifier shapes that count as an import
 //
 
-Deno.test("importsAlias matches a static import", () => {
+test("importsAlias matches a static import", () => {
   assert(importsAlias('import { x } from "zod";', "zod"));
 });
 
-Deno.test("importsAlias matches a type-only import", () => {
+test("importsAlias matches a type-only import", () => {
   assert(importsAlias('import type { X } from "pino";', "pino"));
 });
 
-Deno.test("importsAlias matches a re-export", () => {
+test("importsAlias matches a re-export", () => {
   assert(importsAlias('export { x } from "zod";', "zod"));
   assert(importsAlias('export * from "zod";', "zod"));
 });
 
-Deno.test("importsAlias matches a side-effect import", () => {
+test("importsAlias matches a side-effect import", () => {
   assert(importsAlias('import "ses";', "ses"));
 });
 
-Deno.test("importsAlias matches a dynamic import", () => {
+test("importsAlias matches a dynamic import", () => {
   assert(importsAlias('await import("dagre");', "dagre"));
 });
 
@@ -43,7 +44,7 @@ Deno.test("importsAlias matches a dynamic import", () => {
 // positive on ordinary code, yet leave the happy-path tests above green.
 //
 
-Deno.test("importsAlias matches an import broken across lines", () => {
+test("importsAlias matches an import broken across lines", () => {
   const source = [
     "import {",
     "  scaleBand,",
@@ -53,19 +54,19 @@ Deno.test("importsAlias matches an import broken across lines", () => {
   assert(importsAlias(source, "d3-scale"));
 });
 
-Deno.test("importsAlias matches a dynamic import with surrounding whitespace", () => {
+test("importsAlias matches a dynamic import with surrounding whitespace", () => {
   assert(importsAlias('await import(\n  "dagre",\n);', "dagre"));
 });
 
-Deno.test("importsAlias matches a require call", () => {
+test("importsAlias matches a require call", () => {
   assert(importsAlias('const x = require("left-pad");', "left-pad"));
 });
 
-Deno.test("importsAlias matches an export * as namespace", () => {
+test("importsAlias matches an export * as namespace", () => {
   assert(importsAlias('export * as z from "zod";', "zod"));
 });
 
-Deno.test("importsAlias matches an import with an import attribute", () => {
+test("importsAlias matches an import with an import attribute", () => {
   assert(
     importsAlias(
       'import ports from "@commonfabric/ports" with { type: "json" };',
@@ -74,17 +75,17 @@ Deno.test("importsAlias matches an import with an import attribute", () => {
   );
 });
 
-Deno.test("importsAlias matches @deno-types in single quotes", () => {
+test("importsAlias matches @deno-types in single quotes", () => {
   assert(importsAlias("// @deno-types='@types/leaflet'", "@types/leaflet"));
 });
 
-Deno.test("importsAlias matches @deno-types with spaces around the equals", () => {
+test("importsAlias matches @deno-types with spaces around the equals", () => {
   assert(
     importsAlias('// @deno-types = "@types/d3-scale"', "@types/d3-scale"),
   );
 });
 
-Deno.test("importsAlias matches a @deno-types companion comment", () => {
+test("importsAlias matches a @deno-types companion comment", () => {
   const source = [
     '// @deno-types="@types/d3-scale"',
     'import { scaleBand } from "d3-scale";',
@@ -100,7 +101,7 @@ Deno.test("importsAlias matches a @deno-types companion comment", () => {
 // `@types/*` alias reached through the current form would be reported unused.
 //
 
-Deno.test("importsAlias matches a @ts-types companion comment", () => {
+test("importsAlias matches a @ts-types companion comment", () => {
   const source = [
     '// @ts-types="@types/d3-scale"',
     'import { scaleBand } from "d3-scale";',
@@ -108,7 +109,7 @@ Deno.test("importsAlias matches a @ts-types companion comment", () => {
   assert(importsAlias(source, "@types/d3-scale"));
 });
 
-Deno.test("importsAlias matches @ts-types with single quotes and spaces", () => {
+test("importsAlias matches @ts-types with single quotes and spaces", () => {
   assert(importsAlias("// @ts-types = '@types/leaflet'", "@types/leaflet"));
 });
 
@@ -120,7 +121,7 @@ Deno.test("importsAlias matches @ts-types with single quotes and spaces", () => 
 // deliberate over-match, where an occurrence inside a comment counts.
 //
 
-Deno.test("importsAlias matches a subpath import of a bare alias", () => {
+test("importsAlias matches a subpath import of a bare alias", () => {
   assert(
     importsAlias(
       'import { serveDir } from "@std/http/file-server";',
@@ -129,7 +130,7 @@ Deno.test("importsAlias matches a subpath import of a bare alias", () => {
   );
 });
 
-Deno.test("importsAlias does not treat a longer alias as importing a shorter sibling by name only", () => {
+test("importsAlias does not treat a longer alias as importing a shorter sibling by name only", () => {
   // "@std/http-extras" is not "@std/http": the slash boundary in the subpath
   // rule is what separates them, so a bare "@std/http" must not match here.
 
@@ -139,22 +140,22 @@ Deno.test("importsAlias does not treat a longer alias as importing a shorter sib
   );
 });
 
-Deno.test("importsAlias matches any specifier under a slash-terminated alias", () => {
+test("importsAlias matches any specifier under a slash-terminated alias", () => {
   assert(importsAlias('import env from "@/env.ts";', "@/"));
   assert(importsAlias('import app from "@/app.ts";', "@/"));
 });
 
-Deno.test("importsAlias ignores a slash-terminated alias with nothing after it", () => {
+test("importsAlias ignores a slash-terminated alias with nothing after it", () => {
   // "@/" maps a prefix; a specifier that is only the prefix imports no module.
 
   assertEquals(importsAlias('const s = "@/";', "@/"), false);
 });
 
-Deno.test("importsAlias ignores a bare identifier that is not an import", () => {
+test("importsAlias ignores a bare identifier that is not an import", () => {
   assertEquals(importsAlias("const zod = 1; zod.parse();", "zod"), false);
 });
 
-Deno.test("importsAlias ignores a substring of a different specifier", () => {
+test("importsAlias ignores a substring of a different specifier", () => {
   // "notesEntry" contains "sentry" but imports nothing named sentry.
 
   assertEquals(
@@ -163,7 +164,7 @@ Deno.test("importsAlias ignores a substring of a different specifier", () => {
   );
 });
 
-Deno.test("importsAlias counts a commented-out import as used", () => {
+test("importsAlias counts a commented-out import as used", () => {
   // The loose matching is deliberate: an occurrence inside a comment or string
   // counts as used. That can only ever hide a dead alias, never flag a live
   // one, so the check does not misfire on a real dependency.
@@ -175,7 +176,7 @@ Deno.test("importsAlias counts a commented-out import as used", () => {
 // owningMember: longest-prefix attribution, including nesting
 //
 
-Deno.test("owningMember attributes a file to its member", () => {
+test("owningMember attributes a file to its member", () => {
   const members = ["runtime/memory", "runtime/runner"];
   assertEquals(
     owningMember("runtime/memory/interface.ts", members),
@@ -183,7 +184,7 @@ Deno.test("owningMember attributes a file to its member", () => {
   );
 });
 
-Deno.test("owningMember prefers the nested member over its container", () => {
+test("owningMember prefers the nested member over its container", () => {
   const members = ["patterns", "patterns/nested"];
   assertEquals(
     owningMember("patterns/nested/mod.ts", members),
@@ -195,11 +196,11 @@ Deno.test("owningMember prefers the nested member over its container", () => {
   );
 });
 
-Deno.test("owningMember returns undefined for a file under no member", () => {
+test("owningMember returns undefined for a file under no member", () => {
   assertEquals(owningMember("tasks/check.ts", ["runtime/memory"]), undefined);
 });
 
-Deno.test("owningMember does not match a member that is only a path-segment prefix", () => {
+test("owningMember does not match a member that is only a path-segment prefix", () => {
   // "runtime/mem" must not own a file under "runtime/memory".
 
   assertEquals(
@@ -212,7 +213,7 @@ Deno.test("owningMember does not match a member that is only a path-segment pref
 // Parsing the config files
 //
 
-Deno.test("parseImportMap returns the imports block", () => {
+test("parseImportMap returns the imports block", () => {
   const text = `{
     // a comment
     "imports": { "zod": "npm:zod@^3", "ses": "npm:ses@^1" }
@@ -223,16 +224,16 @@ Deno.test("parseImportMap returns the imports block", () => {
   });
 });
 
-Deno.test("parseImportMap tolerates a missing imports block", () => {
+test("parseImportMap tolerates a missing imports block", () => {
   assertEquals(parseImportMap(`{ "name": "x" }`), {});
 });
 
-Deno.test("parseWorkspaceMembers normalizes leading ./ and trailing /", () => {
+test("parseWorkspaceMembers normalizes leading ./ and trailing /", () => {
   const text = `{ "workspace": ["./runtime/a", "runtime/b/"] }`;
   assertEquals(parseWorkspaceMembers(text), ["runtime/a", "runtime/b"]);
 });
 
-Deno.test("parseWorkspaceMembers returns empty when there is no workspace array", () => {
+test("parseWorkspaceMembers returns empty when there is no workspace array", () => {
   assertEquals(parseWorkspaceMembers(`{ "name": "x" }`), []);
 });
 
@@ -243,7 +244,7 @@ Deno.test("parseWorkspaceMembers returns empty when there is no workspace array"
 // the `git` binary is not there to run.
 //
 
-Deno.test("runs as a command-line program against the repository", async () => {
+test("runs as a command-line program against the repository", async () => {
   // Exercises the module's command-line entry point (the import.meta.main
   // guard). It runs against the real repository, which the "no unused import
   // map entries" test asserts is clean, so the check prints success and exits 0.
@@ -262,7 +263,7 @@ Deno.test("runs as a command-line program against the repository", async () => {
   );
 });
 
-Deno.test("gitTrackedFiles returns null when git is not available", async () => {
+test("gitTrackedFiles returns null when git is not available", async () => {
   // A missing git binary makes Deno.Command throw; the scan falls back to a
   // filesystem walk rather than failing.
 
@@ -276,7 +277,7 @@ Deno.test("gitTrackedFiles returns null when git is not available", async () => 
 // scan over the real repository tree
 //
 
-Deno.test("no unused import map entries in the repository", async () => {
+test("no unused import map entries in the repository", async () => {
   const { unused } = await scan();
   assertEquals(
     unused,
@@ -287,7 +288,7 @@ Deno.test("no unused import map entries in the repository", async () => {
   );
 });
 
-Deno.test("the unused-import-map ALLOWLIST has no stale entries", async () => {
+test("the unused-import-map ALLOWLIST has no stale entries", async () => {
   const { allowlisted } = await scan();
   const live = new Set(
     allowlisted.map((entry) => `${entry.config}\t${entry.alias}`),
@@ -357,7 +358,7 @@ async function captureConsole(
   return { out: out.join("\n"), err: err.join("\n") };
 }
 
-Deno.test("main returns 0 and reports success on a clean tree", async () => {
+test("main returns 0 and reports success on a clean tree", async () => {
   const root = await fixtureTree(
     { zod: "npm:zod@^3" },
     'import { z } from "zod";\n',
@@ -374,7 +375,7 @@ Deno.test("main returns 0 and reports success on a clean tree", async () => {
   }
 });
 
-Deno.test("main returns 1 and names the offender on an unused entry", async () => {
+test("main returns 1 and names the offender on an unused entry", async () => {
   const root = await fixtureTree(
     { zod: "npm:zod@^3", "left-pad": "npm:left-pad@^1" },
     'import { z } from "zod";\n',
@@ -392,7 +393,7 @@ Deno.test("main returns 1 and names the offender on an unused entry", async () =
   }
 });
 
-Deno.test("main checks a member whose config is deno.json", async () => {
+test("main checks a member whose config is deno.json", async () => {
   // Deno accepts deno.json as well as deno.jsonc for a member. An unused entry
   // in a deno.json member must still be found, and reported at its real path.
 
@@ -421,7 +422,7 @@ Deno.test("main checks a member whose config is deno.json", async () => {
   }
 });
 
-Deno.test("main reads a deno.json root's own import map", async () => {
+test("main reads a deno.json root's own import map", async () => {
   // The root itself may be deno.json. An unused alias in its import map must be
   // reported at deno.json, which happens only if the root deno.json is read at
   // all. With deno.json support absent the root goes unread, no entries are
@@ -462,7 +463,7 @@ Deno.test("main reads a deno.json root's own import map", async () => {
   }
 });
 
-Deno.test("main flags a member alias imported only by another member", async () => {
+test("main flags a member alias imported only by another member", async () => {
   // The alias is imported, but under a different member, so the declaring
   // member's entry is still unused: its own files never reach it.
 
@@ -504,7 +505,7 @@ Deno.test("main flags a member alias imported only by another member", async () 
   }
 });
 
-Deno.test("main counts an importer under an output-named directory", async () => {
+test("main counts an importer under an output-named directory", async () => {
   // A file under a directory named `build` is authored source, not generated
   // output: the scan must read it, or its imports' aliases look unused.
 
@@ -535,7 +536,7 @@ Deno.test("main counts an importer under an output-named directory", async () =>
   }
 });
 
-Deno.test("main tolerates a workspace member with no config file", async () => {
+test("main tolerates a workspace member with no config file", async () => {
   // A directory listed as a member but carrying neither deno.jsonc nor
   // deno.json contributes no entries; collecting from it must not fail.
 
@@ -570,7 +571,7 @@ Deno.test("main tolerates a workspace member with no config file", async () => {
   }
 });
 
-Deno.test("main skips a tracked file missing from the working tree", async () => {
+test("main skips a tracked file missing from the working tree", async () => {
   // In a real git tree, git may list a file the working tree no longer holds.
   // Reading it fails, and the scan must skip it rather than throw.
 
@@ -608,7 +609,7 @@ Deno.test("main skips a tracked file missing from the working tree", async () =>
   }
 });
 
-Deno.test("main treats a root alias as used when any member imports it", async () => {
+test("main treats a root alias as used when any member imports it", async () => {
   const root = await Deno.makeTempDir({ prefix: "check-unused-deps-" });
   try {
     await Deno.writeTextFile(

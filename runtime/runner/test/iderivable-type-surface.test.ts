@@ -5,9 +5,9 @@
  * stop exposing typed reactive array helpers.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell, OpaqueCell, Reactive } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 interface Item {
   label: string;

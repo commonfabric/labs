@@ -17,7 +17,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ValidationError } from "@cliffy/command";
 
@@ -39,6 +38,7 @@ import {
   deferSkewNoteUntilFailureExit,
   resetDeferredSkewNoteForTest,
 } from "../lib/version-check.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
 const PIECE = "fid1:call-from-command-piece";

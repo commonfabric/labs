@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 export const callCenterScheduleScenario: PatternIntegrationScenario = {
   name: "call center coverage gaps close and reopen across slots",

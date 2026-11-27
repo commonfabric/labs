@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { aggregate, aggregateNode } from "../src/builtins/aggregate.ts";
 import { useCancelGroup } from "../src/cancel.ts";

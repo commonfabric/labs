@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { newPieceFromCommand, piece } from "../commands/piece.ts";
 import { newPiece } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CONFIG = {
   apiUrl: "https://cf.dev",

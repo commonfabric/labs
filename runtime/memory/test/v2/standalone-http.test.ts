@@ -1,9 +1,9 @@
 /** Tests what the standalone memory host answers to ordinary HTTP requests. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { StandaloneMemoryServer } from "../../v2/standalone.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("standalone memory HTTP", () => {
   it("reports itself up on the health route", async () => {

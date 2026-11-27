@@ -34,6 +34,7 @@ import {
 } from "./contracts/run-manifest.ts";
 import type {
   HarnessAllowedSkillScript,
+  HarnessReviewedSkills,
   HarnessSkillScriptExecutionTarget,
   HarnessSkillsRootRecord,
 } from "./contracts/skill.ts";
@@ -253,6 +254,14 @@ interface HarnessCommonConfig {
   allowSkillScripts?: boolean;
 
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
+
+  /**
+   * The skill bundles this run accepts as reviewed, with the verifiers it
+   * accepts them from. A child handed an acquired skill that one of them
+   * fully covers keeps its parent's prompt-slot binding instead of running
+   * as `quote` (`skills/reviewed-skills.ts`). Absent, no skill is reviewed.
+   */
+  reviewedSkills?: HarnessReviewedSkills;
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
 
@@ -334,6 +343,7 @@ export interface ResolveHarnessConfigOptions {
   docsCorpus?: HarnessDocsCorpusRecord;
   allowSkillScripts?: boolean;
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
+  reviewedSkills?: HarnessReviewedSkills;
   skillScriptExecutionTarget?: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
   handleValueOrigins?: readonly string[];
@@ -805,6 +815,9 @@ export const resolveHarnessConfig = (
     ...(options.allowSkillScripts === true ? { allowSkillScripts: true } : {}),
     ...(options.allowedSkillScripts !== undefined
       ? { allowedSkillScripts: options.allowedSkillScripts }
+      : {}),
+    ...(options.reviewedSkills !== undefined
+      ? { reviewedSkills: options.reviewedSkills }
       : {}),
     skillScriptExecutionTarget: options.skillScriptExecutionTarget ?? "sandbox",
     ...(options.browserAccess !== undefined

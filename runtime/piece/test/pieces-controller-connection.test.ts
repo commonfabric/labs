@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
@@ -10,6 +9,12 @@ import { Runtime } from "@commonfabric/runner";
 import { DEPLOYMENT_RESPONSE_BOUND_MS } from "@commonfabric/runner/deployment-meta";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { StorageManager as EmulatedStorage } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 

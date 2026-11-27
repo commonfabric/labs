@@ -10,6 +10,7 @@ import {
 import { Identity, IdentityCreateConfig } from "@commonfabric/identity";
 import { env } from "@commonfabric/integration";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 const { API_URL } = env;
 
 // Create test identity
@@ -20,7 +21,7 @@ const identity = await Identity.fromPassphrase("test operator", keyConfig);
 
 console.log("\n=== TEST: Simple object persistence ===");
 
-async function test() {
+async function runScenario() {
   // First runtime - save data
   const runtime1 = new Runtime({
     apiUrl: new URL(API_URL),
@@ -96,7 +97,7 @@ async function test() {
 
 async function runTest() {
   for (let i: number = 1; i <= 20; i++) {
-    const [result1, result2] = await test();
+    const [result1, result2] = await runScenario();
     if (!deepEqual(result1, result2)) {
       console.error("Mismatched results for iteration", i, result1, result2);
       throw new Error(`Mismatched results for iteration ${i}`);
@@ -109,7 +110,7 @@ async function runTest() {
   console.log("\nDone");
 }
 
-Deno.test({
+test({
   name: "basic persistence test",
   fn: runTest,
   sanitizeResources: false,

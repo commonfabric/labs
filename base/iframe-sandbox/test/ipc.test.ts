@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   BRIDGE_PROTOCOL,
@@ -14,6 +13,7 @@ import {
   isGuestPortRequest,
   isIPCGuestMessage,
 } from "../src/ipc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ERROR: GuestError = {
   description: "description",

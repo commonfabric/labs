@@ -1,9 +1,14 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import type { Server } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { toMemorySpaceAddress } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";

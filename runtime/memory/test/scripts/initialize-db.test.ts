@@ -1,11 +1,11 @@
 import { fromFileUrl, join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   readDenoConfig,
   runDenoCommandWithTemporaryLock,
 } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { checkSqliteLibrary } from "../../scripts/initialize-db.ts";
 

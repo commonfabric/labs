@@ -20,6 +20,7 @@ import {
   ProtocolError,
 } from "../v2/engine.ts";
 import type { ClientCommit } from "../v2.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const createEngine = async (): Promise<{
   engine: Engine;
@@ -48,7 +49,7 @@ const storedClasses = (path: string): { seq: number; class: string }[] => {
   }
 };
 
-Deno.test("commit class: stamped 'authored' for the transact-shaped path in every arm", async () => {
+test("commit class: stamped 'authored' for the transact-shaped path in every arm", async () => {
   const { engine, path } = await createEngine();
   try {
     applyCommit(engine, {
@@ -73,7 +74,7 @@ Deno.test("commit class: stamped 'authored' for the transact-shaped path in ever
   ]);
 });
 
-Deno.test("commit class: the server's own path stamps 'system'", async () => {
+test("commit class: the server's own path stamps 'system'", async () => {
   const { engine, path } = await createEngine();
   try {
     applyCommit(engine, {
@@ -87,7 +88,7 @@ Deno.test("commit class: the server's own path stamps 'system'", async () => {
   assertEquals(storedClasses(path), [{ seq: 1, class: "system" }]);
 });
 
-Deno.test("commit class: a class smuggled into the client payload is inert", async () => {
+test("commit class: a class smuggled into the client payload is inert", async () => {
   const { engine, path } = await createEngine();
   try {
     // The wire cannot express a commit class: `ClientCommit` has no such
@@ -111,7 +112,7 @@ Deno.test("commit class: a class smuggled into the client payload is inert", asy
   assertEquals(storedClasses(path), [{ seq: 1, class: "authored" }]);
 });
 
-Deno.test("commit class: 'derived' is unclaimable off the flag", async () => {
+test("commit class: 'derived' is unclaimable off the flag", async () => {
   // The lease admission check exists from stage B on, but it is enforced
   // only under EXPERIMENTAL_SERVER_EXECUTION — and off the flag nothing may
   // claim the class at all (protocol.md §1). The ON-arm admission surface is
@@ -134,7 +135,7 @@ Deno.test("commit class: 'derived' is unclaimable off the flag", async () => {
   }
 });
 
-Deno.test("commit class: a pre-class store migrates, backfilling 'authored'", async () => {
+test("commit class: a pre-class store migrates, backfilling 'authored'", async () => {
   const { engine, path } = await createEngine();
   try {
     applyCommit(engine, {
@@ -186,7 +187,7 @@ Deno.test("commit class: a pre-class store migrates, backfilling 'authored'", as
 // mid-transaction would serve that phantom class forever.
 //
 
-Deno.test("commitClassOfSeq: seq 0, negative, and unknown seqs answer undefined (fail-closed substrate of the at-floor witness)", async () => {
+test("commitClassOfSeq: seq 0, negative, and unknown seqs answer undefined (fail-closed substrate of the at-floor witness)", async () => {
   const { engine } = await createEngine();
   try {
     assertEquals(commitClassOfSeq(engine, 0), undefined);
@@ -215,7 +216,7 @@ Deno.test("commitClassOfSeq: seq 0, negative, and unknown seqs answer undefined 
   }
 });
 
-Deno.test("commitClassOfSeq: a mid-transaction read is served but never memoized — a rolled-back seq re-minted under another class answers the new class, not the phantom", async () => {
+test("commitClassOfSeq: a mid-transaction read is served but never memoized — a rolled-back seq re-minted under another class answers the new class, not the phantom", async () => {
   const { engine } = await createEngine();
   try {
     applyCommit(engine, {

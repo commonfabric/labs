@@ -1,6 +1,7 @@
 import { assert, assertAlmostEquals, assertEquals } from "@std/assert";
 import "./index.ts";
 import "../cf-screen/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 type UpdatingElement = HTMLElement & {
   updateComplete: Promise<unknown>;
@@ -17,7 +18,7 @@ async function settleLayout(root: ParentNode): Promise<void> {
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 }
 
-Deno.test("cf-tab-bar remains fixed when used standalone", async () => {
+test("cf-tab-bar remains fixed when used standalone", async () => {
   const tabBar = document.createElement("cf-tab-bar");
   tabBar.innerHTML = `
     <cf-tab-bar-item value="home" label="Home"></cf-tab-bar-item>
@@ -33,7 +34,7 @@ Deno.test("cf-tab-bar remains fixed when used standalone", async () => {
   }
 });
 
-Deno.test("cf-screen reserves space for footer-slotted inset cf-tab-bar", async () => {
+test("cf-screen reserves space for footer-slotted inset cf-tab-bar", async () => {
   const fixture = document.createElement("div");
   fixture.style.cssText = [
     "position: fixed",

@@ -24,11 +24,10 @@ import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
 import {
   type Environment,
   FragmentWriter,
-  preloadArgument,
-  readJUnit,
-  readNameMaps,
+  readResults,
   RECORDS_DIR_VARIABLE,
   recordsDir,
+  resultsFiles,
 } from "@commonfabric/test-support/records";
 import {
   pinShuffleSeed,
@@ -425,9 +424,8 @@ export async function precompilePatternTests(
 }
 
 /**
- * Find and run all .test.tsx pattern tests via `cf test`, write a JUnit
- * report of each file's timing into `junitDir`, and return each file's
- * result. A failing file's output is printed, and is the message its
+ * Find and run all .test.tsx pattern tests via `cf test`, and return each
+ * file's result. A failing file's output is printed, and is the message its
  * result carries.
  *
  * The files run one at a time, in the order the shuffle seed puts them
@@ -435,7 +433,7 @@ export async function precompilePatternTests(
  * itself, which is what test selection charges a lane that holds it.
  */
 async function runPatternTests(
-  { rootDir, junitDir, filter, only, seed, host }: PackageRun,
+  { rootDir, filter, only, seed, host }: PackageRun,
 ): Promise<TestResult[]> {
   const env = hostEnvironment(host);
   const cfCmd = getCfCommand(rootDir, env);
@@ -462,8 +460,6 @@ async function runPatternTests(
     );
   }
   const results: TestResult[] = [];
-  const testTimings: { file: string; durationMs: number; passed: boolean }[] =
-    [];
 
   // The orchestrator is the one producer of pattern-kind records for this
   // run: it appends a record per file from its own wall clock, and it
@@ -499,12 +495,6 @@ async function runPatternTests(
       result = { success: false, code: 127, stderr: String(error) };
     }
     const durationMs = performance.now() - startMs;
-
-    testTimings.push({
-      file: testFile,
-      durationMs,
-      passed: result.success,
-    });
     const record = {
       line: "record" as const,
       test: { k: "pattern", s: "patterns", n: testFile },
@@ -532,52 +522,7 @@ async function runPatternTests(
     });
   }
   recordsFragment?.close();
-
-  await Deno.mkdir(junitDir, { recursive: true });
-  const junitPath = path.join(junitDir, "pattern-unit-tests.xml");
-  await Deno.writeTextFile(junitPath, buildPatternTestJUnit(testTimings));
   return results;
-}
-
-/** Build a JUnit XML document from per-test pattern test timings. */
-function buildPatternTestJUnit(
-  timings: { file: string; durationMs: number; passed: boolean }[],
-): string {
-  const escapeXml = (s: string) =>
-    s
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;");
-
-  const totalTime = timings.reduce((s, t) => s + t.durationMs, 0) / 1000;
-  const failures = timings.filter((t) => !t.passed).length;
-
-  const lines = [
-    `<?xml version="1.0" encoding="UTF-8"?>`,
-    `<testsuites>`,
-    `<testsuite name="pattern-unit-tests" tests="${timings.length}" failures="${failures}" time="${
-      totalTime.toFixed(3)
-    }">`,
-  ];
-
-  for (const t of timings) {
-    const timeSec = (t.durationMs / 1000).toFixed(3);
-    lines.push(
-      `  <testcase name="${escapeXml(t.file)}" time="${timeSec}"${
-        t.passed ? " />" : ">"
-      }`,
-    );
-    if (!t.passed) {
-      lines.push(`    <failure message="Test failed" />`);
-      lines.push(`  </testcase>`);
-    }
-  }
-
-  lines.push(`</testsuite>`);
-  lines.push(`</testsuites>`);
-
-  return lines.join("\n");
 }
 
 /**
@@ -641,15 +586,12 @@ export async function findIntegrationTestFiles(
  * matching files are passed as explicit paths under `relDir`. Deno does not
  * filter explicitly-passed paths through a package `test` config's `exclude`,
  * so they run even where that config drops the `integration/` directory.
- * The files run in the order `seed` shuffles them into. The run writes its
- * JUnit report into `junitDir`, and carries the registration preload beside
- * it.
+ * The files run in the order `seed` shuffles them into.
  */
 export function filteredTestCommand(
   pkg: string,
   relDir: string,
   testFiles: string[],
-  junitDir: string,
   seed: number,
 ): string[] {
   const args = ["deno", "test", "--no-check", "-A", shuffleFlag(seed)];
@@ -659,9 +601,6 @@ export function filteredTestCommand(
   } else if (pkg === "generated-patterns") {
     args.push("--trace-leaks", "--parallel");
   }
-
-  args.push(`--junit-path=${path.join(junitDir, `${pkg}.xml`)}`);
-  args.push(preloadArgument());
 
   for (const name of testFiles) {
     args.push(`./${relDir}/${name}`);
@@ -679,15 +618,13 @@ export function filteredTestCommand(
  * `integration/` directory, leaving no modules to run. Explicit file paths skip
  * that filtering, so the files are enumerated here instead of passing a glob.
  * Returns a failing result, without running anything, when no file matches.
- * The report goes into `junitDir`, an absolute path the caller has made. The
- * files run in the order `seed` shuffles them into.
+ * The files run in the order `seed` shuffles them into.
  */
 export async function runFilteredIntegration(
   pkg: string,
   packageDir: string,
   env: Record<string, string>,
   filter: string,
-  junitDir: string,
   seed: number,
   run: typeof runCommand,
 ): Promise<{ success: boolean; code: number }> {
@@ -704,7 +641,7 @@ export async function runFilteredIntegration(
     return { success: false, code: 1 };
   }
 
-  const command = filteredTestCommand(pkg, relDir, testFiles, junitDir, seed);
+  const command = filteredTestCommand(pkg, relDir, testFiles, seed);
   return await run(command, {
     cwd: packageDir,
     env,
@@ -717,7 +654,7 @@ export interface PackageOutcome {
   success: boolean;
   code: number;
 
-  /** The tests its JUnit report, or the pattern runner, reported. */
+  /** The tests its results, or the pattern runner, reported. */
   tests: TestResult[];
 }
 
@@ -745,10 +682,18 @@ export interface PackageRun {
   rootDir: string;
 
   /**
-   * The directory every `deno test` writes its JUnit report into, absolute,
-   * since each runs in its own package's directory.
+   * A directory of the run's own, absolute, which a package's tests write
+   * their results into where the run has no spool.
    */
-  junitDir: string;
+  scratch: string;
+
+  /**
+   * Whether this run owns its spool, and so turns what a package's tests
+   * wrote into records there. A run that joined another's spool leaves the
+   * results for that run, which reads them under the kind and scope it
+   * knows them by.
+   */
+  records?: boolean;
 
   /** The seed the run shuffles its test files by. */
   seed: number;
@@ -763,14 +708,13 @@ export interface PackageRun {
 }
 
 /**
- * Runs one package's integration tests, with every `deno test` it starts
- * writing its JUnit report into `junitDir`, and returns what they came to.
+ * Runs one package's integration tests, and returns what they came to.
  */
 export async function runPackageIntegration(
   pkg: string,
   run: PackageRun,
 ): Promise<PackageOutcome> {
-  const { apiUrl, rootDir, junitDir, filter, host } = run;
+  const { apiUrl, rootDir, host } = run;
   console.log(`\n${"=".repeat(60)}`);
   console.log(`Running integration tests for: ${pkg}`);
   console.log(`${"=".repeat(60)}`);
@@ -799,25 +743,12 @@ export async function runPackageIntegration(
       : {}),
   };
 
-  // The JUnit path is resolved against the orchestrator's working
-  // directory: the package task runs with the package directory as its
-  // own. A report left by an earlier run is removed, so that a package
-  // writing none is not read as having written it. The preload travels
-  // with the JUnit path: the report names each case by its describe chain,
-  // and where the run records, the map the preload leaves in the spool is
-  // what turns that chain back into a file. Flags already in the
-  // environment are passed on ahead of them, so that the report goes where
-  // the summary reads it.
-  await Deno.mkdir(junitDir, { recursive: true });
-  const junitPath = path.join(junitDir, `${pkg}.xml`);
-  await Deno.remove(junitPath).catch((error) => {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  });
-  env.INTEGRATION_TEST_FLAGS = [
-    ...(host.env.get("INTEGRATION_TEST_FLAGS") ?? "").split(/\s+/),
-    `--junit-path=${junitPath}`,
-    preloadArgument(),
-  ].join(" ").trim();
+  // The package's tests write their results into the run's spool, where the
+  // run's owner reads them, or where the run has none into its scratch
+  // directory. The summary reads the results files that were not there before.
+  const spool = recordsDir(hostEnvironment(host)) ?? run.scratch;
+  const earlier = new Set(await resultsFiles(spool));
+  env[RECORDS_DIR_VARIABLE] = spool;
 
   // Add API_URL for packages that need it
   if (ALL_PACKAGES_WITH_SERVER.includes(pkg)) {
@@ -837,12 +768,47 @@ export async function runPackageIntegration(
     }
   }
 
-  let result: { success: boolean; code: number };
+  const result = await runPackageCommand(pkg, packageDir, env, run);
+  if (result.success) {
+    console.log(`✅ ${pkg} integration tests passed`);
+  } else {
+    console.error(
+      `❌ ${pkg} integration tests failed (exit code: ${result.code})`,
+    );
+  }
+  const report = await readResults(spool, {
+    kind: "integration",
+    scope: packageDirName,
+    ignoring: earlier,
+  });
+  for (const warning of report.warnings) {
+    console.warn(`test records: ${warning}`);
+  }
+  if (run.records === true) {
+    const fragment = FragmentWriter.openForRun(hostEnvironment(host));
+    for (const record of report.records) fragment?.append(record);
+    fragment?.close();
+  }
+  const tests = testResults(
+    report.records,
+    report.failures,
+    (record) => integrationRerun(pkg, record.file),
+  );
+  return { success: result.success, code: result.code, tests };
+}
 
+/** Runs the command that runs `pkg`'s integration tests in `packageDir`. */
+async function runPackageCommand(
+  pkg: string,
+  packageDir: string,
+  env: Record<string, string>,
+  run: PackageRun,
+): Promise<{ success: boolean; code: number }> {
+  const { filter, host } = run;
   if (pkg === "cli") {
     // CLI uses a special shell script
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
-    result = await host.run(
+    return await host.run(
       ["bash", "./integration/integration.sh"],
       { cwd: packageDir, env, inheritStdio: true },
     );
@@ -851,67 +817,33 @@ export async function runPackageIntegration(
     // locally because it depends on platform-specific FUSE setup.
     env.CF_CLI_INTEGRATION_USE_LOCAL = "1";
     env.FUSE_DEEP_ENTITY_PROBE = host.env.get("FUSE_DEEP_ENTITY_PROBE") ?? "0";
-    result = await host.run(
+    return await host.run(
       ["bash", "./integration/fuse-exec.sh"],
       { cwd: packageDir, env, inheritStdio: true },
     );
   } else if (pkg === "patterns-reload") {
-    result = await host.run(["deno", "task", "integration:reload"], {
+    return await host.run(["deno", "task", "integration:reload"], {
       cwd: packageDir,
       env,
       inheritStdio: true,
     });
   } else if (filter) {
-    result = await runFilteredIntegration(
+    return await runFilteredIntegration(
       pkg,
       packageDir,
       env,
       filter,
-      junitDir,
       run.seed,
       host.run,
     );
   } else {
     // Run the standard integration task
-    result = await host.run(["deno", "task", "integration"], {
+    return await host.run(["deno", "task", "integration"], {
       cwd: packageDir,
       env,
       inheritStdio: true,
     });
   }
-
-  if (result.success) {
-    console.log(`✅ ${pkg} integration tests passed`);
-  } else {
-    console.error(
-      `❌ ${pkg} integration tests failed (exit code: ${result.code})`,
-    );
-  }
-
-  let tests: TestResult[] = [];
-  try {
-    const spool = recordsDir(hostEnvironment(host));
-    const prefix = packageDirNamed(rootDir, packageDirName);
-    const report = readJUnit(await Deno.readTextFile(junitPath), {
-      kind: "integration",
-      scope: pkg,
-      filePrefix: prefix,
-      fileByName: spool === undefined
-        ? new Map()
-        : await readNameMaps(spool, { ranIn: prefix }),
-    });
-    tests = testResults(
-      report.records,
-      report.failures,
-      (record) => integrationRerun(pkg, record.file),
-    );
-  } catch (error) {
-    // A package whose command writes no report has no tests to name.
-    if (!(error instanceof Deno.errors.NotFound)) {
-      console.warn(`test summary: reading ${junitPath} failed: ${error}`);
-    }
-  }
-  return { success: result.success, code: result.code, tests };
 }
 
 function printUsage(): void {
@@ -926,8 +858,6 @@ Options:
   --port-offset=N   Use port offset N (100-1000). Servers are left running
                     after tests complete. If not set, picks a random offset
                     and cleans up servers after tests.
-  --junit-dir=DIR   Write JUnit XML results per package to DIR (e.g.,
-                    --junit-dir=test-results creates test-results/<package>.xml).
   --help, -h        Show this help message.
 
 Arguments:
@@ -1027,25 +957,29 @@ async function integrate(
   // the interesting ones; a run that gets as far as its summary prints that
   // first. A signal ends the process without shipping them.
   try {
-    return await runRecorded(args, seed, host, env);
+    return await runRecorded(args, seed, host, env, recording.mode === "own");
   } finally {
     await host.finishRecording(recording);
   }
 }
 
-/** Helper for `integrate()`, which runs everything after recording starts. */
+/**
+ * Helper for `integrate()`, which runs everything after recording starts.
+ * `owns` says whether this run owns its spool, and so records its packages'
+ * results itself rather than leaving them for the run that does.
+ */
 async function runRecorded(
   args: readonly string[],
   seed: number,
   host: IntegrationHost,
   env: Environment,
+  owns: boolean,
 ): Promise<number> {
   // Relative paths on the command line name paths in the working directory.
   const rootDir = host.cwd();
 
   // Parse flags
   let cliPortOffset: number | undefined;
-  let junitDir: string | undefined;
   let onlyFilesPath: string | undefined;
   const positionalArgs: string[] = [];
 
@@ -1053,8 +987,6 @@ async function runRecorded(
     if (arg.startsWith("--port-offset=")) {
       cliPortOffset = parsePortOffset(arg.split("=")[1], "--port-offset");
       if (cliPortOffset === undefined) return 1;
-    } else if (arg.startsWith("--junit-dir=")) {
-      junitDir = path.resolve(rootDir, arg.slice("--junit-dir=".length));
     } else if (arg.startsWith("--files=")) {
       // The file naming the pattern tests to run, one path per line. The
       // list arrives in a file rather than on the command line because a
@@ -1128,16 +1060,15 @@ async function runRecorded(
   let ownsServers = false;
   let serverStarted = false;
   let cleanedUp = false;
-  // Every package writes a JUnit report, which is what the summary is
-  // read from: into the directory named, or into one of this run's own
-  // that it removes when it ends.
-  let ownJunitDir: string | undefined;
+  // The directory of the run's own that `PackageRun.scratch` names, which it
+  // removes when it ends.
+  let scratch: string | undefined;
 
   const cleanup = async (): Promise<void> => {
     if (cleanedUp) return;
     cleanedUp = true;
-    if (ownJunitDir !== undefined) {
-      await Deno.remove(ownJunitDir, { recursive: true });
+    if (scratch !== undefined) {
+      await Deno.remove(scratch, { recursive: true });
     }
     if (ownsServers) {
       console.log("\nCleaning up servers...");
@@ -1200,10 +1131,7 @@ async function runRecorded(
   const unreported: string[] = [];
   const notes: string[] = [];
   try {
-    const reportDir = junitDir ??
-      (ownJunitDir = await Deno.makeTempDir({
-        prefix: "deno-task-integration-",
-      }));
+    scratch = await Deno.makeTempDir({ prefix: "deno-task-integration-" });
     if (needsServer && !await startNeededServers()) {
       notes.push("The servers did not start, so no test ran.");
     } else {
@@ -1216,7 +1144,8 @@ async function runRecorded(
         const outcome = await runPackageIntegration(pkg, {
           apiUrl,
           rootDir,
-          junitDir: reportDir,
+          scratch,
+          records: owns,
           seed,
           host,
           filter: nameFilter,

@@ -9,13 +9,13 @@
 import { mount } from "../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFButton } from "./cf-button/index.ts";
 import { CFCheckbox } from "./cf-checkbox/index.ts";
 import { CFRadio } from "./cf-radio/index.ts";
 import { CFRadioGroup } from "./cf-radio-group/index.ts";
 import { CFSwitch } from "./cf-switch/index.ts";
 import { CFToggle } from "./cf-toggle/index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 type HostControl = HTMLElement & {
   disabled: boolean;

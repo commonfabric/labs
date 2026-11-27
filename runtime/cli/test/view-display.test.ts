@@ -16,6 +16,7 @@ import {
 } from "../lib/view/display.ts";
 import type { Line } from "../lib/view/model.ts";
 import { graphemes } from "../lib/view/width.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A single-span line carrying `text` verbatim (control codes and all). */
 function ln(text: string): Line {
@@ -27,7 +28,7 @@ function glyphs(text: string, mode: DisplayMode): string {
   return displayLine(ln(text), mode).map((c) => c.ch).join("");
 }
 
-Deno.test("displayWidth: matches the rendered cell count", () => {
+test("displayWidth: matches the rendered cell count", () => {
   const samples = [
     "",
     "plain ASCII",
@@ -68,7 +69,7 @@ Deno.test("displayWidth: matches the rendered cell count", () => {
 // mode cycle & labels
 //
 
-Deno.test("DISPLAY_MODES: ansi is first, and every mode has a label", () => {
+test("DISPLAY_MODES: ansi is first, and every mode has a label", () => {
   assertEquals(DISPLAY_MODES[0], "ansi");
   assertEquals(DISPLAY_MODES.length, 3);
   assertEquals(displayModeLabel("pictures"), "control pictures");
@@ -80,7 +81,7 @@ Deno.test("DISPLAY_MODES: ansi is first, and every mode has a label", () => {
 // pictures mode
 //
 
-Deno.test("pictures: control codes become Control Pictures glyphs, one column each", () => {
+test("pictures: control codes become Control Pictures glyphs, one column each", () => {
   // U+000B (vertical tab) → ␋ (U+240B), tab → ␉, CR → ␍, ESC → ␛.
   assertEquals(glyphs("a\x0bb", "pictures"), "a␋b");
   assertEquals(glyphs("a\tb", "pictures"), "a␉b");
@@ -88,14 +89,14 @@ Deno.test("pictures: control codes become Control Pictures glyphs, one column ea
   assertEquals(glyphs("a\x1bb", "pictures"), "a␛b");
 });
 
-Deno.test("pictures: printable text is untouched and maps 1:1 to columns", () => {
+test("pictures: printable text is untouched and maps 1:1 to columns", () => {
   const cells = displayLine(ln("héllo"), "pictures");
   assertEquals(cells.map((c) => c.ch).join(""), "héllo");
   // Every source column maps to exactly one display column at the same index.
   cells.forEach((c, i) => assertEquals(c.col, i));
 });
 
-Deno.test("pictures: a wide character takes two cells, the second empty, both standing for its source", () => {
+test("pictures: a wide character takes two cells, the second empty, both standing for its source", () => {
   const cells = displayLine(ln("a漢b"), "pictures");
 
   assertEquals(
@@ -105,7 +106,7 @@ Deno.test("pictures: a wide character takes two cells, the second empty, both st
   assertEquals(displayWidth(ln("a漢b"), "pictures"), 4);
 });
 
-Deno.test("pictures: a letter and its combining marks, and an emoji of several code points, each share one cell", () => {
+test("pictures: a letter and its combining marks, and an emoji of several code points, each share one cell", () => {
   // A skin tone modifier makes an emoji of two code points.
   const cells = displayLine(ln("e\u0301\u0302x👍🏽"), "pictures");
 
@@ -115,18 +116,18 @@ Deno.test("pictures: a letter and its combining marks, and an emoji of several c
   );
 });
 
-Deno.test("pictures: a combining mark with nothing before it is drawn on a space", () => {
+test("pictures: a combining mark with nothing before it is drawn on a space", () => {
   assertEquals(glyphs("\u0301x", "pictures"), " \u0301x");
 });
 
-Deno.test("ansi: a combining mark joins the letter before it across a hidden color sequence", () => {
+test("ansi: a combining mark joins the letter before it across a hidden color sequence", () => {
   const cells = displayLine(ln("a\x1b[31m\u0301b"), "ansi");
 
   assertEquals(cells.map((c) => c.ch), ["a\u0301", "b"]);
   assertEquals(cells[1].ansi?.fg, [205, 49, 49]);
 });
 
-Deno.test("displayColumnOf and sourceColumnOf map across wide and joined characters", () => {
+test("displayColumnOf and sourceColumnOf map across wide and joined characters", () => {
   // The display columns are a, the two of 漢, the accented e, and b.
   const line = ln("a漢e\u0301b");
 
@@ -140,7 +141,7 @@ Deno.test("displayColumnOf and sourceColumnOf map across wide and joined charact
   );
 });
 
-Deno.test("visitDisplayCellSources: visits each column of a wide character, saying which continue it", () => {
+test("visitDisplayCellSources: visits each column of a wide character, saying which continue it", () => {
   const cells: Array<[number, number, boolean]> = [];
   visitDisplayCellSources("a漢e\u0301", "pictures", (start, end, _, more) => {
     cells.push([start, end, more === true]);
@@ -154,7 +155,7 @@ Deno.test("visitDisplayCellSources: visits each column of a wide character, sayi
   ]]);
 });
 
-Deno.test("ansi: a tab after wide or joined characters reaches the next tab stop by columns", () => {
+test("ansi: a tab after wide or joined characters reaches the next tab stop by columns", () => {
   // 漢 takes two columns and é one, so each tab starts at column 2 or 1 and
   // takes the cells up to column 4.
   for (const text of ["漢\tx", "e\u0301\tx", "👍🏽\tx"]) {
@@ -166,13 +167,13 @@ Deno.test("ansi: a tab after wide or joined characters reaches the next tab stop
   }
 });
 
-Deno.test("pictures: a mark after a line separator is drawn on a space of its own, as the separator joins nothing", () => {
+test("pictures: a mark after a line separator is drawn on a space of its own, as the separator joins nothing", () => {
   const cells = displayLine(ln("a\u2028\u0308"), "pictures");
 
   assertEquals(cells.map((c) => c.ch), ["a", "\u2028", " \u0308"]);
 });
 
-Deno.test("pictures: a letter beside any mark, or beside a character that joins the one before or after it, is grouped as Intl.Segmenter groups it", () => {
+test("pictures: a letter beside any mark, or beside a character that joins the one before or after it, is grouped as Intl.Segmenter groups it", () => {
   // Thai and Lao vowel signs and halfwidth sound marks that are not marks
   // join the character before them; Arabic and Tulu-Tigalari signs join the
   // one after them; a Myanmar mark joins neither.
@@ -193,7 +194,7 @@ Deno.test("pictures: a letter beside any mark, or beside a character that joins 
   assertEquals(displayLine(ln("a\u102b"), "pictures").length, 2);
 });
 
-Deno.test("pictures: a Kirat Rai vowel sign after a Hangul syllable joins it, as Intl.Segmenter joins them", () => {
+test("pictures: a Kirat Rai vowel sign after a Hangul syllable joins it, as Intl.Segmenter joins them", () => {
   const text = "\uac00\u{16d63}";
 
   assertEquals(graphemes(text).length, 1);
@@ -203,7 +204,7 @@ Deno.test("pictures: a Kirat Rai vowel sign after a Hangul syllable joins it, as
   );
 });
 
-Deno.test("visitDisplayCellSources: the same joined text visited in one mode, another, and the first again gives each mode's cells", () => {
+test("visitDisplayCellSources: the same joined text visited in one mode, another, and the first again gives each mode's cells", () => {
   // Hidden mode collapses the escape to nothing, and ANSI mode keeps the
   // tab's columns up to the tab stop.
   const text = "e\u0301\x1b[31m\tx";
@@ -224,7 +225,7 @@ Deno.test("visitDisplayCellSources: the same joined text visited in one mode, an
   assertEquals([ansi.length, hidden.length], [5, 3]);
 });
 
-Deno.test("hasWideCharacter: says whether a character drawn takes two columns", () => {
+test("hasWideCharacter: says whether a character drawn takes two columns", () => {
   // In ANSI mode the Han character overstruck by a letter draws the letter.
   assertEquals(hasWideCharacter("a漢", "pictures"), true);
   assertEquals(hasWideCharacter("e\u0301x", "pictures"), false);
@@ -232,7 +233,7 @@ Deno.test("hasWideCharacter: says whether a character drawn takes two columns", 
   assertEquals(hasWideCharacter("漢\bx", "pictures"), true);
 });
 
-Deno.test("truncate: keeps whole characters within the columns, from the head or the tail", () => {
+test("truncate: keeps whole characters within the columns, from the head or the tail", () => {
   // Each Han character takes two columns and a tab, drawn as its picture,
   // one.
   assertEquals(truncate("漢字かな", 8, true), "漢字かな");
@@ -246,14 +247,14 @@ Deno.test("truncate: keeps whole characters within the columns, from the head or
   assertEquals(truncate("a\u200bbc", 3, true), "a\u200b…");
 });
 
-Deno.test("drawsAsPictures: wide and joined characters draw alike in every mode", () => {
+test("drawsAsPictures: wide and joined characters draw alike in every mode", () => {
   for (const mode of DISPLAY_MODES) {
     assertEquals(drawsAsPictures("漢字e\u0301👍🏽", mode), true, mode);
   }
   assertEquals(drawsAsPictures("漢\t字", "ansi"), false);
 });
 
-Deno.test("pictures: does not interpret ANSI — the escape shows as ␛", () => {
+test("pictures: does not interpret ANSI — the escape shows as ␛", () => {
   // A color sequence is shown literally: ␛ then its printable bytes.
   assertEquals(glyphs("\x1b[31mx", "pictures"), "␛[31mx");
 });
@@ -262,7 +263,7 @@ Deno.test("pictures: does not interpret ANSI — the escape shows as ␛", () =>
 // ansi mode
 //
 
-Deno.test("ansi: an SGR color sequence is hidden and colors the text after it", () => {
+test("ansi: an SGR color sequence is hidden and colors the text after it", () => {
   const cells = displayLine(ln("a\x1b[31mb"), "ansi");
   // The 5-code-point sequence (ESC [ 3 1 m) is consumed; two cells remain.
   assertEquals(cells.map((c) => c.ch).join(""), "ab");
@@ -277,7 +278,7 @@ Deno.test("ansi: an SGR color sequence is hidden and colors the text after it", 
   assertEquals(cells[1].col, 6);
 });
 
-Deno.test("ansi: a reset (and a bare ESC[m) clears the color override", () => {
+test("ansi: a reset (and a bare ESC[m) clears the color override", () => {
   for (const reset of ["\x1b[0m", "\x1b[m"]) {
     const cells = displayLine(ln(`\x1b[31ma${reset}b`), "ansi");
     assertEquals(cells.map((c) => c.ch).join(""), "ab");
@@ -286,26 +287,26 @@ Deno.test("ansi: a reset (and a bare ESC[m) clears the color override", () => {
   }
 });
 
-Deno.test("ansi: attributes and background codes accumulate", () => {
+test("ansi: attributes and background codes accumulate", () => {
   const cells = displayLine(ln("\x1b[1;4;42mx"), "ansi");
   assertEquals(cells[0].ansi?.bold, true);
   assertEquals(cells[0].ansi?.underline, true);
   assertEquals(cells[0].ansi?.bg, [13, 188, 121], "green background");
 });
 
-Deno.test("ansi: a non-color CSI sequence is not hidden", () => {
+test("ansi: a non-color CSI sequence is not hidden", () => {
   // ESC [ 2 J (clear screen) does not end in `m`, so it is shown, not consumed.
   assertEquals(glyphs("\x1b[2Jx", "ansi"), "␛[2Jx");
 });
 
-Deno.test("ansi: 256-color and truecolor foregrounds", () => {
+test("ansi: 256-color and truecolor foregrounds", () => {
   const c256 = displayLine(ln("\x1b[38;5;196mx"), "ansi")[0];
   assertEquals(c256.ansi?.fg, [255, 0, 0], "palette index 196 is red");
   const truecolor = displayLine(ln("\x1b[38;2;10;20;30mx"), "ansi")[0];
   assertEquals(truecolor.ansi?.fg, [10, 20, 30]);
 });
 
-Deno.test("ansi: a tab advances to the next multiple-of-4 column", () => {
+test("ansi: a tab advances to the next multiple-of-4 column", () => {
   assertEquals(glyphs("\tx", "ansi"), "    x");
   assertEquals(glyphs("a\tx", "ansi"), "a   x");
   assertEquals(glyphs("abc\tx", "ansi"), "abc x");
@@ -317,11 +318,11 @@ Deno.test("ansi: a tab advances to the next multiple-of-4 column", () => {
   assertEquals(glyphs("a\t\tx", "ansi"), "a       x");
 });
 
-Deno.test("ansi: tab stops count drawn cells, not hidden color sequences", () => {
+test("ansi: tab stops count drawn cells, not hidden color sequences", () => {
   assertEquals(glyphs("\x1b[31mab\tx", "ansi"), "ab  x");
 });
 
-Deno.test("ansi: every cell a tab draws stands for the tab's source column", () => {
+test("ansi: every cell a tab draws stands for the tab's source column", () => {
   const cells = displayLine(ln("a\tb"), "ansi");
   assertEquals(
     cells.map((c) => [c.ch, c.col, c.sourceEnd]),
@@ -329,7 +330,7 @@ Deno.test("ansi: every cell a tab draws stands for the tab's source column", () 
   );
 });
 
-Deno.test("ansi: a cell visitor sees each cell a tab draws", () => {
+test("ansi: a cell visitor sees each cell a tab draws", () => {
   const ranges: [number, number][] = [];
   visitDisplayCellSources("ab\tc", "ansi", (start, end) => {
     ranges.push([start, end]);
@@ -339,7 +340,7 @@ Deno.test("ansi: a cell visitor sees each cell a tab draws", () => {
   assertEquals(ranges, [[0, 1], [1, 2], [2, 3], [2, 3], [3, 4]]);
 });
 
-Deno.test("ansi: a character struck over itself is one bold cell", () => {
+test("ansi: a character struck over itself is one bold cell", () => {
   const cells = displayLine(ln("aN\bNA\bAb"), "ansi");
   assertEquals(
     cells.map((c) => [c.ch, c.col, c.sourceEnd, c.ansi?.bold]),
@@ -353,7 +354,7 @@ Deno.test("ansi: a character struck over itself is one bold cell", () => {
   assertEquals(cells[1].ansi?.underline, undefined, "bold is not underlined");
 });
 
-Deno.test("ansi: a character struck over an underscore is one underlined cell", () => {
+test("ansi: a character struck over an underscore is one underlined cell", () => {
   for (const text of ["_\bf", "f\b_"]) {
     const [cell, ...rest] = displayLine(ln(text), "ansi");
     assertEquals(rest, [], JSON.stringify(text));
@@ -363,7 +364,7 @@ Deno.test("ansi: a character struck over an underscore is one underlined cell", 
   }
 });
 
-Deno.test("ansi: repeated overstrikes combine into one cell", () => {
+test("ansi: repeated overstrikes combine into one cell", () => {
   const cells = displayLine(ln("_\bX\bX\bXy"), "ansi");
   assertEquals(cells.map((c) => c.ch).join(""), "Xy");
   assertEquals(cells[0].ansi?.bold, true);
@@ -394,13 +395,13 @@ Deno.test("ansi: repeated overstrikes combine into one cell", () => {
   );
 });
 
-Deno.test("ansi: an overstrike keeps the color around it", () => {
+test("ansi: an overstrike keeps the color around it", () => {
   const [cell] = displayLine(ln("\x1b[31mx\bx"), "ansi");
   assertEquals(cell.ansi?.fg, [205, 49, 49]);
   assertEquals(cell.ansi?.bold, true);
 });
 
-Deno.test("ansi: two different characters struck together draw the second", () => {
+test("ansi: two different characters struck together draw the second", () => {
   const cells = displayLine(ln("+\box\byz"), "ansi");
   assertEquals(
     cells.map((c) => [c.ch, c.col, c.sourceEnd, c.ansi]),
@@ -425,7 +426,7 @@ Deno.test("ansi: two different characters struck together draw the second", () =
   }
 });
 
-Deno.test("ansi: overstrike emphasis adds to the syntax colors", () => {
+test("ansi: overstrike emphasis adds to the syntax colors", () => {
   const keyword = { fg: [1, 2, 3] as const, italic: true };
   const [bold, plain] = displayLine(ln("x\bx+\bo"), "ansi", () => keyword);
   assertEquals(bold.ansi, { ...keyword, bold: true });
@@ -433,7 +434,7 @@ Deno.test("ansi: overstrike emphasis adds to the syntax colors", () => {
   assertEquals(plain.syntax, keyword);
 });
 
-Deno.test("ansi: an overstrike takes the syntax colors of the character drawn", () => {
+test("ansi: an overstrike takes the syntax colors of the character drawn", () => {
   const line: Line = {
     text: "_\bf",
     spans: [{ col: 0, text: "_\b", cls: "punctuation" }, {
@@ -452,7 +453,7 @@ Deno.test("ansi: an overstrike takes the syntax colors of the character drawn", 
   assertEquals(cell.ansi, { ...keyword, underline: true });
 });
 
-Deno.test("ansi: a backspace that does not overstrike shows as its glyph", () => {
+test("ansi: a backspace that does not overstrike shows as its glyph", () => {
   assertEquals(glyphs("x\b", "ansi"), "x␈", "nothing after it");
   assertEquals(glyphs("\bx", "ansi"), "␈x", "nothing before it");
   assertEquals(glyphs("\b\bx", "ansi"), "␈␈x", "a backspace before it");
@@ -465,7 +466,7 @@ Deno.test("ansi: a backspace that does not overstrike shows as its glyph", () =>
   );
 });
 
-Deno.test("displayColumnOf and sourceColumnOf: an overstrike is one column", () => {
+test("displayColumnOf and sourceColumnOf: an overstrike is one column", () => {
   const line = ln("aN\bNb");
   for (const col of [1, 2, 3]) {
     assertEquals(displayColumnOf(line, "ansi", col), 1, `column ${col}`);
@@ -476,7 +477,7 @@ Deno.test("displayColumnOf and sourceColumnOf: an overstrike is one column", () 
   assertEquals(displayColumnOf(line, "pictures", 4), 4, "pictures maps 1:1");
 });
 
-Deno.test("ansi: a cell visitor sees one cell for each overstrike", () => {
+test("ansi: a cell visitor sees one cell for each overstrike", () => {
   const ranges: [number, number][] = [];
   visitDisplayCellSources("a😀\b😀b\bc", "ansi", (start, end) => {
     ranges.push([start, end]);
@@ -487,12 +488,12 @@ Deno.test("ansi: a cell visitor sees one cell for each overstrike", () => {
   assertEquals(ranges, [[0, 1], [1, 6], [1, 6], [6, 9]]);
 });
 
-Deno.test("pictures and hidden: an overstrike is not interpreted", () => {
+test("pictures and hidden: an overstrike is not interpreted", () => {
   assertEquals(glyphs("N\bN", "pictures"), "N␈N");
   assertEquals(glyphs("N\bN", "hidden"), "N…N");
 });
 
-Deno.test("pictures and hidden: a tab is one cell", () => {
+test("pictures and hidden: a tab is one cell", () => {
   assertEquals(glyphs("a\tb", "pictures"), "a␉b");
   assertEquals(glyphs("a\tb", "hidden"), "a…b");
 });
@@ -501,12 +502,12 @@ Deno.test("pictures and hidden: a tab is one cell", () => {
 // hidden mode
 //
 
-Deno.test("hidden: ANSI sequences are dropped whatever their final byte", () => {
+test("hidden: ANSI sequences are dropped whatever their final byte", () => {
   assertEquals(glyphs("a\x1b[31mb", "hidden"), "ab");
   assertEquals(glyphs("a\x1b[2Jb", "hidden"), "ab");
 });
 
-Deno.test("hidden: a run of control codes collapses to one ellipsis at its start", () => {
+test("hidden: a run of control codes collapses to one ellipsis at its start", () => {
   const cells = displayLine(ln("a\x01\x02\x03b"), "hidden");
   assertEquals(cells.map((c) => c.ch).join(""), "a…b");
   assertEquals(cells[1].ch, "…");
@@ -519,12 +520,12 @@ Deno.test("hidden: a run of control codes collapses to one ellipsis at its start
   assertEquals(cells[2].col, 4, "text after keeps its source column");
 });
 
-Deno.test("hidden: a lone ESC that opens no sequence joins the ellipsis run", () => {
+test("hidden: a lone ESC that opens no sequence joins the ellipsis run", () => {
   // ESC not followed by `[` is just another non-printable → part of the run.
   assertEquals(glyphs("a\x1bb", "hidden"), "a…b");
 });
 
-Deno.test("hidden: a cell visitor can stop on a collapsed control run", () => {
+test("hidden: a cell visitor can stop on a collapsed control run", () => {
   const ranges: [number, number][] = [];
   const completed = visitDisplayCellSources(
     "\x01\x02x",
@@ -543,11 +544,11 @@ Deno.test("hidden: a cell visitor can stop on a collapsed control run", () => {
 // source → display column mapping (horizontal scrolling)
 //
 
-Deno.test("displayColumnOf: pictures maps 1:1", () => {
+test("displayColumnOf: pictures maps 1:1", () => {
   assertEquals(displayColumnOf(ln("a\x01b"), "pictures", 2), 2);
 });
 
-Deno.test("displayColumnOf: hidden maps a source column to the compacted column", () => {
+test("displayColumnOf: hidden maps a source column to the compacted column", () => {
   const line = ln("a\x01\x02\x03b"); // display cells stand at source cols 0, 1, 4
   assertEquals(displayColumnOf(line, "hidden", 0), 0, "a");
   assertEquals(displayColumnOf(line, "hidden", 1), 1, "the ellipsis");
@@ -564,7 +565,7 @@ Deno.test("displayColumnOf: hidden maps a source column to the compacted column"
   );
 });
 
-Deno.test("displayColumnOf: ansi skips a hidden color sequence", () => {
+test("displayColumnOf: ansi skips a hidden color sequence", () => {
   const line = ln("a\x1b[31mb"); // display cells stand at source cols 0 and 6
   assertEquals(displayColumnOf(line, "ansi", 0), 0);
   assertEquals(
@@ -575,7 +576,7 @@ Deno.test("displayColumnOf: ansi skips a hidden color sequence", () => {
   assertEquals(displayColumnOf(line, "ansi", 6), 1, "b");
 });
 
-Deno.test("displayColumnOf and sourceColumnOf: a tab spans its expanded cells", () => {
+test("displayColumnOf and sourceColumnOf: a tab spans its expanded cells", () => {
   const line = ln("a\tb"); // display cells stand at source cols 0, 1, 1, 1, 2
   assertEquals(displayColumnOf(line, "ansi", 1), 1, "the tab's first cell");
   assertEquals(displayColumnOf(line, "ansi", 2), 4, "b");
@@ -583,7 +584,7 @@ Deno.test("displayColumnOf and sourceColumnOf: a tab spans its expanded cells", 
   assertEquals(sourceColumnOf(line, "ansi", 4), 2, "b");
 });
 
-Deno.test("sourceColumnOf: maps compact display offsets back to source", () => {
+test("sourceColumnOf: maps compact display offsets back to source", () => {
   const line = ln("a\x1b[31mb");
   assertEquals(sourceColumnOf(line, "pictures", 3), 3);
   assertEquals(sourceColumnOf(line, "ansi", 1), 6);
@@ -595,7 +596,7 @@ Deno.test("sourceColumnOf: maps compact display offsets back to source", () => {
 // internals
 //
 
-Deno.test("drawsAsPictures: compares the glyphs and colors a mode draws", () => {
+test("drawsAsPictures: compares the glyphs and colors a mode draws", () => {
   const draws = (text: string, mode: DisplayMode) =>
     drawsAsPictures(text, mode);
 
@@ -609,13 +610,13 @@ Deno.test("drawsAsPictures: compares the glyphs and colors a mode draws", () => 
   assertEquals(draws("N\bN\t\x1b[m", "pictures"), true);
 });
 
-Deno.test("glyphFor: DEL and C1 codes have block glyphs", () => {
+test("glyphFor: DEL and C1 codes have block glyphs", () => {
   assertEquals(glyphFor("\x7f"), "␡");
   assertEquals(glyphFor("\x85"), "␦", "a C1 code uses the substitute glyph");
   assertEquals(glyphFor("x"), "x", "printable is itself");
 });
 
-Deno.test("internal applySgr: the full code range folds into a style", () => {
+test("internal applySgr: the full code range folds into a style", () => {
   const { applySgr } = _internal;
   assertEquals(applySgr({}, "1").bold, true);
   assertEquals(applySgr({}, "2").dim, true);
@@ -643,7 +644,7 @@ Deno.test("internal applySgr: the full code range folds into a style", () => {
   assertEquals(applySgr({ bold: true }, "73").bold, true);
 });
 
-Deno.test("internal xterm256: standard, cube and grayscale ranges", () => {
+test("internal xterm256: standard, cube and grayscale ranges", () => {
   const { xterm256 } = _internal;
   assertEquals(xterm256(1), [205, 49, 49], "0–15 use the standard palette");
   assertEquals(xterm256(16), [0, 0, 0], "cube corner is black");
@@ -652,7 +653,7 @@ Deno.test("internal xterm256: standard, cube and grayscale ranges", () => {
   assertEquals(xterm256(255), [238, 238, 238], "grayscale ramp end");
 });
 
-Deno.test("internal matchCsi: parameter and intermediate bytes are part of the sequence", () => {
+test("internal matchCsi: parameter and intermediate bytes are part of the sequence", () => {
   // ESC [ ? 2 5 h — a private-mode set with a `?` parameter byte.
   assertEquals(glyphs("\x1b[?25hx", "hidden"), "x", "parameter byte consumed");
   // ESC [ 0 <space> q — a cursor-style set with a 0x20 intermediate byte.
@@ -663,7 +664,7 @@ Deno.test("internal matchCsi: parameter and intermediate bytes are part of the s
   );
 });
 
-Deno.test("internal matchCsi: an incomplete ESC[ is not a sequence", () => {
+test("internal matchCsi: an incomplete ESC[ is not a sequence", () => {
   // A trailing `ESC [` with no final byte does not form a CSI: the ESC is a lone
   // non-printable (→ ellipsis) and the `[` is printable.
   assertEquals(glyphs("a\x1b[", "hidden"), "a…[");

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { Database } from "@db/sqlite";
 import { toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
@@ -8,6 +7,7 @@ import {
   CODEMIRROR_CHANGESET_CODEC,
   operationBaselineHash,
 } from "@commonfabric/memory/v2/operation-codec";
+import { describe, it } from "@commonfabric/test-support/test";
 import { inspect } from "../commands/inspect.ts";
 
 async function output(argv: string[]): Promise<string> {

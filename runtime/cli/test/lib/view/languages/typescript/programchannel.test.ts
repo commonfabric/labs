@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type ProgramQuery,
@@ -12,6 +11,7 @@ import {
   UNLOADABLE_PROGRAM_WORKER,
   X_DEFINITION,
 } from "./program-fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TYPE_OF_Y: ProgramQuery = {
   question: "typeAt",

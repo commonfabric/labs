@@ -6,6 +6,7 @@ import {
 import env from "@/env.ts";
 import createApp from "@/lib/create-app.ts";
 import { cfcPostureReport } from "@commonfabric/runner/cfc";
+import { test } from "@commonfabric/test-support/test";
 import { publishCfcPosture } from "@/lib/cfc-posture.ts";
 import { publishExperimentalPosture } from "@/lib/experimental-posture.ts";
 import router from "@/routes/meta/meta.index.ts";
@@ -17,7 +18,7 @@ if (env.ENV !== "test") {
 
 const app = createApp().route("/", router);
 
-Deno.test("meta routes", async (t) => {
+test("meta routes", async (t) => {
   await t.step("GET /api/meta returns 200 with meta status", async () => {
     const response = await app.request("/api/meta");
     assertEquals(response.status, 200);

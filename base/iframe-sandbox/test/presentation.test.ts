@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CommonIframeSandboxElement } from "../src/common-iframe-sandbox.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("CommonIframeSandboxElement", () => {
   describe("instance members", () => {

@@ -1,7 +1,6 @@
 /** Pins non-clearance SQLite requests to their served result instances. */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -13,6 +12,12 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import { table } from "@commonfabric/memory/sqlite/schema";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { sqliteQuery } from "../../src/builtins/sqlite-builtins.ts";
 import type { Cell } from "../../src/cell.ts";

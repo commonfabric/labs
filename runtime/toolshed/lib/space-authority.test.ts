@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { aclDocId } from "@commonfabric/memory/acl";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { Runtime } from "@commonfabric/runner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   createAclServer,
   genesisAcl,

@@ -8,8 +8,9 @@ import {
   runDemo,
   writeGallery,
 } from "./demo.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("parseDemoArgs accepts deterministic demo options", () => {
+test("parseDemoArgs accepts deterministic demo options", () => {
   assertEquals(
     parseDemoArgs([
       "patterns",
@@ -30,7 +31,7 @@ Deno.test("parseDemoArgs accepts deterministic demo options", () => {
   );
 });
 
-Deno.test("parseDemoArgs rejects non-browser packages", () => {
+test("parseDemoArgs rejects non-browser packages", () => {
   assertThrows(
     () => parseDemoArgs(["runner", "counter"]),
     Error,
@@ -38,7 +39,7 @@ Deno.test("parseDemoArgs rejects non-browser packages", () => {
   );
 });
 
-Deno.test("parseDemoArgs accepts multiple test filters", () => {
+test("parseDemoArgs accepts multiple test filters", () => {
   assertEquals(parseDemoArgs(["patterns", "one-demo", "two-demo"]), {
     packageName: "patterns",
     filters: ["one-demo", "two-demo"],
@@ -49,7 +50,7 @@ Deno.test("parseDemoArgs accepts multiple test filters", () => {
   });
 });
 
-Deno.test("parseDemoArgs rejects invalid and incomplete options", () => {
+test("parseDemoArgs rejects invalid and incomplete options", () => {
   assertThrows(
     () => parseDemoArgs(["patterns", "demo", "--port-offset=-1"]),
     Error,
@@ -67,7 +68,7 @@ Deno.test("parseDemoArgs rejects invalid and incomplete options", () => {
   );
 });
 
-Deno.test("default demo dependencies provide time, preflight, and subprocess", async () => {
+test("default demo dependencies provide time, preflight, and subprocess", async () => {
   assertEquals(defaultDependencies.now() instanceof Date, true);
   const previousFfmpeg = Deno.env.get("FFMPEG");
   const root = await Deno.makeTempDir();
@@ -99,7 +100,7 @@ Deno.test("default demo dependencies provide time, preflight, and subprocess", a
   }
 });
 
-Deno.test("demo main handles help, errors, and an injected successful run", async () => {
+test("demo main handles help, errors, and an injected successful run", async () => {
   assertEquals(await main(["--help"]), 0);
   assertEquals(await main(["--unknown"]), 1);
   assertEquals(
@@ -116,7 +117,7 @@ Deno.test("demo main handles help, errors, and an injected successful run", asyn
   );
 });
 
-Deno.test("demo CLI help exits successfully", async () => {
+test("demo CLI help exits successfully", async () => {
   const command = new Deno.Command(Deno.execPath(), {
     args: ["run", "-A", "demo.ts", "--help"],
     cwd: import.meta.dirname,
@@ -131,7 +132,7 @@ Deno.test("demo CLI help exits successfully", async () => {
   );
 });
 
-Deno.test("resolveDemoTest requires exactly one file", async () => {
+test("resolveDemoTest requires exactly one file", async () => {
   const root = await Deno.makeTempDir();
   try {
     const dir = `${root}/patterns/integration`;
@@ -163,7 +164,7 @@ Deno.test("resolveDemoTest requires exactly one file", async () => {
   }
 });
 
-Deno.test("runDemo names and copies a successful video", async () => {
+test("runDemo names and copies a successful video", async () => {
   await withDemoFixture(async (root) => {
     let preflighted = false;
     const dependencies = demoDependencies({
@@ -212,7 +213,7 @@ Deno.test("runDemo names and copies a successful video", async () => {
   });
 });
 
-Deno.test("runDemo preserves a failing integration status and manifest", async () => {
+test("runDemo preserves a failing integration status and manifest", async () => {
   await withDemoFixture(async (root) => {
     const result = await runDemo(
       {
@@ -243,7 +244,7 @@ Deno.test("runDemo preserves a failing integration status and manifest", async (
   });
 });
 
-Deno.test("runDemo rejects a successful test without a video", async () => {
+test("runDemo rejects a successful test without a video", async () => {
   await withDemoFixture(async (root) => {
     await assertRejects(
       () =>
@@ -262,7 +263,7 @@ Deno.test("runDemo rejects a successful test without a video", async () => {
   });
 });
 
-Deno.test("runDemo retains a named video in its artifact directory", async () => {
+test("runDemo retains a named video in its artifact directory", async () => {
   await withDemoFixture(async (root) => {
     const result = await runDemo(
       {
@@ -289,7 +290,7 @@ Deno.test("runDemo retains a named video in its artifact directory", async () =>
   });
 });
 
-Deno.test("runDemo preserves a setup failure without a manifest", async () => {
+test("runDemo preserves a setup failure without a manifest", async () => {
   await withDemoFixture(async (root) => {
     assertEquals(
       await runDemo(
@@ -308,7 +309,7 @@ Deno.test("runDemo preserves a setup failure without a manifest", async () => {
   });
 });
 
-Deno.test("runDemo records multiple tests and writes portable galleries", async () => {
+test("runDemo records multiple tests and writes portable galleries", async () => {
   await withDemoFixture(async (root) => {
     const calls: string[] = [];
     const result = await runDemo(
@@ -352,7 +353,7 @@ Deno.test("runDemo records multiple tests and writes portable galleries", async 
   }, true);
 });
 
-Deno.test("runDemo rejects duplicate tests and an MP4 batch output", async () => {
+test("runDemo rejects duplicate tests and an MP4 batch output", async () => {
   await withDemoFixture(async (root) => {
     await assertRejects(
       () =>
@@ -386,7 +387,7 @@ Deno.test("runDemo rejects duplicate tests and an MP4 batch output", async () =>
   }, true);
 });
 
-Deno.test("writeGallery escapes viewer-facing labels and paths", async () => {
+test("writeGallery escapes viewer-facing labels and paths", async () => {
   const root = await Deno.makeTempDir();
   try {
     await writeGallery(root, [{ title: "one < two", src: 'demo&".mp4' }]);

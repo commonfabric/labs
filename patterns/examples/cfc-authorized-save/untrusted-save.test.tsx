@@ -11,7 +11,7 @@ import {
   findNodeById,
   hasExactText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import AuthorizedSave from "./main.tsx";
+import AuthorizedSave from "./cfc-authorized-save.tsx";
 
 const setDraftTitle = handler<
   void,

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   describeProviderError,
@@ -8,6 +7,7 @@ import {
   providerErrorFromJsonText,
   providerErrorFromPayload,
 } from "../src/model/provider-error.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("provider-error", () => {
   describe("providerErrorFromPayload()", () => {

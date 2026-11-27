@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -7,6 +6,7 @@ import type {
   Revision,
   State,
 } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   createDefaultTraversalContext,
   createSchemaMemo,

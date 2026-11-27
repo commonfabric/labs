@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
@@ -9,6 +8,12 @@ import type {
   SchedulerDiagnosisResult,
   SchedulerGraphSnapshot,
 } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { DebuggerController } from "../src/lib/debugger-controller.ts";
 import type { RuntimeInternals } from "../src/lib/runtime.ts";

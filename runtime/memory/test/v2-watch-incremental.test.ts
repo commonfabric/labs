@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ChangeSet } from "@codemirror/state";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,

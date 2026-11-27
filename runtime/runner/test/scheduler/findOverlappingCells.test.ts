@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { findOverlappingCells } from "../../src/scheduler/graph-snapshot.ts";
 import { entityKey } from "../../src/scheduler/keys.ts";
 import type { Action, ReactivityLog } from "../../src/scheduler/types.ts";
 import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const identity = { principal: "did:test:graph", sessionId: "session-1" };
 

@@ -1,6 +1,5 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricPlainObject, FabricValue } from "@commonfabric/api";
 import { hashOf } from "@commonfabric/data-model";
@@ -10,6 +9,7 @@ import {
   delegationCid,
   issueDelegation,
 } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { MEMORY_PROTOCOL } from "../v2.ts";
 import { type ClientInfo, createClientInfo } from "../v2/client-info.ts";

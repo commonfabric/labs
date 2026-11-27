@@ -4,7 +4,6 @@
  * are rendered at all.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -15,9 +14,11 @@ import {
   livePages,
 } from "./live-page.ts";
 import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
+import { receivedText } from "./sent-text.ts";
 import { faviconHref } from "./favicon.ts";
 import type { Route } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 
@@ -36,18 +37,28 @@ function counter(path = "/counted") {
   return { state, route };
 }
 
-/** Opens the stream for `page` and reads it one event at a time. */
+/**
+ * Opens the stream for `page` and reads it one event at a time. `markup` reads
+ * a page event and returns the markup the page then holds, which is the
+ * event's edits applied to the markup it held before.
+ */
 function watch(pages: ReturnType<typeof livePages>, page: string) {
   const response = pages.open(
     new URL(`http://dashboard/events?page=${encodeURIComponent(page)}`),
   );
   const reader = response.body!.getReader();
+  let held = "";
+  const next = async (): Promise<string> => {
+    const { value, done } = await reader.read();
+    if (done) throw new Error("the event stream ended");
+    return decoder.decode(value);
+  };
   return {
     response,
-    async next(): Promise<string> {
-      const { value, done } = await reader.read();
-      if (done) throw new Error("the event stream ended");
-      return decoder.decode(value);
+    next,
+    async markup(): Promise<string> {
+      held = receivedText(held, markupOf(await next()).html);
+      return held;
     },
     close: () => reader.cancel(),
   };
@@ -77,7 +88,7 @@ describe("livePages()", () => {
     const pages = livePages([route], "v1");
     const page = watch(pages, "/counted");
     await page.next();
-    await page.next();
+    await page.markup();
 
     await pages.tick();
     expect(await page.next()).toMatch(/^event: ping\ndata: 1\n\n$/);
@@ -86,7 +97,7 @@ describe("livePages()", () => {
     state.markup = "two";
     await pages.tick();
     expect(await page.next()).toMatch(/^event: ping\ndata: 2\n/);
-    expect(markupOf(await page.next()).html).toBe("<main>two</main>");
+    expect(await page.markup()).toBe("<main>two</main>");
     await page.close();
   });
 
@@ -164,7 +175,7 @@ describe("livePages()", () => {
     const pages = livePages([slow], "v1");
     const page = watch(pages, "/counted");
     await page.next();
-    await page.next();
+    await page.markup();
 
     hold = true;
     await Promise.race([pages.tick(), Promise.resolve()]);
@@ -173,7 +184,7 @@ describe("livePages()", () => {
     state.markup = "two";
     await pages.tick();
     expect(await page.next()).toMatch(/^event: ping\n/);
-    expect(markupOf(await page.next()).html).toBe("<main>two</main>");
+    expect(await page.markup()).toBe("<main>two</main>");
 
     held[0](new Response("<main>stale</main>"));
     await pages.tick();
@@ -182,7 +193,7 @@ describe("livePages()", () => {
     state.markup = "three";
     await pages.tick();
     await page.next();
-    expect(markupOf(await page.next()).html).toBe("<main>three</main>");
+    expect(await page.markup()).toBe("<main>three</main>");
     await page.close();
   });
 
@@ -199,7 +210,7 @@ describe("livePages()", () => {
     const pages = livePages([flaky], "v1");
     const page = watch(pages, "/counted");
     await page.next();
-    await page.next();
+    await page.markup();
 
     const logged: unknown[][] = [];
     const error = console.error;
@@ -217,8 +228,38 @@ describe("livePages()", () => {
     state.markup = "two";
     await pages.tick();
     await page.next();
-    expect(markupOf(await page.next()).html).toBe("<main>two</main>");
+    expect(await page.markup()).toBe("<main>two</main>");
     await page.close();
+  });
+
+  it("sends a page holding the markup the edits to it, and a page that joins the whole of it", async () => {
+    const { state, route } = counter();
+    const items = (changed: string) =>
+      Array.from({ length: 200 }, (_, i) => `<li>${i === 100 ? changed : i}</li>`)
+        .join("");
+    state.markup = items("100");
+    const pages = livePages([route], "v1");
+    const first = watch(pages, "/counted");
+    await first.next();
+    await first.markup();
+
+    state.markup = items("a hundred");
+    await pages.tick();
+    await first.next();
+    const edits = markupOf(await first.next()).html;
+    expect(typeof edits).not.toBe("string");
+    expect(JSON.stringify(edits).length).toBeLessThan(50);
+    expect(receivedText(`<main>${items("100")}</main>`, edits)).toBe(
+      `<main>${items("a hundred")}</main>`,
+    );
+
+    const second = watch(pages, "/counted");
+    await second.next();
+    expect(markupOf(await second.next()).html).toBe(
+      `<main>${items("a hundred")}</main>`,
+    );
+    await first.close();
+    await second.close();
   });
 });
 
@@ -363,6 +404,60 @@ describe("LIVE_PAGE_CLIENT updates", () => {
     expect(announced[0].detail).toBe(next);
     expect(announced[0].bubbles).toBe(true);
     expect(icon.getAttribute("href")).toBe("/bad.png");
+  });
+
+  it("parses the whole markup, applying each event's edits to the markup before", () => {
+    let page: ((event: { data: string }) => void) | undefined;
+    class FakeSource {
+      readonly readyState = 1;
+      addEventListener(
+        type: string,
+        listener: (event: { data: string }) => void,
+      ): void {
+        if (type === "page") page = listener;
+      }
+      close(): void {}
+    }
+    const parsed: string[] = [];
+    class DOMParser {
+      parseFromString(html: string) {
+        parsed.push(html);
+        return { querySelector: () => null };
+      }
+    }
+    new Function(
+      "document",
+      "location",
+      "EventSource",
+      "DOMParser",
+      "setInterval",
+      "addEventListener",
+      LIVE_PAGE_CLIENT.match(/^<script>([\s\S]*)<\/script>$/)![1],
+    )(
+      {
+        getElementById: () => null,
+        querySelector: () => null,
+        addEventListener: () => {},
+      },
+      { pathname: "/counted", search: "", reload: () => {} },
+      FakeSource,
+      DOMParser,
+      () => 0,
+      () => {},
+    );
+
+    const deliver = (html: unknown) =>
+      page!({ data: JSON.stringify({ version: SERVING_VERSION, html }) });
+    deliver("<main><b>1h ago</b><p>kept</p></main>");
+    deliver({ from: 37, edits: [[9, 2, "2h"]] });
+    deliver({ from: 37, edits: [] });
+    deliver("<main>whole again</main>");
+    expect(parsed).toEqual([
+      "<main><b>1h ago</b><p>kept</p></main>",
+      "<main><b>2h ago</b><p>kept</p></main>",
+      "<main><b>2h ago</b><p>kept</p></main>",
+      "<main>whole again</main>",
+    ]);
   });
 });
 

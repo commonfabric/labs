@@ -1,7 +1,4 @@
-/// <reference path="../clock.d.ts" />
-
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { defer } from "@commonfabric/async/defer";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
@@ -14,6 +11,13 @@ import type {
   SqliteParamsWire,
   SqliteQueryResult,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { sqliteDatabase } from "../../src/builtins/sqlite-builtins.ts";
 import { SQLITE_ROW_SALT } from "../../src/builtins/sqlite/row-identity.ts";

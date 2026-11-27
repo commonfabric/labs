@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ConsoleApp,
@@ -24,6 +23,7 @@ import {
 } from "../../../src/contracts/interactive-chat.ts";
 import { BROWSER_SUBAGENT_PROFILE } from "../../../src/contracts/subagent.ts";
 import { handlerOn, templateText } from "./lit-template.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A row with the fields that decide which run a turn opens. */
 const row = (

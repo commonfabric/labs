@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { type DocumentReader, modelFromDocument } from "../model.ts";
 import type { EntityDocument } from "../reconstruct.ts";

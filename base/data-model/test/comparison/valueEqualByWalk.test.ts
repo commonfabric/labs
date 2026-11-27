@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FabricValue, valueEqual, valueEqualByWalk } from "@";
 import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Wraps `target` so that every property read of it is counted. */
 function counted<T extends object>(

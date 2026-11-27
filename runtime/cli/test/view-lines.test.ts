@@ -3,7 +3,6 @@
  * offset is on, and the code-point column of an offset.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { cpLen } from "../lib/view/ansi.ts";
@@ -13,6 +12,7 @@ import {
   firstIndexAtLeast,
   lineIndexOf,
 } from "../lib/view/lines.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("lines", () => {
   describe("firstIndexAtLeast()", () => {

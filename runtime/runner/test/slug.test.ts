@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isSlugAddress,
@@ -6,6 +5,7 @@ import {
   slugIdForSpace,
   validateSlug,
 } from "../src/index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-slug-space";
 

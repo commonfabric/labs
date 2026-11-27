@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { spaceOfLink } from "../../src/builder/space-access.ts";

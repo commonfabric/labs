@@ -4,7 +4,6 @@
 // across runs of identical code. These unit tests drive the same branches
 // directly so the package's own test job records them on every run.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import { SchemaGenerator } from "../src/schema-generator.ts";
@@ -14,6 +13,7 @@ import {
   getTypeFromCode,
   getTypeFromFiles,
 } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function findInterfaceMemberTypeNode(
   sourceFile: ts.SourceFile,

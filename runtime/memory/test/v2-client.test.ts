@@ -4,6 +4,7 @@ import { FakeTime } from "@std/testing/time";
 import { defer } from "@commonfabric/async/defer";
 import type { FabricValue } from "@commonfabric/data-model";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import {
   decodeMemoryBoundary,
@@ -181,7 +182,7 @@ const abortBetweenInitialAndPostStartChecks = (
   });
 };
 
-Deno.test("memory v2 client rejects an already cancelled connection", async () => {
+test("memory v2 client rejects an already cancelled connection", async () => {
   const controller = new AbortController();
   controller.abort(new Error("cancel before connect"));
   const base = handshakeTransport(HELLO_OK);
@@ -202,7 +203,7 @@ Deno.test("memory v2 client rejects an already cancelled connection", async () =
   assertEquals(sends, 0);
 });
 
-Deno.test("memory v2 client observes cancellation after hello", async () => {
+test("memory v2 client observes cancellation after hello", async () => {
   const controller = new AbortController();
   const reason = new Error("cancel after hello");
 
@@ -217,7 +218,7 @@ Deno.test("memory v2 client observes cancellation after hello", async () => {
   );
 });
 
-Deno.test("memory v2 client rejects an already cancelled mount", async () => {
+test("memory v2 client rejects an already cancelled mount", async () => {
   const client = await connect({ transport: handshakeTransport(HELLO_OK) });
   const controller = new AbortController();
   controller.abort(new Error("cancel before mount"));
@@ -242,7 +243,7 @@ Deno.test("memory v2 client rejects an already cancelled mount", async () => {
   }
 });
 
-Deno.test("memory v2 client propagates a synchronous mount auth failure", async () => {
+test("memory v2 client propagates a synchronous mount auth failure", async () => {
   const client = await connect({ transport: handshakeTransport(HELLO_OK) });
   const controller = new AbortController();
   const tracked = trackAbortListeners(controller);
@@ -266,7 +267,7 @@ Deno.test("memory v2 client propagates a synchronous mount auth failure", async 
   }
 });
 
-Deno.test("memory v2 client observes cancellation after mount auth starts", async () => {
+test("memory v2 client observes cancellation after mount auth starts", async () => {
   const client = await connect({ transport: handshakeTransport(HELLO_OK) });
   const reason = new Error("cancel during mount auth");
   const authFailure = new Error("mount auth completed after cancellation");
@@ -291,7 +292,7 @@ Deno.test("memory v2 client observes cancellation after mount auth starts", asyn
   }
 });
 
-Deno.test("memory v2 client observes cancellation after session open", async () => {
+test("memory v2 client observes cancellation after session open", async () => {
   const cases = [
     {
       reason: new Error("cancel after session open"),
@@ -331,7 +332,7 @@ Deno.test("memory v2 client observes cancellation after session open", async () 
   }
 });
 
-Deno.test("memory v2 client marks only a new outstanding commit as issued", async () => {
+test("memory v2 client marks only a new outstanding commit as issued", async () => {
   const client = await connect({
     transport: handshakeTransport(HELLO_OK),
   });
@@ -363,7 +364,7 @@ Deno.test("memory v2 client marks only a new outstanding commit as issued", asyn
   );
 });
 
-Deno.test("memory v2 client rejects malformed async hello session.open metadata", async () => {
+test("memory v2 client rejects malformed async hello session.open metadata", async () => {
   await assertRejects(
     () =>
       connect({
@@ -379,7 +380,7 @@ Deno.test("memory v2 client rejects malformed async hello session.open metadata"
   );
 });
 
-Deno.test("memory v2 client does not send a request after close begins", async () => {
+test("memory v2 client does not send a request after close begins", async () => {
   let receiver = (_payload: string) => {};
   let lateRequestId: string | undefined;
   let lateRequestCount = 0;
@@ -430,7 +431,7 @@ Deno.test("memory v2 client does not send a request after close begins", async (
   assertEquals(lateRequestCount, 0);
 });
 
-Deno.test("memory v2 client rejects malformed hello session.open metadata", async () => {
+test("memory v2 client rejects malformed hello session.open metadata", async () => {
   const cases: {
     name: string;
     helloOk: FabricValue;
@@ -503,7 +504,7 @@ Deno.test("memory v2 client rejects malformed hello session.open metadata", asyn
   }
 });
 
-Deno.test("memory v2 client rejects a missing session.open challenge", async () => {
+test("memory v2 client rejects a missing session.open challenge", async () => {
   await assertRejects(
     () =>
       connect({
@@ -519,7 +520,7 @@ Deno.test("memory v2 client rejects a missing session.open challenge", async () 
   );
 });
 
-Deno.test("memory v2 client rejects a missing session.open audience", async () => {
+test("memory v2 client rejects a missing session.open audience", async () => {
   await assertRejects(
     () =>
       connect({
@@ -535,7 +536,7 @@ Deno.test("memory v2 client rejects a missing session.open audience", async () =
   );
 });
 
-Deno.test("memory v2 client rejects a missing rotated session.open challenge", async () => {
+test("memory v2 client rejects a missing rotated session.open challenge", async () => {
   const client = await connect({
     transport: handshakeTransport(HELLO_OK, {
       audience: TEST_SESSION_OPEN_AUDIENCE,
@@ -557,7 +558,7 @@ Deno.test("memory v2 client rejects a missing rotated session.open challenge", a
   }
 });
 
-Deno.test("memory v2 client rejects a missing rotated session.open audience", async () => {
+test("memory v2 client rejects a missing rotated session.open audience", async () => {
   const client = await connect({
     transport: handshakeTransport(HELLO_OK, {
       challenge: sessionOpenChallenge,
@@ -579,7 +580,7 @@ Deno.test("memory v2 client rejects a missing rotated session.open audience", as
   }
 });
 
-Deno.test("memory v2 client passes session.open handshake context to the auth factory", async () => {
+test("memory v2 client passes session.open handshake context to the auth factory", async () => {
   const sessionOpen = {
     audience: "did:key:z6Mk-memory-v2-client-audience",
     challenge: sessionOpenChallenge,
@@ -606,7 +607,7 @@ Deno.test("memory v2 client passes session.open handshake context to the auth fa
   }
 });
 
-Deno.test("memory v2 client rotates session.open challenges between protected mounts", async () => {
+test("memory v2 client rotates session.open challenges between protected mounts", async () => {
   const audience = "did:key:z6Mk-memory-v2-client-rotate-audience";
   const server = new Server({
     store: new URL("memory://memory-v2-client-rotate-challenges"),
@@ -655,7 +656,7 @@ Deno.test("memory v2 client rotates session.open challenges between protected mo
   }
 });
 
-Deno.test("memory v2 entity identifier listing transfers identifiers without entity values", async () => {
+test("memory v2 entity identifier listing transfers identifiers without entity values", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-entity-identifiers"),
@@ -781,7 +782,7 @@ Deno.test("memory v2 entity identifier listing transfers identifiers without ent
   }
 });
 
-Deno.test("memory v2 client fails closed without entity identifier capabilities", async () => {
+test("memory v2 client fails closed without entity identifier capabilities", async () => {
   const client = await connect({
     transport: handshakeTransport({
       ...HELLO_OK,
@@ -805,7 +806,7 @@ Deno.test("memory v2 client fails closed without entity identifier capabilities"
   }
 });
 
-Deno.test("memory v2 client watch sets expand to previously hidden graph nodes", async () => {
+test("memory v2 client watch sets expand to previously hidden graph nodes", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-graph-expansion"),
@@ -883,7 +884,7 @@ Deno.test("memory v2 client watch sets expand to previously hidden graph nodes",
   }
 });
 
-Deno.test("memory v2 client can bootstrap watches with watchAdd", async () => {
+test("memory v2 client can bootstrap watches with watchAdd", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-watch-add-bootstrap"),
@@ -957,7 +958,7 @@ Deno.test("memory v2 client can bootstrap watches with watchAdd", async () => {
   }
 });
 
-Deno.test("memory v2 client watch views expose incremental sync effects", async () => {
+test("memory v2 client watch views expose incremental sync effects", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-watch-sync-effects"),
@@ -1048,7 +1049,7 @@ Deno.test("memory v2 client watch views expose incremental sync effects", async 
   }
 });
 
-Deno.test("memory v2 client marks a pushed frame as a push, and a watch reply as not one", async () => {
+test("memory v2 client marks a pushed frame as a push, and a watch reply as not one", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-pushed-sync"),
@@ -1103,7 +1104,7 @@ Deno.test("memory v2 client marks a pushed frame as a push, and a watch reply as
   }
 });
 
-Deno.test("memory v2 client conflict errors expose readiness after caught-up sync", async () => {
+test("memory v2 client conflict errors expose readiness after caught-up sync", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-conflict-ready-to-retry"),
@@ -1190,7 +1191,7 @@ Deno.test("memory v2 client conflict errors expose readiness after caught-up syn
   }
 });
 
-Deno.test("memory v2 client readyToRetry waits for caught-up local sequence", async () => {
+test("memory v2 client readyToRetry waits for caught-up local sequence", async () => {
   const transport = new ConflictReadyTransport();
   const client = await connect({ transport });
   const session = await client.mount("did:key:z6Mk-memory-v2-ready-delay");
@@ -1254,7 +1255,7 @@ Deno.test("memory v2 client readyToRetry waits for caught-up local sequence", as
   }
 });
 
-Deno.test("memory v2 client readyToRetry rejects after session close", async () => {
+test("memory v2 client readyToRetry rejects after session close", async () => {
   const transport = new ConflictReadyTransport();
   const client = await connect({ transport });
   const session = await client.mount("did:key:z6Mk-memory-v2-ready-close");
@@ -1286,7 +1287,7 @@ Deno.test("memory v2 client readyToRetry rejects after session close", async () 
   );
 });
 
-Deno.test("memory v2 client readyToRetry rejects when session ID changes on restore", async () => {
+test("memory v2 client readyToRetry rejects when session ID changes on restore", async () => {
   const transport = new ConflictReadySessionChangingTransport();
   const client = await connect({ transport });
   const session = await client.mount(
@@ -1336,7 +1337,7 @@ Deno.test("memory v2 client readyToRetry rejects when session ID changes on rest
   }
 });
 
-Deno.test("memory v2 client readyToRetry rejects when same session ID is not resumed", async () => {
+test("memory v2 client readyToRetry rejects when same session ID is not resumed", async () => {
   const transport = new ConflictReadyFreshSameSessionTransport();
   const client = await connect({ transport });
   const session = await client.mount(
@@ -1389,7 +1390,7 @@ Deno.test("memory v2 client readyToRetry rejects when same session ID is not res
   }
 });
 
-Deno.test("memory v2 client fires onSessionReplaced when a restore is not resumed", async () => {
+test("memory v2 client fires onSessionReplaced when a restore is not resumed", async () => {
   // The marker epoch dies with the replaced session; consumers holding
   // marker-keyed state (the runner's parked accepted promotions, CT-1927)
   // reconcile through this callback rather than waiting on markers the
@@ -1411,7 +1412,7 @@ Deno.test("memory v2 client fires onSessionReplaced when a restore is not resume
   }
 });
 
-Deno.test("memory v2 client coalesces watch ack bursts", async () => {
+test("memory v2 client coalesces watch ack bursts", async () => {
   const transport = new AckCountingTransport();
   const client = await connect({ transport });
   const session = await client.mount("did:key:z6Mk-memory-v2-client-ack-burst");
@@ -1451,7 +1452,7 @@ Deno.test("memory v2 client coalesces watch ack bursts", async () => {
   }
 });
 
-Deno.test("memory v2 client reschedules an ack after a failed send while still connected", async () => {
+test("memory v2 client reschedules an ack after a failed send while still connected", async () => {
   const transport = new FailFirstAckTransport();
   const client = await connect({ transport });
   const session = await client.mount("did:key:z6Mk-memory-v2-ack-retry");
@@ -1485,7 +1486,7 @@ Deno.test("memory v2 client reschedules an ack after a failed send while still c
   }
 });
 
-Deno.test("memory v2 watch view keeps emitted snapshots incrementally ordered", async () => {
+test("memory v2 watch view keeps emitted snapshots incrementally ordered", async () => {
   const view = WatchView.fromSync({
     type: "sync",
     fromSeq: 0,
@@ -1548,7 +1549,7 @@ Deno.test("memory v2 watch view keeps emitted snapshots incrementally ordered", 
   );
 });
 
-Deno.test("memory v2 watch view batches structural syncs deterministically", () => {
+test("memory v2 watch view batches structural syncs deterministically", () => {
   const view = WatchView.fromSync({
     type: "sync",
     fromSeq: 0,
@@ -1623,7 +1624,7 @@ Deno.test("memory v2 watch view batches structural syncs deterministically", () 
   );
 });
 
-Deno.test("memory v2 watch view return clears pending snapshot waiters", async () => {
+test("memory v2 watch view return clears pending snapshot waiters", async () => {
   const view = WatchView.fromSync({
     type: "sync",
     fromSeq: 0,
@@ -1663,7 +1664,7 @@ Deno.test("memory v2 watch view return clears pending snapshot waiters", async (
   );
 });
 
-Deno.test("memory v2 client close settles a pending ack flush", async () => {
+test("memory v2 client close settles a pending ack flush", async () => {
   const time = new FakeTime();
   const transport = new HangingAckTransport();
   const client = await connect({ transport });
@@ -2622,7 +2623,7 @@ const nextWithTimeout = async <Value>(
   }
 };
 
-Deno.test(
+test(
   "memory v2 client reconnects without reinstalling watch sets when the session resumes",
   async () => {
     const server = new Server({
@@ -2737,7 +2738,7 @@ Deno.test(
   },
 );
 
-Deno.test("memory v2 client emits empty caught-up syncs after resume", async () => {
+test("memory v2 client emits empty caught-up syncs after resume", async () => {
   const transport = new EmptyCaughtUpResumeTransport();
   const client = await connect({ transport });
   const session = await client.mount("did:key:z6Mk-empty-caught-up-resume");
@@ -2776,7 +2777,7 @@ Deno.test("memory v2 client emits empty caught-up syncs after resume", async () 
   }
 });
 
-Deno.test("memory v2 client forwards a top-level-only caught-up seq on resume", async () => {
+test("memory v2 client forwards a top-level-only caught-up seq on resume", async () => {
   // Regression for the dual-channel strand: when a resume promotes
   // caughtUpLocalSeq via the top-level SessionOpenResult field but NOT via a
   // sync (the server already drained the pending catch-up before the lost
@@ -3025,7 +3026,7 @@ class EmptyCaughtUpResumeTransport implements Transport {
   }
 }
 
-Deno.test(
+test(
   "memory v2 client does not restore a closed session after reconnect",
   async () => {
     const server = new Server({
@@ -3070,7 +3071,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "memory v2 client reinstalls watch sets when reconnect opens a fresh session",
   async () => {
     const server = new Server({
@@ -3169,7 +3170,7 @@ Deno.test(
   },
 );
 
-Deno.test("memory v2 client replays an in-flight transact after reconnect", async () => {
+test("memory v2 client replays an in-flight transact after reconnect", async () => {
   const transport = new ScriptedReconnectTransport([1]);
   const client = await connect({ transport });
   const space = await client.mount("did:key:z6Mk-memory-v2-client-replay");
@@ -3197,7 +3198,7 @@ Deno.test("memory v2 client replays an in-flight transact after reconnect", asyn
   }
 });
 
-Deno.test("memory v2 client replays retained commits in localSeq order after reconnect", async () => {
+test("memory v2 client replays retained commits in localSeq order after reconnect", async () => {
   const transport = new ScriptedReconnectTransport([1]);
   const client = await connect({ transport });
   const space = await client.mount(
@@ -3252,7 +3253,7 @@ Deno.test("memory v2 client replays retained commits in localSeq order after rec
   }
 });
 
-Deno.test("memory v2 client sends later transacts before earlier responses settle", async () => {
+test("memory v2 client sends later transacts before earlier responses settle", async () => {
   const transport = new DelayedTransactTransport();
   const client = await connect({ transport });
   const space = await client.mount(
@@ -3317,7 +3318,7 @@ Deno.test("memory v2 client sends later transacts before earlier responses settl
   }
 });
 
-Deno.test("memory v2 client closes a revoked session after takeover and rejects stale resume tokens", async () => {
+test("memory v2 client closes a revoked session after takeover and rejects stale resume tokens", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-client-session-takeover"),
@@ -3386,7 +3387,7 @@ Deno.test("memory v2 client closes a revoked session after takeover and rejects 
   }
 });
 
-Deno.test("memory v2 client waits before retrying and then reconnects cleanly", async () => {
+test("memory v2 client waits before retrying and then reconnects cleanly", async () => {
   const time = new FakeTime();
   const transport = new ControlledReconnectTransport();
   const client = await connect({ transport });
@@ -3427,7 +3428,7 @@ Deno.test("memory v2 client waits before retrying and then reconnects cleanly", 
   }
 });
 
-Deno.test("memory v2 client close interrupts long reconnect backoff", async () => {
+test("memory v2 client close interrupts long reconnect backoff", async () => {
   const time = new FakeTime();
   const transport = new ControlledReconnectTransport();
   const client = await connect({ transport });
@@ -3493,7 +3494,7 @@ class HandshakeHangReconnectTransport implements Transport {
   }
 }
 
-Deno.test("memory v2 client close ends a reconnect parked in the handshake", async () => {
+test("memory v2 client close ends a reconnect parked in the handshake", async () => {
   const transport = new HandshakeHangReconnectTransport();
   const client = await connect({ transport });
 
@@ -3510,7 +3511,7 @@ Deno.test("memory v2 client close ends a reconnect parked in the handshake", asy
   assertEquals(client.isConnected(), false);
 });
 
-Deno.test("memory v2 client rejects hello.ok when flags disagree", async () => {
+test("memory v2 client rejects hello.ok when flags disagree", async () => {
   let receiver = (_payload: string) => {};
   const transport: Transport = {
     send(payload): Promise<void> {
@@ -3541,7 +3542,7 @@ Deno.test("memory v2 client rejects hello.ok when flags disagree", async () => {
   );
 });
 
-Deno.test("memory v2 client stores the server's advertised flags (capability handshake)", async () => {
+test("memory v2 client stores the server's advertised flags (capability handshake)", async () => {
   // Omitting sqliteCommitRowLabelEval leaves the parsed capability false,
   // which keeps the runner's write gate closed. Advertising it yields true.
   const transportWithFlags = (flags: unknown): Transport => {
@@ -3594,7 +3595,7 @@ Deno.test("memory v2 client stores the server's advertised flags (capability han
   }
 });
 
-Deno.test("memory v2 client keeps compression disabled when the server omits the capability", async () => {
+test("memory v2 client keeps compression disabled when the server omits the capability", async () => {
   let receiver = (_payload: string) => {};
   let advertisedCompression: boolean | undefined;
   const compressionStates: boolean[] = [];
@@ -3641,7 +3642,7 @@ Deno.test("memory v2 client keeps compression disabled when the server omits the
   }
 });
 
-Deno.test("memory v2 client wraps close errors with connection error names", async () => {
+test("memory v2 client wraps close errors with connection error names", async () => {
   const client = await connect({
     transport: new CloseOnSessionOpenTransport(),
   });
@@ -3660,7 +3661,7 @@ Deno.test("memory v2 client wraps close errors with connection error names", asy
   throw new Error("Expected mount() to fail");
 });
 
-Deno.test("memory v2 client returns an applied commit even if it closes right after the response", async () => {
+test("memory v2 client returns an applied commit even if it closes right after the response", async () => {
   const transport = new CloseOnAppliedCommitTransport();
   const client = await connect({ transport });
   const space = await client.mount("did:key:z6Mk-memory-v2-close-after-commit");
@@ -3786,7 +3787,7 @@ class DisconnectableAckTransport implements Transport {
   }
 }
 
-Deno.test("memory v2 client ack scheduler does not retry while disconnected", async () => {
+test("memory v2 client ack scheduler does not retry while disconnected", async () => {
   const time = new FakeTime();
   const transport = new DisconnectableAckTransport();
   const client = await connect({ transport });
@@ -3918,7 +3919,7 @@ class SessionChangingTransport implements Transport {
   }
 }
 
-Deno.test("memory v2 client rejects outstanding commits when session ID changes on reopen", async () => {
+test("memory v2 client rejects outstanding commits when session ID changes on reopen", async () => {
   const transport = new SessionChangingTransport();
 
   const client = await connect({ transport });
@@ -3975,7 +3976,7 @@ Deno.test("memory v2 client rejects outstanding commits when session ID changes 
   }
 });
 
-Deno.test("memory v2 client refuses root expectations without server capability", async () => {
+test("memory v2 client refuses root expectations without server capability", async () => {
   const client = await connect({
     transport: handshakeTransport({
       ...HELLO_OK,
@@ -3999,7 +4000,7 @@ Deno.test("memory v2 client refuses root expectations without server capability"
   }
 });
 
-Deno.test("memory v2 client refuses a space-kind expectation without server capability", async () => {
+test("memory v2 client refuses a space-kind expectation without server capability", async () => {
   const client = await connect({
     transport: handshakeTransport({
       ...HELLO_OK,
@@ -4064,7 +4065,7 @@ const spaceKindTransport = (
   return { transport, declared };
 };
 
-Deno.test("memory v2 client reports the kind its latest open of a space with history carries, and declares none of its own", async () => {
+test("memory v2 client reports the kind its latest open of a space with history carries, and declares none of its own", async () => {
   let reported: { serverSeq: number; spaceKind?: string } = {
     serverSeq: 3,
     spaceKind: "fabrichat-room",
@@ -4083,7 +4084,7 @@ Deno.test("memory v2 client reports the kind its latest open of a space with his
   }
 });
 
-Deno.test("memory v2 client reports nothing of the kind from an open of a space with no history, and declares its kind intent on every open", async () => {
+test("memory v2 client reports nothing of the kind from an open of a space with no history, and declares its kind intent on every open", async () => {
   let reported: { serverSeq: number; spaceKind?: string } = { serverSeq: 0 };
   const { transport, declared } = spaceKindTransport(() => reported);
   const client = await connect({ transport });
@@ -4101,7 +4102,7 @@ Deno.test("memory v2 client reports nothing of the kind from an open of a space 
   }
 });
 
-Deno.test("memory v2 client retains its original root intent across caller mutation and reopen", async () => {
+test("memory v2 client retains its original root intent across caller mutation and reopen", async () => {
   const transport = handshakeTransport({
     ...HELLO_OK,
     flags: { ...HELLO_OK.flags, genesisRoot: true },

@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { SpaceInviteError } from "../space-invites.ts";
@@ -19,6 +18,7 @@ import type { InviteResult } from "../v2/invites.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { connectPeer, request, type WirePeer } from "./support/wire-peer.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-open-invite-failures-space";
 const OTHER_SPACE = "did:key:z6Mk-open-invite-failures-other";

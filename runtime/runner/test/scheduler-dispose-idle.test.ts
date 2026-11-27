@@ -14,10 +14,11 @@
  * docs/development/waiting-in-tests.md tells you not to add.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runningClock } from "@commonfabric/test-support/fake-clock";
 import { Runtime } from "../src/runtime.ts";
 import type { Action } from "../src/scheduler.ts";
 
@@ -26,14 +27,6 @@ const signer = await Identity.fromPassphrase("scheduler dispose idle");
 const newRuntime = (
   storageManager: ReturnType<typeof StorageManager.emulate>,
 ) => new Runtime({ apiUrl: new URL(import.meta.url), storageManager });
-
-// The fake clock the preload installs per test; absent on a real-clock run.
-// Read through globalThis so this file also type-checks as a standalone program
-// (the ambient declaration in clock.d.ts is in scope only when the package
-// directory is checked as one).
-function fakeClock(): { settle(): Promise<void> } | undefined {
-  return (globalThis as { clock?: { settle(): Promise<void> } }).clock;
-}
 
 /**
  * Leaves the scheduler with work it will never get to run: an effect
@@ -124,14 +117,14 @@ describe("scheduler.dispose() and idle()", () => {
       // settle() rather than a yield of my own: an ordering guarantee to a
       // fixpoint, which is what an assertion that something has NOT happened
       // needs — it cannot lose the race under load.
-      await fakeClock()?.settle();
+      await runningClock()?.settle();
       // Guards against passing vacuously: if this waiter had already resolved,
       // the claim below would hold for the wrong reason.
       expect(order).toEqual([]);
 
       runtime.scheduler.dispose();
 
-      await fakeClock()?.settle();
+      await runningClock()?.settle();
       expect(order).toEqual([]);
 
       release();

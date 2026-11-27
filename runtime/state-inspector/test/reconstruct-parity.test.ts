@@ -17,6 +17,7 @@ import {
   read,
 } from "@commonfabric/memory/v2/engine";
 import type { FabricValue } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { reconstructDocument } from "../reconstruct.ts";
@@ -44,7 +45,7 @@ function assertParity(
   }
 }
 
-Deno.test("reconstruct parity with memory-v2 engine", async (t) => {
+test("reconstruct parity with memory-v2 engine", async (t) => {
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
   const engine = await open({ url: toFileUrl(path) });
   try {

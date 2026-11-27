@@ -9,11 +9,11 @@
  * zero all look like the real thing to a loose pattern.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
 import { conflictMarkerAt, main, scan } from "./check-conflict-markers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Written out, not built. Detection is anchored at column 0, so these are inert
 // where they sit -- and that is the point: this file is tracked, so the

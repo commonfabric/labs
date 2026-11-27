@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { canonicalizeLogicalPath } from "../../src/cfc/canonical.ts";
 import { ConsumedLabelIndex } from "../../src/cfc/consumed-label-index.ts";
 import { isPrefix } from "../../src/cfc/path-prefix-index.ts";
 import type { LabelMapEntry } from "../../src/cfc/types.ts";
 import { PATH_INDEX_GRID, pathIndexCorpus } from "./path-index-corpus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const entry = (path: string[], ordinal: number): LabelMapEntry => ({
   path,

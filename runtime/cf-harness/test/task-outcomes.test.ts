@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { ConsoleServer } from "../console/server.ts";
 import { resolveConsoleConfig } from "./support/on-linux.ts";
@@ -19,6 +18,7 @@ import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A prompt bound as context: it may inform the run but not command it. */
 const contextPromptSlotBinding = {

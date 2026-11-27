@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { preserveSourceMapRange } from "../src/ast/utils.ts";
@@ -8,6 +7,7 @@ import { isDeclaredWithinFunction } from "../src/ast/scope-analysis.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, parseModule } from "./transformed-ast.ts";
 import { transformSource } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("parameter capture lineage", () => {
   it("keeps a cloned parameter local without conflating same-named bindings", () => {

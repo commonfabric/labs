@@ -24,6 +24,7 @@ import {
   listCommits,
   summarizeSpace,
 } from "../queries.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -151,7 +152,7 @@ function seedDb(path: string) {
   db.close();
 }
 
-Deno.test("state-inspector autopsy core", async (t) => {
+test("state-inspector autopsy core", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-test-" });
   const dbPath = `${dir}/space.sqlite`;
   try {
@@ -295,7 +296,7 @@ CREATE TABLE snapshot (
 );
 `;
 
-Deno.test("a malformed boundary is not laundered by a later valid one", async (t) => {
+test("a malformed boundary is not laundered by a later valid one", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-boundary-" });
   const dbPath = `${dir}/space.sqlite`;
   try {
@@ -371,7 +372,7 @@ Deno.test("a malformed boundary is not laundered by a later valid one", async (t
   }
 });
 
-Deno.test("getValueAt reports a document that holds no value", async () => {
+test("getValueAt reports a document that holds no value", async () => {
   // A stored document is a tree of top-level paths, and `value` is only one
   // of them: a document holding, say, only `source` exists, and has no path
   // under `value` to select.

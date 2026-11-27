@@ -13,9 +13,9 @@
  * and holds against anyone else.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { evaluateExchangeRules, type IFCLabel } from "../src/cfc/mod.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { readProjected } from "../src/cell.ts";

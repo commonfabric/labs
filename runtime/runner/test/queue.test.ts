@@ -1,6 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { AsyncSemaphoreQueue } from "../src/queue.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 describe("AsyncSemaphoreQueue", () => {
   it("processes a single job", async () => {

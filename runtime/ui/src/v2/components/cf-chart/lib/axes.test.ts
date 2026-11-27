@@ -2,11 +2,11 @@
 import "../../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { render, type TemplateResult } from "lit";
 // @ts-types="@types/d3-scale"
 import { scaleBand, scaleLinear, scaleTime } from "d3-scale";
 import { renderXAxis, renderYAxis } from "./axes.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Renders an SVG template into an `<svg>` element and returns the element. */
 function renderSvg(template: TemplateResult): SVGSVGElement {

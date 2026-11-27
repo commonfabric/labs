@@ -12,7 +12,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   CODEC_TYPE_TAGS,
@@ -24,6 +23,7 @@ import {
 } from "@/codec-common";
 import { jsonFromFabricValue, newDefaultJsonCodecEngine } from "@/codecs.ts";
 import { FabricHash } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A fixed 32-byte hash for deterministic tests. */
 const SAMPLE_HASH = new Uint8Array(32);

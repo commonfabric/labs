@@ -2,7 +2,6 @@
 // its own copy of the command tree, which reads the environment as it is built;
 // the query string is what makes the copy.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
@@ -12,6 +11,7 @@ import {
 } from "../commands/root.ts";
 import { test as testCommand } from "../commands/test-command.ts";
 import { argv, cf, checkStderr, stripAnsi, withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 class ExitError extends Error {
   constructor(readonly code: number) {

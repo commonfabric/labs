@@ -5,7 +5,6 @@
  * as an unrelated identity over a fresh connection to the same store.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { join, toFileUrl } from "@std/path";
@@ -47,6 +46,12 @@ import {
   ProfileSpaceRootRefusal,
 } from "../lib/profile-space-root.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const unrootedOwner = await Identity.fromPassphrase("repair-root unrooted");
 const plantedOwner = await Identity.fromPassphrase("repair-root planted");

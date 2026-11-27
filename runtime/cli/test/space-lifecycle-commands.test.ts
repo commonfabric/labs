@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -7,6 +6,7 @@ import {
   type SpaceCommandDependencies,
 } from "../commands/piece.ts";
 import type { SpaceConfig } from "../lib/piece.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk";
 const TARGET = ["-i", "/keys/me.key", "-a", "http://toolshed.test"];

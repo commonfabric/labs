@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { isArrayMethodReceiverExpression } from "../../../src/transformers/expression-rewrite/rewrite-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("rewrite-helpers", () => {
   describe("isArrayMethodReceiverExpression()", () => {

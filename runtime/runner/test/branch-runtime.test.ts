@@ -4,11 +4,16 @@
  * branch of the same store.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { Server } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { waitForSettledThroughHead } from "../src/executor/watermark.ts";
 import { Runtime } from "../src/index.ts";

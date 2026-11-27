@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CSSResultGroup } from "lit";
 import { CFBadge } from "../components/cf-badge/cf-badge.ts";
@@ -8,6 +7,7 @@ import { modalStyles } from "../components/cf-modal/styles.ts";
 import { CFTags } from "../components/cf-tags/cf-tags.ts";
 import { CFToast } from "../components/cf-toast/cf-toast.ts";
 import { variablesCSS } from "./variables.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A theme-derived variable: a surface recipe or the pill radius. */
 const DERIVED =

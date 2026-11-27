@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { ensureCompilerStack } from "../../src/harness/deferred-compiler-stack.ts";
 import { builderSourceSiteOptionsForCompile } from "../../src/harness/module-compile.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Mapping a site measures the helper injection, which parses.
 await ensureCompilerStack();

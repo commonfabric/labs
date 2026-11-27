@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   offerProfileSuggestion,

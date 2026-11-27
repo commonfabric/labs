@@ -176,8 +176,8 @@ const id = `${now.toString(36)}-${Math.random().toString(36).slice(2, 11)}`;
 
 This specifically matters for:
 
-- `activity-log.tsx` event creation / timestamps
-- `agent.tsx` lifecycle handlers (`markIdle`, `markError`)
+- `activity-log/main.tsx` event creation / timestamps
+- `agent/main.tsx` lifecycle handlers (`markIdle`, `markError`)
 - any handler-generated IDs or timestamps in experiment support patterns
 
 For event IDs in authored patterns, `Math.random()` is fine inside a handler:
@@ -206,9 +206,9 @@ lift/computed or at pattern-body level rather than inside a handler.
 
 ## Activity Log Pattern
 
-The Activity Log (`patterns/apps/activity-log/activity-log.tsx`) is a structured
-event stream for recording agent actions. Log events incrementally as you work —
-not in one batch at the end.
+The Activity Log (`patterns/apps/activity-log/main.tsx`) is a structured event
+stream for recording agent actions. Log events incrementally as you work — not
+in one batch at the end.
 
 **Calling `logEvent.handler`:**
 
@@ -291,7 +291,7 @@ echo '"resolved"' | cf cell set --cell $WISH_ID status --space SPACE
 cf piece step --cell $WISH_ID --space SPACE
 ```
 
-**Discover open annotations** — deploy `annotation-manager.tsx` for an
+**Discover open annotations** — deploy `annotation-manager/main.tsx` for an
 aggregated view, or query `pieces.json` directly:
 
 ```bash
@@ -309,7 +309,7 @@ for x in p:
 
 ---
 
-## Agent Piece (`patterns/apps/agent/agent.tsx`)
+## Agent Piece (`patterns/apps/agent/main.tsx`)
 
 Each agent is a piece in the space with its own cells for directive, learned
 state, and lifecycle. Deploy one per agent in the space.
@@ -390,7 +390,7 @@ for x in p:
     ref = x.get('patternRef', {})
     source = ref.get('source', {}) if isinstance(ref, dict) else {}
     locator = (source.get('entry') or source.get('origin', '')) if isinstance(source, dict) else ''
-    if locator.rsplit('/', 1)[-1] == 'agent.tsx':
+    if locator.endswith('/agent/main.tsx'):
         print(x['name'], '—', x.get('summary','')[:60])
 "
 ```

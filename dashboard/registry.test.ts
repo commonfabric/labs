@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { TILES } from "./registry.ts";
 import { type Ctx, runSourceKey } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const context: Ctx = {
   runs: () => Promise.resolve([]),

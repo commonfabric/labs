@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import type { FabricPlainObject } from "@commonfabric/api";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
 import {

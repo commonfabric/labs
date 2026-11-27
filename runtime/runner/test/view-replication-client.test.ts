@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -7,6 +6,8 @@ import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
 } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import type { Pattern } from "../src/builder/types.ts";
 import { COMPONENT_READ_CONTRACT_VERSION } from "../src/component-read-contract.ts";
@@ -21,6 +22,12 @@ import { LocalReadUnavailable } from "../src/storage/local-read-policy.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { viewNodeId } from "../src/view-replication.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up. The fixture waits on view-plan events.
+useRealClock();
 
 const signer = await Identity.fromPassphrase("view replication client");
 const space = signer.did();

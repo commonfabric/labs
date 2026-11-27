@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PatternSourceInfo } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { SourceViewNode } from "../src/lib/scheduler-source.ts";
 import { XSchedulerSource } from "../src/views/SchedulerSourceView.ts";

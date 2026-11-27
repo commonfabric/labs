@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -11,6 +10,7 @@ import {
   parseModule,
 } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The initializer the output gives the variable named `name` under `root`. */
 function initializerOf(root: ts.Node, name: string): ts.Expression {

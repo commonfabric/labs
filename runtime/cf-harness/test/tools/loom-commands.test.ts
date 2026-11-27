@@ -1,6 +1,11 @@
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createCfHarnessCliCapabilities } from "../../src/cli.ts";
 import {

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { entriesForConsumedLabel } from "../../src/cfc/consumed-label.ts";
 import type { LabelMapEntry } from "../../src/cfc/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const note: LabelMapEntry = {
   path: ["note"],

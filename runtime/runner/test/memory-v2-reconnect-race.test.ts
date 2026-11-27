@@ -10,6 +10,8 @@ import {
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { StorageManager as CutoverStorageManager } from "../src/storage/cache.deno.ts";
 import type {
@@ -263,7 +265,7 @@ const visibleIds = (
   ids: readonly URI[],
 ) => ids.filter((id) => provider.get(id)?.value !== undefined).sort();
 
-Deno.test("memory v2 runner does not integrate its own replayed commit after reconnect", async () => {
+test("memory v2 runner does not integrate its own replayed commit after reconnect", async () => {
   const server = new MemoryV2Server.Server({
     ...TEST_MEMORY_SERVER_AUTH,
     store: new URL(`memory://runner-v2-own-replay-${crypto.randomUUID()}`),
@@ -360,7 +362,7 @@ Deno.test("memory v2 runner does not integrate its own replayed commit after rec
   }
 });
 
-Deno.test("memory v2 runner loads and keeps watching a document when its load's response is lost to a reconnect", async () => {
+test("memory v2 runner loads and keeps watching a document when its load's response is lost to a reconnect", async () => {
   const server = new MemoryV2Server.Server({
     ...TEST_MEMORY_SERVER_AUTH,
     store: new URL(`memory://runner-v2-lost-load-${crypto.randomUUID()}`),
@@ -418,7 +420,7 @@ Deno.test("memory v2 runner loads and keeps watching a document when its load's 
   }
 });
 
-Deno.test("memory v2 runner deduplicates replayed stacked commits while integrating remote updates", async () => {
+test("memory v2 runner deduplicates replayed stacked commits while integrating remote updates", async () => {
   const server = new MemoryV2Server.Server({
     ...TEST_MEMORY_SERVER_AUTH,
     store: new URL(`memory://runner-v2-stacked-replay-${crypto.randomUUID()}`),
@@ -522,7 +524,7 @@ Deno.test("memory v2 runner deduplicates replayed stacked commits while integrat
   }
 });
 
-Deno.test("memory v2 runner restores watched graph state after reconnect and keeps retarget updates flowing", async () => {
+test("memory v2 runner restores watched graph state after reconnect and keeps retarget updates flowing", async () => {
   const server = new MemoryV2Server.Server({
     ...TEST_MEMORY_SERVER_AUTH,
     store: new URL(`memory://runner-v2-watch-reconnect-${crypto.randomUUID()}`),
@@ -621,7 +623,7 @@ Deno.test("memory v2 runner restores watched graph state after reconnect and kee
   }
 });
 
-Deno.test("memory v2 runner confirms its own watched commit without an integrate echo", async () => {
+test("memory v2 runner confirms its own watched commit without an integrate echo", async () => {
   const storageManager = CutoverStorageManager.emulate({
     as: signer,
   });
@@ -667,7 +669,7 @@ Deno.test("memory v2 runner confirms its own watched commit without an integrate
   }
 });
 
-Deno.test("memory v2 runner can retry immediately after a conflict revert", async () => {
+test("memory v2 runner can retry immediately after a conflict revert", async () => {
   const storageManager = CutoverStorageManager.emulate({
     as: signer,
   });
@@ -786,7 +788,7 @@ Deno.test("memory v2 runner can retry immediately after a conflict revert", asyn
   }
 });
 
-Deno.test("memory v2 runner keeps later independent pending commits after an earlier conflict", async () => {
+test("memory v2 runner keeps later independent pending commits after an earlier conflict", async () => {
   const transport = new RejectThenSucceedTransport();
   const sessionFactory = new SingleSessionFactory(transport);
   const storageManager = TestStorageManager.create({

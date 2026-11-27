@@ -17,7 +17,6 @@
  * down.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -27,6 +26,7 @@ import {
 } from "@";
 import { FabricError, FabricLink } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Makes a plain object carrying a genuine own `__proto__` property. An object

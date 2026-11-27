@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parse, PendingParses } from "../../../lib/view/backgroundparse.ts";
 import { parseDiff } from "../../../lib/view/diff.ts";
@@ -15,6 +14,7 @@ import {
   languageForFile,
 } from "../../../lib/view/languages/language.ts";
 import type { Span, ViewMode } from "../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FILES = new Map([
   ["/ws/a.ts", "export function alpha() {\n  return 2;\n}\n"],

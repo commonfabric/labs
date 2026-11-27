@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricPlainObject } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { encodeMemoryBoundary } from "../v2.ts";
 import { parseClientMessage } from "../v2/server.ts";

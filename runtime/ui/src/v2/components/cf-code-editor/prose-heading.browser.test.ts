@@ -3,9 +3,10 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { CFCodeEditor } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 for (const marker of ["#", "# "]) {
-  Deno.test(`prose formatting survives a remote unfinished ${JSON.stringify(marker)} heading`, async () => {
+  test(`prose formatting survives a remote unfinished ${JSON.stringify(marker)} heading`, async () => {
     const editor = new CFCodeEditor();
     editor.mode = "prose";
     editor.value = "# Agenda\n\nMeeting notes";

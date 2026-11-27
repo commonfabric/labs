@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -8,6 +7,12 @@ import {
   gitIn,
   repositoryFiles,
 } from "./repository-files.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Runs git in `root`, failing the test when git does. */
 async function git(root: string, ...args: string[]): Promise<void> {

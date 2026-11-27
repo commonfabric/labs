@@ -2,6 +2,7 @@ import { assertEquals, assertStringIncludes } from "@std/assert";
 import { validateFiles, validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const DIAGNOSTIC_TYPE = "reactive-capture:unknown-type";
 const RESULT_DIAGNOSTIC_TYPE = "pattern-result:unknown-type";
@@ -24,7 +25,7 @@ async function unknownResultDiagnostics(
   return diagnostics.filter((d) => d.type === RESULT_DIAGNOSTIC_TYPE);
 }
 
-Deno.test("unknown reactive capture diagnostic", async (t) => {
+test("unknown reactive capture diagnostic", async (t) => {
   await t.step(
     "errors when an untyped wish().result is captured in computed()",
     async () => {

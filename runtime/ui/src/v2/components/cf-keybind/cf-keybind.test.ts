@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { isValidFabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { keybindDetail } from "./cf-keybind.ts";
 
 type FakeModifiers = {

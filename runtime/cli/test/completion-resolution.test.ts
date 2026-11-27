@@ -4,7 +4,6 @@
  * takes nothing, and which target a line's own words name.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Command } from "@cliffy/command";
 
@@ -18,6 +17,7 @@ import {
   resolvePieceContext,
 } from "../lib/completion/providers.ts";
 import { main } from "../commands/main.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A tree with two short flags, one boolean and one taking a value. */
 function fixtureTree() {

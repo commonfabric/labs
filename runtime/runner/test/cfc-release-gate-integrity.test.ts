@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   CFC_ATOM_TYPE,
@@ -10,6 +9,7 @@ import {
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

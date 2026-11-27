@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PatternIndexListedPattern } from "@commonfabric/pattern-index/client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { mineLines, mineRows } from "../lib/pattern-mine.ts";
 
 const row = (

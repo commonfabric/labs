@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path/join";
 
 import { DevServer, devSocketClient } from "./dev-server.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Resolves with the next event of `type` that `target` dispatches. */
 function nextEvent(target: EventTarget, type: string): Promise<Event> {

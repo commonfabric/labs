@@ -4,10 +4,10 @@
  * validates: nothing here throws.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { markerOf } from "@/codec-realm/marker.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("markerOf()", () => {
   it("returns the marker of a well-formed envelope", () => {

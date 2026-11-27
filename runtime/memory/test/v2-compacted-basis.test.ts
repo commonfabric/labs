@@ -17,7 +17,6 @@
  * below it, leave the rows above it, and advance the branch head.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -31,6 +30,12 @@ import {
   read,
 } from "../v2/engine.ts";
 import { encodeMemoryBoundary } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const DOC = "of:doc";
 const OTHER = "of:other";

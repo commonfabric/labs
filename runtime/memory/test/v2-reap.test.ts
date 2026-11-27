@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -24,6 +23,12 @@ import {
   stageReap,
 } from "../v2/reap.ts";
 import { cellDatabaseFilePrefix } from "../v2/storage-path.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6MkReapSpace";
 const ALICE = "did:key:z6MkReapAlice";

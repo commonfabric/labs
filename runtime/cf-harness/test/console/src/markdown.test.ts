@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   markdownTemplate,
   revealedText,
 } from "../../../console/src/markdown.ts";
 import { templateText } from "./lit-template.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const rendered = (
   source: string,

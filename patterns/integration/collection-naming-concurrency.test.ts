@@ -11,14 +11,6 @@
  * allocators through the harness and calls what comes back.
  */
 
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  it,
-} from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -29,6 +21,14 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type * as naming from "../product/collection-naming/naming.ts";
 
 const signer = await Identity.fromPassphrase("collection naming concurrency");

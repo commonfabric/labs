@@ -5,10 +5,10 @@
  * label, and its run under `enforce-strict` completes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { normalize } from "@std/path/posix";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
@@ -307,17 +307,19 @@ const bashInputConfidentiality = (
 /**
  * How this file delegates to each profile. A `shell` child holds `bash`, so a
  * test can hand it a labeled output to observe; a `web` child holds no `bash`.
- * A `browser` child needs a browser host, which this file does not set up.
+ * A `browser` child needs a browser host. An `image-review` child takes
+ * selected author frames; its crossing is exercised by the image-review loop test.
  */
 const PROFILE_KINDS = {
   default: "shell",
+  "image-review": "images",
   "pattern-author": "shell",
   web_fetch: "web",
   web_search: "web",
   browser: "browser",
 } as const satisfies Record<
   HarnessDelegableSubagentProfile,
-  "shell" | "web" | "browser"
+  "shell" | "web" | "browser" | "images"
 >;
 
 const profilesOfKind = (

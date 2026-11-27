@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseCfHarnessCliArgs } from "./support/on-linux.ts";
 import { startCommandHost } from "./support/command-host.ts";
@@ -21,6 +20,7 @@ import {
   runLoomCommand,
   validateLoomCommandsConfig,
 } from "../src/loom-commands.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A host configuration whose endpoint is `url`. */
 const configFor = (url: string): HarnessLoomCommandsConfig => ({

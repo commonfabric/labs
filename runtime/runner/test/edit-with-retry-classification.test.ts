@@ -17,7 +17,6 @@
  * in compile-cache-writeback-conflict.test.ts.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert, assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
@@ -26,6 +25,7 @@ import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
   type Options,
@@ -352,7 +352,7 @@ class TestStorageManager extends V2StorageManager {
   }
 }
 
-Deno.test("a server ProtocolError reaches editWithRetry by name, once", async () => {
+test("a server ProtocolError reaches editWithRetry by name, once", async () => {
   const user = await Identity.fromPassphrase("retry-classification user");
   const bob = await Identity.fromPassphrase("retry-classification bob");
 
@@ -509,7 +509,7 @@ class WireRefusalSessionFactory implements SessionFactory {
   }
 }
 
-Deno.test("a SessionError commits once and does not remount the session", async () => {
+test("a SessionError commits once and does not remount the session", async () => {
   const user = await Identity.fromPassphrase("session-error user");
 
   const server = new MemoryV2Server.Server({
@@ -567,7 +567,7 @@ Deno.test("a SessionError commits once and does not remount the session", async 
   }
 });
 
-Deno.test("a MessageTooLargeError reaches editWithRetry by name, once", async () => {
+test("a MessageTooLargeError reaches editWithRetry by name, once", async () => {
   const user = await Identity.fromPassphrase("message-too-large user");
 
   const server = new MemoryV2Server.Server({

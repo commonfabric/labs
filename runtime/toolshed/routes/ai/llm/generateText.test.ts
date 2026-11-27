@@ -5,11 +5,11 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { APICallError, type LanguageModel } from "ai";
 import { MockLanguageModelV4 } from "ai/test";
 import { GOOGLE_SEARCH_NATIVE_MODEL_TOOL } from "@commonfabric/llm/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import env from "@/env.ts";
 import {
   applyNativeModelTools,

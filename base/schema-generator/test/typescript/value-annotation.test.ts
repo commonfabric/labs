@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -13,6 +12,7 @@ import {
   spellSameValue,
 } from "../../src/typescript/value-annotation.ts";
 import { createTestProgramFromFiles } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ENTRY = `
   import type { PolicyOf } from "./cfc-types.ts";

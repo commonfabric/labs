@@ -15,11 +15,11 @@
  * make impossible.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,

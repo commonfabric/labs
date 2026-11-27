@@ -11,7 +11,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { type Cell, type MemorySpace, Runtime } from "@commonfabric/runner";
@@ -24,6 +23,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { startShareIntakeOf } from "../src/ops/share-intake.ts";
 

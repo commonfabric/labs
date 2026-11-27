@@ -1,8 +1,8 @@
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { decodeJsonPointer } from "@commonfabric/json/json-pointer";
 
 const ROOT = join(import.meta.dirname!, "..", "..", "..");
@@ -23,11 +23,11 @@ const CLICK_STREAMS = [
     stream: "sendMessage",
   },
   {
-    path: "patterns/examples/scoped-group-chat/main-plain-inputs.tsx",
+    path: "patterns/examples/scoped-group-chat/plain-inputs/main.tsx",
     stream: "sendMessage",
   },
   {
-    path: "patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx",
+    path: "patterns/examples/scoped-group-chat/writable-inputs/main.tsx",
     stream: "sendMessage",
   },
 ];

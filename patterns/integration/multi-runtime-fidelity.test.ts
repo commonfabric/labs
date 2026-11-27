@@ -12,13 +12,18 @@
  */
 
 import { assert, assertEquals } from "@std/assert";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { debugStr } from "@commonfabric/data-model";
 import { isLinkRef } from "@commonfabric/data-model/cell-rep";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

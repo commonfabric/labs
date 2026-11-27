@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   canonicalPieceAddress,
   decodePlan,

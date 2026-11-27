@@ -4,13 +4,18 @@
  * the piece holds and the rows its database holds afterward.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { stripEntityUriScheme } from "../src/entity-kind.ts";

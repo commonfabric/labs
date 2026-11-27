@@ -3,7 +3,6 @@
 // (held out of the scheduler, released coarsened), while an ordinary internal
 // write is not shaped. Either way the dependent computed re-runs with the latest
 // value after idle() — nothing is lost, only the wake timing is coarsened.
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -11,6 +10,12 @@ import { markRendererInputTx, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const ROOT = join(import.meta.dirname!, "..");
 

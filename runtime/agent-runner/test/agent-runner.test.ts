@@ -11,7 +11,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -42,6 +41,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { seedHomeAgentQueue } from "../../runner/test/support/agent-queue.ts";
 import { createTrustedBuilder } from "../../runner/test/support/trusted-builder.ts";

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   Engine,
@@ -10,6 +9,12 @@ import {
 } from "./engine-test-support.ts";
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type { RuntimeProgram } from "./engine-test-support.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 describe("Engine.compileToRecordGraph()", () => {
   let runtime: Runtime;
   let engine: Engine;

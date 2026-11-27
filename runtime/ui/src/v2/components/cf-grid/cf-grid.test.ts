@@ -2,8 +2,8 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFGrid } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** The grid container a mounted `cf-grid` with `properties` renders. */
 async function gridOf(properties: Partial<CFGrid> = {}): Promise<Element> {

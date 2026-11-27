@@ -10,7 +10,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   renderVerbList,
@@ -18,6 +17,7 @@ import {
   type VerbHelp,
 } from "../lib/shuttle/help.ts";
 import { readOptions, type VerbOption } from "../lib/shuttle/options.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The verbs every case below lays out. `help [<verb>]` is the longest usage of

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 import env from "@/env.ts";
 import app from "@/app.ts";
 import { CALLER_BASE, SPACE_BASE } from "./ingest-channels.routes.ts";

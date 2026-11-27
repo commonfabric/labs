@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { ExecutableRegistry } from "../../src/harness/executable-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ExecutableRegistry", () => {
   describe("instance members", () => {

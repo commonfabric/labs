@@ -11,8 +11,9 @@ import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import type { CommandLedger } from "@commonfabric/agents-connector/command-ledger";
 import type { AgentFabricTarget } from "@commonfabric/agents-connector/fabric";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("RunningAgentsHost settles runtime work before disposal", async () => {
+test("RunningAgentsHost settles runtime work before disposal", async () => {
   const events: string[] = [];
   const host = {
     stop: () => {
@@ -71,7 +72,7 @@ Deno.test("RunningAgentsHost settles runtime work before disposal", async () => 
   ]);
 });
 
-Deno.test("RunningAgentsHost reports every shutdown failure", async () => {
+test("RunningAgentsHost reports every shutdown failure", async () => {
   const host = {
     stop: () => Promise.reject(new Error("host stop failed")),
   } as unknown as AgentsHost;
@@ -215,7 +216,7 @@ function startOptions(signal?: AbortSignal) {
   };
 }
 
-Deno.test("startAgentsHost opens the target and returns a stoppable host", async () => {
+test("startAgentsHost opens the target and returns a stoppable host", async () => {
   const { dependencies, events } = startHarness();
   const running = await startAgentsHost(startOptions(), dependencies);
 
@@ -241,7 +242,7 @@ Deno.test("startAgentsHost opens the target and returns a stoppable host", async
   ]);
 });
 
-Deno.test("startAgentsHost can finish startup after health ownership", async () => {
+test("startAgentsHost can finish startup after health ownership", async () => {
   const releaseStart = Promise.withResolvers<number>();
   const ownership = Promise.withResolvers<void>();
   const harness = startHarness({
@@ -266,7 +267,7 @@ Deno.test("startAgentsHost can finish startup after health ownership", async () 
   await running.stop();
 });
 
-Deno.test("startAgentsHost cleans up a failed storage claim", async () => {
+test("startAgentsHost cleans up a failed storage claim", async () => {
   const harness = startHarness({
     claimStorage: () => Promise.reject(new Error("storage claim failed")),
   });
@@ -286,7 +287,7 @@ Deno.test("startAgentsHost cleans up a failed storage claim", async () => {
   ]);
 });
 
-Deno.test("startAgentsHost cancels unowned startup work", async () => {
+test("startAgentsHost cancels unowned startup work", async () => {
   const controller = new AbortController();
   const hostStarted = Promise.withResolvers<void>();
   const harness = startHarness({
@@ -323,7 +324,7 @@ Deno.test("startAgentsHost cancels unowned startup work", async () => {
   expect(harness.events).toContain("graph-runtime.dispose");
 });
 
-Deno.test("startAgentsHost reports cleanup failures with startup failure", async () => {
+test("startAgentsHost reports cleanup failures with startup failure", async () => {
   const harness = startHarness({
     claimStorage: () => Promise.reject(new Error("storage claim failed")),
     runtimeSettled: () => Promise.reject(new Error("settle failed")),
@@ -340,7 +341,7 @@ Deno.test("startAgentsHost reports cleanup failures with startup failure", async
   );
 });
 
-Deno.test("startAgentsHost reports every unowned cancellation failure", async () => {
+test("startAgentsHost reports every unowned cancellation failure", async () => {
   const controller = new AbortController();
   const hostStarted = Promise.withResolvers<void>();
   const harness = startHarness({
@@ -379,7 +380,7 @@ Deno.test("startAgentsHost reports every unowned cancellation failure", async ()
   );
 });
 
-Deno.test("startAgentsHost drains owned startup work after cancellation", async () => {
+test("startAgentsHost drains owned startup work after cancellation", async () => {
   const controller = new AbortController();
   const ownership = Promise.withResolvers<void>();
   const harness = startHarness({
@@ -411,7 +412,7 @@ Deno.test("startAgentsHost drains owned startup work after cancellation", async 
   );
 });
 
-Deno.test("startAgentsHost binds configured command producers and accepts their commands without a debug view", async () => {
+test("startAgentsHost binds configured command producers and accepts their commands without a debug view", async () => {
   let bound = false;
   let acceptCommands: boolean | undefined;
   const harness = startHarness({
@@ -448,7 +449,7 @@ Deno.test("startAgentsHost binds configured command producers and accepts their 
   await running.stop();
 });
 
-Deno.test("startAgentsHost accepts no commands when nothing bound a queue", async () => {
+test("startAgentsHost accepts no commands when nothing bound a queue", async () => {
   let acceptCommands: boolean | undefined;
   const harness = startHarness({
     commandsAreBound: () => false,
@@ -486,7 +487,7 @@ for (
     ],
   ] as const
 ) {
-  Deno.test(`startAgentsHost ${description}`, async () => {
+  test(`startAgentsHost ${description}`, async () => {
     const controller = new AbortController();
     const ownership = Promise.withResolvers<void>();
     const startFinished = Promise.withResolvers<number>();
@@ -520,7 +521,7 @@ for (
   });
 }
 
-Deno.test("the default host factory builds a host for the target it describes", async () => {
+test("the default host factory builds a host for the target it describes", async () => {
   const host = defaultStartAgentsHostDependencies.createHost({
     sources: [],
     target: {} as unknown as AgentsHostTarget,

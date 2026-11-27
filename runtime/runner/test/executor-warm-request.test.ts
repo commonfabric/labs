@@ -22,7 +22,6 @@
 // gone, and — before this fix — nothing ever re-demands it, so the
 // staged piece's computed stays underived forever.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
@@ -49,7 +48,20 @@ import {
   read as readDoc,
   serverSeq,
 } from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 class SharedServerStorageManager extends EmulatedStorageManager {
   static override connectTo(

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { toValuePath, type WatchSpec } from "../v2.ts";
 import { createClientInfo } from "../v2/client-info.ts";
@@ -8,6 +7,7 @@ import { close, open } from "../v2/engine.ts";
 import { toDocKey, trackGraph } from "../v2/query.ts";
 import { cacheKeyForEntity } from "../v2/server-sync.ts";
 import { SessionRegistry } from "../v2/session-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = "did:key:document-interests";
 const id = "cid:historical-schema";

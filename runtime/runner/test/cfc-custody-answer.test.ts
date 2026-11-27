@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,

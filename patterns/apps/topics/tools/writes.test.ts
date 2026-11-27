@@ -1,4 +1,3 @@
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { Saved, WriteOutcome, WriteRequest } from "./browser.ts";
@@ -8,6 +7,7 @@ import {
   type Told,
   Writes,
 } from "./writes.ts";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const NOW = 1_000;
 

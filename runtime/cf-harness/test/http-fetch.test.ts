@@ -10,13 +10,14 @@ import {
   defaultHarnessFetch,
   OpenAICompatibleGatewayClient,
 } from "../src/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("barrel re-exports the harness fetch default", () => {
+test("barrel re-exports the harness fetch default", () => {
   assertEquals(typeof defaultHarnessFetch, "function");
   assertEquals(typeof OpenAICompatibleGatewayClient, "function");
 });
 
-Deno.test("defaultHarnessFetch forwards input and init to the global fetch", async () => {
+test("defaultHarnessFetch forwards input and init to the global fetch", async () => {
   const original = globalThis.fetch;
   const calls: Array<{ input: RequestInfo | URL; init?: RequestInit }> = [];
   const stubResponse = new Response("ok", { status: 200 });
@@ -37,7 +38,7 @@ Deno.test("defaultHarnessFetch forwards input and init to the global fetch", asy
   }
 });
 
-Deno.test("the gateway client falls back to the global fetch when given none", async () => {
+test("the gateway client falls back to the global fetch when given none", async () => {
   const original = globalThis.fetch;
   const seen: Array<RequestInfo | URL> = [];
   globalThis.fetch = ((input: RequestInfo | URL) => {

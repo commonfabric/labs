@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -9,6 +8,7 @@ import {
   renumberedCells,
   writerDescription,
 } from "../src/cause-assignment.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The alias a node's binding holds for the internal cell `partialCause`.
 const alias = (partialCause: unknown) => ({

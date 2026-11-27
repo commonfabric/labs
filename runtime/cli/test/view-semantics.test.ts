@@ -6,6 +6,7 @@ import type { Semantics } from "../lib/view/languages/language.ts";
 import { buildPeekCard } from "../lib/view/card.ts";
 import { buildPreparedView } from "../lib/view/mod.ts";
 import type { Document } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const CWD = Deno.cwd();
 
@@ -28,7 +29,7 @@ function typeStub(offset: number, type: string): Semantics {
   };
 }
 
-Deno.test("semantics: infers a binding's type across sections in the blob", () => {
+test("semantics: infers a binding's type across sections in the blob", () => {
   // Two virtual modules; `main` imports `helpers` by its section-header path.
   const blob = `// transformed: /helpers.ts
 export function double(n: number): number {
@@ -43,7 +44,7 @@ const result = double(21);`;
   assertEquals(sem.typeAt(nameOffsetOf(doc, "result")), "number");
 });
 
-Deno.test("semantics: infers a structural return type with no annotations", () => {
+test("semantics: infers a structural return type with no annotations", () => {
   // Nothing here is annotated: the type must come from real inference.
   const blob = `// transformed: /m.ts
 function make() {
@@ -57,7 +58,7 @@ const item = make();`;
   assert(t && t.includes("label: string"), `inferred object type: ${t}`);
 });
 
-Deno.test("semantics: maps offsets to the right section across three sections", () => {
+test("semantics: maps offsets to the right section across three sections", () => {
   // Each section declares a binding of a section-unique type; a mis-mapping of
   // offset→section would surface as the wrong section's type.
   const blob = `// transformed: /a.ts
@@ -85,7 +86,7 @@ const c: { tag: "C" } = { tag: "C" };`;
   );
 });
 
-Deno.test("semantics: duplicate section paths stay reachable (no '#N' fragment)", () => {
+test("semantics: duplicate section paths stay reachable (no '#N' fragment)", () => {
   // Two sections share a header path. The de-duplicated virtual filename must
   // still be a real .ts TypeScript can load, or every binding in the second
   // copy would return null.
@@ -102,7 +103,7 @@ const beta = "x";`;
   );
 });
 
-Deno.test("semantics: resolves a bare import via the deno import map", () => {
+test("semantics: resolves a bare import via the deno import map", () => {
   // A self-contained repo-like layout in a temp dir: an import map points a
   // bare specifier at a real file, and the blob imports it.
   const tmp = Deno.makeTempDirSync();
@@ -126,7 +127,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("semantics: resolves an import-map specifier from a subdirectory", () => {
+test("semantics: resolves an import-map specifier from a subdirectory", () => {
   // The real launch model: the mapping lives in the repo-root deno.json while
   // cf view runs from a subpackage. The value must resolve against the dir that
   // declared it, not the cwd.
@@ -156,7 +157,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("semantics: prefix import map resolves under the mapped dir", () => {
+test("semantics: prefix import map resolves under the mapped dir", () => {
   // `lib/` -> `./src/lib/`. A same-named decoy one directory up must not win.
   const root = Deno.makeTempDirSync();
   try {
@@ -184,7 +185,7 @@ const v = thing;`;
   }
 });
 
-Deno.test("semantics: JSONC import map survives '//' inside a string value", () => {
+test("semantics: JSONC import map survives '//' inside a string value", () => {
   // A comment forces the JSONC path; a value containing '//' must not corrupt
   // the parse and drop the whole import map.
   const root = Deno.makeTempDirSync();
@@ -208,7 +209,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("semantics: JSONC import map survives a trailing comma", () => {
+test("semantics: JSONC import map survives a trailing comma", () => {
   // Deno configs are JSONC and commonly carry trailing commas, which make a
   // plain JSON.parse throw. The config must still be parsed so the import map
   // is not silently dropped and a mapped specifier still resolves.
@@ -239,7 +240,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("semantics: refuses to read files outside the workspace root", () => {
+test("semantics: refuses to read files outside the workspace root", () => {
   const root = Deno.makeTempDirSync(); // the "repo" (holds deno.json)
   const outside = Deno.makeTempDirSync(); // a sibling, outside the root
   try {
@@ -283,7 +284,7 @@ const ok = INSIDE;`;
   }
 });
 
-Deno.test("semantics: builds the program lazily, on first query", () => {
+test("semantics: builds the program lazily, on first query", () => {
   // The dependency does not exist when the service is created. An eager build
   // would cache the missing file; a lazy one reads it after it appears.
   const root = Deno.makeTempDirSync();
@@ -307,7 +308,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("semantics: degrades to null instead of saying 'any'", () => {
+test("semantics: degrades to null instead of saying 'any'", () => {
   const blob = `// transformed: /m.ts
 const mystery = someUndeclaredThing.field;`;
   const doc = parseDocument(blob);
@@ -326,7 +327,7 @@ const answer = 42;
 console.log(answer);
 `;
 
-Deno.test("semantics: a script with no TypeScript extension answers like its .ts twin", () => {
+test("semantics: a script with no TypeScript extension answers like its .ts twin", () => {
   const binding = SCRIPT.indexOf("answer");
   const use = SCRIPT.lastIndexOf("answer");
   const twin = createSemantics(SCRIPT, { cwd: CWD, fileName: "/tmp/tool.ts" })!;
@@ -339,7 +340,7 @@ Deno.test("semantics: a script with no TypeScript extension answers like its .ts
   }
 });
 
-Deno.test("semantics: an extensionless file is served only when read as TypeScript", async () => {
+test("semantics: an extensionless file is served only when read as TypeScript", async () => {
   const root = Deno.makeTempDirSync();
   try {
     const tool = join(root, "tool");
@@ -360,7 +361,7 @@ Deno.test("semantics: an extensionless file is served only when read as TypeScri
   }
 });
 
-Deno.test("semantics: resolves a real commonfabric type from a subdirectory", () => {
+test("semantics: resolves a real commonfabric type from a subdirectory", () => {
   // End-to-end against the real repo: a pattern binding in the representative
   // SAMPLE blob must type even when launched from a subpackage of the repo.
   const doc = parseDocument(SAMPLE);
@@ -372,7 +373,7 @@ Deno.test("semantics: resolves a real commonfabric type from a subdirectory", ()
   assert(!t!.includes("import("), `no import-path prefix: ${t}`);
 });
 
-Deno.test("semantics: tidies a long type to one clamped line", () => {
+test("semantics: tidies a long type to one clamped line", () => {
   const blob = `// transformed: /m.ts
 const big = { aaaa: 1, bbbb: 2, cccc: 3, dddd: 4, eeee: 5, ffff: 6, gggg: 7 };`;
   const doc = parseDocument(blob);
@@ -384,7 +385,7 @@ const big = { aaaa: 1, bbbb: 2, cccc: 3, dddd: 4, eeee: 5, ffff: 6, gggg: 7 };`;
   assert(t.endsWith("…"), "marks truncation");
 });
 
-Deno.test("semantics: definitionOf resolves a cross-section reference in-blob", () => {
+test("semantics: definitionOf resolves a cross-section reference in-blob", () => {
   const blob = `// transformed: /helpers.ts
 export function double(n: number): number {
     return n * 2;
@@ -409,7 +410,7 @@ const result = double(21);`;
   );
 });
 
-Deno.test("semantics: definitionOf picks the exact binding, not first-by-name", () => {
+test("semantics: definitionOf picks the exact binding, not first-by-name", () => {
   // `helper` is declared in two sections; the import binds the use to /b.ts.
   const blob = `// transformed: /a.ts
 export const helper = 1;
@@ -435,7 +436,7 @@ const v = helper;`;
   );
 });
 
-Deno.test("semantics: definitionOf resolves a definition in an external file", () => {
+test("semantics: definitionOf resolves a definition in an external file", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -466,7 +467,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("card: a dependency jumps to the semantic definition, over the name index", () => {
+test("card: a dependency jumps to the semantic definition, over the name index", () => {
   const blob = `// transformed: /m.ts
 const alpha = 1;
 const beta = 2;
@@ -506,7 +507,7 @@ const useIt = beta;`;
   );
 });
 
-Deno.test("card: surfaces an external definition; fileLines colors it (bounded)", () => {
+test("card: surfaces an external definition; fileLines colors it (bounded)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -546,7 +547,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("card: an external method called by a statement is defined elsewhere", () => {
+test("card: an external method called by a statement is defined elsewhere", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -602,7 +603,7 @@ ${call};`;
   }
 });
 
-Deno.test("card: literal call keys have safe one-line display names", () => {
+test("card: literal call keys have safe one-line display names", () => {
   const blob = `// transformed: /main.ts
 const worker = {
   [""](): void {},
@@ -644,7 +645,7 @@ line two\`](), worker["\\u2028"](), worker["\\u2029"]()];
   }
 });
 
-Deno.test("card: signed numeric method calls are defined elsewhere", () => {
+test("card: signed numeric method calls are defined elsewhere", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -685,7 +686,7 @@ import { numbered } from "ext";
   }
 });
 
-Deno.test("card: equal method names keep distinct external jump targets", () => {
+test("card: equal method names keep distinct external jump targets", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -732,7 +733,7 @@ ${calls};`;
   }
 });
 
-Deno.test("card: collapsed definition lookup is bounded and expandable", () => {
+test("card: collapsed definition lookup is bounded and expandable", () => {
   const calls = Array.from({ length: 1_000 }, () => "worker.run()").join(", ");
   const blob = `// transformed: /main.ts
 ${calls};`;
@@ -774,7 +775,7 @@ ${calls};`;
   );
 });
 
-Deno.test("card: a called in-document method is a dependency jump", () => {
+test("card: a called in-document method is a dependency jump", () => {
   const blob = `// transformed: /main.ts
 const worker = { render(): void {} };
 worker.render();`;
@@ -800,7 +801,7 @@ worker.render();`;
   );
 });
 
-Deno.test("card: local function properties retain distinct exact destinations", () => {
+test("card: local function properties retain distinct exact destinations", () => {
   const definitionLine =
     "const worker = { first: { run: () => 1 }, second: { run: () => 2 } };";
   const blob = `// transformed: /main.ts
@@ -823,7 +824,7 @@ ${definitionLine}
   );
 });
 
-Deno.test("card: exact and name-index dependencies stay in source order", () => {
+test("card: exact and name-index dependencies stay in source order", () => {
   const declarations = Array.from(
     { length: 10 },
     (_, index) => `const d${index} = ${index};`,
@@ -854,7 +855,7 @@ worker.run(d0, d1, d2, d3, d4, d5, d6, d7, d8, d9);`;
   );
 });
 
-Deno.test("card: a dependency jumps to the exact binding across a name collision", () => {
+test("card: a dependency jumps to the exact binding across a name collision", () => {
   // `helper` is declared in two sections; /main imports it from /b.ts.
   const blob = `// transformed: /a.ts
 export const helper = 1;
@@ -888,7 +889,7 @@ const v = helper;`;
   );
 });
 
-Deno.test("card: an external def sharing a name with an unrelated in-blob one is shown, not mis-jumped", () => {
+test("card: an external def sharing a name with an unrelated in-blob one is shown, not mis-jumped", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -928,7 +929,7 @@ const flag = ext();`;
   }
 });
 
-Deno.test("card: a non-BMP char on the use line does not derail the definition jump", () => {
+test("card: a non-BMP char on the use line does not derail the definition jump", () => {
   // The emoji (a surrogate pair) precedes the dependency on the same line; the
   // use offset is summed in UTF-16 units, so it must still land on `double`.
   const blob = `// transformed: /helpers.ts
@@ -949,7 +950,7 @@ const result = "😀" + double(21);`;
   );
 });
 
-Deno.test("card: builtins are not listed as defined elsewhere; in-blob is not double-listed", () => {
+test("card: builtins are not listed as defined elsewhere; in-blob is not double-listed", () => {
   const blob = `// transformed: /m.ts
 const s = new Set();
 const helper = 1;
@@ -979,7 +980,7 @@ const useHelper = helper + 1;`;
   );
 });
 
-Deno.test("card: shows the semantic type and it supersedes the syntactic one", () => {
+test("card: shows the semantic type and it supersedes the syntactic one", () => {
   // `cfg`'s syntactic type is the cast `AppConfig`; a semantic service that
   // knows better must win.
   const doc = parseDocument(`// transformed: /a.ts
@@ -1002,7 +1003,7 @@ const cfg = load() as AppConfig;`);
   );
 });
 
-Deno.test("card: builder, pattern and object bindings all show an inferred type", () => {
+test("card: builder, pattern and object bindings all show an inferred type", () => {
   // The inferred-type line is not limited to plain variables — builder/pattern
   // call results and object bindings (the dominant content of real blobs) get
   // it too.
@@ -1029,7 +1030,7 @@ const obj = { a: 1, b: "x" };`);
   }
 });
 
-Deno.test("card: falls back to the syntactic type without a service", () => {
+test("card: falls back to the syntactic type without a service", () => {
   const doc = parseDocument(`// transformed: /a.ts
 const cfg = load() as AppConfig;`);
   const node = doc.flatStructure.find((n) => n.name === "cfg")!;

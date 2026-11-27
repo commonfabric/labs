@@ -4,11 +4,16 @@
  * pointer back to the running pattern.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { getPatternIdentityRef, resolveEntryIdentity } from "../src/index.ts";

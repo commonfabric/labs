@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
@@ -26,6 +25,7 @@ import {
   namesInstancesByDefault,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { startAgentRunner } from "../commands/agent.ts";
 import { getAcl } from "../lib/acl.ts";

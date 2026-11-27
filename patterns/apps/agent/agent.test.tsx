@@ -9,8 +9,8 @@
  */
 import { action, assert, NAME, pattern, TESTS, UI, wish } from "commonfabric";
 import type { Writable } from "commonfabric";
-import ActivityLog from "../activity-log/activity-log.tsx";
-import Agent from "./agent.tsx";
+import ActivityLog from "../activity-log/main.tsx";
+import Agent from "./main.tsx";
 import {
   findElement,
   findNode,

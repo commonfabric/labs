@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Server as MemoryServer } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   startIndexedCollectionHost,
   stopIndexedCollectionHost,

@@ -27,16 +27,31 @@ export function supersededOutputsOwed(
   runtime: Runtime,
   outputs: readonly SupersededOutput[],
 ): boolean | Promise<boolean> {
-  const lagging = outputs.filter((output) => !taken(runtime, output));
   const owed = () => outputs.every((output) => holdsNoValue(runtime, output));
-  return lagging.length === 0 ? owed() : Promise.all(
-    lagging.map((output) => takeSupersedingCommit(runtime, output)),
-  ).then(owed);
+  const taking = supersedingCommitsTaken(runtime, outputs);
+  return taking === undefined ? owed() : taking.then(owed);
 }
 
 /**
- * Helper for {@link supersededOutputsOwed}, which returns whether the replica
- * has taken the commit that superseded `output`.
+ * Returns `undefined` when the replica has taken every commit that superseded
+ * one of `outputs`, and otherwise a promise that resolves once it has. Once
+ * `signal` aborts, the wait stops listening for the commits, and the promise
+ * does not resolve.
+ */
+export function supersedingCommitsTaken(
+  runtime: Runtime,
+  outputs: readonly SupersededOutput[],
+  signal?: AbortSignal,
+): Promise<void> | undefined {
+  const lagging = outputs.filter((output) => !taken(runtime, output));
+  return lagging.length === 0 ? undefined : Promise.all(
+    lagging.map((output) => takeSupersedingCommit(runtime, output, signal)),
+  ).then(() => {});
+}
+
+/**
+ * Helper for {@link supersedingCommitsTaken}, which returns whether the
+ * replica has taken the commit that superseded `output`.
  */
 function taken(runtime: Runtime, output: SupersededOutput): boolean {
   const { space, id, scope, seq, scopeKeyIdentity } = output;
@@ -62,12 +77,13 @@ function holdsNoValue(runtime: Runtime, output: SupersededOutput): boolean {
 }
 
 /**
- * Helper for {@link supersededOutputsOwed}, which resolves once the replica has
- * taken the commit that superseded `output`.
+ * Helper for {@link supersedingCommitsTaken}, which resolves once the replica
+ * has taken the commit that superseded `output`.
  */
 async function takeSupersedingCommit(
   runtime: Runtime,
   output: SupersededOutput,
+  signal: AbortSignal | undefined,
 ): Promise<void> {
   const { space, id, scope, scopeKeyIdentity } = output;
   const manager = runtime.storageManager;
@@ -95,19 +111,24 @@ async function takeSupersedingCommit(
     );
   } catch (error) {
     logger.warn("superseded-output-load-failed", () => [
-      `Could not load ${id} to take the commit that superseded a ` +
-      "derivation's write to it; the derivation waits for its frame",
+      `Could not load ${id} to take the commit that superseded a write ` +
+      "to it; the wait for that commit goes on until its frame arrives",
       error,
     ]);
   }
   if (taken(runtime, output)) return;
   await new Promise<void>((resolve) => {
-    manager.subscribe({
+    if (signal?.aborted === true) return;
+    const subscriber = {
       next: () => {
         if (!taken(runtime, output)) return { done: false };
+        signal?.removeEventListener("abort", stop);
         resolve();
         return { done: true };
       },
-    });
+    };
+    const stop = () => manager.unsubscribe?.(subscriber);
+    manager.subscribe(subscriber);
+    signal?.addEventListener("abort", stop, { once: true });
   });
 }

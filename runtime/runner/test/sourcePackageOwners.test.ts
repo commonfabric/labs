@@ -1,8 +1,8 @@
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { sourcePackageOwners } from "../src/harness/declared-data-files.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 describe("sourcePackageOwners()", () => {
   // Reading a `dataFile()` call out of a module is the compiler stack's work.

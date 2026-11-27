@@ -1,10 +1,15 @@
 import { stripAnsiCode } from "@std/fmt/colors";
 import { expect } from "@std/expect";
 import { join } from "@std/path/join";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { banner, felt } from "./felt.ts";
 import { ResolvedConfig } from "./interface.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Resolves with the next event of `type` that `target` dispatches. */
 function nextEvent(target: EventTarget, type: string): Promise<Event> {

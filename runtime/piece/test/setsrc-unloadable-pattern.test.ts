@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
@@ -9,6 +8,12 @@ import {
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // The manual-rescue case for a stranded piece. A piece whose stored
 // `patternIdentity` resolves to nothing — the live population is the board

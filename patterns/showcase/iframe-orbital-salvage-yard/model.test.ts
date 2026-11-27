@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   activeSnapClaims,
@@ -30,6 +29,7 @@ import {
   findBestSnap,
   findConnections,
 } from "./geometry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const firstId = "123e4567-e89b-12d3-a456-426614174000";
 const secondId = "123e4567-e89b-12d3-a456-426614174001";

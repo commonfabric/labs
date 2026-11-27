@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { Source } from "@commonfabric/js-compiler";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   computeFabricModuleIdentities,
   computeModuleIdentities,

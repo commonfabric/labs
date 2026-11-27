@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { ConsoleBrowserHost } from "../../console/browser-host.ts";
 import type { BrowserHostResult } from "../../src/contracts/browser-host.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PAGE = { url: "https://shop.example/", title: "Shop" };
 

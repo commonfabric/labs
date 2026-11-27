@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { PASS_RUN_BUDGET } from "../src/scheduler/constants.ts";
 import {
   collectInvalidUpstreamForLog,
@@ -12,6 +11,7 @@ import { NodeRegistry } from "../src/scheduler/node-record.ts";
 import { runPullSchedulerSettleLoop } from "../src/scheduler/settle.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 // Identity entity keys resolve scoped addresses against (stage E); these
 // tests use space-scoped addresses, so any one identity partitions alike.
 const TEST_IDENTITY = {

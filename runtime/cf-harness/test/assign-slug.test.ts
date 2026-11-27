@@ -6,7 +6,6 @@
  * reference.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { expect } from "@std/expect";
@@ -58,6 +57,12 @@ import {
 } from "../src/tools/assign-slug.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import { urlToAppView } from "@commonfabric/navigation";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HarnessToolContext } from "../src/tools/types.ts";
 import type { RunPatternToolSuccessOutput } from "../src/tools/run-pattern.ts";
 import type {

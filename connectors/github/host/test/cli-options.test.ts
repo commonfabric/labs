@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { parseGithubHostCliOptions } from "../src/cli-options.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("GitHub host CLI options", () => {
   it("rejects credential-bearing invalid API URLs without retaining them", () => {

@@ -1,4 +1,5 @@
 import { defer } from "@commonfabric/async/defer";
+import { test } from "@commonfabric/test-support/test";
 
 import "../src/common-iframe-sandbox.ts";
 
@@ -446,7 +447,7 @@ function defineTest(
   html: string,
   expected: string | null | RegExp,
 ) {
-  Deno.test(name, async () => {
+  test(name, async () => {
     cleanupFixtures();
     // The event bubbles and is composed, so the document sees it. Listening
     // there rather than on the element catches an error the host dispatches
@@ -526,7 +527,7 @@ function defineBarrierControl(
   html: string,
   expected: string,
 ) {
-  Deno.test(`barrier control: ${name}`, async () => {
+  test(`barrier control: ${name}`, async () => {
     cleanupFixtures();
     const errors: string[] = [];
     let barrierArrived = false;
@@ -580,7 +581,7 @@ function defineTimedNegativeTest(
   if (expected != null) {
     throw new Error(`${name}: expected a negative case.`);
   }
-  Deno.test(name, async () => {
+  test(name, async () => {
     cleanupFixtures();
     try {
       const body = `
@@ -600,5 +601,5 @@ function definePending(
   _html: string,
   _expected: string | null | RegExp,
 ) {
-  Deno.test(name, () => {});
+  test(name, () => {});
 }

@@ -226,8 +226,9 @@ reading a sibling's seal, are in the served-vote record.
 A change to the cycle, the finish or the park is run both ways before it is
 pushed. Run these suites with `--preload=test/clock-preload.ts` from
 `runtime/runner`, as the package's `deno-test` task does. A bare
-`deno test` leaves the global `clock` undefined in the executor and
-parked-runtime tests; that failure does not establish a container defect.
+`deno test` installs no fake clock, so the executor and parked-runtime tests
+that use `clock` fail with "clock is only available inside a test running under
+the fake clock"; that failure does not establish a container defect.
 
 Before a push: repo-wide `deno fmt --check`, `deno lint`, `deno task check`,
 `deno task check-docs-history-index` and `deno task check-skill-facts`, the

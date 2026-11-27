@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { INBOX_ADOPTION_REFUSALS } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 import { refusalReasonText } from "./private-inbox-refusal-text.ts";
 
 describe("refusalReasonText()", () => {

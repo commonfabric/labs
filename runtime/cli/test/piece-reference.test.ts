@@ -9,10 +9,10 @@
  * is the plumbing around it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PieceReference } from "@commonfabric/piece";
 import type { RestoreOutcome } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 import { parsePieceOptions } from "../commands/piece.ts";
 import { readSourcePin, runRestore } from "../lib/bulk.ts";
 import {

@@ -1,6 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CooperativeYield } from "../../src/scheduler/cooperative-yield.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 describe("CooperativeYield", () => {
   // Nothing here arms a timer with a delay, so on the package's fake clock

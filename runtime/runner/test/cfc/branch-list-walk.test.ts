@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   BranchListWalk,
   REACHED_AGAIN,
 } from "../../src/cfc/branch-list-walk.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("BranchListWalk", () => {
   describe("instance members", () => {

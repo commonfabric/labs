@@ -16,7 +16,6 @@
 // registration order) would send bulk first — the assertion fails on
 // exactly the reverted two-phase split (the mutation probe).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import {
@@ -31,6 +30,12 @@ import {
 } from "../v2.ts";
 import { Server } from "../v2/server.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const HELLO = {
   type: "hello",

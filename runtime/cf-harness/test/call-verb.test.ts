@@ -5,7 +5,6 @@
  * piece it holds rather than only read it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
@@ -15,6 +14,12 @@ import {
   parseLLMFriendlyLink,
 } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,

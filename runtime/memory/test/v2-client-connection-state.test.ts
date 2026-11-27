@@ -22,10 +22,10 @@
  * nothing here waits out a timeout, so neither reads as a flake.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,

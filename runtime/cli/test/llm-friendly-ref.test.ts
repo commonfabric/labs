@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import {
@@ -13,6 +12,7 @@ import {
   legacySpaceDid,
 } from "@commonfabric/identity";
 import { isDID } from "@commonfabric/identity/did";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The 43-character id length matches the entity ids the runtime mints, and
 // clears the runner parser's handle-length threshold.

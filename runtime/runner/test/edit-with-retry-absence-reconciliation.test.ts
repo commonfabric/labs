@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -6,6 +5,7 @@ import {
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import type { SpaceReplica } from "../src/storage/v2.ts";
 import { experimentalOptionsFromEnv } from "../src/experimental-posture.ts";

@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   createSession,
@@ -15,6 +14,12 @@ import {
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { cliCommand } from "../lib/cli-name.ts";
 import { ServedLifecycleError } from "../lib/pattern-lifecycle.ts";

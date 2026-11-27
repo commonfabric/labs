@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -15,6 +14,7 @@ import {
   verdictFor,
 } from "./test-selection.ts";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { type LanePlan, lanePlan, manifestMoment } from "./ci-lane.ts";
 import {
   freeCalibration,

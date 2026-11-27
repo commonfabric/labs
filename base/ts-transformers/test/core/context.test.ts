@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { TransformationContext } from "../../src/core/context.ts";
 import { CrossStageState } from "../../src/core/cross-stage-state.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Records the symbols the context marks as synthetic reactive collections. */
 class RecordingState extends CrossStageState {

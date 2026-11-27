@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 // Importing this module also registers the custom matcher it defines.
 import { stripSymbols } from "../src/equal-ignoring-symbols.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const testSymbol1 = Symbol("test1");
 const testSymbol2 = Symbol("test2");

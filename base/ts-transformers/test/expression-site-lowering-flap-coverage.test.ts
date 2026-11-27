@@ -3,6 +3,7 @@ import ts from "typescript";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsMatching, callsNamed, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // A few branches in expression-site-lowering.ts run only while a pattern
 // compiles through the transformer from cold. When CI's compile cache is warm
@@ -24,7 +25,7 @@ const HEAD = `/// <cts-enable />
 import { Cell, pattern, ifElse, UI, VNode } from "commonfabric";
 `;
 
-Deno.test(
+test(
   "helper-owned pass leaves a pure-arithmetic ifElse argument unlowered",
   async () => {
     // The `1 + 2` and `3 + 4` branch values are arguments of `ifElse`, so the
@@ -58,7 +59,7 @@ export default pattern<Input, Output>(({ flag }) => ({
   },
 );
 
-Deno.test(
+test(
   "helper-owned pass lowers a provenance-reactive map nested in a reactive map callback",
   async () => {
     // `nums` is the result of a plain function whose argument is a reactive read,

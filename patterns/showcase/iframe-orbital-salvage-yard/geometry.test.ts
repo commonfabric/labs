@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   DEFAULT_STATE,
@@ -13,6 +12,7 @@ import {
   rotateVectorY,
   worldConnectors,
 } from "./geometry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function moduleAt(
   id: string,

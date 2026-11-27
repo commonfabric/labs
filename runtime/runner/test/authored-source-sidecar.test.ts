@@ -1,9 +1,9 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { injectCfHelpers } from "@commonfabric/ts-transformers";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type { Engine } from "../src/harness/engine.ts";

@@ -3,12 +3,12 @@ import { mount } from "../../test-utils/dom.ts";
 
 import { ContextProvider } from "@lit/context";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { keyboardRouterContext } from "../keyboard-context.ts";
 import type { ShortcutHandler, ShortcutSpec } from "../keyboard-router.ts";
 import type { CFKeybindDetail } from "./cf-keybind.ts";
 import { CFKeybind } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A connected binding with `settings`, and the details of its matches. */
 async function binding(settings: Partial<CFKeybind>) {

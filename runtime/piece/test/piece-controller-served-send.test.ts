@@ -6,7 +6,6 @@
  * read what the served run wrote.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
@@ -18,6 +17,12 @@ import {
   startServingMemoryServer,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
   confirmServedInstantiate,

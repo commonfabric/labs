@@ -5,7 +5,6 @@
  * and the amend that refuses a changed hunk it cannot rebuild.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -13,6 +12,7 @@ import type { GitRunner } from "../lib/view/commitmsg.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SHA = "0123456789abcdef0123456789abcdef01234567";
 

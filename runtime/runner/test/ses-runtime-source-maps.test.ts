@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { identitySourceMap } from "@commonfabric/js-compiler/source-map";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { SESRuntime } from "../src/sandbox/ses-runtime.ts";
 

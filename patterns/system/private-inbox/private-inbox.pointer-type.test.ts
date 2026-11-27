@@ -28,11 +28,11 @@
  * records that this file compiled.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell, NAME } from "commonfabric";
 import type { inboxPieceLinkSchema } from "@commonfabric/piece/ops";
 import type { Schema } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { ChatManagerProfile } from "../fabrichat/schemas.tsx";
 import type {
   advertisedInbox,

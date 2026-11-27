@@ -5,6 +5,7 @@
 
 import { assertEquals } from "@std/assert";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import { test } from "@commonfabric/test-support/test";
 import {
   canRenderConfidentialityAtom,
   confidentialityLabels,
@@ -21,7 +22,7 @@ const policyWith = (bounds: Partial<RenderPolicy>): RenderPolicy => ({
   ...bounds,
 });
 
-Deno.test("display fit - canRenderConfidentialityAtom", async (t) => {
+test("display fit - canRenderConfidentialityAtom", async (t) => {
   await t.step("admits any atom where no ceiling is active", () => {
     assertEquals(canRenderConfidentialityAtom(secret, policyWith({})), true);
   });
@@ -63,7 +64,7 @@ Deno.test("display fit - canRenderConfidentialityAtom", async (t) => {
   });
 });
 
-Deno.test("display fit - confidentialityLabels", async (t) => {
+test("display fit - confidentialityLabels", async (t) => {
   await t.step("collects every entry's clauses once, at any path", () => {
     assertEquals(
       confidentialityLabels({

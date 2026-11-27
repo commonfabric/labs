@@ -1,10 +1,10 @@
 /** Competing meeting bindings converge through the real Loom handler. */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { FabricValue } from "@commonfabric/data-model";
 import { parseLinkOrThrow } from "@commonfabric/runner";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

@@ -1,6 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -15,6 +14,7 @@ import {
   widenLiteralType,
 } from "../../src/ast/type-inference.ts";
 import { setParentPointers } from "../../src/ast/utils.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // A minimal global lib so `string[]` and `checker.isArrayType(...)` resolve.
 // It is passed as a program root file (not the default lib) with `noLib` on, so
@@ -170,7 +170,7 @@ boxedDefaultArray;
 scalar;
 `;
 
-Deno.test("widenLiteralType: a union of differently-based literals widens to a base-type union", () => {
+test("widenLiteralType: a union of differently-based literals widens to a base-type union", () => {
   // `"a" | 1` -> `string | number`. Drives the multi-member reconstruction that
   // rebuilds the union from de-duplicated widened members via getUnionType.
   const { sourceFile, checker } = createProgram(SOURCE);
@@ -181,12 +181,12 @@ Deno.test("widenLiteralType: a union of differently-based literals widens to a b
   assertEquals(checker.typeToString(widened), "string | number");
 });
 
-Deno.test("isCellLikeType: undefined is not cell-like", () => {
+test("isCellLikeType: undefined is not cell-like", () => {
   const { checker } = createProgram(SOURCE);
   assertEquals(isCellLikeType(undefined, checker), false);
 });
 
-Deno.test("isCellLikeType: a branded Cell<T> is cell-like", () => {
+test("isCellLikeType: a branded Cell<T> is cell-like", () => {
   const { sourceFile, checker } = createProgram(SOURCE);
   assertEquals(
     isCellLikeType(typeOf(sourceFile, checker, "cellString"), checker),
@@ -194,7 +194,7 @@ Deno.test("isCellLikeType: a branded Cell<T> is cell-like", () => {
   );
 });
 
-Deno.test("unwrapCellLikeType: a branded Cell<string> unwraps to its inner string", () => {
+test("unwrapCellLikeType: a branded Cell<string> unwraps to its inner string", () => {
   const { sourceFile, checker } = createProgram(SOURCE);
   const unwrapped = unwrapCellLikeType(
     typeOf(sourceFile, checker, "cellString"),
@@ -203,7 +203,7 @@ Deno.test("unwrapCellLikeType: a branded Cell<string> unwraps to its inner strin
   assertEquals(checker.typeToString(unwrapped), "string");
 });
 
-Deno.test("unwrapCellLikeType: a branded Cell<{ a: number }> unwraps to the object type", () => {
+test("unwrapCellLikeType: a branded Cell<{ a: number }> unwraps to the object type", () => {
   const { sourceFile, checker } = createProgram(SOURCE);
   const unwrapped = unwrapCellLikeType(
     typeOf(sourceFile, checker, "cellObject"),
@@ -212,7 +212,7 @@ Deno.test("unwrapCellLikeType: a branded Cell<{ a: number }> unwraps to the obje
   assertEquals(checker.typeToString(unwrapped), "{ a: number; }");
 });
 
-Deno.test("unwrapOpaqueLikeType: an intersection with no branded cell member is rebuilt structurally", () => {
+test("unwrapOpaqueLikeType: an intersection with no branded cell member is rebuilt structurally", () => {
   // `{ a: number } & { b: string }` has no OpaqueCell part, so the walker
   // returns the intersection as it is.
   const { sourceFile, checker } = createProgram(SOURCE);
@@ -226,7 +226,7 @@ Deno.test("unwrapOpaqueLikeType: an intersection with no branded cell member is 
   );
 });
 
-Deno.test("typeToTypeNode: an invalid location argument is caught and yields undefined", () => {
+test("typeToTypeNode: an invalid location argument is caught and yields undefined", () => {
   // typeToTypeNode wraps checker.typeToTypeNode in try/catch. A synthetic node
   // with no source file / position is a location the checker rejects.
   const { sourceFile, checker } = createProgram(SOURCE);
@@ -250,29 +250,29 @@ function elementTypeText(name: string): string {
   return result.type ? checker.typeToString(result.type) : "<none>";
 }
 
-Deno.test("inferArrayElementType: a branded Cell<string[]> yields the element type", () => {
+test("inferArrayElementType: a branded Cell<string[]> yields the element type", () => {
   // Drives the reference-type branch where the inner type is directly an array
   // and extractElementFromArrayType returns the element.
   assertEquals(elementTypeText("cellArray"), "string");
 });
 
-Deno.test("inferArrayElementType: a Default<string[]> alias yields the element type", () => {
+test("inferArrayElementType: a Default<string[]> alias yields the element type", () => {
   // Drives the wrapped-list read: the cell's argument is the union that
   // `Default<string[]>` expands to, and both of its arms yield `string`.
   assertEquals(elementTypeText("cellDefaultArray"), "string");
 });
 
-Deno.test("inferArrayElementType: a Cell<Default<string[]> | undefined> yields the element type", () => {
+test("inferArrayElementType: a Cell<Default<string[]> | undefined> yields the element type", () => {
   // The cell's argument is a union around the array that keeps no alias, so
   // only a read through the union's arms finds `string`.
   assertEquals(elementTypeText("cellDefaultOrUndefined"), "string");
 });
 
-Deno.test("inferArrayElementType: a plain Default<string[]> reference yields the element type via the array fallback", () => {
+test("inferArrayElementType: a plain Default<string[]> reference yields the element type via the array fallback", () => {
   assertEquals(elementTypeText("defaultArray"), "string");
 });
 
-Deno.test("unwrapCellLikeType: a branded cell with no type argument returns itself", () => {
+test("unwrapCellLikeType: a branded cell with no type argument returns itself", () => {
   // The cell is branded (so isCellLikeType is true) but has no type argument, so
   // unwrapOpaqueLikeType returns it unchanged and it has no payload to read —
   // the final `?? type` fallthrough returns the cell type itself.
@@ -284,14 +284,14 @@ Deno.test("unwrapCellLikeType: a branded cell with no type argument returns itse
   assertEquals(checker.typeToString(unwrapped), "BareCell");
 });
 
-Deno.test("inferArrayElementType: two array arms with the same element de-duplicate to a single element", () => {
+test("inferArrayElementType: two array arms with the same element de-duplicate to a single element", () => {
   // `string[] | readonly string[]`: both arms extract `string`, so
   // combineExtractedElementTypes runs its de-duplication loop and collapses the
   // two identical element types back to a single one.
   assertEquals(elementTypeText("duplicateElementArrays"), "string");
 });
 
-Deno.test("inferArrayElementType: a Box<Default<string[]>> unwraps the Default alias while recursing a reference", () => {
+test("inferArrayElementType: a Box<Default<string[]>> unwraps the Default alias while recursing a reference", () => {
   // Drives extractElementFromArrayType's reference-recursion into a member whose
   // type argument is a Default alias wrapping an array.
   assertEquals(elementTypeText("boxedDefaultArray"), "string");
@@ -314,7 +314,7 @@ function programForSynthetics(): {
   return { checker };
 }
 
-Deno.test("ensureTypeNodeRegistered: a synthetic array node rebuilds string[] from a registered element", () => {
+test("ensureTypeNodeRegistered: a synthetic array node rebuilds string[] from a registered element", () => {
   const { checker } = programForSynthetics();
   const registry = new WeakMap<ts.Node, ts.Type>();
   const elementNode = ts.factory.createKeywordTypeNode(
@@ -328,7 +328,7 @@ Deno.test("ensureTypeNodeRegistered: a synthetic array node rebuilds string[] fr
   assertEquals(checker.typeToString(type!), "string[]");
 });
 
-Deno.test("ensureTypeNodeRegistered: a synthetic union node rebuilds string | number from registered members", () => {
+test("ensureTypeNodeRegistered: a synthetic union node rebuilds string | number from registered members", () => {
   const { checker } = programForSynthetics();
   const registry = new WeakMap<ts.Node, ts.Type>();
   const stringNode = ts.factory.createKeywordTypeNode(
@@ -346,7 +346,7 @@ Deno.test("ensureTypeNodeRegistered: a synthetic union node rebuilds string | nu
   assertEquals(checker.typeToString(type!), "string | number");
 });
 
-Deno.test("ensureTypeNodeRegistered: a synthetic type literal rebuilds an anonymous object from registered members", () => {
+test("ensureTypeNodeRegistered: a synthetic type literal rebuilds an anonymous object from registered members", () => {
   const { checker } = programForSynthetics();
   const registry = new WeakMap<ts.Node, ts.Type>();
   const valueNode = ts.factory.createKeywordTypeNode(
@@ -362,7 +362,7 @@ Deno.test("ensureTypeNodeRegistered: a synthetic type literal rebuilds an anonym
   assertEquals(checker.typeToString(type!), "{ a: string; }");
 });
 
-Deno.test("ensureTypeNodeRegistered: a synthetic parenthesized node resolves to its inner registered type", () => {
+test("ensureTypeNodeRegistered: a synthetic parenthesized node resolves to its inner registered type", () => {
   const { checker } = programForSynthetics();
   const registry = new WeakMap<ts.Node, ts.Type>();
   const innerNode = ts.factory.createKeywordTypeNode(
@@ -376,7 +376,7 @@ Deno.test("ensureTypeNodeRegistered: a synthetic parenthesized node resolves to 
   assertEquals(checker.typeToString(type!), "string");
 });
 
-Deno.test("getTypeFromTypeNodeWithFallback: an already-registered node returns the registered type directly", () => {
+test("getTypeFromTypeNodeWithFallback: an already-registered node returns the registered type directly", () => {
   const { checker } = programForSynthetics();
   const registry = new WeakMap<ts.Node, ts.Type>();
   const node = ts.factory.createKeywordTypeNode(ts.SyntaxKind.StringKeyword);
@@ -386,7 +386,7 @@ Deno.test("getTypeFromTypeNodeWithFallback: an already-registered node returns t
   assertEquals(type, stringType);
 });
 
-Deno.test("ensureTypeNodeRegistered: without a registry it returns the direct checker type", () => {
+test("ensureTypeNodeRegistered: without a registry it returns the direct checker type", () => {
   const { sourceFile, checker } = createProgram(
     `declare const s: string; type Alias = string; const a: Alias = "x"; a;`,
   );

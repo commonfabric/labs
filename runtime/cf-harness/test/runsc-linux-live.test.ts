@@ -7,7 +7,6 @@
  * a user that is not root and once as root.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -18,6 +17,7 @@ import {
   RunscSandboxRuntime,
 } from "../src/sandbox/runsc.ts";
 import { resolveSandboxRuntimeSelection } from "../src/sandbox/runtime-selection.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const home = Deno.env.get("CF_HARNESS_LIVE_LINUX_HOME");
 

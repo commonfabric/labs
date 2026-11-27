@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { Identity } from "@commonfabric/identity";
@@ -13,6 +12,7 @@ import { resolveCompletionLine } from "../lib/completion/line.ts";
 import { liveCandidates } from "../lib/completion/providers.ts";
 import { claimProcessDeployment } from "../lib/process-deployment.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("agent inspection connections", () => {
   it("reads and cancels a run on a second server while retaining the home deployment", async () => {

@@ -2,6 +2,7 @@ import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 
 import type { FabricValue } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   commitPreconditionValueHash,
@@ -36,7 +37,7 @@ const createEngine = async (): Promise<{
 
 const toEntityDocument = (value: FabricValue): EntityDocument => ({ value });
 
-Deno.test("origin-committed precondition accepts a committed same-session origin", async () => {
+test("origin-committed precondition accepts a committed same-session origin", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -80,7 +81,7 @@ Deno.test("origin-committed precondition accepts a committed same-session origin
   }
 });
 
-Deno.test("origin-committed precondition rejects a rejected origin localSeq", async () => {
+test("origin-committed precondition rejects a rejected origin localSeq", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -170,7 +171,7 @@ Deno.test("origin-committed precondition rejects a rejected origin localSeq", as
   }
 });
 
-Deno.test("commits without preconditions are unaffected", async () => {
+test("commits without preconditions are unaffected", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -197,7 +198,7 @@ Deno.test("commits without preconditions are unaffected", async () => {
   }
 });
 
-Deno.test("entity-absent precondition applies on a fresh entity", async () => {
+test("entity-absent precondition applies on a fresh entity", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -228,7 +229,7 @@ Deno.test("entity-absent precondition applies on a fresh entity", async () => {
   }
 });
 
-Deno.test("entity-value-hash precondition pins a present value", async () => {
+test("entity-value-hash precondition pins a present value", async () => {
   const { engine, path } = await createEngine();
   try {
     applyCommit(engine, {
@@ -286,7 +287,7 @@ Deno.test("entity-value-hash precondition pins a present value", async () => {
   }
 });
 
-Deno.test("entity-value-hash null pins absence", async () => {
+test("entity-value-hash null pins absence", async () => {
   const { engine, path } = await createEngine();
   try {
     const pin = (localSeq: number) => ({
@@ -330,7 +331,7 @@ Deno.test("entity-value-hash null pins absence", async () => {
   }
 });
 
-Deno.test("entity-value-hash treats metadata-only documents as value-absent", async () => {
+test("entity-value-hash treats metadata-only documents as value-absent", async () => {
   const { engine, path } = await createEngine();
   try {
     applyCommit(engine, {
@@ -386,7 +387,7 @@ Deno.test("entity-value-hash treats metadata-only documents as value-absent", as
   }
 });
 
-Deno.test("entity-absent precondition rejects when the entity head already exists", async () => {
+test("entity-absent precondition rejects when the entity head already exists", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -448,7 +449,7 @@ Deno.test("entity-absent precondition rejects when the entity head already exist
   }
 });
 
-Deno.test("set without entity-absent precondition overwrites an existing entity", async () => {
+test("set without entity-absent precondition overwrites an existing entity", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -492,7 +493,7 @@ Deno.test("set without entity-absent precondition overwrites an existing entity"
   }
 });
 
-Deno.test("entity-absent precondition treats a deleted head as existing", async () => {
+test("entity-absent precondition treats a deleted head as existing", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -548,7 +549,7 @@ Deno.test("entity-absent precondition treats a deleted head as existing", async 
   }
 });
 
-Deno.test("entity-absent precondition-only commit applies for an absent entity", async () => {
+test("entity-absent precondition-only commit applies for an absent entity", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -574,7 +575,7 @@ Deno.test("entity-absent precondition-only commit applies for an absent entity",
   }
 });
 
-Deno.test("entity-absent precondition-only commit rejects for an existing entity", async () => {
+test("entity-absent precondition-only commit rejects for an existing entity", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -616,7 +617,7 @@ Deno.test("entity-absent precondition-only commit rejects for an existing entity
   }
 });
 
-Deno.test("precondition-only commit validates and records against a committed origin", async () => {
+test("precondition-only commit validates and records against a committed origin", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -657,7 +658,7 @@ Deno.test("precondition-only commit validates and records against a committed or
   }
 });
 
-Deno.test("precondition-only commit rejects a missing origin with PreconditionFailedError", async () => {
+test("precondition-only commit rejects a missing origin with PreconditionFailedError", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -685,7 +686,7 @@ Deno.test("precondition-only commit rejects a missing origin with PreconditionFa
   }
 });
 
-Deno.test("malformed preconditions are rejected with ProtocolError", async () => {
+test("malformed preconditions are rejected with ProtocolError", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -725,7 +726,7 @@ Deno.test("malformed preconditions are rejected with ProtocolError", async () =>
   }
 });
 
-Deno.test("precondition failures keep name and precondition through client round trip", async () => {
+test("precondition failures keep name and precondition through client round trip", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-commit-preconditions-client"),
@@ -768,7 +769,7 @@ Deno.test("precondition failures keep name and precondition through client round
   }
 });
 
-Deno.test("entity-absent failures keep receipt-exists through client round trip", async () => {
+test("entity-absent failures keep receipt-exists through client round trip", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-entity-absent-client"),
@@ -817,7 +818,7 @@ Deno.test("entity-absent failures keep receipt-exists through client round trip"
   }
 });
 
-Deno.test("replayed receipt commit returns the stored result instead of an entity-absent rejection", async () => {
+test("replayed receipt commit returns the stored result instead of an entity-absent rejection", async () => {
   const { engine, path } = await createEngine();
 
   try {
@@ -860,7 +861,7 @@ Deno.test("replayed receipt commit returns the stored result instead of an entit
   }
 });
 
-Deno.test("replayed localSeq with different content still fails as a replay mismatch", async () => {
+test("replayed localSeq with different content still fails as a replay mismatch", async () => {
   const { engine, path } = await createEngine();
 
   try {

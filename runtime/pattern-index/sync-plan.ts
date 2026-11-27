@@ -8,7 +8,14 @@
  *     --allow-ffi --allow-run=git runtime/pattern-index/sync-plan.ts \
  *     --repo-root <dir> --program-root <dir> --include '<glob>' \
  *     [--include ...] [--exclude '<glob>' ...] --out <plan.json> \
- *     [--summary <file>]
+ *     [--summary <file>] [--moves-table <path>]
+ *
+ * `--moves-table` names where the repository records how its patterns
+ * moved, relative to its root. Each entry's former paths are then in the
+ * plan, so a moved file continues its old path's lineage. Without it there
+ * are no moves to follow. A module table is imported, so its top-level code
+ * runs here, with this step's permissions: name only a module the repository
+ * trusts as it trusts its own build, or a JSON file.
  *
  * It holds no credential and contacts no index, so it is also the dry run.
  * It compiles in a runtime with in-memory storage, writing nothing to any
@@ -22,13 +29,13 @@
  */
 
 import { parseArgs } from "@std/cli/parse-args";
-import { resolve } from "@std/path";
+import { join, resolve, toFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { experimentalOptionsFromEnv, Runtime } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { compileProgram } from "./src/publish.ts";
-import { planRepo } from "./src/repo-plan.ts";
+import { formerPathsIn, type MovesTable, planRepo } from "./src/repo-plan.ts";
 import type { RepoSyncPlan } from "./src/repo-sync.ts";
 
 /** The repository's tracked files, relative to its root. */
@@ -46,6 +53,49 @@ const gitTrackedFiles = async (repoRoot: string): Promise<string[]> => {
   return new TextDecoder().decode(stdout).split("\0").filter((path) =>
     path !== ""
   );
+};
+
+/**
+ * Why `value` is not a table of moves (former paths to current ones), or
+ * undefined when it is. A path is never empty, and a directory moves only to
+ * a directory: a pair whose trailing `/` disagree would match no file, and
+ * the history of every file it meant would be lost with the job still green.
+ */
+const movesTableProblem = (value: unknown): string | undefined => {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return "it holds no table of moves (former path to current path)";
+  }
+  for (const [from, to] of Object.entries(value)) {
+    if (typeof to !== "string") return `${from} moves to something not a path`;
+    if (from === "" || to === "") return "it names an empty path";
+    if (from.endsWith("/") !== to.endsWith("/")) {
+      return `${from} and ${to} must both end in / to move a directory`;
+    }
+  }
+  return undefined;
+};
+
+/**
+ * The repository's table of moves at `table`, relative to its root: a JSON
+ * object, or a module exporting `MOVED_PATTERN_KEYS`. It is read from the
+ * repository being synced, never from this Labs, which a vendoring
+ * repository runs from but whose moves are not its own.
+ *
+ * @throws Error when there is no file there, or it holds no such table: a
+ *   table named and not found would otherwise lose every move's history
+ *   with the job still green.
+ */
+const repositoryMoves = async (
+  repoRoot: string,
+  table: string,
+): Promise<MovesTable> => {
+  const path = join(repoRoot, table);
+  const moves: unknown = path.endsWith(".json")
+    ? JSON.parse(await Deno.readTextFile(path))
+    : (await import(toFileUrl(path).href)).MOVED_PATTERN_KEYS;
+  const problem = movesTableProblem(moves);
+  if (problem !== undefined) throw new Error(`${table}: ${problem}`);
+  return moves as MovesTable;
 };
 
 /** What a plan holds, for the job summary. */
@@ -76,6 +126,7 @@ const main = async (): Promise<number> => {
       "exclude",
       "out",
       "summary",
+      "moves-table",
     ],
     collect: ["include", "exclude"],
   });
@@ -90,6 +141,11 @@ const main = async (): Promise<number> => {
     return 2;
   }
   const repoRoot = resolve(flags["repo-root"] ?? ".");
+  const movesTable = flags["moves-table"];
+  // An empty name is a table named and not found, not the absence of one.
+  const moves = movesTable === undefined
+    ? undefined
+    : await repositoryMoves(repoRoot, movesTable);
   const signer = await Identity.generate();
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -105,6 +161,9 @@ const main = async (): Promise<number> => {
         programRoot,
         include: flags.include,
         exclude: flags.exclude,
+        ...(moves === undefined
+          ? {}
+          : { formerPaths: formerPathsIn(programRoot, moves) }),
       },
       {
         trackedFiles: () => gitTrackedFiles(repoRoot),

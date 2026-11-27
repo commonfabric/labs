@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -6,6 +5,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { resolveWish } from "../lib/wish.ts";
 import { seedProfileOwner } from "../../runner/test/cfc-seed-envelope.ts";
 

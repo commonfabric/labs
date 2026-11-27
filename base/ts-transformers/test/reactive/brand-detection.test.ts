@@ -4,15 +4,16 @@ import {
   isBrandedCellType,
 } from "../../src/transformers/cell-type.ts";
 import { analyzeExpression, CELL_VARIANTS_PRELUDE } from "./harness.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("detects opaque brand", () => {
+test("detects opaque brand", () => {
   const { checker, expression } = analyzeExpression("state.count");
   const type = checker.getTypeAtLocation(expression);
   assert(isBrandedCellType(type, checker));
   assertEquals(getCellKind(type, checker), "opaque");
 });
 
-Deno.test("detects cell brand variants", () => {
+test("detects cell brand variants", () => {
   const variants: Array<
     [
       string,

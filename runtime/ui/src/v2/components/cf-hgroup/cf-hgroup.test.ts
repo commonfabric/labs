@@ -2,8 +2,8 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFHGroup } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** The group container a mounted `cf-hgroup` with `properties` renders. */
 async function groupOf(properties: Partial<CFHGroup> = {}): Promise<Element> {

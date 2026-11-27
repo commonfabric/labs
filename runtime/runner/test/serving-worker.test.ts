@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 
 import { defer } from "@commonfabric/async/defer";
@@ -17,6 +16,13 @@ import { SERVER_EXECUTION_EFFECTS_DOC_ID } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
@@ -34,6 +40,12 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it runs the serving loop in a real
+// Worker, whose heartbeat timer ticks on the real clock. Auto-advance would run
+// the watchdog's timer at once, and it would kill a healthy worker for the
+// silence.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("serving worker space");
 const space = spaceSigner.did() as MemorySpace;

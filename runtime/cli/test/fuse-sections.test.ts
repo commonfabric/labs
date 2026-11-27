@@ -18,11 +18,11 @@
  * running it, which only CI can do.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import { loadCliSuites } from "../../../tasks/test-topology/cli.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The FUSE integration script, whose tail holds the dispatch table. */
 const SCRIPT = await Deno.readTextFile(

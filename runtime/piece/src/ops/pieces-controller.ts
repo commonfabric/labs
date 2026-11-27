@@ -73,10 +73,10 @@ import {
   type Schema,
   sendEvent,
   setPatternRepository,
-  setPatternSource,
   settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
+  stampCreatedFromOrigin,
   startWithInputSources,
 } from "@commonfabric/runner";
 import type {
@@ -2449,7 +2449,12 @@ export class PiecesController<T = unknown> {
       // when supplied, is recorded via setPatternRepository below, so a custom
       // root without a repository intentionally stays unstamped.
       if (options?.customProgram === undefined) {
-        setPatternSource(pieceCell, tx, patternConfig.source);
+        stampCreatedFromOrigin(
+          pieceCell,
+          tx,
+          patternConfig.source,
+          getPatternIdentityRef(pieceCell.withTx(tx)),
+        );
       }
 
       if (options?.repository !== undefined) {

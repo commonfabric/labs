@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { PASS_RUN_BUDGET } from "../../src/scheduler/constants.ts";
 import type { SchedulerSettleLoopState } from "../../src/scheduler/execution.ts";
@@ -7,6 +6,12 @@ import { runPullSchedulerSettleLoop } from "../../src/scheduler/settle.ts";
 import type { Action } from "../../src/scheduler/types.ts";
 import type { IMemorySpaceAddress } from "../../src/storage/interface.ts";
 import { type CapturedLogs, captureLogs } from "../support/captured-logs.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const identity = { principal: "did:test:settle", sessionId: "session-1" };
 

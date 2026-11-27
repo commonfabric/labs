@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { Signer } from "@commonfabric/memory/interface";
@@ -7,6 +6,8 @@ import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
 } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   createSignedConnectionAuth,

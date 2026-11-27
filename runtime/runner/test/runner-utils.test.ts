@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { Module, Pattern } from "../src/builder/types.ts";
 import { describePatternOrModule, mergeObjects } from "../src/runner-utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("runner-utils", () => {
   describe("describePatternOrModule()", () => {

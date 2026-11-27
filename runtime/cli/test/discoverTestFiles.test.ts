@@ -2,10 +2,10 @@
  * The files `cf test` finds in a directory.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { discoverTestFiles } from "../lib/test-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("discoverTestFiles()", () => {
   it("returns the pattern tests in a directory and its subdirectories, and no other file", async () => {

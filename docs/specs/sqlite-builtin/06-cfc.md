@@ -733,9 +733,9 @@ Phase 2's per-column label is a join — clause concatenation for confidentialit
 is never unioned when labels of different values fold into a derived one.
 
 Demos:
-[`cfc-row-label-mailbox`](../../../patterns/examples/cfc-row-label-mailbox/main.tsx)
+[`cfc-row-label-mailbox`](../../../patterns/examples/cfc-row-label-mailbox/cfc-row-label-mailbox.tsx)
 (rule + ceiling + skip + aggregate refusal end to end) and
-[`cfc-row-label-records`](../../../patterns/examples/cfc-row-label-records/main.tsx)
+[`cfc-row-label-records`](../../../patterns/examples/cfc-row-label-records/cfc-row-label-records.tsx)
 (per-row ∧ per-column composition on one row). e2e:
 [`sqlite-cfc-row-label.test.ts`](../../../runtime/runner/integration/sqlite-cfc-row-label.test.ts)
 (3.a/3.b) and

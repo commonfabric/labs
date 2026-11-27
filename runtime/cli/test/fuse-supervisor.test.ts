@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   cleanupFuseChild,
@@ -9,6 +8,7 @@ import {
   runFuseSupervisor,
   supervisorMain,
 } from "../lib/fuse-supervisor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CHILD_PID = 777;
 

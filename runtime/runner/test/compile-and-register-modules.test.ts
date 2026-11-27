@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -14,6 +13,12 @@ import { loadCompiledClosure } from "../src/compilation-cache/cell-cache.ts";
 import type { CompiledModuleArtifact } from "../src/harness/types.ts";
 import { PatternCoverageCollector } from "../src/pattern-coverage.ts";
 import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CompileClaims } from "../src/harness/compile-interleave.ts";
 import type { ModuleByteCache } from "../src/runtime.ts";
 

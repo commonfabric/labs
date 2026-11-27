@@ -2,11 +2,11 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { defer } from "@commonfabric/async/defer";
 import { NAVIGATE_EVENT, OPEN_EXTERNAL_EVENT } from "@commonfabric/navigation";
 import type { CellHandle, CellRef } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import { providePieceBoundary } from "../../../../../html/src/main/space-context.ts";
 import { PIECE_MENU_OPEN_ATTRIBUTE } from "../cf-piece-menu/cf-piece-menu.ts";

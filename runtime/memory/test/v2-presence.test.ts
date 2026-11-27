@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { PresenceFacets } from "../v2.ts";
@@ -8,6 +7,7 @@ import {
   PresenceError,
   validatePresencePublication,
 } from "../v2/presence.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Facets named `f0`, `f1`, ..., `count` of them. */
 const facetsOf = (count: number): PresenceFacets =>

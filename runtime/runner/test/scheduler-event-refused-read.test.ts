@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type ScopeKeyIdentity, toDocumentPath } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { refusedReadIn } from "../src/scheduler/events.ts";
 import type {

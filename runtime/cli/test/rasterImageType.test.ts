@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { rasterImageType } from "../lib/profile.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** `parts` as bytes: numbers are bytes, strings their characters' codes. */
 function bytesOf(...parts: (number | string)[]): Uint8Array {

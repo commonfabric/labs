@@ -10,10 +10,10 @@
 
 import { expect } from "@std/expect";
 import * as Path from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { signFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DUMP_BASE = "/api/storage/memory/dump";
 

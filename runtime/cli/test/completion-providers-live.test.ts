@@ -6,7 +6,6 @@
  * registry is the one piece.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -14,6 +13,12 @@ import { pieceId, setSlugLink } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { resolveCompletionLine } from "../lib/completion/line.ts";
 import { complete, tokenizeLine } from "../lib/completion/mod.ts";

@@ -5,11 +5,16 @@
  * the members.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { defineIndexedCollections } from "../src/builtins/indexed-collection/definition.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { type Cell, createCell } from "../src/cell.ts";

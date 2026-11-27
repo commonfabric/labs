@@ -1,6 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import {
   connectReverseInvalidation,
@@ -8,6 +7,7 @@ import {
   type ReverseInvalidationDeps,
   ReverseInvalidationQueue,
 } from "./invalidation.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 
@@ -50,7 +50,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-Deno.test("flushes queued entry invalidations off-thread with the name length excluding NUL", async () => {
+test("flushes queued entry invalidations off-thread with the name length excluding NUL", async () => {
   const { queue, rec } = setup();
   assert(queue.addEntry(1n, ["alpha", "beta"]));
   assertEquals(queue.pendingEntryCount, 1);
@@ -62,7 +62,7 @@ Deno.test("flushes queued entry invalidations off-thread with the name length ex
   assertEquals(queue.pendingEntryCount, 0);
 });
 
-Deno.test("coalesces repeated names and parents before flushing", async () => {
+test("coalesces repeated names and parents before flushing", async () => {
   const { queue, rec } = setup();
   queue.addEntry(1n, ["a"]);
   queue.addEntry(1n, ["a", "b"]);
@@ -75,7 +75,7 @@ Deno.test("coalesces repeated names and parents before flushing", async () => {
   );
 });
 
-Deno.test("flushes queued inode invalidations", async () => {
+test("flushes queued inode invalidations", async () => {
   const { queue, rec } = setup();
   assert(queue.addInode(5n));
   assert(queue.addInode(5n));
@@ -86,14 +86,14 @@ Deno.test("flushes queued inode invalidations", async () => {
   assertEquals(queue.pendingInodeCount, 0);
 });
 
-Deno.test("flush with nothing queued issues no notify calls", async () => {
+test("flush with nothing queued issues no notify calls", async () => {
   const { queue, rec } = setup();
   await queue.flush();
   assertEquals(rec.entryCalls.length, 0);
   assertEquals(rec.inodeCalls.length, 0);
 });
 
-Deno.test("queue additions are rejected while unmounting", () => {
+test("queue additions are rejected while unmounting", () => {
   const { queue } = setup({ isUnmounting: () => true });
   assertEquals(queue.addEntry(1n, ["a"]), false);
   assertEquals(queue.addInode(2n), false);
@@ -101,7 +101,7 @@ Deno.test("queue additions are rejected while unmounting", () => {
   assertEquals(queue.pendingInodeCount, 0);
 });
 
-Deno.test("an unsupported entry notify disables further entry invalidation and logs once", async () => {
+test("an unsupported entry notify disables further entry invalidation and logs once", async () => {
   const { queue, rec } = setup({
     invalidateEntry: () => -38, // -ENOSYS
   });
@@ -117,7 +117,7 @@ Deno.test("an unsupported entry notify disables further entry invalidation and l
   assertEquals(queue.addEntry(3n, ["d"]), false);
 });
 
-Deno.test("an entry notify that throws disables entry invalidation and warns", async () => {
+test("an entry notify that throws disables entry invalidation and warns", async () => {
   const { queue, rec } = setup({
     invalidateEntry: () => {
       throw new Error("boom");
@@ -130,7 +130,7 @@ Deno.test("an entry notify that throws disables entry invalidation and warns", a
   assert(rec.warns[0].includes("notify_inval_entry failed"));
 });
 
-Deno.test("an unsupported inode notify disables further inode invalidation without logging", async () => {
+test("an unsupported inode notify disables further inode invalidation without logging", async () => {
   const { queue, rec } = setup({
     invalidateInode: () => -38,
   });
@@ -141,7 +141,7 @@ Deno.test("an unsupported inode notify disables further inode invalidation witho
   assertEquals(queue.addInode(10n), false);
 });
 
-Deno.test("an inode notify that throws disables inode invalidation and warns", async () => {
+test("an inode notify that throws disables inode invalidation and warns", async () => {
   const { queue, rec } = setup({
     invalidateInode: () => {
       throw new Error("nope");
@@ -153,7 +153,7 @@ Deno.test("an inode notify that throws disables inode invalidation and warns", a
   assert(rec.warns[0].includes("notify_inval_inode failed"));
 });
 
-Deno.test("debug logs a nonzero entry result but stays quiet on success", async () => {
+test("debug logs a nonzero entry result but stays quiet on success", async () => {
   const results = [7, 0];
   const { queue, rec } = setup({
     debug: true,
@@ -164,14 +164,14 @@ Deno.test("debug logs a nonzero entry result but stays quiet on success", async 
   assertEquals(rec.logs, ["notify_inval_entry(parent=1, name=a) => 7"]);
 });
 
-Deno.test("debug logs every inode result, including zero", async () => {
+test("debug logs every inode result, including zero", async () => {
   const { queue, rec } = setup({ debug: true });
   queue.addInode(4n);
   await queue.flush();
   assertEquals(rec.logs, ["notify_inval_inode(ino=4) => 0"]);
 });
 
-Deno.test("the drain loop picks up work queued while an await is outstanding", async () => {
+test("the drain loop picks up work queued while an await is outstanding", async () => {
   const rec: Recorder = { entryCalls: [], inodeCalls: [], logs: [], warns: [] };
   const queue = new ReverseInvalidationQueue({
     invalidateEntry: (parentIno, nameBuf, nameLen) => {
@@ -195,7 +195,7 @@ Deno.test("the drain loop picks up work queued while an await is outstanding", a
   );
 });
 
-Deno.test("a reply held back mid-flush stops the drain, keeping what it has not sent", async () => {
+test("a reply held back mid-flush stops the drain, keeping what it has not sent", async () => {
   let pending = 0;
   const { queue, rec } = setup({
     pendingReplyCount: () => pending,
@@ -222,7 +222,7 @@ Deno.test("a reply held back mid-flush stops the drain, keeping what it has not 
   assertEquals(queue.pendingInodeCount, 0);
 });
 
-Deno.test("a re-entrant flush returns the running flush instead of starting a second", async () => {
+test("a re-entrant flush returns the running flush instead of starting a second", async () => {
   const gate = deferred<number>();
   let calls = 0;
   const { queue, rec } = setup({
@@ -243,7 +243,7 @@ Deno.test("a re-entrant flush returns the running flush instead of starting a se
   assertEquals(calls, 1);
 });
 
-Deno.test("unmounting mid-flush stops issuing and clears the queue", async () => {
+test("unmounting mid-flush stops issuing and clears the queue", async () => {
   let unmounting = false;
   const { queue, rec } = setup({
     isUnmounting: () => unmounting,
@@ -263,7 +263,7 @@ Deno.test("unmounting mid-flush stops issuing and clears the queue", async () =>
   assertEquals(queue.pendingEntryCount, 0);
 });
 
-Deno.test("a disabled entry kind is skipped while the inode kind still flushes", async () => {
+test("a disabled entry kind is skipped while the inode kind still flushes", async () => {
   const { queue, rec } = setup({ invalidateEntry: () => -38 });
   queue.addEntry(1n, ["a"]);
   await queue.flush();
@@ -274,7 +274,7 @@ Deno.test("a disabled entry kind is skipped while the inode kind still flushes",
   assertEquals(rec.inodeCalls, [5n]);
 });
 
-Deno.test("active() resolves before any flush and tracks the latest flush after", async () => {
+test("active() resolves before any flush and tracks the latest flush after", async () => {
   const { queue } = setup();
   await queue.active(); // the initial resolved promise
   queue.addEntry(1n, ["a"]);
@@ -283,7 +283,7 @@ Deno.test("active() resolves before any flush and tracks the latest flush after"
   await flush;
 });
 
-Deno.test("close refuses further additions and reports closed", () => {
+test("close refuses further additions and reports closed", () => {
   const { queue } = setup();
   assert(!queue.closed);
   queue.close();
@@ -292,7 +292,7 @@ Deno.test("close refuses further additions and reports closed", () => {
   assertEquals(queue.addInode(2n), false);
 });
 
-Deno.test("a flush after close is a no-op that issues nothing", async () => {
+test("a flush after close is a no-op that issues nothing", async () => {
   const { queue, rec } = setup();
   queue.addEntry(1n, ["a"]);
   queue.addInode(2n);
@@ -302,7 +302,7 @@ Deno.test("a flush after close is a no-op that issues nothing", async () => {
   assertEquals(rec.inodeCalls.length, 0);
 });
 
-Deno.test("close during an in-flight flush halts the remaining notifies", async () => {
+test("close during an in-flight flush halts the remaining notifies", async () => {
   const gate = deferred<number>();
   let calls = 0;
   const { queue, rec } = setup({
@@ -328,7 +328,7 @@ Deno.test("close during an in-flight flush halts the remaining notifies", async 
   assertEquals(queue.pendingInodeCount, 0);
 });
 
-Deno.test("both synchronous and asynchronous notify results are drained", async () => {
+test("both synchronous and asynchronous notify results are drained", async () => {
   const { queue, rec } = setup({
     invalidateEntry: (parentIno, nameBuf, nameLen) => {
       const name = decoder.decode(nameBuf).replace(/\0$/, "");

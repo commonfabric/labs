@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -17,6 +16,12 @@ import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { defer } from "@commonfabric/async/defer";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ACLManager } from "../../src/acl-manager.ts";
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";

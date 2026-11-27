@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { STAT_BY_ARCH, STAT_LAYOUT, writeStatWith } from "./platform-linux.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Read a member back at the width its architecture gives it. */
 function nlinkAt(view: DataView, stat: typeof STAT_LAYOUT): number {

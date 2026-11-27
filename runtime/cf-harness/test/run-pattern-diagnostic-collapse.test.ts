@@ -1,8 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import { collapseSupersededRunPatternDiagnostics } from "../src/run-pattern-diagnostic-collapse.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const codeFrame = (line: number) =>
   [

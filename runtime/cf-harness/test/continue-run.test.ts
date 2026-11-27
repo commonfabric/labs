@@ -3,7 +3,6 @@
  * run id. Scripted model requests and on-disk artifacts expose both sides of
  * the boundary; the predecessor's files must remain unchanged.
  */
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
@@ -13,6 +12,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   buildCfHarnessBatchSystemPrompt,

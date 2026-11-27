@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { llmGenerateObjectRequestProblem } from "@commonfabric/llm/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { llmToolExecutionHelpers } from "../../src/builtins/llm-dialog.ts";
 

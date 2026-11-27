@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { resolveCfcSchemaRefs } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { getResultCellWithSourceSchema } from "../../runner/src/piece-helpers.ts";
 import { listPieceCallables } from "../lib/piece.ts";
 

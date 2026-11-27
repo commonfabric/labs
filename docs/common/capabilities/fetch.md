@@ -126,4 +126,4 @@ expected to lift as fetches move to runtime-managed egress under an explicit
 egress policy.
 
 A worked example lives in
-[`patterns/examples/fetch-json/fetch-json.tsx`](../../../patterns/examples/fetch-json/fetch-json.tsx).
+[`patterns/examples/fetch-json/main.tsx`](../../../patterns/examples/fetch-json/main.tsx).

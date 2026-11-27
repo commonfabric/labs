@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
@@ -17,6 +16,7 @@ import type {
   SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   ScriptedSessionTransport,

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as Address from "../src/storage/transaction/address.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The identity address strings resolve scoped addresses against
 // (key-vocabulary.md §1 site 8). Space-scoped addresses ignore it.

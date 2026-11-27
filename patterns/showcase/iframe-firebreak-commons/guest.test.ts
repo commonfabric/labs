@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   GuestLoadError,
@@ -23,6 +22,7 @@ import {
   reduceSimulation,
   type TileState,
 } from "./simulation.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const GUEST = new URL("./guest.ts", import.meta.url);
 const HTML = new URL("./guest.html", import.meta.url);

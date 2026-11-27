@@ -18,6 +18,7 @@
 import { assert } from "@std/assert";
 import { join } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import { shellQuote } from "../lib/shell-quote.ts";
 
 const CLI_MOD = join(import.meta.dirname!, "..", "mod.ts");
@@ -298,7 +299,7 @@ function withDoc(
   };
 }
 
-Deno.test({
+test({
   name: "pager: opens a TTY, draws the document, quits on q",
   ignore: !SCRIPT,
   fn: withDoc(SRC, async (file) => {
@@ -310,7 +311,7 @@ Deno.test({
   }),
 });
 
-Deno.test({
+test({
   name: "pager: scrolling and search keystrokes are handled",
   ignore: !SCRIPT,
   fn: withDoc(
@@ -353,7 +354,7 @@ Deno.test({
   ),
 });
 
-Deno.test({
+test({
   name: "pager: an edit triggers the deferred reparse, then quits",
   ignore: !SCRIPT,
   fn: withDoc(SRC, async (file) => {
@@ -377,7 +378,7 @@ Deno.test({
   }),
 });
 
-Deno.test({
+test({
   name: "pager: a diff is viewed interactively",
   ignore: !SCRIPT,
   fn: withDoc(DIFF, async (file) => {
@@ -389,7 +390,7 @@ Deno.test({
   }),
 });
 
-Deno.test({
+test({
   name: "pager: a terminal stdin with no file is reported as no input",
   ignore: !SCRIPT,
   // No file argument and a TTY on stdin: the input reader returns empty rather

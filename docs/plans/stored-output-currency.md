@@ -119,8 +119,10 @@ key, so reading one viewer's slices reads no other viewer's rows:
   decides", below, says why.
 - **What the piece writes**, whoever it runs for: one row per document id in
   the declared write surface of every computation registered under it,
-  whether or not that computation has run, and the ids of the cells it owns.
-  The enclosing pieces are kept beside them.
+  whether or not that computation has run, and the ids of the cells it owns
+  that are owed a default, each with whether an absent instance of it reads
+  as that default ("What the demand pass does with it"). The enclosing
+  pieces are kept beside them.
 
 The write rows are what let a mark travel through a document no session
 demands: they say which pieces a stale piece makes stale, and which absent
@@ -369,7 +371,8 @@ The store can serve a root when:
   piece, or by a recorded piece beneath it, passes: each slice of the owner
   the row's instance is resolved under (the slice at the row's scope key and
   each broader one) is clean and of the current epoch, and a written id is
-  answered for, and an owned id is held by the store at the row's scope key.
+  answered for, and an owned id is held by the store at the row's scope key
+  or has a scalar default, as below.
   A written id is answered for by a vouch row in the slice at the row's
   scope key, or, where a run at another key wrote the instance, by the rows
   the slices of the demanding session's own chain hold for it ("An instance
@@ -401,9 +404,30 @@ not on the pieces that enclose it: a nested piece that reads what an
 enclosing piece writes is marked through that read, and one that reads
 nothing of it is unaffected.
 
-The arrival seed and the arrival re-arm run only for a started piece. A
-session whose demand reaches an owned scoped cell it holds no instance of
-fails the second condition, so the piece starts and seeds it.
+The arrival seed and the arrival re-arm run only for a started piece. An
+owned cell scoped narrower than its piece's result is owed a default, which
+the seed writes into the instance of each viewer who demands the piece, and
+a reader of an instance the store does not hold reads the cell's schema
+default. Where that default is a scalar the two are the same value, and a
+write to the cell replaces the whole value, so an absent instance of such a
+cell reads as current and refuses nothing: a new session of a board that
+owns a per-session text field is served from the store. Where the default
+is an object or an array they can differ: a viewer's first write into a
+part of an absent instance creates the instance holding that part alone,
+where a seed would have written the rest of the default beside it. A
+session whose demand reaches such a cell it holds no instance of fails the
+second condition, so the piece starts and seeds it. An owned cell that a
+computation of the piece also writes is a written id, and is judged as
+one. A cell's initial value is its schema default and can only be static
+data, so no argument of the piece decides what the seed writes.
+
+The record says which owned cells have a scalar default
+(`CurrencyRecord.absentAsDefault`), stored as `owned = 2` in
+`currency_write` beside `1` for any other owned cell and `0` for a written
+id. A piece that owns an id under two programs keeps the lower value, and
+so does one that owns and writes it. A row stored as `1` keeps refusing
+until the piece's next record, which the start it causes takes, so a store
+whose records name no such cells needs no new epoch.
 
 ### Starting what is stale upstream
 
@@ -778,6 +802,11 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   clean while what it would compute moves. The interval clock of a wish is
   the one such input the index knows, and a slice that read it expires at
   the tick after the one it read.
+- **An owned scoped cell with an object or an array default starts its
+  piece for each new viewer.** A session that holds no instance of it is
+  refused as `absent-owned` until a start has seeded it ("What the demand
+  pass does with it"). Serving it would need the seed without a start, or a
+  first write that fills the rest of the default.
 - **A crash loses what the last cycles would have recorded.** The affected
   pieces are marked by their own later commits and start again.
 
@@ -853,8 +882,8 @@ For the index, in `runtime/memory/test/`:
    nothing.
 8. A root is judged servable only when its piece's `space` slice is clean,
    and every slice a demand row beneath it is resolved under is clean and
-   the row's instance is vouched for; an absent instance of an owned cell, a
-   written id with no vouch row, a marked nested piece that owns a demanded
+   the row's instance is vouched for; an absent instance of an owned cell
+   whose default is not a scalar, a written id with no vouch row, a marked nested piece that owns a demanded
    row, and a record from another epoch each fail it.
 
 For the serving loop, in `runtime/runner/test/executor/`, with real client
@@ -874,8 +903,12 @@ write:
     starts it on the next demand, and the session reads the recomputed value.
 13. A change to an input of a skipped piece while its session is live starts
     it, and the watermark does not pass the change before the piece derived.
-14. A session whose demand reaches an owned scoped cell it holds no instance
-    of starts the piece and is seeded.
+14. A session whose demand reaches an owned scoped cell with an object
+    default that it holds no instance of starts the piece and is seeded. A
+    session whose demand reaches one with a scalar default that it holds no
+    instance of leaves the piece unstarted, and a client in a session that
+    holds no instance of it reads the default; one a computation of the
+    piece writes starts the piece.
 15. A demand for an output of a recorded piece that no computation had
     written starts the piece.
 16. A piece with a debounced computation still invalid at the settle is

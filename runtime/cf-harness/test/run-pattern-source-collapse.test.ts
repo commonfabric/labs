@@ -1,11 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import type {
   HarnessAssistantTranscriptMessage,
   HarnessTranscriptMessage,
 } from "../src/contracts/transcript.ts";
 import { collapseSupersededRunPatternSources } from "../src/run-pattern-source-collapse.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SOURCE = [
   "import { computed, pattern } from 'commonfabric';",

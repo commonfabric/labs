@@ -5,12 +5,17 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { Runtime } from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { RuntimeClient } from "@/runtime-client.ts";
 import { attachedClient } from "./attached-client.ts";

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   FLIGHT_STEP,
   GROWING,

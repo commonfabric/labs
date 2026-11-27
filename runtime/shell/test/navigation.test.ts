@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import type { DID } from "@commonfabric/identity";
 import {
   type AppView,
   newTabReservationEnabled,
 } from "@commonfabric/navigation";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { AppState, ShellApp } from "../src/lib/app-state.ts";
 import { Navigation } from "../src/lib/navigation.ts";

@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricPlainObject } from "@commonfabric/api";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Server } from "../v2/server.ts";
 import { connectPeer, openSession, request } from "./support/wire-peer.ts";

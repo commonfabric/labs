@@ -12,10 +12,10 @@
  * reads `deno.jsonc`.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { walk } from "@std/fs/walk";
 import { fromFileUrl, relative } from "@std/path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PACKAGE_ROOT = fromFileUrl(new URL("..", import.meta.url));
 

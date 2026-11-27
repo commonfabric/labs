@@ -493,7 +493,7 @@ storage schema to use these exact TypeScript field names.
 | Active origin | No origin, a `system:` ref, a stable mutable fabric-entity URL, or a content-addressed fabric pattern URL with an export symbol | **Partial**: `patternSource` stores the active origin string. Explicit history actions can clear it, restore an earlier origin, or accept one a person typed. Fabric origin creation and the stored export selector remain required |
 | Revision head | The stable identifier of the latest accepted source and origin state | **Partial**: the last valid `pieceSourceHistory` entry is the guarded head. It is not yet mirrored in the complete source-state schema |
 | Source revision log | Ordered records of every accepted source and origin state, with a durable reference to each immutable authored-program manifest | **Partial**: source-backed direct Piece API creation, lifecycle-aware edits, detach, revert, repoint, provenance repair, and origin updates append guarded records. Each record links to an existing source-document closure that is verified in the lifecycle write transaction. Programmatically constructed patterns without retained source, other creation paths, and immutable authored-program manifests remain required |
-| Last reconciliation | What following the active origin last did — followed, could not reach it, did not land the write that adopts what it offered, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, a refusal's reason, and for a `system:` origin the release time confirmed for the running source on the piece, and an accepted transition clears it. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing |
+| Last reconciliation | What following the active origin last did — followed, could not reach it, did not land the write that adopts what it offered, or refused what it offered — with when, why, and the identity the origin offered | **Partial**: reconciliation records the outcome, its time, the offered identity, a refusal's reason, and for a `system:` origin the release time confirmed for the running source on the piece, and an accepted transition clears it. An origin of a kind nothing follows yet records that, which is a state of its own rather than an absence. Reaching the same conclusion twice rewrites nothing, and creating a piece from an origin records that it follows it |
 | Descriptive repository | Optional locator shown by tooling; never followed | Implemented as `patternRepository` metadata |
 | Creator | The DID of the principal the piece was created for, which a field a later release adds with a placeholder `ownerPrincipal` is bound to ([cfc-protected-initialization.md](cfc-protected-initialization.md), "Attribution of an initialized value") | **Partial**: `creator` metadata on the piece result cell, written by the creating setup, or at the next source transition of a piece from before the record: for a space root, the owner its space's access list names, for any other piece the one owner its owner-protected fields name; admitted by no other write, and behind the `pieceCreatorRecord` experimental option until its ruling merges |
 
@@ -1544,7 +1544,11 @@ revision — a refused candidate was never accepted, and the revision log record
 only what the piece adopted. An accepted transition clears it, because the
 piece has left the state it describes. A reconciliation that reaches the same
 conclusion again rewrites nothing, so opening a piece that is up to date stays
-a read.
+a read. Creating a piece from an origin is its first reconciliation: the
+transaction that creates it records it as following that origin, naming the
+pattern it was created running, so the first follow that finds the origin
+offering that pattern writes nothing either, and the piece's result document
+gets no revision after its creation for it.
 
 A refused candidate is worth surfacing beyond the panel, because a piece
 nobody opens says nothing at all and the owner of the origin is usually not
@@ -1796,7 +1800,7 @@ The implementation evidence for this table is concentrated in:
   and
   [`patterns/system/suggestion/suggestion.tsx`](../../patterns/system/suggestion/suggestion.tsx)
   for the current indexed-URL UI flow;
-- [`patterns/examples/write-and-run/write-and-run.tsx`](../../patterns/examples/write-and-run/write-and-run.tsx)
+- [`patterns/examples/write-and-run/main.tsx`](../../patterns/examples/write-and-run/main.tsx)
   and
   [`runtime/runner/src/builtins/compile-and-run.ts`](../../runtime/runner/src/builtins/compile-and-run.ts)
   for the example LLM-backed creation machinery; and

@@ -7,6 +7,7 @@
 
 import { expect } from "@std/expect";
 import { pressKey } from "@commonfabric/deno-web-test/commands";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   type BetweenButtons,
@@ -31,14 +32,14 @@ async function mounted(
   return { ...await betweenButtons(control), changes };
 }
 
-Deno.test("Tab reaches the radio, and focus rests on the radio itself", async () => {
+test("Tab reaches the radio, and focus rests on the radio itself", async () => {
   using page = await mounted();
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.control);
   expect(page.control.shadowRoot?.activeElement).toBeNull();
 });
 
-Deno.test("the focused radio shows a focus ring", async () => {
+test("the focused radio shows a focus ring", async () => {
   using page = await mounted();
   const circle = page.control.shadowRoot?.querySelector(".radio");
   if (!circle) throw new Error("the radio did not render");
@@ -49,7 +50,7 @@ Deno.test("the focused radio shows a focus ring", async () => {
   expect(getComputedStyle(circle).boxShadow).toContain("0px 0px 0px 4px");
 });
 
-Deno.test("Space selects the focused radio, and Enter does not", async () => {
+test("Space selects the focused radio, and Enter does not", async () => {
   using page = await mounted();
   await pressKey("Tab");
   await pressKey("Enter");
@@ -61,7 +62,7 @@ Deno.test("Space selects the focused radio, and Enter does not", async () => {
   expect(page.changes).toEqual([{ checked: true, value: "yes" }]);
 });
 
-Deno.test("Tab passes over a disabled radio, and Space leaves it alone", async () => {
+test("Tab passes over a disabled radio, and Space leaves it alone", async () => {
   using page = await mounted({ disabled: true });
   await pressKey("Tab");
   expect(document.activeElement).toBe(page.after);

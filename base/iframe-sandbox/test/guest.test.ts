@@ -4,8 +4,8 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { ASSETS_ATTRIBUTE } from "../src/assets.ts";

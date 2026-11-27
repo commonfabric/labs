@@ -137,8 +137,10 @@
  * |                            | test harnesses) marks the serving posture, and   |
  * |                            | it hand-rolls its options deliberately           |
  * | compileTurns               | core-default (unset) — NEVER set by a preset:    |
- * |                            | only that same factory builds runtimes that      |
- * |                            | yield while they compile and share a byte cache  |
+ * |                            | only that same factory, and `cf` for its         |
+ * |                            | connections, build runtimes that take turns at a |
+ * |                            | cold compile with the other runtimes and         |
+ * |                            | processes that share their byte cache            |
  * | moduleCompiler             | core-default (unset) — NEVER set by a preset:    |
  * |                            | only that same factory hands its runtimes the    |
  * |                            | compile worker its serving host owns             |

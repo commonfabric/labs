@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   getPatternIdentityRef,
@@ -21,6 +20,12 @@ import {
 } from "../src/ops/pieces-controller.ts";
 import { reconcilePieceSource } from "../src/ops/piece-origin.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // The route that ref expands to — what the toolshed serves, and what the
 // worker names the module by when it compiles the pattern over HTTP.

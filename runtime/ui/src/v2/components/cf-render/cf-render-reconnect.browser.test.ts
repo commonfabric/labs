@@ -12,6 +12,7 @@ import {
   type VDomBatchNotification,
   type VDomConnection,
 } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   pushUpdate,
@@ -204,7 +205,7 @@ function notes(element: CFRender): string | undefined {
   return element.shadowRoot?.querySelector("textarea")?.value;
 }
 
-Deno.test("cf-render reconnects unchanged cells after their card moves", async () => {
+test("cf-render reconnects unchanged cells after their card moves", async () => {
   const view = fixture();
   try {
     await view.ready;
@@ -225,7 +226,7 @@ Deno.test("cf-render reconnects unchanged cells after their card moves", async (
   }
 });
 
-Deno.test("cf-render resumes after removal without resolving cells while detached", async () => {
+test("cf-render resumes after removal without resolving cells while detached", async () => {
   const view = fixture();
   try {
     await view.ready;
@@ -252,7 +253,7 @@ Deno.test("cf-render resumes after removal without resolving cells while detache
   }
 });
 
-Deno.test("cf-render reconnects despite an equal cell update queued before moving", async () => {
+test("cf-render reconnects despite an equal cell update queued before moving", async () => {
   const view = fixture();
   try {
     await view.ready;
@@ -272,7 +273,7 @@ Deno.test("cf-render reconnects despite an equal cell update queued before movin
   }
 });
 
-Deno.test("cf-render uses the newest cell assigned while detached", async () => {
+test("cf-render uses the newest cell assigned while detached", async () => {
   const view = fixture();
   try {
     await view.ready;
@@ -299,7 +300,7 @@ Deno.test("cf-render uses the newest cell assigned while detached", async () => 
 });
 
 for (const abort of [false, true]) {
-  Deno.test(`cf-render discards a pending resolution after ${abort ? "runtime disposal" : "reconnection"}`, async () => {
+  test(`cf-render discards a pending resolution after ${abort ? "runtime disposal" : "reconnection"}`, async () => {
     const view = fixture();
     const gate = Promise.withResolvers<void>();
     try {
@@ -335,7 +336,7 @@ for (const abort of [false, true]) {
   });
 }
 
-Deno.test("cf-render reestablishes a linked target subscription after detachment", async () => {
+test("cf-render reestablishes a linked target subscription after detachment", async () => {
   const view = fixture(true);
   try {
     await view.ready;
@@ -369,7 +370,7 @@ Deno.test("cf-render reestablishes a linked target subscription after detachment
   }
 });
 
-Deno.test("cf-render does not remount an attached element when a disposed runtime finishes resolving", async () => {
+test("cf-render does not remount an attached element when a disposed runtime finishes resolving", async () => {
   const view = fixture();
   const gate = Promise.withResolvers<void>();
   try {
@@ -392,7 +393,7 @@ Deno.test("cf-render does not remount an attached element when a disposed runtim
   }
 });
 
-Deno.test("cf-render rejects late batches from a pending mount after reconnection", async () => {
+test("cf-render rejects late batches from a pending mount after reconnection", async () => {
   const reply = Promise.withResolvers<void>();
   const view = fixture(false, reply.promise);
   try {

@@ -23,8 +23,13 @@ import {
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import {
   initializePiecesController,

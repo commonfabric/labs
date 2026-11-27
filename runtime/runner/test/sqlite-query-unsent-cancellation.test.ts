@@ -26,10 +26,10 @@
  * an existing guard. Both are read rather than asserted.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { sqliteQuery } from "../src/builtins/sqlite-builtins.ts";
 import { cfcLabelViewForCell } from "../src/cfc/label-view.ts";

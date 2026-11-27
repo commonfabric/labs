@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Circular alias error handling", () => {
   it("should throw descriptive error for circular Default aliases", async () => {

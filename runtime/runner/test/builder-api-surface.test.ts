@@ -16,12 +16,12 @@
  * the last step, where the built object is frozen and handed over.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Reactive, WishState } from "@commonfabric/api";
 // Imported for the module augmentation it carries as much as for the type: the
 // schema-carrying overloads it adds are part of what the pin below calls.
 import "@commonfabric/api/schema";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createBuilder } from "../src/builder/factory.ts";
 import type {
   BuilderFunctionsAndConstants,

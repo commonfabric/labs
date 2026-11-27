@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -51,6 +50,12 @@ import type {
   CfcRefusalDetail,
   CfcRefusalInput,
 } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type {
   SandboxCommandRequest,
   SandboxCommandResult,

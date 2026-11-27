@@ -7,7 +7,6 @@
  * the host writes the file the file-based path would have left.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
@@ -46,6 +45,12 @@ import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
 } from "./support/responses-fixture.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // A pattern's task text: context for the run, not an operator's command.
 const contextPromptSlotBinding: PromptSlotBinding = {

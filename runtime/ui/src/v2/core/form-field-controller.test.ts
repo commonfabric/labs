@@ -2,7 +2,6 @@
 import { mount, settle } from "../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { ReactiveElement } from "lit";
 
 import { CFForm } from "../components/form/index.ts";
@@ -12,6 +11,7 @@ import {
   createFormFieldController,
   FormFieldController,
 } from "./form-field-controller.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A cell controller holding `value`, which records what it is asked to do. A

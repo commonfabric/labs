@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   evaluateReadBudget,
@@ -7,6 +6,7 @@ import {
   readBudgetForStep,
   ReadBudgetMeasurement,
 } from "../lib/read-budgets.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("read-budgets", () => {
   it("separates many cheap runs from one expensive run without double counting", () => {

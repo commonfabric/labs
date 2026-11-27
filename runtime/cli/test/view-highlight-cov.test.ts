@@ -7,8 +7,9 @@ import {
 import type { Line } from "../lib/view/model.ts";
 import { stripAnsi } from "../lib/view/ansi.ts";
 import { parseDocument, SAMPLE } from "./view-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("renderLinePlain returns the verbatim line text, no color", () => {
+test("renderLinePlain returns the verbatim line text, no color", () => {
   const line: Line = {
     text: "const x = 1;",
     spans: [
@@ -25,7 +26,7 @@ Deno.test("renderLinePlain returns the verbatim line text, no color", () => {
   assertEquals(stripAnsi(out), out);
 });
 
-Deno.test("renderLinePlain ignores spans and background tint entirely", () => {
+test("renderLinePlain ignores spans and background tint entirely", () => {
   const line: Line = {
     text: "  +added line",
     spans: [
@@ -39,11 +40,11 @@ Deno.test("renderLinePlain ignores spans and background tint entirely", () => {
   assertEquals(renderLinePlain(line), "  +added line");
 });
 
-Deno.test("renderLinePlain handles an empty line", () => {
+test("renderLinePlain handles an empty line", () => {
   assertEquals(renderLinePlain({ text: "", spans: [] }), "");
 });
 
-Deno.test("spanStyle renders comments in bright white", () => {
+test("spanStyle renders comments in bright white", () => {
   for (const cls of ["comment", "docComment"] as const) {
     assertEquals(
       spanStyle({ col: 0, text: "comment", cls }).fg,
@@ -52,14 +53,14 @@ Deno.test("spanStyle renders comments in bright white", () => {
   }
 });
 
-Deno.test("renderLinePlain matches every parsed line of the sample blob", () => {
+test("renderLinePlain matches every parsed line of the sample blob", () => {
   const doc = parseDocument(SAMPLE);
   for (const line of doc.lines) {
     assertEquals(renderLinePlain(line), line.text);
   }
 });
 
-Deno.test("renderLinePlain equals stripAnsi of the colored render", () => {
+test("renderLinePlain equals stripAnsi of the colored render", () => {
   const doc = parseDocument(SAMPLE);
   for (const line of doc.lines) {
     const plain = renderLinePlain(line);

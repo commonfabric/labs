@@ -6,12 +6,12 @@
  * something a caller could drop.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FabricInstance, refuseFabricInstance } from "@";
 import { UnknownValue } from "@/codec-common";
 import { FabricError, FabricMap } from "@/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FABRIC_ERROR = FabricError.fromNativeError(new Error("boom"));
 

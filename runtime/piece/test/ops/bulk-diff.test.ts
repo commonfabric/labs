@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { diffPlan } from "../../src/ops/bulk-diff.ts";
 import type { PiecePlan, PiecePlanRow } from "../../src/ops/bulk-plan.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const header = {
   kind: "piece-plan",

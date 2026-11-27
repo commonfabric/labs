@@ -686,6 +686,10 @@ export function renderConfidentialityResolverFor(
     // the reconciler's, so the manifests it watches and the ones this
     // resolves are one cache.
     modulePolicyResolver: modulePolicySource?.resolve,
+    // A committed policy subject nominates the derivation space it digests,
+    // pending commonfabric/specs#110.
+    committedSubjectCandidates:
+      runtime.experimental.cfcCommittedSubjectCandidates === true,
   });
 }
 

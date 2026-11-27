@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   attachDefinitions,
   splitDefinitions,
 } from "../../system/notes/reference-block.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const A = { key: "a3f9zz", address: "/of:fid1:aaa" };
 const B = { key: "b7k2m1", address: "/of:fid1:bbb" };

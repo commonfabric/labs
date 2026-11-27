@@ -4,7 +4,7 @@ import {
   fireClick,
   hasExactText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import OutputSchema from "./output_schema.tsx";
+import OutputSchema from "./main.tsx";
 
 // The one control the pattern renders: a button labelled with the value.
 const counterButton = (root: unknown): unknown =>

@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { CFC_CONCEPT_KIND, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { IFCLabel } from "@commonfabric/runner/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import { consoleRunLens, summarizeConsoleRun } from "../../console/runs.ts";
 import { ownerConsoleDisplay } from "../../console/display-ceiling.ts";
 import {

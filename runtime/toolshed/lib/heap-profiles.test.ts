@@ -7,6 +7,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { startHeapSampling } from "@commonfabric/runner/heap-profile";
 import type { WorkerHeapProfile } from "@commonfabric/runner/executor/serving-worker-host";
+import { test } from "@commonfabric/test-support/test";
 import { writeHeapProfiles } from "./heap-profiles.ts";
 
 /** The permission bits of `path`. */
@@ -15,7 +16,7 @@ async function modeOf(path: string): Promise<number | null> {
   return mode === null ? null : mode & 0o777;
 }
 
-Deno.test("writes the main thread's profile and a manifest naming it and each worker's, in a directory it creates, each readable by its user alone", async () => {
+test("writes the main thread's profile and a manifest naming it and each worker's, in a directory it creates, each readable by its user alone", async () => {
   await startHeapSampling();
   const root = await Deno.makeTempDir({ prefix: "heap-profiles-" });
   try {
@@ -50,7 +51,7 @@ Deno.test("writes the main thread's profile and a manifest naming it and each wo
   }
 });
 
-Deno.test("leaves the workers out of the manifest where the serving loop has none", async () => {
+test("leaves the workers out of the manifest where the serving loop has none", async () => {
   await startHeapSampling();
   const directory = await Deno.makeTempDir({ prefix: "heap-profiles-" });
   try {
@@ -67,7 +68,7 @@ Deno.test("leaves the workers out of the manifest where the serving loop has non
   }
 });
 
-Deno.test("leaves the main thread's profile out where the main thread does not sample, and writes the workers'", async () => {
+test("leaves the main thread's profile out where the main thread does not sample, and writes the workers'", async () => {
   const directory = await Deno.makeTempDir({ prefix: "heap-profiles-" });
   try {
     const workers: WorkerHeapProfile[] = [

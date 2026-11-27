@@ -2,10 +2,10 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFResizablePanelGroup } from "../cf-resizable-panel-group/index.ts";
 import { CFResizableHandle } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A handle inside a group lying in `direction`, with no panels, and the
  * deltas of every adjustment it asks its group for. */

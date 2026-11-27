@@ -22,6 +22,7 @@ import {
   space,
 } from "./scheduler-test-utils.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
@@ -37,7 +38,7 @@ const PROGRAM: RuntimeProgram = {
   }],
 };
 
-Deno.test("releasing a target before link resolution preserves the held start", async () => {
+test("releasing a target before link resolution preserves the held start", async () => {
   const env = createSchedulerTestRuntime(import.meta.url, {});
   try {
     const { runtime, tx } = env;

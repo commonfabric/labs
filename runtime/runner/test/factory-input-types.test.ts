@@ -5,10 +5,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { Default, Writable } from "@commonfabric/api";
 import type { MustBeTrue } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type {
   FactoryInput,

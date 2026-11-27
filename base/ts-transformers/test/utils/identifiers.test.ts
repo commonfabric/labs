@@ -4,12 +4,13 @@ import {
   isSafeIdentifierText,
   sanitizeIdentifierCandidate,
 } from "../../src/utils/identifiers.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("sanitizeIdentifierCandidate normalizes invalid fallback prefixes", () => {
+test("sanitizeIdentifierCandidate normalizes invalid fallback prefixes", () => {
   const result = sanitizeIdentifierCandidate("", { fallback: "-ref" });
   assertEquals(result, "_ref");
 });
 
-Deno.test("isSafeIdentifierText recognizes astral plane characters", () => {
+test("isSafeIdentifierText recognizes astral plane characters", () => {
   assertEquals(isSafeIdentifierText("𠮷"), true);
 });

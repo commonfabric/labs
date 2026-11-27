@@ -8,7 +8,6 @@
 // value-type dispatch's leaf arm and the plain-schema fast path's
 // special-object check.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { internSchema } from "@commonfabric/data-model-schema";
@@ -29,6 +28,7 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import type { SchemaPathSelector } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "../src/fabric-special-object-brand.ts";
 import {

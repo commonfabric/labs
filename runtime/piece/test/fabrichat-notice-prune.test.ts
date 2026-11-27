@@ -8,7 +8,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -22,6 +21,13 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const sender = await Identity.fromPassphrase("FabriChat notice prune sender");

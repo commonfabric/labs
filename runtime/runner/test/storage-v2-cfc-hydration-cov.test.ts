@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { SessionSync } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import type { SpaceReplica } from "../src/storage/v2.ts";
 import { newSpaceReplica } from "./memory-v2-test-utils.ts";

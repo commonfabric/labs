@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   parseUnlistedPlacement,
   unlistedToolshed,
 } from "../v2/routed-directory.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const LAST_CHARACTER = Object.freeze({
   "1": 0,

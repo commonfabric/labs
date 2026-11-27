@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { html, nothing } from "lit";
 import {
@@ -7,6 +6,7 @@ import {
   boundValues,
   templateText,
 } from "./template.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("template", () => {
   describe("templateText()", () => {

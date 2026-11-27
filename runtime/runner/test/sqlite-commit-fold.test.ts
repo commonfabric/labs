@@ -5,12 +5,17 @@
 // runtime/memory/test/v2-sqlite-atomic.test.ts; this proves the RUNNER wires
 // recordSqliteWrite -> getNativeCommit -> buildCommit.)
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import type { SqliteDbRef } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 
 describe("folded sqlite write (commit atomicity at the runner)", () => {

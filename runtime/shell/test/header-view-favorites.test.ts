@@ -5,6 +5,7 @@
 import { assert, assertEquals, assertFalse } from "@std/assert";
 
 import type { XHeaderView as HeaderViewClass } from "../src/views/HeaderView.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Exercises the lazy favorites-subscription paths in HeaderView. The header
 // resolves the home space's default pattern only when its favorites surface is
@@ -138,7 +139,7 @@ function makeRuntime(
 const fakeEvent = () =>
   ({ preventDefault() {}, stopPropagation() {} }) as unknown as Event;
 
-Deno.test("favorites stay unsubscribed until a runtime exists and a surface opens", async () => {
+test("favorites stay unsubscribed until a runtime exists and a surface opens", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -162,7 +163,7 @@ Deno.test("favorites stay unsubscribed until a runtime exists and a surface open
   }
 });
 
-Deno.test("a new runtime re-arms the lazy subscription", async () => {
+test("a new runtime re-arms the lazy subscription", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -193,7 +194,7 @@ Deno.test("a new runtime re-arms the lazy subscription", async () => {
   }
 });
 
-Deno.test("opening the header menu requests the favorites subscription", async () => {
+test("opening the header menu requests the favorites subscription", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -209,7 +210,7 @@ Deno.test("opening the header menu requests the favorites subscription", async (
   }
 });
 
-Deno.test("toggling a favorite requests the subscription and swallows a disposal race", async () => {
+test("toggling a favorite requests the subscription and swallows a disposal race", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -260,7 +261,7 @@ Deno.test("toggling a favorite requests the subscription and swallows a disposal
   }
 });
 
-Deno.test("an optimistic favorite says nothing about another scope of the same id", async () => {
+test("an optimistic favorite says nothing about another scope of the same id", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -299,7 +300,7 @@ Deno.test("an optimistic favorite says nothing about another scope of the same i
   }
 });
 
-Deno.test("a favorite matches only in the scope the piece's address names", async () => {
+test("a favorite matches only in the scope the piece's address names", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -331,7 +332,7 @@ Deno.test("a favorite matches only in the scope the piece's address names", asyn
   }
 });
 
-Deno.test("a favorite matches only in the space the piece's address names", async () => {
+test("a favorite matches only in the space the piece's address names", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");
@@ -363,7 +364,7 @@ Deno.test("a favorite matches only in the space the piece's address names", asyn
   }
 });
 
-Deno.test("favorites re-subscribe after the header disconnects and reopens", async () => {
+test("favorites re-subscribe after the header disconnects and reopens", async () => {
   const restore = installBrowserGlobals();
   try {
     const { XHeaderView } = await import("../src/views/HeaderView.ts");

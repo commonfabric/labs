@@ -14,7 +14,6 @@
  * carried by reading the switch rather than by running it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FileSystemHarnessArtifactStore } from "../../src/artifacts.ts";
@@ -35,6 +34,7 @@ import {
   propertyRunDir,
   scriptedModel,
 } from "./support/episode.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A slot binding in the role named, standing for where its text came from.

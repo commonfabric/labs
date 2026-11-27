@@ -10,7 +10,7 @@
  * gutter and the structure guide bar are all column maths over that grid.
  */
 
-import { diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
+import { clamp, diffContentRowCount, maxPagerTop, maxTop } from "./actions.ts";
 import {
   cpLen,
   ESCAPE_SPLIT,
@@ -459,7 +459,22 @@ export interface DialogState {
 
   /** Index of the focused field, or -1 when none is. */
   readonly fieldFocus?: number;
+
+  /** A security key drawn beside the box's right edge, or null for none. */
+  readonly securityKey?: SecurityKey | null;
 }
+
+/** A security key beside a dialog, `time` milliseconds into its way from
+ * just past the screen's right edge to plugged into the dialog's right edge,
+ * with its light off, on, or lit to show that it was touched. */
+export interface SecurityKey {
+  readonly time: number;
+  readonly light: "off" | "on" | "touched";
+}
+
+/** How long a security key takes to come in from past the screen's edge and
+ * plug into a dialog, in milliseconds. */
+export const KEY_PLUG_MS = 350;
 
 /** How a piece of a dialog's row is drawn: plain, as the dialog's text is;
  * bright, as the viewer's own words in the task dialog are; as a name those
@@ -539,8 +554,32 @@ export interface DialogRadioButtons {
   readonly selected: number;
 }
 
+/** A slider: a label whose first letter matching {@link hotkey} is drawn
+ * highlighted, followed by the value the slider sets, and under them a track
+ * as wide as the dialog, with a thumb at the stop the value is at. The
+ * stops are evenly spaced along the track, the first at its left end and the
+ * last at its right end. */
+export interface DialogSlider {
+  readonly kind: "slider";
+  readonly label: string;
+  readonly hotkey: string;
+
+  /** How many stops the track has. */
+  readonly stopCount: number;
+
+  /** The index of the stop the thumb is drawn at. */
+  readonly stop: number;
+
+  /** The value the slider sets, as the label row shows it. */
+  readonly text: string;
+}
+
 /** A control in a dialog other than a button. */
-export type DialogField = DialogCheckBox | DialogInputLine | DialogRadioButtons;
+export type DialogField =
+  | DialogCheckBox
+  | DialogInputLine
+  | DialogRadioButtons
+  | DialogSlider;
 
 interface Cell {
   ch: string;
@@ -1685,6 +1724,17 @@ export interface DialogBox {
   innerH: number;
 }
 
+/** How many rows tall a dialog box is on a screen as tall as `view`, when it
+ * holds `contentRows` rows of body and fields: those, its title and bottom
+ * edges, a blank row on each side of them, and its buttons and their
+ * shadow, leaving a row for the box's own shadow. */
+export function dialogHeight(
+  view: Pick<ViewState, "height">,
+  contentRows: number,
+): number {
+  return Math.max(0, Math.min(contentRows + 6, view.height - 1));
+}
+
 /** Geometry of the centered dialog box, sized to its content (title, body and
  * button row) or to the body's fixed width, and clamped to leave two cells for
  * the drop shadow. */
@@ -1707,12 +1757,11 @@ export function dialogBox(
     0,
     Math.min(contentW + 2 * DIALOG_HMARGIN + 2, view.width - 2),
   );
-  const boxH = Math.max(
-    0,
-    Math.min(contentRows(dialog) + 6, view.height - 1),
-  );
+  const boxH = dialogHeight(view, contentRows(dialog));
+  // A box with a security key beside it moves left as far as the key needs.
+  const room = view.width - boxW - (dialog.securityKey ? KEY_REACH : 0);
   return {
-    x: Math.max(0, Math.floor((view.width - boxW) / 2)),
+    x: Math.max(0, Math.min(Math.floor((view.width - boxW) / 2), room)),
     y: Math.max(0, Math.floor((view.height - boxH) / 2)),
     boxW,
     boxH,
@@ -1776,20 +1825,27 @@ function buttonRowOf(dialog: DialogState, innerH: number): number {
 }
 
 /** The text of the rows of a field that set how wide it is: a check box's
- * mark and label, an input line's label, or the label of a set of radio
- * buttons and each button's mark and label. */
+ * mark and label, an input line's label, the label of a set of radio
+ * buttons and each button's mark and label, or a slider's label and
+ * value. */
 function fieldTexts(field: DialogField): string[] {
   if (field.kind === "checkBox") return [`[X] ${field.label}`];
   if (field.kind === "inputLine") return [field.label];
+  if (field.kind === "slider") return [sliderLabel(field)];
   return [field.label, ...field.buttons.map((b) => `(•) ${b.label}`)];
 }
 
-/** The rows a field takes: a check box's one, an input line's label and the
- * line under it, or the label of a set of radio buttons and a row for each
- * button. */
+/** The row of a slider above its track: its label and its value. */
+function sliderLabel(field: DialogSlider): string {
+  return `${field.label}: ${field.text}`;
+}
+
+/** The rows a field takes: a check box's one, an input line's or a
+ * slider's label and the line under it, or the label of a set of radio
+ * buttons and a row for each button. */
 function fieldHeight(field: DialogField): number {
   if (field.kind === "checkBox") return 1;
-  if (field.kind === "inputLine") return 2;
+  if (field.kind === "inputLine" || field.kind === "slider") return 2;
   return 1 + field.buttons.length;
 }
 
@@ -1980,6 +2036,31 @@ export function radioButtonAt(
     : null;
 }
 
+/**
+ * Returns the index of the stop of slider `index` of `dialog` nearest the
+ * zero-based screen column `x`, when `y` is the row its track is drawn on,
+ * or null otherwise. A column past either end of the track counts as that
+ * end. Throws when field `index` is not a slider.
+ */
+export function sliderStopAt(
+  view: Pick<ViewState, "width" | "height">,
+  dialog: DialogState,
+  index: number,
+  x: number,
+  y: number,
+): number | null {
+  const field = dialog.fields?.[index];
+  if (field?.kind !== "slider") {
+    throw new Error(`field ${index} of the dialog is not a slider`);
+  }
+  const box = dialogBox(view, dialog);
+  const row = shownFieldRows(dialog, box.innerH)[index];
+  if (row == null || y !== box.y + 1 + row + 1) return null;
+  const last = box.innerW - 2 * DIALOG_HMARGIN - 1;
+  const column = clamp(x - box.x - 1 - DIALOG_HMARGIN, 0, last);
+  return Math.round(column / Math.max(1, last) * (field.stopCount - 1));
+}
+
 /** The index in `chars`, the cells of a label, of the highlighted shortcut
  * letter, its first that matches `hotkey` in either case, or -1 when none
  * does. */
@@ -2076,6 +2157,125 @@ function applyDialog(
   }
 
   if (view.color) castShadow(rows, view, x, y, boxW, boxH);
+  if (dialog.securityKey) {
+    drawSecurityKey(
+      rows,
+      view,
+      x + boxW - 1,
+      y + 1,
+      dialog.securityKey,
+      border,
+    );
+  }
+}
+
+/** The face of a security key not plugged into a dialog, the cells of its
+ * light, along its top and bottom edges, marked `*`, and its touch pad
+ * marked `|`. */
+const KEY_FACE = ["╭─**─╮", "┤    │", "│   |│", "┤    │", "╰─**─╯"];
+
+/** The left column of the face of a security key plugged into a dialog,
+ * joining the dialog's edge. */
+const KEY_JOINS = "╟║║║╟";
+
+/** The plug of a security key, its contacts' cells marked `*`. */
+const KEY_PLUG = ["╭────", "│ ** ", "╰────"];
+
+/** How many rows a dialog box needs to have a security key beside it: the
+ * key's face reaches from the row under the box's top edge to the row above
+ * its bottom edge. */
+export const KEY_ROWS = KEY_FACE.length + 2;
+
+/** How many columns past a dialog's right edge a security key plugged into
+ * it reaches, its shadow included. */
+export const KEY_REACH = KEY_FACE[0].length + 1;
+
+/** How a security key's light is drawn, by whether it is off, on, or lit to
+ * show that the key was touched. */
+const KEY_LIGHTS: Readonly<Record<SecurityKey["light"], Style>> = {
+  off: {},
+  on: ui.keyLightOn,
+  touched: ui.keyLightTouched,
+};
+
+/**
+ * Draws `key` beside the dialog whose right edge is column `edge`, drawn in
+ * `face`, the top of the key's face on row `top`, with the shadows its face
+ * and its plug cast. The key speeds up as it comes in, the distance it has
+ * gone growing as the square of the time. The dialog hides the part of the
+ * plug inside it, and once the key is plugged in, its face shares the
+ * dialog's edge. The light is drawn as part of the face's edge, in its own
+ * color while it is lit, or without color as a heavier line.
+ */
+function drawSecurityKey(
+  rows: string[],
+  view: ViewState,
+  edge: number,
+  top: number,
+  key: SecurityKey,
+  face: Style,
+): void {
+  const travel = Math.max(0, view.width + KEY_PLUG[0].length - edge);
+  const time = Math.min(key.time, KEY_PLUG_MS);
+  const left = edge + travel -
+    Math.floor(travel * time * time / (KEY_PLUG_MS * KEY_PLUG_MS));
+  const plug = left - KEY_PLUG[0].length;
+  // Draws `lines` from column `col` of row `row`, each character as the cell
+  // `cell` gives, except for the columns before `clip` and past the screen.
+  const shape = (
+    lines: readonly string[],
+    row: number,
+    col: number,
+    clip: number,
+    cell: (ch: string) => Cell,
+  ) =>
+    lines.forEach((line, i) => {
+      const from = Math.max(col, clip);
+      const to = Math.min(col + line.length, view.width);
+      if (row + i >= rows.length || from >= to) return;
+      const cells = [...line.slice(from - col, to - col)].map(cell);
+      rows[row + i] = overlayRow(
+        rows[row + i],
+        from,
+        cellsToAnsi(cells, view.color),
+      );
+    });
+  if (view.color) {
+    const shade = (row: number, col: number, lines: readonly string[]) => {
+      const from = Math.max(col, edge + 1);
+      lines.forEach((line, i) =>
+        darkenSpan(rows, view, row + i, from, col + line.length - from)
+      );
+    };
+    shade(top + 2, plug + 2, KEY_PLUG);
+    shade(top + 1, left + 2, KEY_FACE);
+  }
+  shape(
+    KEY_PLUG,
+    top + 1,
+    plug,
+    edge + 1,
+    (ch) =>
+      ch === "*"
+        ? { ch: "▪", style: ui.keyContacts }
+        : { ch, style: ui.keyPlug },
+  );
+  const light = { ...face, ...KEY_LIGHTS[key.light] };
+  const pad = { ...face, ...ui.keyPad };
+  shape(
+    left === edge
+      ? KEY_FACE.map((line, i) => KEY_JOINS[i] + line.slice(1))
+      : KEY_FACE,
+    top,
+    left,
+    edge,
+    (ch) =>
+      ch === "*"
+        ? { ch: view.color || key.light === "off" ? "─" : "━", style: light }
+        : ch === "|"
+        ? { ch: "┃", style: pad }
+        : { ch, style: face },
+  );
 }
 
 /** Write `chars`, the cells of some text, in `cells` from column `from`,
@@ -2132,11 +2332,11 @@ function placeText(
 
 /**
  * Draws row `row` of `field` in `cells`, after the dialog's margin: a check
- * box's mark and label, an input line's label and then its line, or the label
- * of a set of radio buttons and then each button's mark and label. The
- * focused check box is drawn highlighted, as are the label of the focused
- * input line and the label and selected button of the focused set of radio
- * buttons.
+ * box's mark and label, an input line's label and then its line, the label
+ * of a set of radio buttons and then each button's mark and label, or a
+ * slider's label and value and then its track. The focused check box is
+ * drawn highlighted, as are the label of the focused input line or slider
+ * and the label and selected button of the focused set of radio buttons.
  */
 function placeField(
   cells: Cell[],
@@ -2189,6 +2389,19 @@ function placeField(
   }
   if (row === 0) {
     label(0, field.label, field.hotkey);
+    if (field.kind === "slider") {
+      const at = shownCells(field.label).length;
+      put(at, shownCells(sliderLabel(field)).slice(at), () => textStyle);
+    }
+    return;
+  }
+  if (field.kind === "slider") {
+    const last = width - 1;
+    const thumb = Math.round(
+      field.stop / Math.max(1, field.stopCount - 1) * last,
+    );
+    put(0, [..."▒".repeat(Math.max(0, width))], () => ui.sliderTrack);
+    put(thumb, ["■"], () => ui.sliderThumb);
     return;
   }
   if (field.kind === "radioButtons") {

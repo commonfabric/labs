@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   collectedMemory,
   exposeGarbageCollector,
 } from "@commonfabric/runner/collected-memory";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { GraphQueryRoot } from "../../v2.ts";
 import { applyCommit, close, open } from "../../v2/engine.ts";

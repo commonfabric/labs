@@ -10,7 +10,6 @@
  * gap that is merely untested is invisible.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -24,6 +23,7 @@ import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
 import { FabricSet } from "@/fabric-instances";
 import { FrozenSet } from "@/frozen-builtins.ts";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricSet", () => {
   it("implements `FabricInstance`", () => {

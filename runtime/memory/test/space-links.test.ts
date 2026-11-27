@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { DIDKey } from "@commonfabric/identity/did";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   buildInviteLink,
   createInviteCredentials,

@@ -13,6 +13,7 @@ import type {
   StructureNode,
   TokenClass,
 } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Build one identifier-class span at a given column. */
 function ident(
@@ -56,7 +57,7 @@ function node(partial: Partial<StructureNode>): StructureNode {
   };
 }
 
-Deno.test("findReferences: declaration plus call site, with inside flag", () => {
+test("findReferences: declaration plus call site, with inside flag", () => {
   const doc = parseDocument(SAMPLE);
   const lift = doc.flatStructure.find((n) => n.label === "lift __cfLift_1")!;
   const refs = findReferences(doc, "__cfLift_1", lift);
@@ -72,7 +73,7 @@ Deno.test("findReferences: declaration plus call site, with inside flag", () => 
   );
 });
 
-Deno.test("findReferences: inside flag honors column bounds on boundary lines", () => {
+test("findReferences: inside flag honors column bounds on boundary lines", () => {
   // One line, two occurrences of `foo`. The node covers only the second one
   // (columns 6..9); the first, at column 0, is a sibling to its left. With only
   // line bounds it is wrongly flagged inside, so it would vanish from the "uses"
@@ -116,7 +117,7 @@ Deno.test("findReferences: inside flag honors column bounds on boundary lines", 
   ]);
 });
 
-Deno.test("findReferences: ignores non-identifier occurrences", () => {
+test("findReferences: ignores non-identifier occurrences", () => {
   const doc = parseDocument(SAMPLE);
   // "token" appears as a schema key (schemaKey) and as identifiers; references
   // should only pick identifier-role spans, not schema/property keys.
@@ -129,7 +130,7 @@ Deno.test("findReferences: ignores non-identifier occurrences", () => {
   }
 });
 
-Deno.test("findDependencies: pattern depends on the hoisted lift", () => {
+test("findDependencies: pattern depends on the hoisted lift", () => {
   const doc = parseDocument(SAMPLE);
   const p = doc.flatStructure.find((n) => n.label === "pattern myPattern")!;
   const deps = findDependencies(doc, p);
@@ -141,7 +142,7 @@ Deno.test("findDependencies: pattern depends on the hoisted lift", () => {
   assertEquals(dep.kind, "builder");
 });
 
-Deno.test("findDependencies: excludes the node's own declarations", () => {
+test("findDependencies: excludes the node's own declarations", () => {
   const doc = parseDocument(SAMPLE);
   const p = doc.flatStructure.find((n) => n.label === "pattern myPattern")!;
   const deps = findDependencies(doc, p);
@@ -149,7 +150,7 @@ Deno.test("findDependencies: excludes the node's own declarations", () => {
   assert(!deps.some((d) => d.name === "t"), "local binding t is not a dep");
 });
 
-Deno.test("findDependencies: member calls do not match same-named declarations", () => {
+test("findDependencies: member calls do not match same-named declarations", () => {
   for (const name of ["run", "render", "__cfLift_1"]) {
     const doc = parseDocument(`function ${name}() {}
 worker.${name}();`);
@@ -161,7 +162,7 @@ worker.${name}();`);
   }
 });
 
-Deno.test("collectIdentUses: a called member can match the selected binding's name", () => {
+test("collectIdentUses: a called member can match the selected binding's name", () => {
   const doc = parseDocument("const run = worker.run();");
   const binding = doc.flatStructure.find((node) => node.name === "run")!;
   const uses = collectIdentUses(doc, binding);
@@ -177,7 +178,7 @@ Deno.test("collectIdentUses: a called member can match the selected binding's na
   );
 });
 
-Deno.test("ancestorsOf: chain from section down to the parent", () => {
+test("ancestorsOf: chain from section down to the parent", () => {
   const doc = parseDocument(SAMPLE);
   const closure = doc.flatStructure.find((n) =>
     n.kind === "closure" && n.depth >= 2
@@ -196,7 +197,7 @@ Deno.test("ancestorsOf: chain from section down to the parent", () => {
   assert(chain[chain.length - 1].depth < closure.depth);
 });
 
-Deno.test("ancestorsOf: a root node has no ancestors", () => {
+test("ancestorsOf: a root node has no ancestors", () => {
   const doc = parseDocument(SAMPLE);
   const section = doc.flatStructure.find((n) => n.kind === "section")!;
   assertEquals(ancestorsOf(doc.flatStructure, section).length, 0);

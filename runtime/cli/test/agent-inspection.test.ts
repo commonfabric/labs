@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -8,6 +7,12 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { renderCellReference } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   type AgentInspectionDeps,

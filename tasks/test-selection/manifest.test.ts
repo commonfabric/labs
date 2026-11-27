@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   AliasResolver,
@@ -6,6 +5,7 @@ import {
   serializeManifest,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { dialSnapshot, manifestUnderAliases } from "./manifest.ts";
 import { DIALS } from "./policy.ts";

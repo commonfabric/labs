@@ -16,7 +16,7 @@ import {
   fireClick,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Counter from "./counter.tsx";
+import Counter from "./main.tsx";
 
 /** Whether the counter's result line, which spells its value as an ordinal,
  * reads `expected`. */

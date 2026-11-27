@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { createNativeMemorySocket } from "../../src/storage/memory-socket.ts";
 import {
@@ -12,6 +11,7 @@ import {
   drivableSockets,
   type DrivableWebSocket,
 } from "./drivable-web-socket.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("WebSocketTransport", () => {
   it("receives a large native frame with a null limit and rejects it after the limit is omitted", async () => {

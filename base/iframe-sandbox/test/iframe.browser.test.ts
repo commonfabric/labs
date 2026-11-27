@@ -1,4 +1,5 @@
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { test } from "@commonfabric/test-support/test";
 
 import "../src/common-iframe-sandbox.ts";
 import {
@@ -52,7 +53,7 @@ const unsink = (key) => {
 const GUEST_EPILOG = `
 </script>`;
 
-Deno.test("pulls and sets", async () => {
+test("pulls and sets", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 });
@@ -73,7 +74,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("runs a script given apart from its document, once the document is parsed", async () => {
+test("runs a script given apart from its document, once the document is parsed", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: "" });
@@ -99,7 +100,7 @@ connectFabric().cell("a").set(mark + " </script> <!--<script>");
   }
 });
 
-Deno.test("subscribes", async () => {
+test("subscribes", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 }, [
@@ -186,7 +187,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("handles multiple iframes", async () => {
+test("handles multiple iframes", async () => {
   cleanupFixtures();
   try {
     const context1 = new ContextShim({ a: 1 }, ["b"]);
@@ -220,7 +221,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("handles loading new documents", async () => {
+test("handles loading new documents", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 }, ["b", "c"]);
@@ -240,7 +241,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("loads the last document asked for when a second is asked for before the first has loaded", async () => {
+test("loads the last document asked for when a second is asked for before the first has loaded", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({}, ["ran"]);
@@ -275,7 +276,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("cancels subscriptions between documents", async () => {
+test("cancels subscriptions between documents", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ a: 1 }, [
@@ -333,7 +334,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("what a guest posts outside its port raises an alarm, not a write", async () => {
+test("what a guest posts outside its port raises an alarm, not a write", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({}, ["after"]);
@@ -375,7 +376,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("an alarm raised before a write is dispatched before the write lands", async () => {
+test("an alarm raised before a write is dispatched before the write lands", async () => {
   cleanupFixtures();
 
   // The alarm route and the port are separate channels. An alarm crosses two
@@ -452,7 +453,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("a reattached element loads its document into the frame it gets", async () => {
+test("a reattached element loads its document into the frame it gets", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({}, ["ran"]);
@@ -480,7 +481,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("same-task reparenting keeps the bridge host alive", async () => {
+test("same-task reparenting keeps the bridge host alive", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({}, ["ready", "seen", "value"]);
@@ -509,7 +510,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("a second ready from the frame already in hand is refused", async () => {
+test("a second ready from the frame already in hand is refused", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({}, ["ran"]);
@@ -539,7 +540,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("a repeated load report does not unseat the guest holding its port", async () => {
+test("a repeated load report does not unseat the guest holding its port", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ watched: 1 }, ["ready", "echo"]);
@@ -591,7 +592,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("a guest that starts listening after its handoff went by still gets a port", async () => {
+test("a guest that starts listening after its handoff went by still gets a port", async () => {
   cleanupFixtures();
   try {
     // The host hands a port over once the guest's document has loaded, and
@@ -618,7 +619,7 @@ cell.set((await cell.pull()) + 1);
   }
 });
 
-Deno.test("an element that gets a frame and has no source says nothing is loaded", async () => {
+test("an element that gets a frame and has no source says nothing is loaded", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({}, ["ran"]);
@@ -641,7 +642,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("a subscription is cancelled against the bridge that issued it", async () => {
+test("a subscription is cancelled against the bridge that issued it", async () => {
   cleanupFixtures();
   try {
     const first = new ContextShim({ watched: 1 }, ["ready"]);
@@ -680,7 +681,7 @@ ${GUEST_EPILOG}`;
   }
 });
 
-Deno.test("carries a value structured cloning would flatten", async () => {
+test("carries a value structured cloning would flatten", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({

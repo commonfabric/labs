@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -7,6 +6,7 @@ import {
   type CaptureCollectorOptions,
 } from "../../src/closures/capture-collector.ts";
 import { createInMemoryProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Builds a program from `source` and returns its checker with the arrow
