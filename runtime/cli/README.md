@@ -2093,6 +2093,21 @@ changes a piece's source in this process. The contract, including the refusals
 and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
+A command that compiles in this process, as `cf piece new` does against a
+deployment that does not run the serving loop, compiles through a directory of
+compiled modules at `common-fabric/compiled-modules` under `$XDG_CACHE_HOME` or
+`~/.cache`. The directory takes the form a host's toolsheds share among
+themselves (`openSharedCompileCache()`), though it is not theirs. A module that
+any earlier `cf` process compiled from the same source with the same compiler is
+read from there rather than type-checked, transformed and emitted again, and two
+processes that compile the same modules at once compile them once.
+`lib/compile-byte-cache.ts` opens the directory once per process, when the first
+compile asks it for anything, so a command that compiles nothing does not touch
+it. From the first failure of the directory, whether opening it, reading it or
+locking in it, the command keeps what it compiles in memory for the rest of the
+process, and the connection whose compile met the failure says why, through its
+caller's report where it has one and on stderr otherwise.
+
 ## Piece discovery
 
 `cf piece describe --cell <piece>` documents a piece's readable fields and

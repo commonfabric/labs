@@ -1,8 +1,9 @@
 /**
  * The compiled-module cache every toolshed process on a host shares, and every
- * serving worker in each of them: a directory of compiled modules, one file per
- * module, and the claims that keep two of them from compiling the same modules
- * at once. Deno-only: it reads, writes and locks files.
+ * serving worker in each of them, and that the connections of every `cf`
+ * process share in a directory of their own: a directory of compiled modules,
+ * one file per module, and the claims that keep two of them from compiling the
+ * same modules at once. Deno-only: it reads, writes and locks files.
  *
  * The directory holds two trees. `modules/<version>/<identity>.json` is one
  * module as `ProcessModuleByteCache.serialized()` writes it, under the hashes

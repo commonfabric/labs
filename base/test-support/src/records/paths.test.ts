@@ -98,6 +98,20 @@ describe("paths", () => {
       ).toBe(join("/Users/u", ".cache", "common-fabric", "test-records"));
       expect(defaultSpoolRoot(() => undefined)).toBeUndefined();
     });
+
+    it("passes over a variable set to the empty string", () => {
+      const env = (values: Record<string, string>) => (name: string) =>
+        values[name];
+
+      expect(
+        defaultSpoolRoot(env({ XDG_CACHE_HOME: "", HOME: "/home/u" })),
+      ).toBe(join("/home/u", ".cache", "common-fabric", "test-records"));
+      expect(
+        defaultSpoolRoot(env({ HOME: "", USERPROFILE: "/Users/u" })),
+      ).toBe(join("/Users/u", ".cache", "common-fabric", "test-records"));
+      expect(defaultSpoolRoot(env({ HOME: "", USERPROFILE: "" })))
+        .toBeUndefined();
+    });
   });
 
   describe("writableSpool()", () => {
