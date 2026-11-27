@@ -1830,8 +1830,8 @@ action's public write. Therefore, normatively:
   discovers session scope as it runs has read without the session's
   ceiling, so its seal refuses it, the same way the early-emit guard
   refuses a run that outgrew its stamp. The rerun is stamped as the
-  session's instance and reads under the ceiling. The refusal does not
-  spend the run's retry budget, and `sessionCeilingRefusals` counts it.
+  session's instance and reads under the ceiling, and
+  `sessionCeilingRefusals` counts the refusal.
   No ceiling binds a bookkeeping run, which acts as no session; a run
   acting as a session that declared none reads under the serving
   runtime's option alone. Verification-coverage.md OW64 is the coverage

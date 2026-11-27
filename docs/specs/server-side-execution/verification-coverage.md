@@ -10704,7 +10704,7 @@ supply; OW29/OW32/OW34 closed):
     handler with a session actor, a session instance's derivation) or
     the serving runtime's writes carry no labels (`derivedWritesCarryLabels`).
     A shared instance's derivation that discovers session scope is
-    refused at the seal, off the retry budget, and reruns as the
+    refused at the seal and reruns as the
     session's instance under the ceiling. Pinned end to end in
     `runtime/runner/test/executor-derivation-read-ceiling.test.ts`. The
     cell guard is pinned in `runtime/runner/test/cfc-cell-read-ceiling.test.ts`,

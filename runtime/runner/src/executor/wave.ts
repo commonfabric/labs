@@ -326,19 +326,6 @@ export function sealedOutsideSessionCeiling(
     discovered === "session";
 }
 
-/** The reason a seal refuses a run stamped at a scope the node has since
- * outgrown. Rerunning resolves it, as a stale basis does, so the scheduler
- * re-queues it without charging the action's retry budget
- * ({@link isOutgrownStampRefusal}). */
-class OutgrownStamp extends Error {}
-
-/** Whether a commit error is a seal's refusal of a run stamped at a scope
- * the node has since outgrown. */
-export function isOutgrownStampRefusal(error: unknown): boolean {
-  return isObjectOrArray(error) && "reason" in error &&
-    error.reason instanceof OutgrownStamp;
-}
-
 /**
  * Settle a scope-attributed derivation run's `acting` and `capabilityRef`
  * from its FINAL discovered scope, at the seal (server-execution v2
@@ -1774,7 +1761,7 @@ export class WaveAccumulator
             message: "session read ceiling not applied: the run read as a " +
               "shared instance before discovering session scope (the " +
               "retry reads under the session's ceiling)",
-            reason: new OutgrownStamp("session-ceiling-unapplied"),
+            reason: new Error("session-ceiling-unapplied"),
           },
         };
       }
