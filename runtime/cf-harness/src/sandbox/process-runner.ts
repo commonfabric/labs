@@ -84,9 +84,7 @@ export class DenoProcessRunner implements ProcessRunner {
     const release = () => {
       held?.abort().catch(() => undefined);
     };
-    let done = false;
     const exited = child.status.then((status) => {
-      done = true;
       release();
       return { exitCode: status.code };
     });
@@ -95,11 +93,10 @@ export class DenoProcessRunner implements ProcessRunner {
       exited,
       kill: (signal = "SIGTERM") => {
         release();
-        if (done) return;
         try {
           child.kill(signal);
         } catch {
-          // Already gone.
+          // Deno throws once the process has ended.
         }
       },
     };

@@ -19,6 +19,7 @@ import {
   loadHarnessDocsCorpus,
   MAX_CORPUS_BYTES,
   MAX_CORPUS_FILE_BYTES,
+  readAtMost,
   resolveHarnessDocsCorpus,
 } from "../src/docs-corpus/corpus.ts";
 import {
@@ -115,6 +116,53 @@ describe("docs-corpus", () => {
       );
 
       expect(rankSections(sections, "how should you use this")).toEqual([]);
+    });
+  });
+
+  describe("readAtMost()", () => {
+    /**
+     * A reader over `text` that hands out at most `chunk` bytes per read, and
+     * reports how many bytes it has handed out.
+     */
+    const chunkedReader = (text: string, chunk: number) => {
+      const source = new TextEncoder().encode(text);
+      let position = 0;
+      return {
+        get position() {
+          return position;
+        },
+        read(into: Uint8Array): Promise<number | null> {
+          if (position === source.length) {
+            return Promise.resolve(null);
+          }
+          const piece = source.subarray(
+            position,
+            position + Math.min(chunk, into.length),
+          );
+          into.set(piece);
+          position += piece.length;
+          return Promise.resolve(piece.length);
+        },
+      };
+    };
+    const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+    it("returns every byte of a reader that ends before the size, as a file that shrank does", async () => {
+      const reader = chunkedReader("Dip once.", 4);
+
+      const bytes = await readAtMost(reader, 20);
+
+      expect(decode(bytes)).toBe("Dip once.");
+      expect(bytes.length).toBe(9);
+    });
+
+    it("returns the first size bytes of a reader holding more, without reading past them", async () => {
+      const reader = chunkedReader("Dip once. Then fire.", 4);
+
+      const bytes = await readAtMost(reader, 9);
+
+      expect(decode(bytes)).toBe("Dip once.");
+      expect(reader.position).toBe(9);
     });
   });
 

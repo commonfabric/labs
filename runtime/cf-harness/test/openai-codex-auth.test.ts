@@ -762,6 +762,82 @@ test("Codex device login stops on a terminal provider denial", async () => {
   assertEquals(waits, 1);
 });
 
+const codexTestDevice = {
+  deviceAuthId: "device-1",
+  userCode: "ABCD-EFGH",
+  intervalMs: 1_000,
+  verificationUrl: "https://auth.openai.com/codex/device",
+};
+
+test("Codex device login keeps polling through status-only pending replies until it expires", async () => {
+  let clock = 0;
+  const statuses = [404, 403, 404];
+  const polled: number[] = [];
+  await assertRejects(
+    () =>
+      completeOpenAICodexDeviceAuthorization({
+        device: codexTestDevice,
+        expiresInMs: statuses.length * 1_000,
+        now: () => clock,
+        wait: (milliseconds) => {
+          clock += milliseconds;
+          return Promise.resolve();
+        },
+        fetchFn: () => {
+          const status = statuses[polled.length];
+          polled.push(status);
+          return Promise.resolve(new Response("not json", { status }));
+        },
+      }),
+    Error,
+    "OpenAI Codex device authorization expired",
+  );
+  assertEquals(polled, statuses);
+});
+
+test("Codex device login fails on a status-only reply that is not pending", async () => {
+  let polls = 0;
+  await assertRejects(
+    () =>
+      completeOpenAICodexDeviceAuthorization({
+        device: codexTestDevice,
+        now: () => 0,
+        wait: () => Promise.resolve(),
+        fetchFn: () => {
+          polls += 1;
+          return Promise.resolve(new Response("not json", { status: 500 }));
+        },
+      }),
+    Error,
+    "device authorization failed (500)",
+  );
+  assertEquals(polls, 1);
+});
+
+test("Codex device login rejects a token reply without the authorization code", async () => {
+  let requests = 0;
+  await assertRejects(
+    () =>
+      completeOpenAICodexDeviceAuthorization({
+        device: codexTestDevice,
+        now: () => 0,
+        wait: () => Promise.resolve(),
+        fetchFn: () => {
+          requests += 1;
+          return Promise.resolve(
+            new Response(
+              JSON.stringify({ code_verifier: "device-verifier" }),
+              { status: 200 },
+            ),
+          );
+        },
+      }),
+    Error,
+    "OpenAI Codex device token response is missing required fields",
+  );
+  assertEquals(requests, 1);
+});
+
 test("Codex refresh classifies invalid grants without exposing tokens", async () => {
   const store = new InMemoryHarnessCredentialStore();
   await store.set("local", "openai-codex", {
@@ -1821,4 +1897,96 @@ test("marking a refused Codex token needs reconnection only while it is the stor
     reason: "revoked",
   });
   assertEquals(seen.refreshes, 0);
+});
+
+test("a refused Codex token is not refreshed when the signal aborts before the update runs", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const controller = new AbortController();
+  const reason = new Error("abort inside the store transaction");
+  const originalUpdateRecord = store.updateRecord.bind(store);
+  store.updateRecord = (ownerKey, providerId, updater) =>
+    originalUpdateRecord(ownerKey, providerId, (record) => {
+      controller.abort(reason);
+      return updater(record);
+    });
+  const { resolver, seen } = rejectionResolver(store, refreshedTokenReply);
+
+  const error = await assertRejects(() =>
+    resolver.refreshRejected(refused, controller.signal)
+  );
+
+  assertStrictEquals(error, reason);
+  assertEquals(seen.refreshes, 0);
+  assertEquals(await store.get("local", "openai-codex"), refused);
+});
+
+test("a refused Codex token's refresh is kept when the signal aborts as the refresh lands", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  const controller = new AbortController();
+  const reason = new Error("abort after refresh response");
+  const { resolver, seen } = rejectionResolver(store, () => {
+    controller.abort(reason);
+    return refreshedTokenReply();
+  });
+
+  const error = await assertRejects(() =>
+    resolver.refreshRejected(refused, controller.signal)
+  );
+
+  assertStrictEquals(error, reason);
+  assertEquals(seen.refreshes, 1);
+  assertEquals(
+    (await store.get("local", "openai-codex"))?.refreshToken,
+    "refresh-new",
+  );
+});
+
+test("a refused Codex token whose store cannot be updated is reported as unavailable storage", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const refused = unexpiredCodexCredential("access-refused");
+  await store.set("local", "openai-codex", refused);
+  store.updateRecord = () =>
+    Promise.reject(
+      new HarnessControlError("provider-auth-required", "store refusal"),
+    );
+  const { resolver, seen } = rejectionResolver(store, refreshedTokenReply);
+
+  const error = await assertRejects(() => resolver.refreshRejected(refused));
+
+  assertEquals(error instanceof HarnessControlError, true);
+  assertEquals((error as HarnessControlError).code, "provider-unavailable");
+  assertEquals(
+    (error as HarnessControlError).message,
+    "OpenAI Codex credential storage could not be updated",
+  );
+  assertEquals(seen.refreshes, 0);
+});
+
+test("marking a refused Codex token tolerates a store that cannot be written unless aborted", async () => {
+  const store = new InMemoryHarnessCredentialStore();
+  const stored = unexpiredCodexCredential("access-stored");
+  await store.set("local", "openai-codex", stored);
+  const controller = new AbortController();
+  const reason = new Error("abort during the mark");
+  store.updateRecord = () => Promise.reject(new Error("write failure"));
+  const { resolver } = rejectionResolver(store, refreshedTokenReply);
+
+  assertEquals(
+    await resolver.markRejected(stored, controller.signal),
+    undefined,
+  );
+  assertEquals(
+    (await new OpenAICodexAuthService(store, "local").status()).status,
+    "connected",
+  );
+
+  controller.abort(reason);
+  const error = await assertRejects(() =>
+    resolver.markRejected(stored, controller.signal)
+  );
+  assertStrictEquals(error, reason);
 });

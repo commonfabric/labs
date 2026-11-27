@@ -923,6 +923,38 @@ describe("registry", () => {
         expect(codes).toEqual(["skill-resource-scan-outside-root"]);
       });
 
+      it("indexes no resources for a skill whose SKILL.md lives in another skill directory", async () => {
+        // Without a name in its frontmatter each skill is named after the
+        // directory holding its SKILL.md, so the two do not collide.
+
+        const unnamed = ["---", "description: Shared", "---", ""].join("\n");
+        await writeSkill(root, "real", unnamed);
+        await writeSkillResource(root, "real", "references/guide.md", "# G\n");
+        await Deno.mkdir(join(root, "alias"));
+        await Deno.symlink(
+          join(root, "real", "SKILL.md"),
+          join(root, "alias", "SKILL.md"),
+        );
+        const registry = await discoverHarnessSkills({ skillsRoot: root });
+        expect(registry.skills.map((skill) => skill.name)).toEqual([
+          "alias",
+          "kit",
+          "real",
+        ]);
+        const [alias, , real] = registry.skills;
+        expect(alias.resources).toEqual([]);
+        expect(codesOf(alias.diagnostics)).toEqual([
+          "missing-name",
+          "skill-resource-scan-outside-root",
+        ]);
+        expect(alias.diagnostics[1].path).toBe(join(root, "alias"));
+        expect(real.resources.map((resource) => resource.path)).toEqual([
+          "references/guide.md",
+          "SKILL.md",
+        ]);
+        expect(codesOf(real.diagnostics)).toEqual(["missing-name"]);
+      });
+
       it("skips an entry that is neither a file nor a directory", async () => {
         const socketPath = join(root, "kit", "sock");
         const listener = Deno.listen({ transport: "unix", path: socketPath });
