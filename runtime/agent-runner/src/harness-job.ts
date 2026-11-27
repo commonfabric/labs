@@ -130,8 +130,11 @@ export interface HarnessJobFabric {
 
 /** One job, as plain data. */
 export interface HarnessJobSpec extends HarnessModelLimits {
-  /** The task text, given to the model as the prompt. */
+  /** The submitted task text. */
   task: string;
+
+  /** Gives the opening task to the model by file. Follow-ups keep their message inline. */
+  taskDelivery?: "file";
 
   /** The predecessor's run root, whose checkpoint seeds this follow-up. */
   continueFrom?: { runRoot: string };
@@ -571,6 +574,15 @@ export const runHarnessJob = async (
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
   }
+  let filePrompt: string | undefined;
+  if (spec.taskDelivery === "file" && spec.continueFrom === undefined) {
+    await Deno.writeTextFile(join(workspace, ".job-task"), spec.task, {
+      createNew: true,
+      mode: 0o400,
+    });
+    filePrompt =
+      "Your task is in .job-task in the workspace. Follow the job instructions to use it.";
+  }
   const argv = argvOf(
     spec,
     workspace,
@@ -702,11 +714,18 @@ export const runHarnessJob = async (
       };
       return {
         runPrompt: (promptOptions) =>
-          run(promptOptions, (wrapped) => loop.runPrompt(wrapped)),
+          run(
+            promptOptions,
+            (wrapped) =>
+              loop.runPrompt(
+                filePrompt === undefined
+                  ? wrapped
+                  : { ...wrapped, prompt: filePrompt },
+              ),
+          ),
         runTranscript: (transcriptOptions) =>
           run(transcriptOptions, (wrapped) => loop.runTranscript(wrapped)),
-        // The harness classifies the task before it assembles the prompt; a
-        // wrapper without this seam runs every job with full orientation.
+        // The harness classifies the submitted task before it assembles the prompt.
         ...(loop.classifyTask !== undefined
           ? {
             classifyTask: (task: string) => loop.classifyTask!(task),

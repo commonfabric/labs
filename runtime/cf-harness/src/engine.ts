@@ -1814,12 +1814,22 @@ export class CfHarnessEngine {
 
   async recordCfcModelContextObservations(
     observations: readonly HarnessCfcModelContextObservationInput[],
+    frames?: HarnessRunState["observedImageFrames"],
   ): Promise<HarnessRunState> {
     this.#runState = appendHarnessCfcModelContextObservations(
       this.#runState,
       observations,
       this.#now(),
     );
+    if (frames !== undefined) {
+      this.#runState = {
+        ...this.#runState,
+        observedImageFrames: {
+          ...this.#runState.observedImageFrames,
+          ...frames,
+        },
+      };
+    }
     await this.persistRunState();
     return this.getRunState();
   }

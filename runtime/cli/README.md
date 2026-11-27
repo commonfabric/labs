@@ -2730,6 +2730,12 @@ harness admits one level of delegation, so depth is `1`. Only a child's
 operation's arguments or page content. Other child tool steps, such as
 `submit_result`, omit `action`.
 
+A local job profile can set `taskDelivery: "file"` for jobs that consume a
+structured task in the workspace. On the opening run, the runner writes the
+submitted task verbatim to `.job-task` before the first turn and puts its
+location in the task's prompt slot. The workspace must have that name free.
+Follow-up messages arrive inline in the same conversation and workspace.
+
 A profile may grant `hostMounts`, a list of
 `{name, hostPath, sandboxPath, mode}` objects. Each names an existing host
 directory mounted into the job's sandbox, with `mode: "readonly"` or

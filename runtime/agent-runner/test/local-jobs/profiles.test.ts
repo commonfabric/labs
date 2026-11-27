@@ -82,6 +82,17 @@ describe("local-jobs/profiles", () => {
       });
     });
 
+    it("retains file delivery only on profiles that select it", async () => {
+      const profiles = await read({
+        normal: ASK,
+        build: { ...ASK, taskDelivery: "file" },
+      });
+      expect(profiles.get("normal")).not.toHaveProperty("taskDelivery");
+      expect(profiles.get("build")?.taskDelivery).toBe("file");
+      await expect(read({ bad: { ...ASK, taskDelivery: "/some/path" } }))
+        .rejects.toThrow("taskDelivery");
+    });
+
     it("reads a command endpoint that names no relevant commands as naming none", async () => {
       const commands = { url: ASK.commands.url, actor: ASK.commands.actor };
       const profile = (await read({ ask: { ...ASK, commands } })).get("ask")!;

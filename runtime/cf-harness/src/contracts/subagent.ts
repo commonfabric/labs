@@ -20,6 +20,7 @@ import type {
 } from "./skill.ts";
 import type { BuiltinToolId } from "./tool-descriptor.ts";
 
+export const IMAGE_REVIEW_SUBAGENT_PROFILE = "image-review" as const;
 export const DEFAULT_SUBAGENT_PROFILE = "default" as const;
 export const BROWSER_SUBAGENT_PROFILE = "browser" as const;
 export const WEB_FETCH_SUBAGENT_PROFILE = "web_fetch" as const;
@@ -321,6 +322,7 @@ export const HARNESS_SUBAGENT_PROFILES = [
   WEB_FETCH_SUBAGENT_PROFILE,
   WEB_SEARCH_SUBAGENT_PROFILE,
   PATTERN_AUTHOR_SUBAGENT_PROFILE,
+  IMAGE_REVIEW_SUBAGENT_PROFILE,
 ] as const;
 
 export type HarnessDelegableSubagentProfile =
@@ -487,6 +489,13 @@ export const getHarnessSubagentProfileConfig = (
   provider: HarnessModelProviderId = "openai-compatible-gateway",
 ): HarnessSubagentProfileConfig => {
   switch (profile) {
+    case IMAGE_REVIEW_SUBAGENT_PROFILE:
+      return {
+        ...DEFAULT_SUBAGENT_PROFILE_CONFIG,
+        profile,
+        allowedToolIds: [],
+        maxModelTurns: 1,
+      };
     case DEFAULT_SUBAGENT_PROFILE:
       return DEFAULT_SUBAGENT_PROFILE_CONFIG;
     case BROWSER_SUBAGENT_PROFILE:
@@ -725,6 +734,9 @@ export interface DelegateTaskToolInput {
   context?: string;
   maxModelTurns?: number;
   returnSchema?: JSONSchema;
+
+  /** Ordered output IDs of frames already observed by this author. */
+  imageOutputIds?: readonly string[];
 
   /** Published patterns selected from this parent's prior search results. */
   patternRefs?: readonly DelegateTaskPatternRef[];

@@ -1,3 +1,4 @@
+import { observedImageRead } from "./support/observed-image.ts";
 import { assertEquals, assertRejects, assertStringIncludes } from "@std/assert";
 import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
@@ -2848,10 +2849,10 @@ test("write_file tool denies reserved artifact paths before shelling out", async
   assertEquals(sandbox.calls, []);
 });
 
-test("view_image tool attaches a workspace image without shelling out", async () => {
+test("view_image tool uses the sandbox observation for a workspace image", async () => {
   const workspace = await Deno.realPath(await Deno.makeTempDir());
   await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
-  const sandbox = new FakeSandboxRuntime();
+  const sandbox = new FakeSandboxRuntime([observedImageRead(ONE_PIXEL_PNG)]);
 
   const output = await viewImageTool.invoke(
     createContext(
@@ -2875,7 +2876,11 @@ test("view_image tool attaches a workspace image without shelling out", async ()
   assertEquals(output.mediaType, "image/png");
   assertEquals(output.bytes, ONE_PIXEL_PNG.byteLength);
   assertEquals(output.imageAttachment.hostPath, join(workspace, "capture.png"));
-  assertEquals(sandbox.calls, []);
+  assertEquals(sandbox.calls.length, 1);
+  assertEquals(
+    sandbox.calls[0].request.cfcInvocationContext?.toolId,
+    "view_image",
+  );
 });
 
 test("view_image tool denies reserved artifact paths", async () => {

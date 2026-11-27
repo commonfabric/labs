@@ -5,6 +5,7 @@
  * strings that name addresses come back as tokens.
  */
 
+import { observedImageRead } from "./support/observed-image.ts";
 import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
@@ -435,7 +436,9 @@ describe("prompt-loop address handles", () => {
       URI_A,
     );
     const engine = new CfHarnessEngine({
-      sandboxRuntime: new FakeSandboxRuntime(),
+      sandboxRuntime: new FakeSandboxRuntime([
+        observedImageRead(ONE_PIXEL_PNG),
+      ]),
       workspaceHostPath: workspace,
       runId,
       model: "gpt-5.4",
