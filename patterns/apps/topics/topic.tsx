@@ -568,7 +568,7 @@ export type TopicBoard = IndexedCollections<{ topics: TopicMirrored }>;
  * table's `rowid`.
  */
 export const MENTIONED_BY_SQL = `
-  SELECT m.member_cf_link AS topic FROM topics m
+  SELECT m.member_cf_link AS topic, m.title AS title FROM topics m
   WHERE m.member_cf_link <> :self_cf_link AND m.member_cf_link IN (
     SELECT source_cf_link FROM topics_mentioned
     WHERE target_cf_link = :self_cf_link
@@ -578,9 +578,13 @@ export const MENTIONED_BY_SQL = `
   ORDER BY m.shortName IS NULL, CAST(m.shortName AS INTEGER), m.rowid
   LIMIT 200`;
 
-/** A row of `MENTIONED_BY_SQL`: a mentioning topic, as an unread reference. */
+/**
+ * A row of `MENTIONED_BY_SQL`: a mentioning topic, as an unread reference,
+ * and its title as the collection mirrors it.
+ */
 export interface MentionedByRow {
   topic: OpaqueCell<TopicSummary>;
+  title: string | null;
 }
 
 /**
@@ -2614,6 +2618,16 @@ export default pattern<TopicInput, TopicOutput>(
       );
       return mentioning as TopicSummary[];
     });
+    // The list below labels each link with the title the collection mirrors.
+    // A labelled link reads nothing of its target while it is shown, and the
+    // title is there for a topic that has never run, which has stored no name
+    // for a link to show.
+    const backlinkLinks = computed(() =>
+      (mentionedBy.result ?? []).map((row) => ({
+        topic: row.topic,
+        label: row.title?.trim() || "(untitled topic)",
+      }))
+    );
     const hasReferences = backlinks.length > 0;
     // Only what THIS pattern owns is offered for removal. The union `mentions`
     // also carries the editor's map and the link resolutions, and a control
@@ -2962,7 +2976,9 @@ export default pattern<TopicInput, TopicOutput>(
                   <cf-vstack gap="2">
                     <cf-heading level={5}>Referenced by</cf-heading>
                     <cf-vstack gap="1">
-                      {backlinks.map((topic) => <cf-cell-link $cell={topic} />)}
+                      {backlinkLinks.map((link) => (
+                        <cf-cell-link $cell={link.topic} label={link.label} />
+                      ))}
                     </cf-vstack>
                   </cf-vstack>
                 </cf-card>
