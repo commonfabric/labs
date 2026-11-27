@@ -259,6 +259,10 @@ export async function indexedCollectionHostFixture() {
       ) as unknown as Collection).add("topics", topic);
     });
   }
+  /** Writes `to` as the title of the topic `addTopic()` added as `title`. */
+  function retitleTopic(title: string, to: string) {
+    return commit((tx) => topicCell(title, tx).set({ title: to }));
+  }
   /**
    * Returns the rows `sql` selects from `db` once `done` accepts them,
    * asking again after each commit the server admits to the space.
@@ -326,6 +330,7 @@ export async function indexedCollectionHostFixture() {
     declare,
     topicCell,
     addTopic,
+    retitleTopic,
     stored,
     select,
     hostWatchRoots,

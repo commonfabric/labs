@@ -72,7 +72,10 @@ at that moment (`#releaseServedHandlerResult` in
 when a host's client cancels a cell subscription
 (`RuntimeProcessor.handleCellUnsubscribe()` in `runtime/runtime-client`),
 and when a host's client departs (`RuntimeProcessor.disposeClient()`). A host
-may also call `Runtime.releaseUnreadDocuments()` itself. A pass any of these
+may also call `Runtime.releaseUnreadDocuments()` itself, as the toolshed's
+indexed-collection host does each time a collection's maintenance has nothing
+left to re-read ("Which runtime maintains" in
+[`indexed-collections.md`](indexed-collections.md)). A pass any of these
 asks for is followed by another once the cells holding what it kept have been
 garbage collected, as below. The pass waits until the scheduler is idle. Passes
 run one after another, never two at once. Requests made before a pass begins

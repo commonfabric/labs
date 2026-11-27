@@ -179,13 +179,27 @@ describe("indexed-collection-host", () => {
 
   it("stops watching the members a drain re-read once the cells it read them through are collected", async () => {
     // The host's runtime runs no piece, so only a release pass it asks for
-    // itself lets go of what it read. The helper adds three topics, collects
-    // the host's cells, and adds a fourth; the first three were watched until
-    // then, which is what shows that the observable sees a member's watch.
+    // itself lets go of what it read. The helper adds three topics while a
+    // cell of the host's runtime holds the first, collects the host's other
+    // cells, and adds a fourth. The held topic stays watched, which is what
+    // shows that the count sees a member's watch at all.
 
     expect(await runReleaseHelper("earlier-members")).toEqual({
-      watchedBefore: 3,
-      watchedAfter: 0,
+      heldWatched: true,
+      releasedWatched: 0,
+    });
+  });
+
+  it("keeps a member's document loaded from its re-read to its projection through a release pass", async () => {
+    // The helper holds the drain after it has synced the retitled topic and
+    // before it queues the transaction that projects it, and collects the
+    // host's cells and runs a release pass in that window. A document
+    // dropped there reads as absent in the transaction, and the member
+    // projects to empty rows.
+
+    expect(await runReleaseHelper("release-before-projection")).toEqual({
+      loadedThroughPass: true,
+      titles: ["renamed"],
     });
   });
 

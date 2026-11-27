@@ -12,16 +12,30 @@
  * The first argument names the scenario:
  *
  * - `earlier-members`: three topics are added and maintained one after
- *   another, the host's cells are collected, and a fourth is added. The
- *   report says how many of the first three the host's session watched
- *   before the collection (`watchedBefore`) and after the fourth was
- *   maintained (`watchedAfter`).
+ *   another while a cell of the host's runtime holds the first, the host's
+ *   cells are collected, and a fourth topic is added. The report says
+ *   whether the host's session watched the held topic once the fourth was
+ *   maintained (`heldWatched`), and how many of the other two it watched
+ *   (`releasedWatched`).
+ * - `release-before-projection`: a topic is added and maintained, and then
+ *   retitled. The drain that re-reads it is held once it has synced the
+ *   topic and before it queues the transaction that projects it, while the
+ *   host's cells are collected and a release pass runs. The report says
+ *   whether the topic's document was still loaded in the host's runtime once
+ *   the pass had run (`loadedThroughPass`), and the titles the collection
+ *   holds once the host has settled (`titles`).
  */
+
+import type { SqliteDbRef } from "@commonfabric/memory/v2";
 
 import { indexedCollectionHostFixture } from "./indexed-collection-host-fixture.ts";
 
+type Fixture = Awaited<ReturnType<typeof indexedCollectionHostFixture>>;
+
 const scenario = Deno.args[0];
-if (scenario !== "earlier-members") {
+if (
+  scenario !== "earlier-members" && scenario !== "release-before-projection"
+) {
   throw new Error(`Unknown scenario: \`${scenario}\``);
 }
 
@@ -38,8 +52,11 @@ async function collect(): Promise<void> {
   gc!();
 }
 
-const f = await indexedCollectionHostFixture();
-try {
+/**
+ * Adds the topic `a`, and waits for the host to adopt the collection, bring
+ * it up to its declaration, and re-read the topic. Returns the database.
+ */
+async function addFirstTopic(f: Fixture): Promise<SqliteDbRef> {
   const db = await f.declare({ columns: { title: "text" } });
   // The first topic lists the collection, which the host adopts and brings
   // up to its declaration before it re-reads anything; the declaration is
@@ -51,25 +68,72 @@ try {
     (rows) => rows.length === 1,
   );
   await f.host.runtime!.settled();
+  return db;
+}
+
+/** Runs the `earlier-members` scenario, and returns its report. */
+async function earlierMembers(f: Fixture) {
+  await addFirstTopic(f);
+  const runtime = f.host.runtime!;
+  const held = runtime.getCell(f.space, "topic-a");
+  await held.sync();
   for (const title of ["b", "c"]) {
     await f.addTopic(title);
-    await f.host.runtime!.settled();
+    await runtime.settled();
   }
-  const earlier = ["a", "b", "c"].map((title) =>
-    f.topicCell(title).getAsNormalizedFullLink().id
-  );
-  const watched = () => {
-    const roots = new Set(f.hostWatchRoots());
-    return earlier.filter((id) => roots.has(id)).length;
-  };
-  const watchedBefore = watched();
 
   await collect();
   await f.addTopic("d");
-  await f.host.runtime!.settled();
-  const watchedAfter = watched();
+  await runtime.settled();
+  const roots = new Set(f.hostWatchRoots());
+  const heldWatched = roots.has(held.getAsNormalizedFullLink().id);
+  const releasedWatched =
+    ["b", "c"].filter((title) =>
+      roots.has(f.topicCell(title).getAsNormalizedFullLink().id)
+    ).length;
+  return { heldWatched, releasedWatched };
+}
 
-  console.log(JSON.stringify({ watchedBefore, watchedAfter }));
+/** Runs the `release-before-projection` scenario, and returns its report. */
+async function releaseBeforeProjection(f: Fixture) {
+  const db = await addFirstTopic(f);
+  const runtime = f.host.runtime!;
+  // The next maintenance event of the space waits for this turn, which says
+  // when the event has begun to wait for it, and ends once the pass has run.
+  const waiting = Promise.withResolvers<void>();
+  const passed = Promise.withResolvers<void>();
+  const turn: PromiseLike<void> = {
+    then: (onFulfilled, onRejected) => {
+      waiting.resolve();
+      return passed.promise.then(onFulfilled, onRejected);
+    },
+  };
+  runtime.indexedCollections.accessForTestingOnly.turns.set(
+    f.space,
+    turn as Promise<void>,
+  );
+  await f.retitleTopic("a", "renamed");
+  await waiting.promise;
+
+  await collect();
+  await runtime.releaseUnreadDocuments();
+  const id = f.topicCell("a").getAsNormalizedFullLink().id;
+  const loadedThroughPass = runtime.storageManager.open(f.space).replica
+    .hasLocalDocumentCoverage?.(id) === true;
+  passed.resolve();
+  await runtime.settled();
+  const titles = (await f.select(db, "SELECT title FROM topics")).map((row) =>
+    row.title
+  );
+  return { loadedThroughPass, titles };
+}
+
+const f = await indexedCollectionHostFixture();
+try {
+  const report = scenario === "earlier-members"
+    ? await earlierMembers(f)
+    : await releaseBeforeProjection(f);
+  console.log(JSON.stringify(report));
 } finally {
   await f.close();
 }
