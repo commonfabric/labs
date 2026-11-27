@@ -742,6 +742,59 @@ describe("cfc-reclassify", () => {
       );
     });
 
+    it("refuses a declaration added to an existing document that stored no envelope", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+      const tx = client.edit();
+      const link = client.getCell(space, `derived-${names++}`)
+        .getAsNormalizedFullLink();
+      const plain = client.getCellFromLink<unknown>(
+        { ...link, id: link.id.replace(/^of:/, "computed:") as typeof link.id },
+        undefined,
+        tx,
+      );
+      plain.set("plain");
+      plain.setMetaRaw("result", piece.getAsLink(), rawMetaWriteAuthorization);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      const again = await deriveFrom(client, source, {
+        identity: writer(patternModule(piece)),
+        into: plain,
+        value: "fix?",
+      });
+
+      expect(JSON.stringify(again.error)).toContain(
+        "is not in its stored envelope",
+      );
+    });
+
+    it("refuses a stored declaration's path written under another policy", async () => {
+      const client = connect(alice);
+      const piece = await createPiece(client);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+      const { derived } = await deriveFrom(client, source, {
+        piece,
+        identity: writer(patternModule(piece)),
+      });
+      const before = storedConfidentiality(client, derived);
+
+      const again = await deriveFrom(client, source, {
+        identity: writer(patternModule(piece)),
+        schema: {
+          type: "string",
+          ifc: {
+            reclassify: [{ ...POLICY_MARKER, policyDigest: "other-policy" }],
+          },
+        } as JSONSchema,
+        into: derived,
+        value: "fix?",
+      });
+
+      expect(again.error).toBeDefined();
+      expect(storedConfidentiality(client, derived)).toEqual(before);
+    });
+
     it("refuses a malformed declaration with the flag off", async () => {
       const client = connect(alice, { reclassification: false });
       const source = await storeSecret(client, secretSchema(alice), "fix");

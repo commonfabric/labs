@@ -259,6 +259,27 @@ leave room:
   module the pattern imports is not the module `patternIdentity` names, so its
   declaration is ignored and a diagnostic says so. That fails closed. Admitting
   it needs the module set of the piece's program to be readable at commit.
+- **A writer can rewire what the creator's pattern reads.** Pinning the code the
+  creator installed does not pin its inputs. A member of B with WRITE can change
+  the piece's argument to link other data of A's, and the unchanged lift reads
+  it, a serving runtime reading as A, and releases it to `P`. A handler's event
+  payload naming a document does the same. The inputs of a reclassified
+  derivation need to be fixed by the creator, or carry integrity from the
+  creator's act, before the dial is on.
+- **Authority names a module, not a piece.** The writer check admits any writer
+  whose module is the piece's pattern, and the piece is found from the written
+  document's `result` link. A piece of the same pattern created by someone else,
+  writing a document that links to A's piece, would be counted as A's. Whether
+  pattern code can set that link is unverified; the check should name the piece
+  itself.
+- **One writer's schema can be attributed to another in one transaction.**
+  Authoring identities are recorded per path from the first schema input, so in
+  a transaction with two writers a schemaless write beneath a declaration takes
+  the declaring writer's identity. Whether one transaction carries two writers
+  in practice is unverified; every identity per path should be kept.
+- **The owner's data includes other people's.** Connector data labeled `User(A)`
+  holds content others sent A, such as received mail or invites, and a
+  reclassification releases it as A's.
 - **A reclassification must cover every path the transaction writes.** The flow
   join is stamped on the whole document, so a declaration on one field is
   honored only when the transaction writes nothing else there.

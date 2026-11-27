@@ -2589,10 +2589,19 @@ const reclassifiedFlowConfidentiality = (
   const declared = reclassifyDeclarationsOf(context.declaring);
   reclassifyDeclarationsOf(context.merged);
   const storedDeclarations = reclassifyDeclarationsOf(context.stored);
-  if (context.stored !== undefined) {
+  // Only the write that creates the document declares a reclassification. A
+  // document that already exists keeps the one it stored, at the same path
+  // and under the same policy, whether or not it stored an envelope at all.
+  if (
+    declared.length > 0 && !createdInTransaction(tx, { ...target, path: [] })
+  ) {
     for (const declaration of declared) {
       const storedHere = storedDeclarations.some((stored) =>
-        arraysEqual(stored.path, declaration.path)
+        arraysEqual(stored.path, declaration.path) &&
+        commitmentAwareEquals(
+          stored.marker as FabricValue,
+          declaration.marker as FabricValue,
+        )
       );
       if (!storedHere) {
         throw new Error(
