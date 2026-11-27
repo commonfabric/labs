@@ -10696,10 +10696,13 @@ supply; OW29/OW32/OW34 closed):
     over the client runtime's fields stays true because the carried
     value is those fields. Shared query results retain the complete
     labels of their materialized rows and array shape; each cell read
-    enforces its runtime and carried session ceiling. A served
-    derivation's cell reads skip the carried ceiling, because the
-    demanding session only resolves the run's addresses and the result
-    may be shared; a handler's do not. That is pinned end to end in
+    enforces its runtime and carried session ceiling. Whether the
+    carried ceiling binds a read is one decision for cells and queries
+    (wave.ts `readCeilingOfRun`): a shared instance's derivation does not
+    read under the ceiling of the session it resolves against, a session
+    instance, a handler acting as a session and a session-scoped query
+    do, and a shared instance that discovers session scope is refused at
+    the seal and reruns under it. Pinned end to end in
     `runtime/runner/test/executor-derivation-read-ceiling.test.ts`. The
     cell guard is pinned in `runtime/runner/test/cfc-cell-read-ceiling.test.ts`,
     and shared result shape, aggregate and diagnostic protection in

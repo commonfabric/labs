@@ -1797,25 +1797,39 @@ action's public write. Therefore, normatively:
 - **The run carries the READ CEILING of the session it acts as.** The
   stamp reads the memory server's session record for the run's
   `scopeKeyIdentity.sessionId` (`Server.sessionReadCeiling`) and
-  attaches it as `WaveRunContext.readCeiling` — the ceiling the
+  attaches it as `WaveRunContext.sessionReadCeiling` — the ceiling the
   client declared in its signed `session.open` descriptor
-  (protocol.md §1), or one the server assigned to the session. The
-  sqlite builtin resolves one effective ceiling per run: the serving
-  runtime's own option met with the carried one, `onExceed` meeting
-  toward `fail` — and reads under it exactly as a client's own run
-  reads under its option (06-cfc.md, "Runtime read ceiling"): the
-  meet joins the request hash and filters rows for a session-scoped
-  result. A shared result materializes under its query contract and
-  carries labels on its array shape and rows; cell reads meet the
-  carried session ceiling with the runtime ceiling before returning content. Never
-  for a bookkeeping run, which acts as no session; a run acting as a
-  session that declared none reads under the serving runtime's option
-  alone. A served derivation's cell reads skip the carried ceiling: the
-  session whose demand scheduled the run only stands in to resolve its
-  addresses, and the result may be shared by every demander. The result
-  carries its inputs' labels, so each session's own read of it meets that
-  session's ceiling. A handler run's cell reads, and a derivation's
-  session-scoped query, still read under the carried ceiling. Verification-coverage.md OW64 is the coverage row.
+  (protocol.md §1), or one the server assigned to the session. That
+  session is the one the run's scoped addresses resolve to, which is not
+  always the one it acts as, so one function decides when the ceiling
+  binds a read (wave.ts `readCeilingOfRun`), for cell reads and queries
+  alike:
+  - a query whose result is materialized for the session alone reads
+    under it, whatever the run;
+  - a handler acting as a session reads under it;
+  - a derivation reads under it when its instance is that session's. A
+    space or user instance is shared by its demanders, acts as no
+    session (or as the user), and does not read under the ceiling of
+    the session it resolves against: its result carries its inputs'
+    labels, so each reader's own read of it meets that reader's ceiling.
+    A serving runtime that does not persist flow labels gives no such
+    guarantee, and its derivations read under the ceiling.
+
+  The decision follows the stamped instance, never the order of a run's
+  reads. A shared instance that discovers session scope is refused at the
+  seal, the early-emit guard's shape, and the rerun is stamped as the
+  session's instance and reads under its ceiling (`sessionCeilingRefusals`
+  counts it). The sqlite builtin resolves one effective ceiling per
+  run: the serving runtime's own option met with the carried one,
+  `onExceed` meeting toward `fail` — and reads under it exactly as a
+  client's own run reads under its option (06-cfc.md, "Runtime read
+  ceiling"): the meet joins the request hash and filters rows for a
+  session-scoped result. A shared result materializes under its query
+  contract and carries labels on its array shape and rows. A cell read
+  the ceiling binds meets it with the runtime ceiling before returning
+  content. Never for a bookkeeping run, which acts as no session; a run
+  acting as a session that declared none reads under the serving
+  runtime's option alone. Verification-coverage.md OW64 is the coverage row.
 - **The run's CFC trust snapshot carries the run's ACTING principal** —
   the event's server-stamped actor, the demanded instance's principal,
   or the delegated carriage's actor — never the serving runtime's
