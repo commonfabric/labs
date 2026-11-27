@@ -313,10 +313,13 @@ const CARDS_SQL = `
 /**
  * The cards of the rows the card query returned. A lift at module scope, so
  * that its declared parameter is the whole of what it reads, and so that a
- * measurement can name it.
+ * measurement can name it. The rows are the session's, as the count of them
+ * is, so the cards are stored per session too: at space scope, each session's
+ * page would replace the last one written.
  */
 const cardRowsByActivity = lift(
-  ({ rows }: { rows?: CardFields[] }): CardRow[] => cardRowsOf(rows ?? []),
+  ({ rows }: { rows?: CardFields[] }): PerSession<CardRow[]> =>
+    cardRowsOf(rows ?? []),
 );
 
 /**
@@ -781,8 +784,14 @@ export default pattern<TopicsInput, TopicsOutput>(({ names }) => {
   const hasNoTopics = computed<boolean>(() => counted.result?.[0]?.n === 0);
 
   // The cards the board shows, already in order, and the strings each
-  // renders, derived in one computation.
-  const listed = board.query<CardSource>(CARDS_SQL, { params: { shown } });
+  // renders, derived in one computation. The query is asked for the
+  // session's own count, so its result is the session's: at the default
+  // scope, the result every session reads would be the page the session that
+  // asked last asked for.
+  const listed = board.query<CardSource>(CARDS_SQL, {
+    params: { shown },
+    scope: "session",
+  });
   const cards = cardRowsByActivity({ rows: listed.result });
   const hasMoreCards = computed<boolean>(() =>
     (counted.result?.[0]?.n ?? 0) > shown.get()
