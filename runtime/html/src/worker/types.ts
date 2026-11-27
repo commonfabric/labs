@@ -197,10 +197,10 @@ export interface NodeState {
   childrenBlockedByPolicy: boolean;
 
   /** Original authored children, before any render-policy placeholder rewrite. */
-  sourceChildren?: WorkerVNode["children"];
+  sourceChildren?: NonNullable<WorkerVNode["children"]>;
 
   /** Original authored props, used to recompute child render policy. */
-  sourceProps?: WorkerVNode["props"];
+  sourceProps?: WorkerProps | Cell<WorkerProps>;
 
   /**
    * Whether this node is the `span` the reconciler wraps a child position's

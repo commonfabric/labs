@@ -368,7 +368,7 @@ export function cellLabelSources(
   try {
     const own = cfcLabelViewSourceForCell(cell);
     const resolved = cell.resolveAsCell();
-    return sameCell(cell, resolved)
+    return areLinksSame(cell, resolved)
       ? [own]
       : [own, cfcLabelViewSourceForCell(resolved)];
   } catch {
@@ -578,13 +578,4 @@ function resolvedConfidentialityRenderable(
     return false;
   }
   return true;
-}
-
-/** Whether two cells address the same place, comparing by identity when they cannot be compared by link. */
-function sameCell(left: Cell<unknown>, right: Cell<unknown>): boolean {
-  try {
-    return areLinksSame(left, right);
-  } catch {
-    return left === right;
-  }
 }

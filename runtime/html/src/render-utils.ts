@@ -116,22 +116,12 @@ export const styleObjectToCssString = (
 };
 
 export const setPropDefault = <T>(target: T, key: string, value: unknown) => {
-  // Handle style object specially - set as attribute.
-  if (
-    key === "style" &&
-    target instanceof HTMLElement &&
-    typeof value === "string"
-  ) {
-    if (target.getAttribute("style") !== value) {
-      target.setAttribute("style", value);
-    }
-    return;
-  }
-
   // ARIA names and data-* keys are attributes; assigning a hyphenated
-  // property does not expose them to accessibility APIs or dataset.
+  // property does not expose them to accessibility APIs or dataset. A style
+  // string is written as the `style` attribute.
   if (
-    isAttributePropName(key) &&
+    (isAttributePropName(key) ||
+      (key === "style" && typeof value === "string")) &&
     (target as Element | null | undefined)?.nodeType === 1
   ) {
     const element = target as Element;

@@ -448,6 +448,38 @@ test("worker reconciler CFC ceiling over props and bindings", async (t) => {
       },
     );
 
+    // A stream holds no value, so no read of one admits its binding under a
+    // ceiling. Without a ceiling, nothing is decided and it is bound.
+    await t.step(
+      "withholds a stream binding under a ceiling and binds it without one",
+      async () => {
+        const tx = runtime.edit();
+        runtime.getCell(signer.did(), "prop-ceiling-stream", undefined, tx)
+          .setRawUntyped({ $stream: true });
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const stream = runtime.getCell<unknown>(
+          signer.did(),
+          "prop-ceiling-stream",
+          { asCell: ["stream"] },
+        );
+        const tree: WorkerVNode = {
+          type: "vnode",
+          name: "div",
+          props: { $events: stream as never },
+          children: [],
+        };
+        const gated = await mount(tree, HOST_CEILING);
+        const ungated = await mount(tree);
+        try {
+          expect(gated.bindings("events")).toBe(0);
+          expect(ungated.bindings("events")).toBe(1);
+        } finally {
+          gated.cancel();
+          ungated.cancel();
+        }
+      },
+    );
+
     await t.step(
       "binds what a trusted component declares it uses only as a reference",
       async () => {
