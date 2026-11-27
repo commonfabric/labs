@@ -28,6 +28,7 @@
  * and the requester's own command collects the delivery as usual.
  */
 
+import { delay } from "@std/async/delay";
 import { exists } from "@std/fs";
 import { dirname, join } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -117,7 +118,11 @@ export type CommandRunner = (
   args: string[],
 ) => Promise<{ code: number; stdout: Uint8Array }>;
 
-const runCommand: CommandRunner = (command, args) =>
+/**
+ * Runs a command, collecting its exit code and standard output and
+ * discarding its standard error.
+ */
+export const runCommand: CommandRunner = (command, args) =>
   new Deno.Command(command, { args, stdout: "piped", stderr: "null" })
     .output();
 
@@ -144,14 +149,18 @@ export function defaultGithubToken(
   })();
 }
 
-/** The wiring the command line runs against. */
-export function defaultDeps(): KeyToolDeps {
+/**
+ * The wiring the command line runs against, waiting out each polling
+ * interval through `wait`.
+ */
+export function defaultDeps(
+  wait: (ms: number) => Promise<void> = delay,
+): KeyToolDeps {
   return {
     env: Deno.env.get,
     fetchImpl: fetch,
     githubToken: () => defaultGithubToken(),
-    pause: () =>
-      new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS)),
+    pause: () => wait(POLL_INTERVAL_MS),
   };
 }
 

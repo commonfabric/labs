@@ -5,6 +5,7 @@ import {
   assertRejects,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
 import {
   acceptedCoverageDebt,
   type Artifact,
@@ -22,6 +23,7 @@ import {
   isNotFound,
   measuredSetCoverageMetric,
 } from "./ci-check-lib.ts";
+import { dirname, join } from "@std/path";
 import { buildZip } from "./zip-testing.ts";
 import { test } from "@commonfabric/test-support/test";
 
@@ -966,4 +968,110 @@ test("downloadAndExtractArtifact retries an artifact that does not unzip", async
       .test(warnings[1] ?? ""),
     true,
   );
+});
+
+/**
+ * A response whose body, when read, first does `sabotage` to each directory
+ * named with `prefix` under the temporary root, then breaks off.
+ */
+function breakingOffAfter(
+  prefix: string,
+  sabotage: (directory: string) => Promise<void>,
+): Response {
+  return new Response(
+    new ReadableStream({
+      async pull(controller) {
+        for (const directory of await artifactDirectories(prefix)) {
+          await sabotage(directory);
+        }
+        controller.error(new Error("connection reset"));
+      },
+    }, { highWaterMark: 0 }),
+    { status: 200 },
+  );
+}
+
+/** The directories named with `prefix` under the temporary root. */
+async function artifactDirectories(prefix: string): Promise<string[]> {
+  const probe = await Deno.makeTempDir();
+  await Deno.remove(probe);
+  const tempRoot = dirname(probe);
+  const directories: string[] = [];
+  for await (const entry of Deno.readDir(tempRoot)) {
+    if (entry.name.startsWith(prefix)) {
+      directories.push(join(tempRoot, entry.name));
+    }
+  }
+  return directories;
+}
+
+test("downloadAndExtractArtifact keeps only the directory of an artifact it unpacked", async () => {
+  const prefix = `artifact-cleanup-test-${crypto.randomUUID()}-`;
+  const { sleep } = recordingSleep();
+  const { result } = await withFetch(
+    () => Promise.resolve(new Response("not a zip", { status: 200 })),
+    () => downloadAndExtractArtifact(9, prefix, { sleep }),
+  );
+  assertEquals(result, null);
+  assertEquals(await artifactDirectories(prefix), []);
+
+  const directory = await withArtifactZip(
+    await buildZip("records.json", new TextEncoder().encode("{}"), 0),
+    () => downloadAndExtractArtifact(9, prefix),
+  );
+  assertExists(directory);
+  try {
+    assertEquals(await artifactDirectories(prefix), [directory]);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+test("downloadAndExtractArtifact retries a download whose directory is already gone", async () => {
+  const prefix = `artifact-vanishing-test-${crypto.randomUUID()}-`;
+  const { sleep } = recordingSleep();
+  const { result, calls } = await withFetch(
+    () =>
+      Promise.resolve(
+        breakingOffAfter(
+          prefix,
+          (directory) => Deno.remove(directory, { recursive: true }),
+        ),
+      ),
+    () => downloadAndExtractArtifact(10, prefix, { sleep }),
+  );
+  expect(result).toBeNull();
+  expect(calls).toBe(4);
+  expect(await artifactDirectories(prefix)).toEqual([]);
+});
+
+test("downloadAndExtractArtifact retries a download whose directory cannot be removed, naming both failures", async () => {
+  const prefix = `artifact-unremovable-test-${crypto.randomUUID()}-`;
+  const refusal = new Deno.errors.PermissionDenied("removal refused");
+  const refused: string[] = [];
+  const removeDirectory = (path: string) => {
+    refused.push(path);
+    return Promise.reject(refusal);
+  };
+
+  const { sleep } = recordingSleep();
+  try {
+    const { result, calls, warnings } = await withFetch(
+      () => Promise.resolve(breakingOffAfter(prefix, () => Promise.resolve())),
+      () => downloadAndExtractArtifact(11, prefix, { sleep, removeDirectory }),
+    );
+    expect(result).toBeNull();
+    expect(calls).toBe(4);
+    expect(warnings.join("\n")).toMatch(
+      /: Error: connection reset, and .+ could not be removed: PermissionDenied: removal refused/,
+    );
+    expect(refused.toSorted()).toEqual(
+      (await artifactDirectories(prefix)).toSorted(),
+    );
+    expect(refused).toHaveLength(4);
+  } finally {
+    for (const directory of await artifactDirectories(prefix)) {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }
 });

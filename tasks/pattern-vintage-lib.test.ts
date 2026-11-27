@@ -1802,6 +1802,47 @@ describe("promoting a generation", () => {
     }
   });
 
+  it("FAILS with git's reason, and moves nothing, when `git mv` refuses a tracked fixture", async () => {
+    // A tracked fixture must move through git or not at all: falling back to a
+    // plain rename here would produce the delete-plus-add diff the tracked
+    // path exists to avoid. A held index lock is one ordinary way `git mv`
+    // refuses while `git ls-files` still reads the index.
+    const root = await Deno.makeTempDir({ prefix: "vintage-promote-" });
+    try {
+      const git = (...args: string[]) =>
+        new Deno.Command("git", {
+          args,
+          cwd: root,
+          stdout: "piped",
+          stderr: "null",
+        }).output();
+      await git("init", "-q");
+
+      const auto = `${root}/topics/t.test.tsx/${AUTO}`;
+      await Deno.mkdir(auto, { recursive: true });
+      const stamp = "2026-01-09T00-00-00.000Z";
+      const path = `${auto}/${vintageFileName(stamp, ID_A)}`;
+      await Deno.writeTextFile(path, "a committed generation");
+      await git("add", "-A");
+      await Deno.writeTextFile(`${root}/.git/index.lock`, "");
+
+      const ref = parseVintagePath(path, root)!;
+      await expect(promoteVintage(ref)).rejects.toThrow(
+        /^git mv .* failed: .*index\.lock/s,
+      );
+
+      expect(await Deno.readTextFile(path), "the source moved anyway").toBe(
+        "a committed generation",
+      );
+      expect(
+        await exists(promotedPath(ref)),
+        "the fixture was renamed behind git's back",
+      ).toBe(false);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("handles a nested test key without folding the path", () => {
     // `a/b/c.test.tsx` has slashes in the KEY, so anything that finds the tier
     // by counting from the front loses a directory here.

@@ -22,6 +22,8 @@ import {
 import type { GateRoots } from "./pattern-vintage-run.ts";
 import type { AcceptedStateDrop } from "./pattern-vintage-accepted-drops.ts";
 import { runPatternVintage } from "./pattern-vintage.ts";
+import { REPO_ROOT } from "./pattern-files.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 const signer = await Identity.fromPassphrase("pattern vintage shell test");
 
@@ -420,5 +422,45 @@ describe("pattern-vintage", () => {
         );
       });
     });
+  });
+});
+
+describe("the pattern-vintage command", () => {
+  /** Run the task as `deno task pattern-vintage` does, over this checkout. */
+  const runTask = async (args: readonly string[]) => {
+    const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+      root: REPO_ROOT,
+      args: (lock) => [
+        "run",
+        "-A",
+        "--lock",
+        lock,
+        `${REPO_ROOT}/tasks/pattern-vintage.ts`,
+        ...args,
+      ],
+    });
+    const decoder = new TextDecoder();
+    return {
+      code,
+      out: decoder.decode(stdout),
+      err: decoder.decode(stderr),
+    };
+  };
+
+  it("prints a refusal to standard error and exits 1", async () => {
+    expect(await runTask(["--frobnicate"])).toEqual({
+      code: 1,
+      out: "",
+      err: `${reportUnknownFlags(["--frobnicate"])}\n`,
+    });
+  });
+
+  it("prints each step to standard error as it begins", async () => {
+    const key = "no-such-vintage-subject.test.tsx";
+    const { code, err } = await runTask(["--update", key]);
+
+    expect(code).toBe(1);
+    expect(err).toMatch(new RegExp(`^capture 1/1: ${key}\n`));
+    expect(err).toContain("\n1 vintage(s) could not be captured:\n");
   });
 });

@@ -16,6 +16,10 @@
  * `check-package-cycles` reads, an import by package name or by a relative
  * path that climbs into another package. Between pattern categories they are
  * relative imports, which is the only way one pattern names another's module.
+ *
+ * Usage: deno run --allow-read --allow-run=git ./tasks/check-dependency-direction.ts [root]
+ *
+ * `root` is the repository to scan, and defaults to the one holding this file.
  */
 
 import { dirname, fromFileUrl } from "@std/path";
@@ -31,6 +35,7 @@ import {
   PATTERN_CATEGORIES,
   withoutPackageParent,
 } from "./package-layout.ts";
+import { runOnRoot } from "./root-argument.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -58,13 +63,14 @@ function categoryOf(path: string): number | undefined {
 export async function findViolations(root: string): Promise<Violation[]> {
   const workspace = await readWorkspace(root);
   // `check-package-cycles` names a package without its parent directory,
-  // and those names are unique (`tasks/package-layout.test.ts`).
+  // and those names are unique (`tasks/package-layout.test.ts`). A name
+  // missing from this map is taken as the directory it spells, which
+  // `dependencyLayerOf` rejects by name unless it is one.
   const dirOf = new Map(
     workspace.members.map((member) => [withoutPackageParent(member), member]),
   );
   const layerOf = (name: string) => {
-    const member = dirOf.get(name);
-    if (member === undefined) throw new Error(`no package is named ${name}`);
+    const member = dirOf.get(name) ?? name;
     const top = member.split("/")[0];
     return dependencyLayerOf(
       top === "connectors" || top === "patterns" ? top : member,
@@ -118,4 +124,7 @@ export async function main(root: string = REPO_ROOT): Promise<number> {
   return 1;
 }
 
-if (import.meta.main) Deno.exit(await main());
+/** What the command line may hold. */
+const USAGE = "check-dependency-direction.ts [root]";
+
+if (import.meta.main) Deno.exit(await runOnRoot(Deno.args, USAGE, main));

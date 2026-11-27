@@ -37,6 +37,7 @@ import {
   readVintageManifest,
   type VintageManifestEntry,
   vintageRoot,
+  type VintageRuntime,
   writeVintageManifest,
 } from "../runtime/piece/test/state-continuity-harness.ts";
 import {
@@ -322,21 +323,7 @@ export async function adoptVintage(options: AdoptOptions): Promise<string> {
     const back = await readVintageManifest(vintage);
     log(`manifest readback: ${JSON.stringify(back)}`);
 
-    // The replay's restore control reads a doc at the known vintage-root cause
-    // (a native capture pins the test run's result there). An adopted fixture
-    // has no test run, so stamp a marker doc: it travels in the same file, so
-    // its presence after restore proves restoration the same way.
-    const control = vintageRoot<Record<string, unknown>>(vintage, undefined);
-    const { error } = await vintage.runtime.editWithRetry((tx) => {
-      control.withTx(tx).set({
-        adoptedFrom: snapshotPath.slice(snapshotPath.lastIndexOf("/") + 1),
-      });
-    });
-    if (error !== undefined) {
-      throw new Error(`could not stamp restore control: ${error.message}`);
-    }
-    await vintage.runtime.idle();
-    await vintage.runtime.storageManager.synced();
+    await stampRestoreControl(vintage, snapshotPath);
 
     const outDir = `${roots.vintagesRoot}/${testKey}/${PINNED}`;
     await Deno.mkdir(outDir, { recursive: true });
@@ -357,9 +344,35 @@ export async function adoptVintage(options: AdoptOptions): Promise<string> {
 }
 
 /**
+ * Stamp the doc the replay's restore control reads, at the known vintage-root
+ * cause, with the name of the snapshot it was adopted from, and wait until
+ * the write is durable. A native capture pins the test run's result there; an
+ * adopted fixture has no test run, so the marker stands in for it. It travels
+ * in the same file, so its presence after restore proves restoration the same
+ * way. Throws when the write is refused.
+ */
+export async function stampRestoreControl(
+  vintage: VintageRuntime,
+  snapshotPath: string,
+): Promise<void> {
+  const control = vintageRoot<Record<string, unknown>>(vintage, undefined);
+  const { error } = await vintage.runtime.editWithRetry((tx) => {
+    control.withTx(tx).set({
+      adoptedFrom: snapshotPath.slice(snapshotPath.lastIndexOf("/") + 1),
+    });
+  });
+  if (error !== undefined) {
+    throw new Error(`could not stamp restore control: ${error.message}`);
+  }
+  await vintage.runtime.idle();
+  await vintage.runtime.storageManager.synced();
+}
+
+/**
  * Adopt the snapshot the command line `args` name into the tree at
- * `repoRoot`, logging each step through `log`, under the fixture signer the
- * gate replays with. A refusal throws, as `adoptVintage()` does; arguments it
+ * `repoRoot` (by default the working directory), logging each step through
+ * `log` (by default standard output), under the fixture signer the gate
+ * replays with. A refusal throws, as `adoptVintage()` does; arguments it
  * cannot read return the usage.
  *
  *   vintage-adopt.ts <snapshot.sqlite> <identity> <test key> <main> [cause]
@@ -367,8 +380,8 @@ export async function adoptVintage(options: AdoptOptions): Promise<string> {
  */
 export async function runVintageAdopt(
   args: readonly string[],
-  repoRoot: string,
-  log: (line: string) => void,
+  repoRoot: string = Deno.cwd(),
+  log: (line: string) => void = console.log,
 ): Promise<CommandOutput> {
   const childArgs = args.filter((arg) => arg.startsWith("--child="));
   const positional = args.filter((arg) => !arg.startsWith("--child="));
@@ -410,6 +423,4 @@ export async function runVintageAdopt(
   return { code: 0 };
 }
 
-if (import.meta.main) {
-  emit(await runVintageAdopt(Deno.args, Deno.cwd(), console.log));
-}
+if (import.meta.main) emit(await runVintageAdopt(Deno.args));

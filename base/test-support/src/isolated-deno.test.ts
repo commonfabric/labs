@@ -1,7 +1,9 @@
-import { assert, assertEquals, assertMatch } from "@std/assert";
+import { assert, assertEquals, assertMatch, assertRejects } from "@std/assert";
 import { join } from "@std/path";
+import { expect } from "@std/expect";
 import {
   readDenoConfig,
+  removeIfPresent,
   runDenoCheckWithTemporaryConfig,
   runDenoCommandWithTemporaryLock,
   runFrozenDriftCheck,
@@ -104,6 +106,26 @@ test("a command with a temporary lock runs in the environment it is given", asyn
   assertEquals(decode(output.stdout).trim(), `given ${ROOT}`);
 });
 
+test("a command with a temporary lock inherits this process's environment unless it clears it", async () => {
+  const probe = async (clearEnv: boolean) => {
+    const output = await runDenoCommandWithTemporaryLock({
+      root: ROOT,
+      args: (lockPath) => [
+        "eval",
+        "--lock",
+        lockPath,
+        "console.log(Deno.env.get('CF_ISOLATED_DENO_PROBE'), Deno.env.has('HOME'))",
+      ],
+      env: { CF_ISOLATED_DENO_PROBE: "given" },
+      clearEnv,
+    });
+    return { code: output.code, stdout: decode(output.stdout) };
+  };
+
+  expect(await probe(false)).toEqual({ code: 0, stdout: "given true\n" });
+  expect(await probe(true)).toEqual({ code: 0, stdout: "given false\n" });
+});
+
 test("nested frozen checks reject dependency graph drift", async () => {
   // A frozen check rejects a config whose dependency graph no longer matches
   // its lockfile. Proving that against the whole workspace would force Deno to
@@ -180,4 +202,56 @@ test("a child records nothing and skips nothing unless the caller says so", asyn
     ),
     ["/spool", "/skip.json"],
   );
+});
+
+test("a config that cannot be written fails with its own error, leaving nothing behind", async () => {
+  // The temporary config is never created, so cleaning it up finds nothing to
+  // remove; the caller sees why the config could not be written instead.
+  const prefix = `deno.test-support.unwritable-${crypto.randomUUID()}`;
+
+  await assertRejects(
+    () =>
+      runDenoCheckWithTemporaryConfig({
+        root: ROOT,
+        config: { compilerOptions: { target: 1n } },
+        files: ["base/test-support/src/mod.ts"],
+        tempConfigPrefix: prefix,
+      }),
+    TypeError,
+    "BigInt",
+  );
+
+  for await (const entry of Deno.readDir(ROOT)) {
+    assert(!entry.name.includes(prefix), `left behind ${entry.name}`);
+  }
+});
+
+test("removeIfPresent() removes a present path, and returns for an absent one", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    const present = join(directory, "present");
+    await Deno.mkdir(join(present, "inner"), { recursive: true });
+
+    await removeIfPresent(present, { recursive: true });
+    await removeIfPresent(present, { recursive: true });
+
+    await expect(Deno.lstat(present)).rejects.toThrow(Deno.errors.NotFound);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+test("removeIfPresent() throws for a path it cannot remove for a reason other than absence", async () => {
+  const directory = await Deno.makeTempDir();
+  try {
+    const file = join(directory, "file");
+    await Deno.writeTextFile(file, "kept\n");
+
+    await expect(removeIfPresent(join(file, "inner"))).rejects.toThrow(
+      Deno.errors.NotADirectory,
+    );
+    expect(await Deno.readTextFile(file)).toBe("kept\n");
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
 });

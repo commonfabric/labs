@@ -36,6 +36,7 @@ import {
   walkthroughCommands,
 } from "./check-verb-session-sync.ts";
 import { beforeAll, describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -313,6 +314,85 @@ describe("check-verb-session-sync", () => {
       const lines: string[] = [];
       expect(await main({ log: (l) => lines.push(l) })).toBe(0);
       expect(lines.length).toBe(1);
+    });
+
+    describe("as a program", () => {
+      /**
+       * Runs the script with the task's permissions, from a directory holding
+       * `tour.md`, a document quoting `cf frobnicate`, and `demo.sh`, a demo
+       * running `demoLine`, with `args` as its command line. Returns its exit
+       * code and what it printed.
+       */
+      async function runScript(demoLine: string, args: string[]) {
+        const dir = await Deno.makeTempDir();
+        try {
+          await Deno.writeTextFile(
+            join(dir, "tour.md"),
+            "```bash\ncf frobnicate --nothing-like-this\n```\n",
+          );
+          await Deno.writeTextFile(
+            join(dir, "demo.sh"),
+            `#!/usr/bin/env bash\nrun ${demoLine}\n`,
+          );
+          const output = await runDenoCommandWithTemporaryLock({
+            root: REPO_ROOT,
+            cwd: dir,
+            args: (lockPath) => [
+              "run",
+              "--config",
+              join(REPO_ROOT, "deno.jsonc"),
+              "--lock",
+              lockPath,
+              "--allow-read",
+              join(REPO_ROOT, "tasks/check-verb-session-sync.ts"),
+              ...args,
+            ],
+          });
+          return {
+            code: output.code,
+            stdout: new TextDecoder().decode(output.stdout),
+            stderr: new TextDecoder().decode(output.stderr),
+          };
+        } finally {
+          await Deno.remove(dir, { recursive: true });
+        }
+      }
+
+      it("exits 1 and names the violation for a document its demo does not run", async () => {
+        const { code, stdout, stderr } = await runScript("cf piece ls", [
+          "tour.md",
+          "demo.sh",
+        ]);
+        expect(code).toBe(1);
+        expect(stdout).toBe("");
+        expect(stderr).toContain("verb-session sync: 1 violation(s)");
+      });
+
+      it("exits 0 and says so for a document quoting only what its demo runs", async () => {
+        const { code, stdout, stderr } = await runScript(
+          "cf frobnicate --nothing-like-this",
+          ["tour.md", "demo.sh"],
+        );
+        expect(stderr).toBe("");
+        expect(code).toBe(0);
+        expect(stdout).toBe(
+          "Commands and act references in 1 document(s) all match the demo.\n",
+        );
+      });
+
+      it("exits 2 and prints the usage for an option or a third argument", async () => {
+        for (
+          const args of [["--help"], ["tour.md", "demo.sh", "extra.md"]]
+        ) {
+          expect(
+            await runScript("cf frobnicate --nothing-like-this", args),
+          ).toEqual({
+            code: 2,
+            stdout: "",
+            stderr: "usage: check-verb-session-sync.ts [doc [demo]]\n",
+          });
+        }
+      });
     });
 
     it("returns 1 through main() when the walkthrough composes", async () => {

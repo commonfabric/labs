@@ -44,6 +44,9 @@ const WITHOUT_TITLE: PatternContract = {
 
 const RECORDED_AT = new Date("2026-01-02T03:04:05Z");
 
+/** Arguments that judge one real pattern of this checkout, which passes. */
+const COUNTER = ["--only", "examples/counter/main.tsx"];
+
 /** A module whose default export is a pattern declaring `contract`. */
 const patternModule = (contract: PatternContract) => ({ default: contract });
 
@@ -517,13 +520,11 @@ describe("pattern-compat", () => {
 
     // The whole gate, over one pattern of this checkout and its baselines.
 
-    const counter = ["--only", "examples/counter/main.tsx"];
-
     it("compiles a real pattern and proves it against its recorded baselines, writing no record unasked", async () => {
       const said: string[] = [];
       let shown: CommandOutput | undefined;
       const spooled = await recordsSpooledBy(async () => {
-        shown = await runPatternCompat(counter, {
+        shown = await runPatternCompat(COUNTER, {
           say: (line) => said.push(line),
         });
       });
@@ -542,9 +543,55 @@ describe("pattern-compat", () => {
 
     it("writes one gate record per judged pattern when asked", async () => {
       const spooled = await recordsSpooledBy(() =>
-        runPatternCompat(counter, { recordResults: true, say: () => {} })
+        runPatternCompat(COUNTER, { recordResults: true, say: () => {} })
       );
 
+      expect(spooled.map((record) => [record.test.n, record.outcome]))
+        .toEqual([["pattern-compat examples/counter/main.tsx", "pass"]]);
+    });
+  });
+
+  describe("as a program", () => {
+    // `deno task pattern-compat` is judged by its exit code and its standard
+    // error, which only running it as a program states. It is started through
+    // `Deno.execPath()` so the child writes a coverage profile the parent's
+    // Deno can report, and with `--frozen` so it resolves the checked-in
+    // dependency graph.
+    const run = async (...args: string[]) => {
+      const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+        args: ["run", "--frozen", "-A", "tasks/pattern-compat.ts", ...args],
+        cwd: new URL("../", import.meta.url),
+      }).output();
+      const decoder = new TextDecoder();
+      return {
+        code,
+        out: decoder.decode(stdout),
+        err: decoder.decode(stderr),
+      };
+    };
+
+    it("exits 2 and names an argument it does not know, judging nothing", async () => {
+      const shown = await run("--frobnicate");
+
+      expect(shown).toEqual({
+        code: 2,
+        out: "",
+        err: "Unknown argument: --frobnicate\n",
+      });
+    });
+
+    it("exits 0 and records each judged pattern for a run that passes", async () => {
+      let shown: Awaited<ReturnType<typeof run>> | undefined;
+      const spooled = await recordsSpooledBy(async () => {
+        shown = await run(...COUNTER);
+      });
+
+      expect(shown?.code).toBe(0);
+      expect(shown?.err).toBe("");
+      expect(shown?.out).toContain("[1/1] examples/counter/main.tsx\n");
+      expect(shown?.out).toContain(
+        "\n1 pattern(s) can be updated from every recorded contract.\n",
+      );
       expect(spooled.map((record) => [record.test.n, record.outcome]))
         .toEqual([["pattern-compat examples/counter/main.tsx", "pass"]]);
     });

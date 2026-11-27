@@ -58,6 +58,20 @@ describe("lint-test-registration", () => {
     expect(diagnose(`dispatchEvent(new Event("load"));`)).toEqual([]);
   });
 
+  it("reports only an event kind or a specifier it can read literally", () => {
+    for (
+      const source of [
+        `dispatchEvent(new Event(kind));`,
+        "dispatchEvent(new Event(`un${'load'}`));",
+        `dispatchEvent(new Event(1));`,
+        `await import(specifier);`,
+        "await import(`@std/testing/${'bdd'}`);",
+      ]
+    ) {
+      expect(diagnose(source)).toEqual([]);
+    }
+  });
+
   it("reports nothing for the module's own functions or other names", () => {
     expect(diagnose(`
       import { describe, it, test } from "@commonfabric/test-support/test";

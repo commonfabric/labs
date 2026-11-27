@@ -1240,14 +1240,21 @@ export class Fold {
   readonly #resolver: AliasResolver;
   readonly #today: string;
   readonly #resolved: number;
+  readonly #spool: () => ObservationSpool;
   #observations = 0;
   #intact = true;
 
+  /**
+   * `spool` gives the spool each batch `addUnordered()` folds is read aside
+   * into.
+   */
   constructor(
     aggregate: AggregateState,
     resolver: AliasResolver,
     today: string,
+    spool: () => ObservationSpool = () => new ObservationSpool(),
   ) {
+    this.#spool = spool;
     this.#states = new Map(
       Object.entries(aggregate.states)
         // An aggregate written before lane measurements stopped being
@@ -1467,7 +1474,7 @@ export class Fold {
 
   /** Reads a batch aside and folds it, holding the spool meanwhile. */
   async #foldBatch(reports: AsyncIterable<StoredReport>): Promise<void> {
-    using observations = new ObservationSpool();
+    using observations = this.#spool();
     const batch = noContributions();
     for await (const report of reports) {
       const name = report.objectName;

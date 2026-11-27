@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
 import {
   composeCiContext,
@@ -12,6 +12,7 @@ import {
   shouldShipRun,
 } from "./test-records-relay.ts";
 import { gunzipToText } from "@commonfabric/test-support/records";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   afterEach,
   beforeEach,
@@ -491,11 +492,9 @@ describe("test-records-relay", () => {
     });
 
     it("ships nothing for a fork run by an unlisted actor", async () => {
-      const forkPayload = structuredClone(PAYLOAD) as {
-        workflow_run: Record<string, unknown>;
-      };
-      forkPayload.workflow_run.head_repository = { full_name: "fork/labs" };
-      forkPayload.workflow_run.actor = { id: 999 };
+      const forkPayload = structuredClone(PAYLOAD);
+      forkPayload.workflow_run.head_repository.full_name = "fork/labs";
+      forkPayload.workflow_run.actor = { login: "someone", id: 999 };
       const code = await runRelay({
         artifactsDir: join(dir, "absent"),
         runJson: await writePayload(forkPayload),
@@ -590,6 +589,63 @@ describe("test-records-relay", () => {
       expect(errors).toEqual([
         "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]",
       ]);
+    });
+  });
+
+  describe("as a program", () => {
+    const root = fromFileUrl(new URL("..", import.meta.url));
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = await Deno.makeTempDir({ prefix: "test-records-relay-main-" });
+    });
+
+    afterEach(async () => {
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    function run(args: string[]): Promise<Deno.CommandOutput> {
+      return runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-env",
+          join(root, "tasks/test-records-relay.ts"),
+          ...args,
+        ],
+        env: { TEST_RECORDS_MEMBER_ACTOR_IDS: "1,2" },
+      });
+    }
+
+    it("exits 2 with the usage for a malformed command line", async () => {
+      const { code, stdout, stderr } = await run(["--artifacts"]);
+      expect(code).toBe(2);
+      expect(new TextDecoder().decode(stdout)).toBe("");
+      expect(new TextDecoder().decode(stderr)).toBe(
+        "usage: test-records-relay.ts --artifacts <dir> [--run-json <file>]\n",
+      );
+    });
+
+    it("exits 0 for a well-formed command line naming a fork run that ships nothing", async () => {
+      const forkPayload = structuredClone(PAYLOAD);
+      forkPayload.workflow_run.head_repository.full_name = "fork/labs";
+      forkPayload.workflow_run.actor = { login: "someone", id: 999 };
+      const payload = join(dir, "payload.json");
+      await Deno.writeTextFile(payload, JSON.stringify(forkPayload));
+      const { code, stdout, stderr } = await run([
+        "--artifacts",
+        join(dir, "absent"),
+        "--run-json",
+        payload,
+      ]);
+      expect(new TextDecoder().decode(stderr)).toBe("");
+      expect(code).toBe(0);
+      expect(new TextDecoder().decode(stdout)).toContain("nothing ships");
     });
   });
 });

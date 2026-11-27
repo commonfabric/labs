@@ -3,9 +3,10 @@ import type {
   Companion,
   ManifestRow,
 } from "@commonfabric/runner/cfc/kernel/manifest";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
 
-import { fromFileUrl } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
 import { SNAPSHOT_PATH, type SpecSnapshot } from "./cfc-spec-snapshot.ts";
 import {
@@ -1094,6 +1095,33 @@ export { le as atomLe };
       const { lines, sink } = recorder();
       expect(show({ text: "broken", code: 1 }, sink)).toBe(1);
       expect(lines).toEqual([["error", "broken"]]);
+    });
+  });
+
+  describe("the script", () => {
+    it("prints the report on the checkout it sits in, with the task's permissions, and exits with its code", async () => {
+      const root = fromFileUrl(new URL("..", import.meta.url));
+      const expected = report(await readInput(root));
+      const output = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-env",
+          "--allow-run=git",
+          join(root, "tasks/check-cfc-correspondence.ts"),
+        ],
+      });
+      const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+      const shown = `${expected.text}\n`;
+      expect(output.code).toBe(expected.code);
+      expect([decode(output.stdout), decode(output.stderr)]).toEqual(
+        expected.code === 0 ? [shown, ""] : ["", shown],
+      );
     });
   });
 });

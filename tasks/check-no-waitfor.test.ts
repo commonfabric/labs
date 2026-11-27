@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
-import { join } from "@std/path";
+import { expect } from "@std/expect";
+import { fromFileUrl, join } from "@std/path";
 import {
   ALLOWLIST,
   importsPollingWaitFor,
@@ -8,6 +9,7 @@ import {
   scan,
 } from "./check-no-waitfor.ts";
 import { test } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 // Writes a single integration test file with the given contents into a fresh
 // temp tree and returns its root. The caller removes the tree.
@@ -388,6 +390,7 @@ test("the polling-waitFor ALLOWLIST has no stale entries", async () => {
 //
 // The next two tests drive the command entry point over a temp fixture tree, so
 // they cover the clean and violation paths without depending on the real tree.
+// The last two run the script itself as a separate process.
 //
 
 test(
@@ -427,4 +430,59 @@ test("main reports the offender and returns 1 on a violation", async () => {
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+/**
+ * Runs the script with the task's permissions over a tree holding one
+ * integration test file, returning its exit code and what it printed.
+ */
+async function runScript(fileName: string, contents: string) {
+  const root = await fixtureTree(fileName, contents);
+  const repo = fromFileUrl(new URL("..", import.meta.url));
+  try {
+    const output = await runDenoCommandWithTemporaryLock({
+      root: repo,
+      args: (lockPath) => [
+        "run",
+        "--config",
+        join(repo, "deno.jsonc"),
+        "--lock",
+        lockPath,
+        "--allow-read",
+        join(repo, "tasks/check-no-waitfor.ts"),
+        root,
+      ],
+    });
+    return {
+      code: output.code,
+      stdout: new TextDecoder().decode(output.stdout),
+      stderr: new TextDecoder().decode(output.stderr),
+    };
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+test("exits 1 as a command-line program and names the offender in the repository it is given", async () => {
+  const { code, stdout, stderr } = await runScript(
+    "bad.test.ts",
+    'import { waitFor } from "@commonfabric/integration";\n',
+  );
+  expect(code).toBe(1);
+  expect(stdout).toBe("");
+  expect(stderr).toContain("runtime/foo/integration/bad.test.ts");
+});
+
+test("exits 0 as a command-line program for a repository it is given with no polling `waitFor`", async () => {
+  expect(
+    await runScript(
+      "good.test.ts",
+      'import { waitForCondition } from "@commonfabric/integration";\n',
+    ),
+  ).toEqual({
+    code: 0,
+    stdout: `No new polling waitFor in integration tests ` +
+      `(${ALLOWLIST.size} allowlisted exception(s)).\n`,
+    stderr: "",
+  });
 });
