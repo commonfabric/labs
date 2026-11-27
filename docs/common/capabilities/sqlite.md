@@ -397,7 +397,9 @@ export default pattern<{ favorite: Cell<Donut> }, {
   `bakerName: { type: "text", path: ["baker", "name"] }`, and a relation a
   field holding one reference as well as a list of them. A column whose
   field is absent holds `NULL`, and a relation whose field is absent has no
-  row.
+  row. A field the member computes, such as one its pattern returns from a
+  `lift()`, reads the same way until the computation has run, and is filled
+  in once it has.
 - `add(kind, member)` and `remove(kind, member)` are called in a handler. After `add()`,
   you write to the member and nothing else: the runtime re-reads a member when
   a document its mirrored fields were read from is written.
