@@ -73,8 +73,8 @@ export const EXPERIMENTAL_ENV_VARS = {
   // The creator record is default-off; env-reachable so a process can opt in
   // with an explicit "true".
   pieceCreatorRecord: "EXPERIMENTAL_PIECE_CREATOR_RECORD",
-  // Default-off; env-reachable so a process can opt in with an explicit
-  // "true".
+  // Default-on until commonfabric/specs#110 rules; env-reachable so a process
+  // can opt out with an explicit "false", restoring specs#49's §4.9.3.
   cfcCommittedSubjectCandidates:
     "EXPERIMENTAL_CFC_COMMITTED_SUBJECT_CANDIDATES",
   // Instance naming is default-off, and reachable programmatically only: one

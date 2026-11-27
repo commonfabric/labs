@@ -192,12 +192,13 @@ export type RenderConfidentialityResolverConfig = {
  *
  * A subject held in commitment form (label-metadata protection, §4.6.4.1)
  * names no space, and the runtime never opens one (§4.3.6). Where `readFrom`
- * — the spaces the render read from: each labeled read's document and each
- * link hop it followed, across the whole render — holds a space whose digest
+ * — the spaces the label was read from, the same set its module policies'
+ * manifests are read from (`RenderLabelInput.spaces`; at the display, the spaces
+ * of each read whose label selects a module policy) — holds a space whose digest
  * that commitment is, that space is listed too: the candidate is digested and
  * compared, which is the equality-shaped consumption §4.6.4.1 keeps, and the
  * guard's later match against the minted fact is the commitment-aware
- * unification §4.3.6 prescribes. Testing a space the render read from tells
+ * unification §4.3.6 prescribes. Testing a space the label was read from tells
  * the display nothing it could not compute itself, and the point query still
  * decides membership: residency only nominates the candidate. The fact it
  * mints is true, and like every minted fact every rule the label selects may
@@ -209,7 +210,6 @@ export type RenderConfidentialityResolverConfig = {
  * candidate whether or not the resolver was told to consult it, which costs a
  * subscription and decides nothing). Order-preserving and deduped.
  */
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/110
 export const membershipSpacesInConfidentiality = (
   confidentiality: readonly CfcConfClause[],
   readFrom?: () => readonly string[],
@@ -233,6 +233,7 @@ export const membershipSpacesInConfidentiality = (
       }
     }
   }
+  // SPEC-PENDING https://github.com/commonfabric/specs/pull/110
   if (committed.length > 0 && readFrom !== undefined) {
     for (const space of readFrom()) {
       if (
