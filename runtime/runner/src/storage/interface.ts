@@ -879,11 +879,13 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * same-space doc no selector ever walked — without a pull such reads mask
    * as `undefined`, indistinguishable from absence. The other is a doc the
    * replica holds from its own commit alone
-   * (`ISpaceReplica.holdsUnwatchedWrite()`): the read is served, and without
+   * (`ISpaceReplica.lacksWatchEvidence()`): the read is served, and without
    * a pull it keeps returning the replica's own version while other sessions
-   * change the doc. Returns true at most once per (space, id, scope) per
-   * manager lifetime, and only in those two cases; the caller kicks the
-   * actual sync (see the link-resolution hop loop). Optional: managers
+   * change the doc. Returns true only in those two cases, and at most once
+   * per (space, id, scope) until the replica drops the doc, the kicked sync
+   * rejects and its caller retracts the reservation
+   * (`retractDocPullKick()`), or the manager releases the space; the caller
+   * kicks the actual sync (see the link-resolution hop loop). Optional: managers
    * without lazy remote replication (e.g. test mocks) simply don't implement
    * it.
    */
@@ -4126,12 +4128,15 @@ export interface ISpaceReplica extends ISpace {
    * document, and no watch of the replica's is rooted at it. Where no watch
    * reaches such a document, it stays at the replica's own version while
    * other sessions change it, until something loads it. The replica cannot
-   * rule out that a watch rooted at another document reaches it, since the
-   * server sends a session no frame for the session's own write, so this
-   * returns `true` for such a document too. `instance` names a scoped
-   * document's instance where it is not the replica's own.
+   * rule out that a watch rooted at another document reaches it, so this
+   * returns `true` in two such cases as well: a document a load reaches
+   * whose answer has not arrived, and one the commit created within the
+   * reach of a watch that already existed, since the refresh that follows a
+   * commit leaves the committing session's own write out of its frame.
+   * `instance` names a scoped document's instance where it is not the
+   * replica's own.
    */
-  holdsUnwatchedWrite?(
+  lacksWatchEvidence?(
     id: URI,
     scope?: CellScope,
     instance?: ScopeKey,

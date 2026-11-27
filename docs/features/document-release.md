@@ -10,10 +10,15 @@ replica keeps for that reader until the next release pass. The other is a
 document the runtime's own commit stored that no watch reaches, which the
 replica holds as that commit left it until a cell of its own loads it or a read
 reaches it through a link and starts that load
-(`IStorageManager.shouldPullDoc()`). The server sends a session no frame for
-the session's own write, so the replica cannot tell such a document from one
-its own commit stored within a watch's reach, and the first read through a link
-loads either, once for each document. This document describes how the runtime
+(`IStorageManager.shouldPullDoc()`). That load gives the document a watch, so
+from then on a release pass removes the watch and drops the document once
+nothing reads or holds it, as it does any other; a read through the link then
+finds no value and loads the document again. The replica cannot tell a
+document no watch reaches from two others: one a load reaches whose answer has
+not arrived, and one its commit created within the reach of a watch that
+already existed, which the refresh that follows the commit leaves out of the
+session's frame. The first read through a link loads any of the three, at
+most once for each document until the document is dropped or the load fails. This document describes how the runtime
 removes the watches nothing needs any more, and drops the documents they kept
 loaded, so that a long-lived runtime that opens and closes many pieces does not
 hold every document it ever loaded.

@@ -12,11 +12,13 @@ import {
 } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import type { Cell as BuilderCell } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("own-written link target");
 const space = signer.did();
@@ -260,11 +262,121 @@ describe("own-written link target", () => {
       });
       const held = () => linking.key("inner").key("v").get();
       expect(held()).toBe(1);
+      await storage.synced();
 
       await change("target", { v: 2 });
       await readPastMarker(linking);
 
       expect(held()).toBe(2);
+    });
+  });
+
+  describe("read of a running piece's result under no schema", () => {
+    // The reader runs a piece, so its own commits store every document the
+    // piece is made of, and reads the piece's result through a cell with no
+    // schema, which reaches those documents through the links the result
+    // holds. The other client writes through those links too, and then marks
+    // the result document.
+
+    type Row = { id: string };
+    type Result = { sequence: number; rows: Row[]; mark?: number };
+
+    /** Runs the piece at the reader and returns its result under no schema. */
+    const runPiece = async (): Promise<Cell<Result>> => {
+      const { pattern, cell, handler } = createTrustedBuilder(reader)
+        .commonfabric;
+      const add = handler<
+        { id: string },
+        { rows: BuilderCell<Row[]> }
+      >(
+        { type: "object", properties: { id: { type: "string" } } },
+        {
+          type: "object",
+          properties: {
+            rows: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: { id: { type: "string" } },
+              },
+              asCell: ["cell"],
+            },
+          },
+          required: ["rows"],
+        },
+        (event, context) => context.rows.push({ id: event.id }),
+      );
+      const piece = pattern<{ rows: Row[] }>(({ rows }) => ({
+        add: add({ rows }),
+        sequence: cell(0),
+        rows,
+      }));
+      const tx = reader.edit();
+      reader.run(
+        tx,
+        piece,
+        { rows: [] },
+        reader.getCell(space, "piece", undefined, tx),
+      );
+      reader.prepareTxForCommit(tx);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await reader.idle();
+      return reader.getCell<Result>(space, "piece");
+    };
+
+    /** The other client's cell for the piece's result, loaded. */
+    const theirResult = async (): Promise<Cell<Result>> => {
+      const theirs = other.getCell<Result>(space, "piece");
+      await theirs.pull();
+      return theirs;
+    };
+
+    /**
+     * Has the other client mark the result document, and returns what the
+     * reader holds once the marker has arrived.
+     */
+    const resultPastMarker = async (
+      result: Cell<Result>,
+      theirs: Cell<Result>,
+    ): Promise<Result> => {
+      const tx = other.edit();
+      theirs.withTx(tx).key("mark").set(1);
+      expect((await tx.commit().settled).error).toBeUndefined();
+      return await waitForCellValue<Result>(
+        reader,
+        result,
+        (held) => held?.mark === 1,
+      );
+    };
+
+    it("reads another client's change of a document the piece's setup made", async () => {
+      const result = await runPiece();
+      expect((await result.pull())?.sequence).toBe(0);
+      await storage.synced();
+
+      const theirs = await theirResult();
+      const tx = other.edit();
+      theirs.withTx(tx).key("sequence").set(5);
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect((await resultPastMarker(result, theirs)).sequence).toBe(5);
+    });
+
+    it("reads another client's change of a document a handler of the piece made", async () => {
+      const result = await runPiece();
+      result.key("add" as never).send({ id: "ours" } as never);
+      await reader.idle();
+      expect((await result.pull())?.rows[0]?.id).toBe("ours");
+      await storage.synced();
+
+      const theirs = await theirResult();
+      const tx = other.edit();
+      theirs.withTx(tx).key("rows").key(0).key("id").set("theirs");
+      expect((await tx.commit().settled).error).toBeUndefined();
+
+      expect((await resultPastMarker(result, theirs)).rows[0]?.id).toBe(
+        "theirs",
+      );
     });
   });
 
@@ -294,6 +406,15 @@ describe("own-written link target", () => {
       await storage.synced();
 
       expect(storage.shouldPullDoc(space, idOf(reader, "target"))).toBe(true);
+    });
+
+    it("returns `false` for a document its own commit stored, in the turn that starts the document's own load", async () => {
+      await store(reader, "target", { v: 1 });
+      await storage.synced();
+      const load = reader.getCell(space, "target").sync();
+
+      expect(storage.shouldPullDoc(space, idOf(reader, "target"))).toBe(false);
+      await load;
     });
 
     it("returns `false` for a document its own cell loaded", async () => {

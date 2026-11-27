@@ -1917,7 +1917,8 @@ export class StorageManager implements IStorageManager {
 
   /**
    * Docs already offered a link-target pull via `shouldPullDoc()`. One entry
-   * per (space, scope, id) for the manager's lifetime: the first pull registers
+   * per (space, scope, id), kept until the replica drops the doc, the kicked
+   * sync rejects, or the manager releases the space: the first pull registers
    * a server-side watch that keeps the doc flowing afterwards, so a second kick
    * is never needed — and never re-kicking is what keeps reads of genuinely
    * absent targets (dangling links, deleted docs) from churning the cross-space
@@ -3728,7 +3729,7 @@ export class StorageManager implements IStorageManager {
     // or a watch is rooted at it. One it holds from its own commit alone is
     // served too, but nothing shows that a watch brings in what other
     // sessions store there after it. The pull registers that watch.
-    return replica.holdsUnwatchedWrite?.(id, scope, instance) === true;
+    return replica.lacksWatchEvidence?.(id, scope, instance) === true;
   }
 
   /** @inheritDoc */
@@ -8296,13 +8297,15 @@ export class SpaceReplica
    * session keeps of it. The server sends a session the documents its
    * watches reach, so such a document stays at the replica's own version
    * while other sessions change it, until something loads it, unless a
-   * watch rooted at another document reaches it. Content under a
+   * watch rooted at another document reaches it. A document a release pass
+   * owes a watch, or one a retraction left unwatched for its holder, is
+   * that pass's to settle. Content under a
    * content-addressed id cannot change and needs no watch, a document held
    * only in this replica has no stored copy another session could change,
    * and a replica that reads its store directly learns of every write to a
    * document it holds.
    */
-  holdsUnwatchedWrite(
+  lacksWatchEvidence(
     id: URI,
     scope?: CellScope,
     instance?: ScopeKey,
