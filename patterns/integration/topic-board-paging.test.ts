@@ -11,11 +11,11 @@
  */
 
 import { expect } from "@std/expect";
-import { beforeAll, describe, it } from "@std/testing/bdd";
 
 import type { Identity } from "@commonfabric/identity";
 import { env, type Page } from "@commonfabric/integration";
 import { login, ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 import { clickCfButton } from "./cfc-browser-helpers.ts";
 import {
