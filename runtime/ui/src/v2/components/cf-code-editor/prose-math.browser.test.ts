@@ -6,6 +6,7 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { CFCodeEditor } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const NOTE = "Euler: $e^{i\\pi} + 1 = 0$, for $5.\n\n" +
   "$$\n\\int_0^1 x^2\\,dx = \\frac{1}{3}\n$$\n\n" +
@@ -38,7 +39,7 @@ async function withEditor(
   }
 }
 
-Deno.test("a prose editor with math draws inline and block formulas with KaTeX", async () => {
+test("a prose editor with math draws inline and block formulas with KaTeX", async () => {
   await withEditor(true, (root) => {
     assertEquals(inlineFormulas(root), [
       "e^{i\\pi} + 1 = 0",
@@ -53,7 +54,7 @@ Deno.test("a prose editor with math draws inline and block formulas with KaTeX",
   });
 });
 
-Deno.test("a prose editor with math shows TeX KaTeX cannot parse as written", async () => {
+test("a prose editor with math shows TeX KaTeX cannot parse as written", async () => {
   await withEditor(true, (root) => {
     const error = root.querySelector<HTMLElement>(".cm-prose-math-error");
     assertEquals(error?.textContent, "$\\frac{1$");
@@ -61,13 +62,13 @@ Deno.test("a prose editor with math shows TeX KaTeX cannot parse as written", as
   });
 });
 
-Deno.test("a prose editor with math draws no link a formula asks for", async () => {
+test("a prose editor with math draws no link a formula asks for", async () => {
   await withEditor(true, (root) => {
     assertEquals(root.querySelectorAll(".cm-content a").length, 0);
   });
 });
 
-Deno.test("a prose editor with math keeps a $$ formula inside a sentence in its line", async () => {
+test("a prose editor with math keeps a $$ formula inside a sentence in its line", async () => {
   const editor = new CFCodeEditor();
   editor.mode = "prose";
   editor.math = true;
@@ -85,7 +86,7 @@ Deno.test("a prose editor with math keeps a $$ formula inside a sentence in its 
   }
 });
 
-Deno.test("a prose editor with math sets a quoted formula without the quote's markers", async () => {
+test("a prose editor with math sets a quoted formula without the quote's markers", async () => {
   const editor = new CFCodeEditor();
   editor.mode = "prose";
   editor.math = true;
@@ -99,14 +100,14 @@ Deno.test("a prose editor with math sets a quoted formula without the quote's ma
   }
 });
 
-Deno.test("a prose editor without math leaves formulas as text", async () => {
+test("a prose editor without math leaves formulas as text", async () => {
   await withEditor(false, (root, editor) => {
     assertEquals(root.querySelectorAll(".katex").length, 0);
     assert(editor.editorView!.contentDOM.textContent?.includes("$e^{i\\pi}"));
   });
 });
 
-Deno.test("math set on a focused editor shows the TeX of the formula under the cursor", async () => {
+test("math set on a focused editor shows the TeX of the formula under the cursor", async () => {
   await withEditor(false, async (root, editor) => {
     const view = editor.editorView!;
     view.focus();
@@ -124,7 +125,7 @@ Deno.test("math set on a focused editor shows the TeX of the formula under the c
   });
 });
 
-Deno.test("focus followed at once by another update still shows the TeX under the cursor", async () => {
+test("focus followed at once by another update still shows the TeX under the cursor", async () => {
   await withEditor(true, async (root, editor) => {
     const view = editor.editorView!;
     const formula = view.state.doc.toString().indexOf("e^{");
@@ -144,7 +145,7 @@ Deno.test("focus followed at once by another update still shows the TeX under th
   });
 });
 
-Deno.test("setting math on a mounted prose editor starts drawing formulas", async () => {
+test("setting math on a mounted prose editor starts drawing formulas", async () => {
   await withEditor(false, async (root, editor) => {
     editor.math = true;
     await editor.updateComplete;

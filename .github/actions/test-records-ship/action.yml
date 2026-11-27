@@ -1,7 +1,7 @@
 name: Ship test records
 description: >-
-  Gather the job's spooled test records and JUnit files into an artifact for
-  the test-records relay. Credential-free; a gathering failure warns and
+  Gather the job's spooled test records into an artifact for the
+  test-records relay. Credential-free; a gathering failure warns and
   never fails the job.
 
 inputs:
@@ -22,13 +22,6 @@ inputs:
     description: Stable name of a non-default test configuration.
     required: false
     default: ""
-  junit:
-    description: >-
-      Newline-separated JUnit ingestion specifications, each
-      kind=<kind>,scope=<scope>[,prefix=<repository path>],glob=<glob>,
-      with globs relative to the repository root.
-    required: false
-    default: ""
 
 runs:
   using: composite
@@ -39,7 +32,6 @@ runs:
         SHIP_JOB: ${{ inputs.job }}
         SHIP_SHARD: ${{ inputs.shard }}
         SHIP_VARIANT: ${{ inputs.variant }}
-        SHIP_JUNIT: ${{ inputs.junit }}
       run: |
         args=(--out test-records-artifact --job "$SHIP_JOB")
         if [ -n "$SHIP_SHARD" ]; then
@@ -49,11 +41,6 @@ runs:
         if [ -n "$RESOLVED_VARIANT" ]; then
           args+=(--variant "$RESOLVED_VARIANT")
         fi
-        while IFS= read -r spec; do
-          if [ -n "$spec" ]; then
-            args+=(--junit "$spec")
-          fi
-        done <<< "$SHIP_JUNIT"
         deno run --allow-read --allow-write --allow-env --allow-run=git \
           tasks/test-records-gather.ts "${args[@]}"
 

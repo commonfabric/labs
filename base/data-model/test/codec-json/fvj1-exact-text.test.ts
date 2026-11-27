@@ -15,7 +15,6 @@
  * a record one order of keys.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { type FabricValue, valueEqual } from "@";
@@ -39,6 +38,7 @@ import {
   FabricUnavailable,
 } from "@/fabric-primitives";
 import type { FabricPrimitiveClassesByName } from "@/fabric-primitives/impl.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** One value, and the exact text it encodes to and decodes from. */
 type TextCase = {

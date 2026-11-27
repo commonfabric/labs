@@ -2,12 +2,12 @@
 import { mount, settle } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFResizableHandle } from "../cf-resizable-handle/index.ts";
 import { CFResizablePanel } from "../cf-resizable-panel/index.ts";
 import type { PanelGroupDirection } from "./cf-resizable-panel-group.ts";
 import { CFResizablePanelGroup } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A `ResizeObserver` that reports a size only when a test calls `report()`,
  * as the document has no layout to measure. */

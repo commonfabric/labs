@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { UnknownValue } from "@commonfabric/data-model/codec-common";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -8,6 +7,7 @@ import {
 } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { immutableCellsFor } from "../src/immutable-cell.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";

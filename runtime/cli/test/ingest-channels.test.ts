@@ -10,11 +10,16 @@
 // Everything else (status handling, error surfacing) is about not swallowing
 // what the server said.
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   type ChannelConfig,
   controlPlaneUrl,

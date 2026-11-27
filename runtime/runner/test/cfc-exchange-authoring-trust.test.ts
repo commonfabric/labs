@@ -4,9 +4,10 @@ import {
   exchangeRules,
   THIS_POLICY,
 } from "@commonfabric/api/cfc-authoring";
+import { test } from "@commonfabric/test-support/test";
 import { isTrustedBuilderArtifact } from "../src/builder/pattern-metadata.ts";
 
-Deno.test("exchange-rule authoring declarations never acquire builder trust", () => {
+test("exchange-rule authoring declarations never acquire builder trust", () => {
   const rule = exchangeRule({
     appliesTo: THIS_POLICY,
     guard: { policyState: [{ enabled: true }] },

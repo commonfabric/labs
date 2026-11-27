@@ -24,7 +24,7 @@ import RewardSpinner, {
   REEL_LENGTH,
   SPIN_MS,
   type SpinRecord,
-} from "./reward-spinner.tsx";
+} from "./main.tsx";
 
 const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0);
 const emojis = PRIZES.map((p) => p.emoji);

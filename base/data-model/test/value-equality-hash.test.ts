@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   deepFreeze,
@@ -18,6 +17,7 @@ import {
 import { codecOf, NULL_LIVE_ENVIRONMENT, UnknownValue } from "@/codec-common";
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A bounded, deterministic draw from a sample's private generator. */
 type Draw = (limit: number) => number;

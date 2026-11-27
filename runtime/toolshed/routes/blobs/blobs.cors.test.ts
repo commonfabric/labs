@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, afterEach, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { hashOf } from "@commonfabric/data-model";
 import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
@@ -14,6 +13,13 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { DID, URI } from "@commonfabric/memory/interface";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import app from "@/app.ts";
 import env from "@/env.ts";

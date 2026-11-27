@@ -13,9 +13,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { UI } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { safeStringify } from "../lib/render.ts";
 import { renderValue } from "../lib/shuttle/value.ts";

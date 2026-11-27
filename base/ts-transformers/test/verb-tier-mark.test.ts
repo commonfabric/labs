@@ -13,8 +13,8 @@
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { StaticCache } from "@commonfabric/static";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import ts from "typescript";
 
 import { transformCfDirective } from "../src/mod.ts";
@@ -37,7 +37,7 @@ function tierMarked(output: string, property: string): boolean {
   return slice.includes('tier: "wrapper"');
 }
 
-Deno.test("a void-event action over a session cell is wrapper-tier", async () => {
+test("a void-event action over a session cell is wrapper-tier", async () => {
   const output = await emit(`
     import { action, pattern, type PerSession, Stream, type Writable } from "commonfabric";
     interface Out {
@@ -56,7 +56,7 @@ Deno.test("a void-event action over a session cell is wrapper-tier", async () =>
   assertStringIncludes(output, 'tier: "wrapper"');
 });
 
-Deno.test("a quoted wrapper verb name is marked like a bare one", async () => {
+test("a quoted wrapper verb name is marked like a bare one", async () => {
   // Two things at once, both previously untested: the returned property is a
   // STRING-LITERAL name (the inference and mutation passes must agree on
   // static names), and the wrapper is a directly-authored `handler(...)`
@@ -81,7 +81,7 @@ Deno.test("a quoted wrapper verb name is marked like a bare one", async () => {
   assertEquals(tierMarked(output, '"open-composer"'), true);
 });
 
-Deno.test("a payload-carrying verb touching a session cell stays unmarked", async () => {
+test("a payload-carrying verb touching a session cell stays unmarked", async () => {
   // The addTopic shape: real event payload, incidental session-draft clear.
   const output = await emit(`
     import { action, pattern, type PerSession, Stream, type Writable } from "commonfabric";
@@ -104,7 +104,7 @@ Deno.test("a payload-carrying verb touching a session cell stays unmarked", asyn
   assertEquals(tierMarked(output, "create"), false);
 });
 
-Deno.test("a headless verb without session bindings stays unmarked", async () => {
+test("a headless verb without session bindings stays unmarked", async () => {
   const output = await emit(`
     import { action, pattern, Stream, type Writable } from "commonfabric";
     interface AddEvent { value: number; }

@@ -11,6 +11,7 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { Database } from "@db/sqlite";
 import type { FabricValue } from "@commonfabric/data-model";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace, type SpaceDb } from "../db.ts";
 import {
@@ -121,7 +122,7 @@ function hashWith(extra: Doc[]): string {
   return hash;
 }
 
-Deno.test("the manifest classifies generated vs authored internal cells", () => {
+test("the manifest classifies generated vs authored internal cells", () => {
   withSpace([], (space) => {
     const { generated, named } = generatedInternalCellIds(space);
     assert(generated.has("of:generated"));
@@ -130,7 +131,7 @@ Deno.test("the manifest classifies generated vs authored internal cells", () => 
   });
 });
 
-Deno.test("a generated cell's value does not move the fingerprint", () => {
+test("a generated cell's value does not move the fingerprint", () => {
   // THE contract. A pattern update rewrites generated cells by design; if that
   // moved the fingerprint, every clean migration would look like data loss.
   const base = hashWith([]);
@@ -143,7 +144,7 @@ Deno.test("a generated cell's value does not move the fingerprint", () => {
   assertEquals(generatedChanged, base);
 });
 
-Deno.test("an authored cell's value does move the fingerprint", () => {
+test("an authored cell's value does move the fingerprint", () => {
   // The other half: excluding generated cells must not blind the check to real
   // content. A named internal cell is intentional durable state.
   const base = hashWith([]);
@@ -158,7 +159,7 @@ Deno.test("an authored cell's value does move the fingerprint", () => {
   assert(inputChanged !== base, "an input cell change must be visible");
 });
 
-Deno.test("includeGenerated makes generated churn visible on purpose", () => {
+test("includeGenerated makes generated churn visible on purpose", () => {
   withSpace([], (a) => {
     const strict = contentFingerprint(a);
     const loose = contentFingerprint(a, { includeGenerated: true });
@@ -169,7 +170,7 @@ Deno.test("includeGenerated makes generated churn visible on purpose", () => {
   });
 });
 
-Deno.test("per-user and per-session state is covered, not silently skipped", () => {
+test("per-user and per-session state is covered, not silently skipped", () => {
   // listEntityModels defaults to scope "space"; on the real Estuary store that
   // omits 579 entities. A fingerprint that ignored them would call a migration
   // clean while PerUser state was destroyed.
@@ -190,7 +191,7 @@ Deno.test("per-user and per-session state is covered, not silently skipped", () 
   assert(changed !== base, "a per-user value change must move the fingerprint");
 });
 
-Deno.test("the same id in two scopes is fingerprinted separately", () => {
+test("the same id in two scopes is fingerprinted separately", () => {
   withSpace([
     { id: "of:shared", doc: { value: "space-value" } },
     {
@@ -206,7 +207,7 @@ Deno.test("the same id in two scopes is fingerprinted separately", () => {
   });
 });
 
-Deno.test("an entity address key never aliases a different address", () => {
+test("an entity address key never aliases a different address", () => {
   // The key decides which entity is which: `diffFingerprints` pairs rows by it,
   // and `verifyClone` subtracts generated exclusions by it — where an alias
   // clears a removal that really happened rather than merely misattributing a
@@ -227,7 +228,7 @@ Deno.test("an entity address key never aliases a different address", () => {
   );
 });
 
-Deno.test("the fingerprint is deterministic and order-independent", () => {
+test("the fingerprint is deterministic and order-independent", () => {
   withSpace([{ id: "of:z", doc: { value: 1 } }, {
     id: "of:a",
     doc: { value: 2 },
@@ -239,7 +240,7 @@ Deno.test("the fingerprint is deterministic and order-independent", () => {
   });
 });
 
-Deno.test("diff names what moved, not merely that something did", () => {
+test("diff names what moved, not merely that something did", () => {
   // The point of per-entity hashes: a rehearsal needs "these two cells changed",
   // not "the number differs".
   let before = null as ReturnType<typeof contentFingerprint> | null;
@@ -272,7 +273,7 @@ Deno.test("diff names what moved, not merely that something did", () => {
   assertEquals(reverse.added, []);
 });
 
-Deno.test("a value the canonical hasher rejects is reported, not skipped", () => {
+test("a value the canonical hasher rejects is reported, not skipped", () => {
   // Silently treating a rejected value as empty would let real content drift
   // read as "unchanged" — the one lie this must not tell. A value nested past
   // the call stack is one the hasher rejects.
@@ -286,7 +287,7 @@ Deno.test("a value the canonical hasher rejects is reported, not skipped", () =>
   assert(rejected.error.length > 0, "and must carry a reason");
 });
 
-Deno.test("one unhashable entity is reported without aborting the space", () => {
+test("one unhashable entity is reported without aborting the space", () => {
   // A ~5,000-deep value stores and parses fine but overflows the canonical
   // hasher's recursion. The whole-space fingerprint must survive it: report the
   // entity as unhashable, keep hashing the rest. Aborting would leave a
@@ -306,7 +307,7 @@ Deno.test("one unhashable entity is reported without aborting the space", () => 
   });
 });
 
-Deno.test("a possibly truncated enumeration is refused, not fingerprinted", () => {
+test("a possibly truncated enumeration is refused, not fingerprinted", () => {
   // A hash over part of a space is worse than no hash: it looks authoritative.
   withSpace([], (space) => {
     assertThrows(
@@ -317,7 +318,7 @@ Deno.test("a possibly truncated enumeration is refused, not fingerprinted", () =
   });
 });
 
-Deno.test("a scope holding exactly the cap is complete, and is fingerprinted", () => {
+test("a scope holding exactly the cap is complete, and is fingerprinted", () => {
   // The refusal boundary is EXCLUSIVE, which `FingerprintOptions.enumerationCap`
   // states and nothing pinned: a scope of exactly `cap` entities was enumerated
   // whole, so refusing it would withhold a hash over a complete reading. One
@@ -342,7 +343,7 @@ Deno.test("a scope holding exactly the cap is complete, and is fingerprinted", (
   });
 });
 
-Deno.test("malformed internal manifests are skipped, not fatal", () => {
+test("malformed internal manifests are skipped, not fatal", () => {
   // A piece whose manifest is the wrong shape must not abort a whole-space
   // fingerprint; its cells simply go unclassified (and so are fingerprinted).
   withSpace([
@@ -384,7 +385,7 @@ Deno.test("malformed internal manifests are skipped, not fatal", () => {
   });
 });
 
-Deno.test("an entity with no value is recorded, not dropped", () => {
+test("an entity with no value is recorded, not dropped", () => {
   withSpace(
     [{ id: "of:novalue", doc: { result: link("of:piece") } }],
     (space) => {
@@ -419,7 +420,7 @@ function seedBulk(path: string, count: number): void {
   db.close();
 }
 
-Deno.test("enumerates a store past the spread-argument ceiling", () => {
+test("enumerates a store past the spread-argument ceiling", () => {
   // `200_000` entities exceed V8's default spread-argument limit while staying
   // below `ENUMERATION_CAP`. The margin accommodates variations in stack size.
 
@@ -504,7 +505,7 @@ function withScopedSpace(run: (space: SpaceDb) => void): void {
  * match the per-scope query: same addresses, revision counts, and order, with
  * tombstones kept. This pins the equality, not just the count.
  */
-Deno.test("one pass yields each scope's rows exactly as the per-scope query does", () => {
+test("one pass yields each scope's rows exactly as the per-scope query does", () => {
   withScopedSpace((space) => {
     const grouped = visibleEntityRowsByScope(space, { branch: "" });
     const scopes = listScopes(space, { branch: "" }).map((s) => s.raw);
@@ -541,7 +542,7 @@ Deno.test("one pass yields each scope's rows exactly as the per-scope query does
  * counted where they are issued rather than where they are prepared, since a
  * space prepares each statement once and reuses it.
  */
-Deno.test("the fingerprint enumerates rows in one unscoped pass", () => {
+test("the fingerprint enumerates rows in one unscoped pass", () => {
   // A row query filtered on one scope cannot seek (the index leads with `id`),
   // so each walks the whole branch; the walk issues none, and derives its
   // scopes from the same pass rather than enumerating a second time.
@@ -569,7 +570,7 @@ Deno.test("the fingerprint enumerates rows in one unscoped pass", () => {
   });
 });
 
-Deno.test("scopes of grouped rows are the scopes listScopes reports", () => {
+test("scopes of grouped rows are the scopes listScopes reports", () => {
   withScopedSpace((space) => {
     assertEquals(
       scopesOfRows(visibleEntityRowsByScope(space, { branch: "" })),

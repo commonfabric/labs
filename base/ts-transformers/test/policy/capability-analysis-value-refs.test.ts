@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
@@ -9,6 +8,7 @@ import {
   parseModule,
 } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // What a function does through a value is charged to every tracked ref the
 // value may be. These tests pin the values ref resolution has to see through

@@ -16,13 +16,13 @@
  * enumeration, and a primitive short-circuits ahead of all of it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, isDeepFrozen, isValidDeepFrozenFabricValue } from "@";
 import { FabricError } from "@/fabric-instances";
 import { FabricEpochNsec } from "@/fabric-primitives";
 import { forgetDeepFrozenCacheForTestingOnly } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("deep-freeze", () => {
   describe("isDeepFrozen()", () => {

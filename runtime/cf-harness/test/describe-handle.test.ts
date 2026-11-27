@@ -5,7 +5,6 @@
  * handle table or from what the referent declares in the session's fabric.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -16,6 +15,12 @@ import { Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { parseLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { normalize } from "@std/path/posix";
 import { join } from "@std/path";
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";

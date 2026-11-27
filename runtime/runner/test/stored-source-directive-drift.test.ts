@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   Engine,
@@ -6,6 +5,12 @@ import {
   signer,
   StorageManager,
 } from "./engine-test-support.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // A `@ts-expect-error` that was valid when a pattern was AUTHORED becomes
 // "unused" (TS2578) once the platform's vendored types improve (a `jsx.d.ts`

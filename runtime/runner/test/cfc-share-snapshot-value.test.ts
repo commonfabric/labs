@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { snapshotJsonValue } from "../src/cfc/share-snapshot-value.ts";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cfc-share-snapshot-value", () => {
   it("copies and freezes the complete JSON payload for review", () => {

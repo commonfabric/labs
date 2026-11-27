@@ -1,11 +1,16 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type {
   AdmittedCommitNotice,
   ServedAclChange,
 } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   commitForeignWaveBatch,

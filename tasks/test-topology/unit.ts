@@ -16,9 +16,9 @@
  * listed in `whole`, because the skip list is keyed by the file that
  * registered a test, and a member's directory is not such a file.
  *
- * A lane runs such a member's task as it stands, with no record preload and
- * no report path, so no `deno test` the task starts records anything there
- * unless the member's own runner writes records. That is why running whole
+ * A lane runs such a member's task as it stands, without the permissions
+ * its tests need to record, so no `deno test` the task starts records
+ * anything there unless the member's own runner writes records. That is why running whole
  * is a decision listed with its reason rather than a shape a task can fall
  * into unnoticed.
  *
@@ -144,8 +144,8 @@ async function readMember(
     throw new Error(
       whole
         ? `A lane cannot hand \`${memberPath}\`'s tests a file list, so it ` +
-          `would run the member whole, passing it no record preload and no ` +
-          `report path. Write the task that runs them as a single ` +
+          `would run the member whole, passing it none of the permissions ` +
+          `its tests need to record. Write the task that runs them as a single ` +
           `\`deno test\`, or list the member in \`RUNS_WHOLE\` in ` +
           `tasks/test-topology/unit.ts with the reason it cannot be one.`
         : `\`${memberPath}\` is listed in \`RUNS_WHOLE\`, and a lane can ` +
@@ -406,7 +406,6 @@ function unitSuite(
           const batches = testBatches(member.run, [...byFile.keys()]);
           for (const [index, batch] of batches.entries()) {
             const name = index === 0 ? slug : `${slug}.${index}`;
-            const junitPath = path.join(context.outputDir, `${name}.xml`);
             const requests = batch.files.map((file) => byFile.get(file)!);
             const skipList = await writeBatchSkipList(
               context,
@@ -417,18 +416,12 @@ function unitSuite(
               command: denoTestCommand(
                 batch.flags,
                 context,
-                junitPath,
                 batch.files,
                 skipList.path,
               ),
               cwd: memberDir,
               env: { ...denoEnv, ...skipList.env },
-              junit: [{
-                path: junitPath,
-                kind: "unit",
-                scope: member.scope,
-                filePrefix: member.memberPath.replace(/^\.\//, ""),
-              }],
+              results: { kind: "unit", scope: member.scope },
             });
           }
         }

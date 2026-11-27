@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseDocument, SAMPLE } from "./view-helpers.ts";
 import type { Document, StructureNode } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function byLabel(doc: Document, label: string): StructureNode {
   const node = doc.flatStructure.find((n) => n.label === label);
@@ -8,7 +9,7 @@ function byLabel(doc: Document, label: string): StructureNode {
   return node;
 }
 
-Deno.test("meta: lift contract — captures, input/output schema, synthetic", () => {
+test("meta: lift contract — captures, input/output schema, synthetic", () => {
   const doc = parseDocument(SAMPLE);
   const lift = byLabel(doc, "lift __cfLift_1");
   assert(lift.meta?.kind === "contract", "lift has contract meta");
@@ -24,7 +25,7 @@ Deno.test("meta: lift contract — captures, input/output schema, synthetic", ()
   assertEquals(lift.meta.output?.rootType, "string");
 });
 
-Deno.test("meta: pattern contract — captures and return shape", () => {
+test("meta: pattern contract — captures and return shape", () => {
   const doc = parseDocument(SAMPLE);
   const p = byLabel(doc, "pattern myPattern");
   assert(p.meta?.kind === "contract");
@@ -35,7 +36,7 @@ Deno.test("meta: pattern contract — captures and return shape", () => {
   assertEquals(p.meta.returns, ["url"]);
 });
 
-Deno.test("meta: schema node — root type, required, fields", () => {
+test("meta: schema node — root type, required, fields", () => {
   const doc = parseDocument(SAMPLE);
   const schema = doc.flatStructure.find((n) =>
     n.kind === "schema" && n.meta?.kind === "schema" &&
@@ -47,7 +48,7 @@ Deno.test("meta: schema node — root type, required, fields", () => {
   assertEquals(schema.meta.schema.required, ["token"]);
 });
 
-Deno.test("meta: interface and type alias members", () => {
+test("meta: interface and type alias members", () => {
   const doc = parseDocument(SAMPLE);
   const foo = byLabel(doc, "type Foo");
   assert(foo.meta?.kind === "type");
@@ -64,7 +65,7 @@ Deno.test("meta: interface and type alias members", () => {
   }
 });
 
-Deno.test("meta: import names and module", () => {
+test("meta: import names and module", () => {
   const doc = parseDocument(SAMPLE);
   const imp = doc.flatStructure.find((n) =>
     n.kind === "import" && n.meta?.kind === "import" &&
@@ -76,7 +77,7 @@ Deno.test("meta: import names and module", () => {
   assertEquals(imp.meta.names, ["pattern", "lift"]);
 });
 
-Deno.test("meta: closure params and variable binding", () => {
+test("meta: closure params and variable binding", () => {
   const doc = parseDocument(SAMPLE);
   const closure = doc.flatStructure.find((n) =>
     n.kind === "closure" && n.meta?.kind === "closure" &&
@@ -91,7 +92,7 @@ Deno.test("meta: closure params and variable binding", () => {
   }
 });
 
-Deno.test("meta: variable type from annotation, cast, new, and literals", () => {
+test("meta: variable type from annotation, cast, new, and literals", () => {
   const doc = parseDocument(`// transformed: /a.ts
 const n = 42;
 const s = "hi";
@@ -118,7 +119,7 @@ const call = input.key("token");`);
   assertEquals(typeOf("call"), undefined, "no type for an unknowable call");
 });
 
-Deno.test("meta: extraction never throws on odd input", () => {
+test("meta: extraction never throws on odd input", () => {
   // truncated / malformed schema-ish input should not crash the parser
   const weird = `const x = lift({ type: } as const satisfies JSONSchema);
 interface Empty {}

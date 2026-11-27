@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { basename, join, resolve, toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { writeFailedSupervisorStartupStatus } from "../../fuse/mod.ts";
@@ -47,6 +46,12 @@ import {
   STATFS_SIZE,
   writeMountState,
 } from "../lib/fuse.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const CHILD_PID = 321;
 

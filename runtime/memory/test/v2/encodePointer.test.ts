@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { encodePointer, parsePointer } from "../../v2/path.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("encodePointer()", () => {
   it("preserves empty segments and escapes JSON Pointer tokens in order", () => {

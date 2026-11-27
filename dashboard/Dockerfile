@@ -5,7 +5,8 @@
 # runtime/toolshed/Dockerfile). Every backend is reached over its REST API — the GitHub
 # tiles as a GitHub App or with GH_TOKEN, and the cloud-spend tile via BigQuery
 # using the workload's own service account (Workload Identity) — so no cloud CLI
-# is installed.
+# is installed. The one exception is the ci tile's offcuts scan, which fetches
+# repositories over Git.
 #
 # The GKE nodes are linux/amd64, so the image is pinned to that platform. Build
 # it on any host — an Apple-Silicon Mac emulates amd64 through QEMU:
@@ -15,6 +16,12 @@
 #     -t us-central1-docker.pkg.dev/commontools-core/containers/dev-dashboard:$(git rev-parse HEAD) .
 
 FROM --platform=linux/amd64 denoland/deno:2.9.8@sha256:a0d88a7fcbd44f062cba2748e19df67d30290ad12aa203c7c1e0b12462c483f0
+
+# The ci tile's scan for references into the offcuts organization keeps each
+# repository as a shallow Git repository and searches it with `git grep`.
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates git \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 COPY . .
@@ -33,5 +40,5 @@ USER 65532
 ENV DASHBOARD_PORT=8731
 EXPOSE 8731
 ENTRYPOINT ["deno", "run", \
-  "--allow-net", "--allow-run=deno", "--allow-read", "--allow-write", "--allow-env", \
+  "--allow-net", "--allow-run=deno,git", "--allow-read", "--allow-write", "--allow-env", \
   "dashboard/server.ts"]

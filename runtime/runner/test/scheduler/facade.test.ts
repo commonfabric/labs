@@ -1,6 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ScopeKeyIdentity } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { Cell } from "../../src/cell.ts";
 import { newFanOutNodeState } from "../../src/scheduler/fan-out.ts";
 import type {

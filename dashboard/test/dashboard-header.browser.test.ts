@@ -3,6 +3,7 @@ import {
   DASHBOARD_HEADER_RULES,
   dashboardHeader,
 } from "../dashboard-header.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function assertNear(actual: number, expected: number, message: string): void {
   assert(
@@ -43,7 +44,7 @@ function part(top: HTMLElement, selector: string): HTMLElement {
   return element;
 }
 
-Deno.test("the dashboard message keeps its place while the freshness age counts up", async () => {
+test("the dashboard message keeps its place while the freshness age counts up", async () => {
   await withHeader(1100, (top) => {
     const form = part(top, ".message-form");
     const age = part(top, "#agotext");
@@ -70,7 +71,7 @@ Deno.test("the dashboard message keeps its place while the freshness age counts 
   });
 });
 
-Deno.test("the dashboard message keeps its place while the badge goes offline and back", async () => {
+test("the dashboard message keeps its place while the badge goes offline and back", async () => {
   await withHeader(1100, (top) => {
     const form = part(top, ".message-form");
     const badge = part(top, "#livetext");
@@ -84,7 +85,7 @@ Deno.test("the dashboard message keeps its place while the badge goes offline an
   });
 });
 
-Deno.test("the dashboard message fills the space between the identity and the freshness indicator", async () => {
+test("the dashboard message fills the space between the identity and the freshness indicator", async () => {
   await withHeader(1100, (top) => {
     const view = top.ownerDocument.defaultView;
     assertExists(view);
@@ -97,7 +98,7 @@ Deno.test("the dashboard message fills the space between the identity and the fr
   });
 });
 
-Deno.test("the dashboard message takes a row of its own on a phone-width screen", async () => {
+test("the dashboard message takes a row of its own on a phone-width screen", async () => {
   await withHeader(400, (top) => {
     const header = top.getBoundingClientRect();
     const brand = part(top, ".brand").getBoundingClientRect();

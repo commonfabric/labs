@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { argv, cf } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("write-policy-any-of", () => {
   // The fixture's steps admit each named writer through its own reviewed

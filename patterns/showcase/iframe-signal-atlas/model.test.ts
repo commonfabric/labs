@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   DEFAULT_STATE,
@@ -21,6 +20,7 @@ import {
   visibleObservations,
   visibleRoutes,
 } from "./model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const observations: SignalObservation[] = [
   {

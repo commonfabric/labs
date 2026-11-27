@@ -3,6 +3,7 @@ import { parseDocument } from "./view-helpers.ts";
 import { renderFrame, type ViewState } from "../lib/view/render.ts";
 import { stripAnsi } from "../lib/view/ansi.ts";
 import type { StructureNode } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function baseView(over: Partial<ViewState> = {}): ViewState {
   return {
@@ -64,7 +65,7 @@ function mkNode(over: Partial<StructureNode> = {}): StructureNode {
 // every reachable branch of `guideChar`.
 //
 
-Deno.test("guide: a multi-line node draws top corner, body, and bottom corner", () => {
+test("guide: a multi-line node draws top corner, body, and bottom corner", () => {
   // Node covers lines 1..3 of a five-line document. Lines 0 and 4 are outside
   // the node; line 1 is the start (╭), lines 2 are the body (│), line 3 is the
   // end (╰).
@@ -81,7 +82,7 @@ Deno.test("guide: a multi-line node draws top corner, body, and bottom corner", 
   assertEquals(col0[4], " ", "blank guide below the node");
 });
 
-Deno.test("guide: a single-line node draws the arrow glyph", () => {
+test("guide: a single-line node draws the arrow glyph", () => {
   // startLine === endLine -> the `▶` branch.
   const node = mkNode({ startLine: 2, endLine: 2 });
   const rows = renderFrame(
@@ -94,7 +95,7 @@ Deno.test("guide: a single-line node draws the arrow glyph", () => {
   assertEquals(col0[3], " ", "blank guide below the single-line node");
 });
 
-Deno.test("guide: a node spanning two adjacent lines is all corners", () => {
+test("guide: a node spanning two adjacent lines is all corners", () => {
   // startLine !== endLine, with no interior line -> top corner then bottom
   // corner, never the body rail.
   const node = mkNode({ startLine: 1, endLine: 2 });
@@ -107,7 +108,7 @@ Deno.test("guide: a node spanning two adjacent lines is all corners", () => {
   assertEquals(col0[2], "╰", "second line is the bottom corner");
 });
 
-Deno.test("guide: lines past the end of the document still draw a blank rail", () => {
+test("guide: lines past the end of the document still draw a blank rail", () => {
   // A short document with a single-line node and a tall view forces the
   // renderer to draw rows for line indices past the document, exercising the
   // out-of-range branch (lineIdx > endLine) of the guide character.
@@ -124,7 +125,7 @@ Deno.test("guide: lines past the end of the document still draw a blank rail", (
   }
 });
 
-Deno.test("guide: a node on a real parsed document draws the rail", () => {
+test("guide: a node on a real parsed document draws the rail", () => {
   // Mirror the existing suite's use of a parsed document: pick a node that
   // spans more than one line and assert the rail glyphs appear.
   const doc = parseDocument(

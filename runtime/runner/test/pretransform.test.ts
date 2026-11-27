@@ -5,9 +5,9 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { injectCfHelpers } from "@commonfabric/ts-transformers";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
 import { helperInjectionLineOffset } from "../src/harness/module-compile.ts";
@@ -21,7 +21,7 @@ import type { RuntimeProgram } from "../src/harness/types.ts";
 // boundaries that normally load the deferred compiler stack), so load it here.
 await ensureCompilerStack();
 
-Deno.test("transformInjectHelperModule injects the helper import into every file", () => {
+test("transformInjectHelperModule injects the helper import into every file", () => {
   const program: RuntimeProgram = {
     main: "/main.tsx",
     files: [
@@ -48,7 +48,7 @@ Deno.test("transformInjectHelperModule injects the helper import into every file
   assertNotMatch(main.contents, /cts-enable/);
 });
 
-Deno.test("transformInjectHelperModule passes .d.ts files through untouched", () => {
+test("transformInjectHelperModule passes .d.ts files through untouched", () => {
   const declarations = "export declare const value: number;\n";
   const transformed = transformInjectHelperModule({
     main: "/main.tsx",
@@ -69,7 +69,7 @@ Deno.test("transformInjectHelperModule passes .d.ts files through untouched", ()
   assertNotMatch(types.contents, /__cfHelpers/);
 });
 
-Deno.test("transformInjectHelperModule injects JS-syntax helpers into .js sources", () => {
+test("transformInjectHelperModule injects JS-syntax helpers into .js sources", () => {
   const program: RuntimeProgram = {
     main: "/main.tsx",
     files: [
@@ -106,7 +106,7 @@ Deno.test("transformInjectHelperModule injects JS-syntax helpers into .js source
 // prelude. Mixed import splitting must preserve the original line count.
 //
 
-Deno.test("mixed import rewrite must not drift coverage line numbers", () => {
+test("mixed import rewrite must not drift coverage line numbers", () => {
   const transformedContents = (contents: string): string =>
     transformInjectHelperModule({
       main: "/m.tsx",
@@ -160,7 +160,7 @@ Deno.test("mixed import rewrite must not drift coverage line numbers", () => {
   );
 });
 
-Deno.test("preserveLineCount rejects expanding rewrites", () => {
+test("preserveLineCount rejects expanding rewrites", () => {
   assertEquals(preserveLineCount("one\ntwo", "one"), "one\n");
   assertThrows(
     () => preserveLineCount("one", "one\ntwo"),
@@ -179,7 +179,7 @@ Deno.test("preserveLineCount rejects expanding rewrites", () => {
 // the injector also appends must not count.
 //
 
-Deno.test("helperInjectionLineOffset matches what the injector actually shifts", async () => {
+test("helperInjectionLineOffset matches what the injector actually shifts", async () => {
   await ensureCompilerStack();
   const MARKER = "const marker = 1;";
 
@@ -226,7 +226,7 @@ Deno.test("helperInjectionLineOffset matches what the injector actually shifts",
   }
 });
 
-Deno.test("helperInjectionLineOffset leaves a blank file alone", async () => {
+test("helperInjectionLineOffset leaves a blank file alone", async () => {
   await ensureCompilerStack();
   // "Content" here means any non-blank line, comments included — a
   // comment-only file is injected like any other, so only a wholly blank file

@@ -3,7 +3,6 @@
  * counts taken by hand from the same tables.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
@@ -24,6 +23,7 @@ import {
   normalizePrefixes,
   planCompaction,
 } from "../v2/compact.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const A = "computed:a";
 const B = "computed:b";

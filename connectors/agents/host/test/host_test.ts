@@ -19,7 +19,6 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   AgentsHost,
   type AgentsHostTarget,
@@ -27,6 +26,7 @@ import {
 } from "../src/host.ts";
 import { join } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const TARGET_DESCRIPTION: AgentsHostTargetDescription = {
   spaceDid: "did:key:test-space",
@@ -374,7 +374,7 @@ function clock(): () => Date {
   return () => new Date(Date.UTC(2026, 6, 20, 0, 0, tick++));
 }
 
-Deno.test("AgentsHost validates and closes its lifecycle boundaries", async () => {
+test("AgentsHost validates and closes its lifecycle boundaries", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const target = new FakeTarget();
@@ -426,7 +426,7 @@ Deno.test("AgentsHost validates and closes its lifecycle boundaries", async () =
   }
 });
 
-Deno.test("AgentsHost rejects a configuration with no enabled source", async () => {
+test("AgentsHost rejects a configuration with no enabled source", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const host = new AgentsHost({
@@ -452,7 +452,7 @@ Deno.test("AgentsHost rejects a configuration with no enabled source", async () 
   }
 });
 
-Deno.test("AgentsHost publishes sessions, health, and lifecycle activity", async () => {
+test("AgentsHost publishes sessions, health, and lifecycle activity", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -505,7 +505,7 @@ Deno.test("AgentsHost publishes sessions, health, and lifecycle activity", async
   }
 });
 
-Deno.test("AgentsHost preserves source health for a superseded collection", async () => {
+test("AgentsHost preserves source health for a superseded collection", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const target = new FakeTarget();
@@ -536,7 +536,7 @@ Deno.test("AgentsHost preserves source health for a superseded collection", asyn
   }
 });
 
-Deno.test("AgentsHost continues when one configured source fails to start", async () => {
+test("AgentsHost continues when one configured source fails to start", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const healthy = new FakeDriver("healthy");
@@ -570,7 +570,7 @@ Deno.test("AgentsHost continues when one configured source fails to start", asyn
   }
 });
 
-Deno.test("AgentsHost serializes explicit full collections", async () => {
+test("AgentsHost serializes explicit full collections", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -606,7 +606,7 @@ Deno.test("AgentsHost serializes explicit full collections", async () => {
   }
 });
 
-Deno.test("AgentsHost remains stopping while an admitted collection finishes", async () => {
+test("AgentsHost remains stopping while an admitted collection finishes", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -647,7 +647,7 @@ Deno.test("AgentsHost remains stopping while an admitted collection finishes", a
   }
 });
 
-Deno.test("AgentsHost records command receipt activity without prompt contents", async () => {
+test("AgentsHost records command receipt activity without prompt contents", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -687,7 +687,7 @@ Deno.test("AgentsHost records command receipt activity without prompt contents",
   }
 });
 
-Deno.test("AgentsHost drains admitted commands before stopping drivers", async () => {
+test("AgentsHost drains admitted commands before stopping drivers", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -731,7 +731,7 @@ Deno.test("AgentsHost drains admitted commands before stopping drivers", async (
   }
 });
 
-Deno.test("AgentsHost stops startup before collection after cancellation", async () => {
+test("AgentsHost stops startup before collection after cancellation", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -767,7 +767,7 @@ Deno.test("AgentsHost stops startup before collection after cancellation", async
   }
 });
 
-Deno.test("AgentsHost defers health until startup owns the ready state", async () => {
+test("AgentsHost defers health until startup owns the ready state", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -812,7 +812,7 @@ Deno.test("AgentsHost defers health until startup owns the ready state", async (
   }
 });
 
-Deno.test("AgentsHost cancellation publishes no deferred startup health", async () => {
+test("AgentsHost cancellation publishes no deferred startup health", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -853,7 +853,7 @@ Deno.test("AgentsHost cancellation publishes no deferred startup health", async 
   }
 });
 
-Deno.test("AgentsHost reports late subscription cleanup failures", async () => {
+test("AgentsHost reports late subscription cleanup failures", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -905,7 +905,7 @@ Deno.test("AgentsHost reports late subscription cleanup failures", async () => {
   }
 });
 
-Deno.test("AgentsHost reports failed post-command session refreshes", async () => {
+test("AgentsHost reports failed post-command session refreshes", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -953,7 +953,7 @@ Deno.test("AgentsHost reports failed post-command session refreshes", async () =
   }
 });
 
-Deno.test("AgentsHost flushes unpublished receipts before stopping", async () => {
+test("AgentsHost flushes unpublished receipts before stopping", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1025,7 +1025,7 @@ Deno.test("AgentsHost flushes unpublished receipts before stopping", async () =>
   }
 });
 
-Deno.test("AgentsHost names the producer queue on a failed receipt publication", async () => {
+test("AgentsHost names the producer queue on a failed receipt publication", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1074,7 +1074,7 @@ Deno.test("AgentsHost names the producer queue on a failed receipt publication",
   }
 });
 
-Deno.test("AgentsHost names the producer queue on a failed command", async () => {
+test("AgentsHost names the producer queue on a failed command", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1159,7 +1159,7 @@ Deno.test("AgentsHost names the producer queue on a failed command", async () =>
   }
 });
 
-Deno.test("AgentsHost checks startup cancellation after initial collection", async () => {
+test("AgentsHost checks startup cancellation after initial collection", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1197,7 +1197,7 @@ Deno.test("AgentsHost checks startup cancellation after initial collection", asy
   }
 });
 
-Deno.test("AgentsHost completes a sync committed before cancellation", async () => {
+test("AgentsHost completes a sync committed before cancellation", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1247,7 +1247,7 @@ Deno.test("AgentsHost completes a sync committed before cancellation", async () 
   }
 });
 
-Deno.test("AgentsHost reports post-commit health failure", async () => {
+test("AgentsHost reports post-commit health failure", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1283,7 +1283,7 @@ Deno.test("AgentsHost reports post-commit health failure", async () => {
   }
 });
 
-Deno.test("AgentsHost cancels a pending initial provider collection", async () => {
+test("AgentsHost cancels a pending initial provider collection", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1328,7 +1328,7 @@ Deno.test("AgentsHost cancels a pending initial provider collection", async () =
   }
 });
 
-Deno.test("a canceled collection remains serialized until provider work stops", async () => {
+test("a canceled collection remains serialized until provider work stops", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1368,7 +1368,7 @@ Deno.test("a canceled collection remains serialized until provider work stops", 
   }
 });
 
-Deno.test("AgentsHost completes shutdown when subscription cancellation fails", async () => {
+test("AgentsHost completes shutdown when subscription cancellation fails", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const driver = new FakeDriver("codex");
@@ -1415,7 +1415,7 @@ Deno.test("AgentsHost completes shutdown when subscription cancellation fails", 
   }
 });
 
-Deno.test("AgentsHost rejects startup when failed-source cleanup fails", async () => {
+test("AgentsHost rejects startup when failed-source cleanup fails", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const healthy = new FakeDriver("healthy");
@@ -1451,7 +1451,7 @@ Deno.test("AgentsHost rejects startup when failed-source cleanup fails", async (
   }
 });
 
-Deno.test("AgentsHost continues stopping after a synchronous driver failure", async () => {
+test("AgentsHost continues stopping after a synchronous driver failure", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const first = new FakeDriver("first");
@@ -1480,7 +1480,7 @@ Deno.test("AgentsHost continues stopping after a synchronous driver failure", as
   }
 });
 
-Deno.test("AgentsHost retains a session whose published copy matches its inventory", async () => {
+test("AgentsHost retains a session whose published copy matches its inventory", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const target = new FakeTarget();

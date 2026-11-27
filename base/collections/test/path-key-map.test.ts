@@ -9,9 +9,9 @@
  * reactive read returns.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { PathKeyMap } from "../src/path-key-map.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("PathKeyMap", () => {
   describe("empty state", () => {

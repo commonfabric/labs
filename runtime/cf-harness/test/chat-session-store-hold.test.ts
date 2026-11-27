@@ -9,7 +9,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Database } from "@db/sqlite";
 
@@ -30,6 +29,7 @@ import {
   sqliteHarnessChatSessionStoreHolderPath,
 } from "../src/sqlite-session-store.ts";
 import { makeResult, nextIsoNow } from "./support/session-store-fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const completingPromptLoop: HarnessInteractivePromptLoopFactory = () => ({
   runTranscript: (options) => Promise.resolve(makeResult(options, "Done.")),

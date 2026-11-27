@@ -7,13 +7,13 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { cellOf, drawnRows, mouseKey, parseDocument } from "./view-helpers.ts";
 import { overlayBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import { buildView } from "../lib/view/mod.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
 import type { DirEntry, FileGateway } from "../lib/view/filegateway.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function press(s: Session, ...names: string[]): void {
   for (const name of names) {
@@ -100,7 +100,7 @@ function entryText(s: Session): string[] {
   return s.view().overlay?.lines.map((l) => l.text) ?? [];
 }
 
-Deno.test("filepicker: lists the file's directory, dirs first, with a .. entry", () => {
+test("filepicker: lists the file's directory, dirs first, with a .. entry", () => {
   const s = session();
   openPicker(s);
   assertEquals(entryText(s), ["../", "sub/", "a.ts", "b.ts"]);
@@ -108,7 +108,7 @@ Deno.test("filepicker: lists the file's directory, dirs first, with a .. entry",
   assertEquals(s.view().overlay?.selectedLine, 0);
 });
 
-Deno.test("filepicker: pressing the mouse on an entry selects it", () => {
+test("filepicker: pressing the mouse on an entry selects it", () => {
   const s = session();
   openPicker(s);
   s.handleKey(mouseKey(true, cellOf(drawnRows(s), "b.ts")));
@@ -117,7 +117,7 @@ Deno.test("filepicker: pressing the mouse on an entry selects it", () => {
   assertEquals(s.doc.text, FILES["/work/b.ts"]);
 });
 
-Deno.test("filepicker: pressing the mouse off the entries keeps the selection", () => {
+test("filepicker: pressing the mouse off the entries keeps the selection", () => {
   const s = session();
   openPicker(s);
   press(s, "down"); // ".." -> "sub/"
@@ -130,7 +130,7 @@ Deno.test("filepicker: pressing the mouse off the entries keeps the selection", 
   assertEquals(s.view().overlay?.selectedLine, 1);
 });
 
-Deno.test("filepicker: typing filters the list and drops the .. entry", () => {
+test("filepicker: typing filters the list and drops the .. entry", () => {
   const s = session();
   openPicker(s);
   type(s, "a");
@@ -138,7 +138,7 @@ Deno.test("filepicker: typing filters the list and drops the .. entry", () => {
   assertEquals(s.view().inputLine, "find file: /work/a");
 });
 
-Deno.test("filepicker: enter on a directory descends into it", () => {
+test("filepicker: enter on a directory descends into it", () => {
   const s = session();
   openPicker(s);
   press(s, "down"); // ".." -> "sub/"
@@ -147,7 +147,7 @@ Deno.test("filepicker: enter on a directory descends into it", () => {
   assertEquals(entryText(s), ["../", "c.ts"]);
 });
 
-Deno.test("filepicker: enter on a file opens it and swaps the buffer", () => {
+test("filepicker: enter on a file opens it and swaps the buffer", () => {
   const s = session();
   openPicker(s);
   press(s, "down", "down"); // ".." -> "sub/" -> "a.ts"
@@ -160,7 +160,7 @@ Deno.test("filepicker: enter on a file opens it and swaps the buffer", () => {
   assertEquals(s.view().cursor, { line: 0, col: 0 });
 });
 
-Deno.test("filepicker: opening a file from a subdirectory works", () => {
+test("filepicker: opening a file from a subdirectory works", () => {
   const s = session();
   openPicker(s);
   press(s, "down", "enter"); // into sub/
@@ -227,7 +227,7 @@ describe("filepicker view modes", () => {
   });
 });
 
-Deno.test("filepicker: the .. entry steps back up", () => {
+test("filepicker: the .. entry steps back up", () => {
   const s = session();
   openPicker(s);
   press(s, "down", "enter"); // into sub/
@@ -236,7 +236,7 @@ Deno.test("filepicker: the .. entry steps back up", () => {
   assertEquals(entryText(s), ["../", "sub/", "a.ts", "b.ts"]);
 });
 
-Deno.test("filepicker: backspace on an empty filter steps up", () => {
+test("filepicker: backspace on an empty filter steps up", () => {
   const s = session();
   openPicker(s);
   press(s, "down", "enter"); // into sub/
@@ -244,7 +244,7 @@ Deno.test("filepicker: backspace on an empty filter steps up", () => {
   assertEquals(entryText(s), ["../", "sub/", "a.ts", "b.ts"]);
 });
 
-Deno.test("filepicker: escape cancels and leaves the buffer untouched", () => {
+test("filepicker: escape cancels and leaves the buffer untouched", () => {
   const s = session();
   openPicker(s);
   press(s, "escape");
@@ -253,7 +253,7 @@ Deno.test("filepicker: escape cancels and leaves the buffer untouched", () => {
   assertEquals(s.doc.text, FILES["/work/a.ts"]);
 });
 
-Deno.test("filepicker: opening from pager mode preserves the viewport", () => {
+test("filepicker: opening from pager mode preserves the viewport", () => {
   const path = "/work/a.ts";
   const text = Array.from({ length: 20 }, (_, i) => `line ${i + 1}`).join("\n");
   const s = new Session(
@@ -271,7 +271,7 @@ Deno.test("filepicker: opening from pager mode preserves the viewport", () => {
   assertEquals(s.view().top, 8);
 });
 
-Deno.test("filepicker: refuses to open with unsaved edits", () => {
+test("filepicker: refuses to open with unsaved edits", () => {
   const s = session();
   press(s, "e"); // reveal cursor
   type(s, "X"); // dirty the buffer

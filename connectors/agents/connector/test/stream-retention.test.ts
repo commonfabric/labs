@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { streamSource } from "../src/reconcile.ts";
 import type { AgentDriver, SessionPage, SessionSummary } from "../src/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Constructs a paginated driver which records transcript reads. */
 function fixture() {

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseDiff } from "../../../lib/view/diff.ts";
 import { buildDiffDocument } from "../../../lib/view/diffdoc.ts";
@@ -9,6 +8,7 @@ import type { FileGateway } from "../../../lib/view/filegateway.ts";
 import { overlayBox } from "../../../lib/view/render.ts";
 import { Session } from "../../../lib/view/session.ts";
 import { parseDocument, SAMPLE } from "../../view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Sends printable characters and named keys through the public event handler. */
 function press(session: Session, ...names: string[]): void {

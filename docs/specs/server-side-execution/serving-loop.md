@@ -416,7 +416,13 @@ demand row of every session whose id the piece writes or owns, or a recorded
 piece beneath it does, is vouched for: each slice of the owner the row's
 instance is resolved under, the one at its scope key and each broader one,
 is clean and of the epoch, with a vouch row in the slice at that key for a
-written id, and a live document for an owned cell. A written instance that a
+written id, and a live document for an owned cell whose default is not a
+scalar. A reader of an owned cell's absent instance reads its schema
+default, which is what the arrival seed writes there, and a write to a
+scalar replaces it whole, so an absent instance of a cell with a scalar
+default needs no seed to be current. An object or array default is not
+taken so, since a first write into part of an absent instance creates it
+without the rest of the default. A written instance that a
 run at another key wrote, as the redirect a viewer's run leaves at the
 space's key is, is answered for by the slice of that run. For each session
 that demands the instance, each row a slice of the session's own chain holds
@@ -455,9 +461,16 @@ input marks it or the policy names another epoch. Impl: `StoreCurrency` in `runt
 **A piece a handler starts.** A handler's result pattern runs on the serving
 runtime so that its setup stages into the wave, and each pattern it starts
 registers its nodes there. Nothing demands those nodes, so once the handler's
-transaction commits the result is released (`#releaseServedHandlerResult` in
-`runner.ts`), and what remains is what the store holds, with the basis rows of
-any of its actions that ran. A demand for one of its values, or an event to one
+transaction commits and the scheduler is idle after it, the result is released
+(`#releaseServedHandlerResult` in `runner.ts`), and what remains is what the
+store holds, with the basis rows of any of its actions that ran. The wait for
+idle is what puts the piece's derived values in the store for the derivations
+that read them: the commit sets off every derivation that reads what a new
+piece derives, as a board's index reads what each of its topics derives, and
+each of those runs before the scheduler is idle, so it reads the value from a
+piece that still runs. A piece released at the commit itself would have written
+none of those values, and a derivation reading one through a link starts
+nothing. A demand for one of its values, or an event to one
 of its streams, starts the piece as either starts a piece on a fresh runtime.
 A session demands one of its values when it is sent a document the piece's
 setup wrote, other than its argument, which holds inputs current without it,
@@ -465,10 +478,10 @@ and other than a `computed:` document that holds a value, which the store
 serves as it stands. A `computed:` document the piece has not written holds
 none, so a read that reaches one through a link starts the piece until it has
 derived it, and releases it again ("A computed document a demand names"
-below). A read that stops at
-a link to the piece is sent only its result document, and starts nothing
-(`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A piece whose
-document a client session tracks at that commit keeps running,
+below). A read that stops at a link to the piece is sent only its result
+document, and starts nothing (`carriesPieceMeta` in
+`runtime/memory/v2/server-sync.ts`). A piece whose document a client session
+tracks at the release keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
@@ -1965,6 +1978,18 @@ write, and the seed runs once more against the viewer's instance loaded
 fresh, filling the default's missing fields under what the viewer wrote
 (scopes.md §2). A fourth kind is a spec edit here first.
 
+The runner retries a dropped piece start once in place. The settlement of a
+bookkeeping contribution dropped whole over a concurrent write it cannot
+rebase over names every document it wrote, each with the store's head
+when it was dropped, as the settlement of a superseded derivation write
+does (below). The retry waits until the
+replica has taken each of those commits
+(`Runtime.awaitCommitRetryReadiness`). A retry started sooner writes
+every document again over what the replica holds, past a commit the
+replica has not taken. A client's start that stored a computed document
+then loses that document's `value`, and a send that resolves its target
+through the document addresses a place no handler is registered for.
+
 **The flag-ON client's speculative-consequence deferred start
 (RULED 2026-08-13; the Phase-4 P1-5 flag).** A flag-ON CLIENT's
 deferred piece-start transaction minted as a SPECULATIVE
@@ -2495,6 +2520,17 @@ its caller passes explicitly. They are the compile-cache and program
 writeback into a piece's own space, and the `agent` effect's index
 entry in the requester's home space (builtins.md).
 
+A commit precondition is part of the write it gates. A foreign seal
+that carries only preconditions still lands a commit in the foreign
+store, which takes a seq and a commit row and wakes that space's
+subscribers, so the gate holds it to the same carriage and grant as
+any other foreign write. A run that only observes a foreign document
+does not seal one. The CFC boundary's consultation of a module-policy
+manifest is such an observation: it adds no precondition to the commit
+(CFC spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is
+pending), so a run that reads a policy-labeled value in another
+space commits to its own space alone.
+
 **No run writes an access list.** The wave commits engine-direct, past
 the memory server's INV-12 check (`09-invariants.md`), and nothing on
 this plane checks an ACL write's shape or the acting user's level, so
@@ -2594,7 +2630,10 @@ views under server execution runs no piece and follows nothing, the space
 root included; the serving runtime is the opener of every piece it serves.
 Tenure activation owes its space the EXISTENCE of a root, without following
 that root's source; the root's origin is followed on the first start of the
-root, as any piece's is. A served wish explicitly opens the runtime-supplied
+root, as any piece's is. A root the activation creates is recorded as
+following its origin, since creating it ran what the origin offered
+(piece-source-lifecycle.md), so that first follow writes nothing where the
+origin still offers the same source. A served wish explicitly opens the runtime-supplied
 sidecars it needs through `openSidecarSurface` and `SourceReconciler.open`;
 existing sidecars follow their origins on that open. The SWAP is the
 server's: a pattern-pointer

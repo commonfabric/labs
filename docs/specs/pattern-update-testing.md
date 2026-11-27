@@ -39,6 +39,13 @@ baseline could remove the very one that would have caught a break. A break the
 repository decides to ship is declared instead, in
 `tasks/pattern-compat-accepted-breaks.ts` — see the finding it answers below.
 
+A baseline directory is named for the key its pattern had when the baseline was
+recorded, and a baseline never moves, since moving one deletes it from where it
+was. A pattern that moves records its move in
+`runtime/runner/src/pattern-key-moves.ts`, and the gate reads its baselines
+under every key that table says it had, so a piece made at an old key is still
+proved able to roll forward to the new one.
+
 ### Findings and their remedies
 
 - **`contract <hash> is not recorded`** — the pattern's contract changed and
@@ -109,6 +116,15 @@ repository decides to ship is declared instead, in
   directory to record the retirement deliberately. A pattern whose file is
   gone is still one of the patterns the gate divides between its runs, for as
   long as its baselines remain, so `--only` names it as it would any other.
+- **`is a main.tsx entry, which is offered as standalone, but requires …`** —
+  in a repository `<name>/main.tsx` is a pattern's standalone entry, the one
+  offered to a person choosing what to place, so a `main.tsx` under
+  `patterns/` has to run with no other piece wired in: every input its
+  argument schema requires carries a default. The rule is
+  `inputsNeededToRun` in `runtime/pattern-index/src/standalone.ts`, which the
+  pattern index applies at publish too. Give each named input a default (an
+  input a host fills in, such as the loom id, is optional), or give the file a
+  descriptive name, since `main.tsx` is kept for a pattern that stands alone.
 - **`newly fails to evaluate`** — a pattern that cannot evaluate gets no
   contract, so no baseline, so no check, forever. Fix it, or add it to
   `tasks/pattern-compat-unevaluable.ts` with a reason. That allowlist can only

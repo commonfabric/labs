@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import {
   applyPullExecuteContinuation,
   applyQuiescentContinuation,
@@ -16,6 +15,7 @@ import {
 } from "../src/scheduler/node-record.ts";
 import { SchedulerGates } from "../src/scheduler/gates.ts";
 import type { Action, QueuedEvent } from "../src/scheduler/types.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("split-clock readiness decisions", () => {
   // F11: a readiness/parked decision must read `performance.now()` once. When

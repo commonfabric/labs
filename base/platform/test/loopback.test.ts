@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isLoopbackHostname } from "@commonfabric/platform/loopback";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isLoopbackHostname()", () => {
   it("returns `true` for the loopback names and addresses a URL normalizes to", () => {

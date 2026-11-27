@@ -4,9 +4,14 @@
  * replaces `console.error` to read the prompt.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { encode } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { resolveSecret } from "../commands/identity.ts";
 

@@ -31,6 +31,7 @@ import { Database } from "@db/sqlite";
 
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import { deriveDiskHandleId } from "../../cli/lib/sqlite-source.ts";
 import app from "../../toolshed/app.ts";
@@ -551,14 +552,14 @@ const serve = (contractArrivesLate: boolean) => async () => {
   }
 };
 
-Deno.test({
+test({
   name: "sqlite db.query labels a result read through an injected input handle",
   fn: serve(false),
   sanitizeResources: false,
   sanitizeOps: false,
 });
 
-Deno.test({
+test({
   name:
     "sqlite db.query relabels an injected result when the contract arrives after the first read",
   fn: serve(true),

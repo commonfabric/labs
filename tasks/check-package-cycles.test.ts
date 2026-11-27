@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 
@@ -20,6 +19,7 @@ import {
   scan,
   targetPackage,
 } from "./check-package-cycles.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const edge = (from: string, to: string): Edge => ({
   from,

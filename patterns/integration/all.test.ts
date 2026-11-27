@@ -1,9 +1,9 @@
 import { createTestSpace, env } from "@commonfabric/integration";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { PATTERN_CATEGORIES } from "../../tasks/package-layout.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
 

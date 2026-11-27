@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   decodeSLEB128,
@@ -6,6 +5,7 @@ import {
   encodeSLEB128,
   encodeULEB128,
 } from "@commonfabric/bytes/leb128";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("leb128", () => {
   describe("encodeULEB128()", () => {

@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { walk } from "@std/fs";
 import { fromFileUrl, relative } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 // STATIC SWEEP — bypass guard for the type→TypeNode chokepoint.
 //
@@ -58,7 +59,7 @@ const ALLOWED: Record<string, string> = {
     "3 special sites: validation-only (undefined contract), nullish-only custom fallback, inspected-not-emitted",
 };
 
-Deno.test("raw checker.typeToTypeNode call sites match the reviewed allowlist", async () => {
+test("raw checker.typeToTypeNode call sites match the reviewed allowlist", async () => {
   // file (relative) -> count of raw calls
   const found = new Map<string, number>();
 

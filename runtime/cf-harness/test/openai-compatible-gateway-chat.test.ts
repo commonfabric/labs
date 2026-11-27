@@ -1,5 +1,4 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { encodeBase64 } from "@std/encoding/base64";
 import { join } from "@std/path";
@@ -7,6 +6,7 @@ import { createHarnessImageAttachment } from "../src/image-attachments.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /**
  * The Chat Completions path is now reached only by Vertex-backed models and
@@ -78,7 +78,7 @@ const assistantText = (text: string) => ({
   choices: [{ index: 0, message: { role: "assistant", content: text } }],
 });
 
-Deno.test("chat requests map a full transcript, including tool turns", async () => {
+test("chat requests map a full transcript, including tool turns", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, () => ({
     body: assistantText("All done."),
@@ -128,7 +128,7 @@ Deno.test("chat requests map a full transcript, including tool turns", async () 
   );
 });
 
-Deno.test("chat responses with array content are flattened to text", async () => {
+test("chat responses with array content are flattened to text", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, () => ({
     body: {
@@ -151,7 +151,7 @@ Deno.test("chat responses with array content are flattened to text", async () =>
   assertEquals(result.assistant.content, "Part one. Part two.");
 });
 
-Deno.test("chat responses preserve cache and reasoning usage", async () => {
+test("chat responses preserve cache and reasoning usage", async () => {
   const client = clientWith([], () => ({
     body: {
       ...assistantText("Done."),
@@ -181,7 +181,7 @@ Deno.test("chat responses preserve cache and reasoning usage", async () => {
   });
 });
 
-Deno.test("chat-routed models reject reasoning effort before provider traffic", async () => {
+test("chat-routed models reject reasoning effort before provider traffic", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, () => ({
     body: assistantText("unused"),
@@ -195,7 +195,7 @@ Deno.test("chat-routed models reject reasoning effort before provider traffic", 
   assertEquals(captured.length, 0);
 });
 
-Deno.test("chat responses surface native model tool results", async () => {
+test("chat responses surface native model tool results", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, () => ({
     body: {
@@ -223,7 +223,7 @@ Deno.test("chat responses surface native model tool results", async () => {
   assertEquals(native[0].provider, "google");
 });
 
-Deno.test("a chat response without a message choice is rejected", async () => {
+test("a chat response without a message choice is rejected", async () => {
   const client = clientWith([], () => ({ body: { choices: [] } }));
   await assertRejects(
     () => client.complete(turn()),
@@ -232,7 +232,7 @@ Deno.test("a chat response without a message choice is rejected", async () => {
   );
 });
 
-Deno.test("listModels maps the gateway registry", async () => {
+test("listModels maps the gateway registry", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, () => ({
     body: {
@@ -262,7 +262,7 @@ Deno.test("listModels maps the gateway registry", async () => {
   assertEquals(models[1].supportedReasoningEfforts, []);
 });
 
-Deno.test("listModels surfaces a failed registry fetch", async () => {
+test("listModels surfaces a failed registry fetch", async () => {
   const client = clientWith([], () => ({ body: "nope", status: 503 }));
   await assertRejects(
     () => client.listModels(),
@@ -271,7 +271,7 @@ Deno.test("listModels surfaces a failed registry fetch", async () => {
   );
 });
 
-Deno.test("a Responses 5xx with an empty body names the provider mismatch", async () => {
+test("a Responses 5xx with an empty body names the provider mismatch", async () => {
   // Vertex-backed models answer this way on /v1/responses; the message has to
   // point at the model choice rather than look like a transient outage.
   const client = clientWith([], () => ({ body: "", status: 500 }));
@@ -282,7 +282,7 @@ Deno.test("a Responses 5xx with an empty body names the provider mismatch", asyn
   );
 });
 
-Deno.test("a Responses 401 explains which credential was rejected", async () => {
+test("a Responses 401 explains which credential was rejected", async () => {
   const client = clientWith([], () => ({ body: "denied", status: 401 }));
   await assertRejects(
     () => client.complete(turn({ model: "gpt-5.6-terra" })),
@@ -291,7 +291,7 @@ Deno.test("a Responses 401 explains which credential was rejected", async () => 
   );
 });
 
-Deno.test("transport failures name the operation that failed", async () => {
+test("transport failures name the operation that failed", async () => {
   // A Responses timeout reported as a "chat completion" failure sends anyone
   // reading the log to the wrong endpoint.
   const failing = new OpenAICompatibleGatewayModelClient(
@@ -315,7 +315,7 @@ Deno.test("transport failures name the operation that failed", async () => {
   );
 });
 
-Deno.test("other Responses failures pass the body through", async () => {
+test("other Responses failures pass the body through", async () => {
   const client = clientWith([], () => ({
     body: '{"error":{"message":"bad request"}}',
     status: 400,

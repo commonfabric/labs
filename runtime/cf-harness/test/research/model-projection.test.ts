@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   HarnessResearchKit,
@@ -9,6 +8,7 @@ import { selectResearchContext } from "../../src/research/context.ts";
 import { projectHarnessResearchKitForModel } from "../../src/research/model-projection.ts";
 import { RESEARCH_KIT_SCHEMA } from "../../src/contracts/research-schema.ts";
 import { validateStructuredResultValue } from "../../src/structured-result.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const kit = (): HarnessResearchKit => ({
   status: "incomplete",

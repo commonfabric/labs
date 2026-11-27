@@ -26,6 +26,7 @@ import type {
 import { ACQUIRED_SKILL_MOUNT_NAME } from "../src/skills/acquired-skill-mount.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** One `runsc run`: where its bundle was, and what it was asked to run. */
 interface RecordedRun {
@@ -129,7 +130,7 @@ const runscEngine = (
     ...extra,
   });
 
-Deno.test("a child of a runsc run gets a sandbox of its own, not its parent's", async () => {
+test("a child of a runsc run gets a sandbox of its own, not its parent's", async () => {
   const runner = new RecordingRunner();
   const engine = runscEngine("run-runsc-parent", runner);
   const parentConfig = engine.ownedRunscSandboxConfig;
@@ -253,7 +254,7 @@ const toolsOffered = async (engine: CfHarnessEngine): Promise<string[]> => {
   return (bodies[0].tools ?? []).map((tool) => String(tool.name));
 };
 
-Deno.test("a runsc run that mounts an acquired skill is offered the skill script tool", async () => {
+test("a runsc run that mounts an acquired skill is offered the skill script tool", async () => {
   const acquiredSkills: HarnessAcquiredSkills = {
     type: HARNESS_ACQUIRED_SKILLS_TYPE,
     version: 1,

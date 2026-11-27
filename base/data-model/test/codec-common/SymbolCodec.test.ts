@@ -14,7 +14,6 @@
  * and the behavior is the same at any.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -23,6 +22,7 @@ import {
   SymbolCodec,
 } from "@/codec-common";
 import type { JsonCodecValue } from "@/codec-json/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // An `Encoded` that cannot hold a registry key cannot be constructed at, since
 // the format has to hand in the embedding and no honest one exists. This covers

@@ -7,6 +7,7 @@ import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import type { FabricValue } from "@commonfabric/api";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   buildCrossSpaceLinkIndex,
@@ -81,7 +82,7 @@ function corruptEntity(path: string, id: string): void {
   db.close();
 }
 
-Deno.test("cross-space convergence", async (t) => {
+test("cross-space convergence", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-converge-" });
   try {
     await t.step("base scan results omit the exact unknown count", () => {

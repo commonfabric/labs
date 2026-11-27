@@ -2,7 +2,6 @@
 import "../../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { render } from "lit";
 // @ts-types="@types/d3-scale"
 import { scaleBand, scaleLinear, scaleTime } from "d3-scale";
@@ -13,6 +12,7 @@ import {
   findNearest,
   renderCrosshair,
 } from "./interaction.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function mark(
   markIndex: number,

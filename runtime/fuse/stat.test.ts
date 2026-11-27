@@ -7,8 +7,9 @@ import {
 } from "./platform.ts";
 import { buildNodeStat, getMountOwnership, nodeMode } from "./stat.ts";
 import type { FsNode } from "./types.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("msToTimespec splits milliseconds into seconds and nanoseconds", () => {
+test("msToTimespec splits milliseconds into seconds and nanoseconds", () => {
   assertEquals(msToTimespec(1_700_000_000_500), {
     sec: 1_700_000_000n,
     nsec: 500_000_000n,
@@ -17,7 +18,7 @@ Deno.test("msToTimespec splits milliseconds into seconds and nanoseconds", () =>
   assertEquals(msToTimespec(undefined), { sec: 0n, nsec: 0n });
 });
 
-Deno.test("getMountOwnership uses the current process ids when available", () => {
+test("getMountOwnership uses the current process ids when available", () => {
   assertEquals(
     getMountOwnership({
       uid: () => 501,
@@ -27,11 +28,11 @@ Deno.test("getMountOwnership uses the current process ids when available", () =>
   );
 });
 
-Deno.test("getMountOwnership falls back to root ids when unavailable", () => {
+test("getMountOwnership falls back to root ids when unavailable", () => {
   assertEquals(getMountOwnership({}), { uid: 0, gid: 0 });
 });
 
-Deno.test("getMountOwnership falls back when uid/gid probes throw", () => {
+test("getMountOwnership falls back when uid/gid probes throw", () => {
   assertEquals(
     getMountOwnership({
       uid: () => {
@@ -45,7 +46,7 @@ Deno.test("getMountOwnership falls back when uid/gid probes throw", () => {
   );
 });
 
-Deno.test("buildNodeStat assigns mounted handler files to the current user", () => {
+test("buildNodeStat assigns mounted handler files to the current user", () => {
   const script = new TextEncoder().encode("#!/bin/sh\n");
   const node: FsNode = {
     kind: "callable",
@@ -72,7 +73,7 @@ Deno.test("buildNodeStat assigns mounted handler files to the current user", () 
   );
 });
 
-Deno.test("nodeMode exposes directories as read-only", () => {
+test("nodeMode exposes directories as read-only", () => {
   const node: FsNode = {
     kind: "dir",
     children: new Map(),
@@ -82,7 +83,7 @@ Deno.test("nodeMode exposes directories as read-only", () => {
   assertEquals(nodeMode(node), DIR_MODE);
 });
 
-Deno.test("nodeMode exposes writable directories with write bits", () => {
+test("nodeMode exposes writable directories with write bits", () => {
   const node: FsNode = {
     kind: "dir",
     children: new Map(),
@@ -92,7 +93,7 @@ Deno.test("nodeMode exposes writable directories with write bits", () => {
   assertEquals(nodeMode(node, true), DIR_MODE_RW);
 });
 
-Deno.test("nodeMode gives writable nodes user-independent write bits", () => {
+test("nodeMode gives writable nodes user-independent write bits", () => {
   const file: FsNode = {
     kind: "file",
     content: new Uint8Array(),

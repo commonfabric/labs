@@ -3,6 +3,7 @@ import ts from "typescript";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The default export is `__cfHelpers.__cf_data(helper)`: one call to the member
 // `__cf_data` whose sole argument is the identifier `helper`.
@@ -31,7 +32,7 @@ async function transform(lines: string[]): Promise<string> {
   });
 }
 
-Deno.test("module-scope cf-data wraps an arrow callable returning a call-on-call result", async () => {
+test("module-scope cf-data wraps an arrow callable returning a call-on-call result", async () => {
   const out = await transform([
     "const helper = () => factory()();",
     "export default helper;",
@@ -39,7 +40,7 @@ Deno.test("module-scope cf-data wraps an arrow callable returning a call-on-call
   assert(wrapsHelper(out));
 });
 
-Deno.test("module-scope cf-data wraps a block-body callable whose return is a call-on-call result", async () => {
+test("module-scope cf-data wraps a block-body callable whose return is a call-on-call result", async () => {
   const out = await transform([
     "const helper = () => {",
     "  const seed = 1;",
@@ -51,7 +52,7 @@ Deno.test("module-scope cf-data wraps a block-body callable whose return is a ca
   assert(wrapsHelper(out));
 });
 
-Deno.test("module-scope cf-data wraps when the call-on-call result is nested in the returned expression", async () => {
+test("module-scope cf-data wraps when the call-on-call result is nested in the returned expression", async () => {
   const out = await transform([
     "const helper = () => ({ value: factory()() });",
     "export default helper;",
@@ -59,7 +60,7 @@ Deno.test("module-scope cf-data wraps when the call-on-call result is nested in 
   assert(wrapsHelper(out));
 });
 
-Deno.test("module-scope cf-data ignores a call-on-call result inside a nested function boundary", async () => {
+test("module-scope cf-data ignores a call-on-call result inside a nested function boundary", async () => {
   const out = await transform([
     "const helper = () => {",
     "  const inner = () => factory()();",
@@ -72,7 +73,7 @@ Deno.test("module-scope cf-data ignores a call-on-call result inside a nested fu
   assert(!wrapsHelper(out), "expected helper to be left unwrapped");
 });
 
-Deno.test("module-scope cf-data ignores a callable whose body expression is itself a function", async () => {
+test("module-scope cf-data ignores a callable whose body expression is itself a function", async () => {
   const out = await transform([
     "const helper = () => () => factory()();",
     "export default helper;",

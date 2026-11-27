@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import type { SchemaHint } from "../src/interface.ts";
@@ -8,6 +7,7 @@ import {
   createTestProgramFromFiles,
   getTypeFromCode,
 } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("SchemaGenerator", () => {
   describe("formatter chain", () => {

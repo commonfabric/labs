@@ -9,9 +9,9 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 import { MAX_BINARY_VIEW_BYTES } from "../lib/view/languages/binary/binary.ts";
 import { argv, cf } from "./utils.ts";
@@ -49,13 +49,13 @@ function runViewForBytes(args: string[]): Promise<Deno.CommandOutput> {
   });
 }
 
-Deno.test("cf view --plain prints colorized source and exits 0", async () => {
+test("cf view --plain prints colorized source and exits 0", async () => {
   const { code, stdout } = await cf(argv`view --plain`, { stdin: SRC });
   assertEquals(code, 0);
   assert(stdout.join("\n").includes("pattern"), stdout.join("\n"));
 });
 
-Deno.test("cf view --plain --color never prints without escapes", async () => {
+test("cf view --plain --color never prints without escapes", async () => {
   const { code, stdout } = await cf(argv`view --plain --color never`, {
     stdin: SRC,
   });
@@ -63,7 +63,7 @@ Deno.test("cf view --plain --color never prints without escapes", async () => {
   assert(!stdout.join("\n").includes("\x1b["), "no ANSI escapes");
 });
 
-Deno.test("cf view --plain --color always emits escapes", async () => {
+test("cf view --plain --color always emits escapes", async () => {
   const { code, stdout } = await cf(argv`view --plain --color always`, {
     stdin: SRC,
   });
@@ -71,12 +71,12 @@ Deno.test("cf view --plain --color always emits escapes", async () => {
   assert(stdout.join("\n").includes("\x1b["), "has ANSI escapes");
 });
 
-Deno.test("cf view --plain --line-numbers exits 0", async () => {
+test("cf view --plain --line-numbers exits 0", async () => {
   const { code } = await cf(argv`view --plain --line-numbers`, { stdin: SRC });
   assertEquals(code, 0);
 });
 
-Deno.test("cf view --plain --line-numbers prefixes lines with numbers", async () => {
+test("cf view --plain --line-numbers prefixes lines with numbers", async () => {
   const { code, stdout } = await cf(
     argv`view --plain --line-numbers --color never`,
     { stdin: SRC },
@@ -125,7 +125,7 @@ describe("cf view byte-preserving output", () => {
   });
 });
 
-Deno.test("cf view --plain without --line-numbers has no number gutter", async () => {
+test("cf view --plain without --line-numbers has no number gutter", async () => {
   const { code, stdout } = await cf(argv`view --plain --color never`, {
     stdin: SRC,
   });
@@ -136,24 +136,24 @@ Deno.test("cf view --plain without --line-numbers has no number gutter", async (
   );
 });
 
-Deno.test("cf view --plain --diff renders a forced diff", async () => {
+test("cf view --plain --diff renders a forced diff", async () => {
   const { code, stdout } = await cf(argv`view --plain --diff`, { stdin: DIFF });
   assertEquals(code, 0);
   assert(stdout.join("\n").includes("next"), stdout.join("\n"));
 });
 
-Deno.test("cf view --plain auto-detects a diff", async () => {
+test("cf view --plain auto-detects a diff", async () => {
   const { code, stdout } = await cf(argv`view --plain`, { stdin: DIFF });
   assertEquals(code, 0);
   assert(stdout.join("\n").includes("next"));
 });
 
-Deno.test("cf view --plain --no-diff is accepted and views a diff as source", async () => {
+test("cf view --plain --no-diff is accepted and views a diff as source", async () => {
   const { code } = await cf(argv`view --plain --no-diff`, { stdin: DIFF });
   assertEquals(code, 0);
 });
 
-Deno.test("cf view --filename selects piped source by its virtual name", async () => {
+test("cf view --filename selects piped source by its virtual name", async () => {
   const source = "# Title with **weight**\n";
   const { code, stdout } = await cf(
     argv`view --plain --rendered --color never --filename notes.md`,
@@ -163,7 +163,7 @@ Deno.test("cf view --filename selects piped source by its virtual name", async (
   assertEquals(stdout, ["Title with weight"]);
 });
 
-Deno.test("cf view --language aliases override a piped virtual filename", async () => {
+test("cf view --language aliases override a piped virtual filename", async () => {
   const source = "# Title with **weight**\n";
   const { code, stdout } = await cf(
     argv`view --plain --rendered --color never --language md --filename notes.txt`,
@@ -266,7 +266,7 @@ describe("cf view binary input", () => {
   });
 });
 
-Deno.test("cf view rejects an unknown --language", async () => {
+test("cf view rejects an unknown --language", async () => {
   const { code, stderr } = await cf(argv`view --plain --language ruby`, {
     stdin: SRC,
   });
@@ -278,7 +278,7 @@ Deno.test("cf view rejects an unknown --language", async () => {
   assert(stderr.join("\n").includes("python"), stderr.join("\n"));
 });
 
-Deno.test("cf view rejects source selection combined with forced diff mode", async () => {
+test("cf view rejects source selection combined with forced diff mode", async () => {
   for (
     const selector of [
       argv`--language plain-text`,
@@ -299,7 +299,7 @@ Deno.test("cf view rejects source selection combined with forced diff mode", asy
   }
 });
 
-Deno.test("cf view rejects an invalid --color", async () => {
+test("cf view rejects an invalid --color", async () => {
   const { code, stderr } = await cf(argv`view --plain --color bogus`, {
     stdin: SRC,
   });
@@ -307,7 +307,7 @@ Deno.test("cf view rejects an invalid --color", async () => {
   assert(stderr.join("\n").toLowerCase().includes("color"), stderr.join("\n"));
 });
 
-Deno.test("cf view reports empty piped input", async () => {
+test("cf view reports empty piped input", async () => {
   const { code, stderr } = await cf(argv`view --plain`, { stdin: "" });
   assertEquals(code, 1);
   assert(
@@ -316,7 +316,7 @@ Deno.test("cf view reports empty piped input", async () => {
   );
 });
 
-Deno.test("cf view reads and prints a file argument", async () => {
+test("cf view reads and prints a file argument", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const file = `${dir}/transformed.ts`;
@@ -351,7 +351,7 @@ describe("cf view redirected byte output", () => {
   });
 });
 
-Deno.test("cf view rejects piped-input overrides with a file argument", async () => {
+test("cf view rejects piped-input overrides with a file argument", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const file = `${dir}/source.txt`;
@@ -369,7 +369,7 @@ Deno.test("cf view rejects piped-input overrides with a file argument", async ()
   }
 });
 
-Deno.test("cf view --rendered formats a named Markdown file", async () => {
+test("cf view --rendered formats a named Markdown file", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const file = `${dir}/notes.md`;
@@ -385,7 +385,7 @@ Deno.test("cf view --rendered formats a named Markdown file", async () => {
   }
 });
 
-Deno.test("cf view reports an empty file argument", async () => {
+test("cf view reports an empty file argument", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const file = `${dir}/empty.ts`;

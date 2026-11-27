@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
 import { basename, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HarnessJobOptions, HarnessJobSpec } from "../src/harness-job.ts";
 import { runHarnessJob } from "../src/harness-job.ts";
 import {
@@ -106,6 +111,41 @@ describe("harness-job continuation", () => {
       );
     });
   }
+
+  it("continues a file-delivered opening task with an inline follow-up", async () => {
+    const workspace = join(root, "conversation");
+    const job = { ...spec, taskDelivery: "file" as const };
+    const first = await run(
+      job,
+      scriptedJob(() => answerReply("first")),
+      "first",
+      { workspace },
+    );
+    expect(first.outcome).toBe("completed");
+    const script = scriptedJob(() => answerReply("next"));
+
+    const next = await run(
+      {
+        ...job,
+        task: "Use the previous edits",
+        continueFrom: { runRoot: first.report!.runRef! },
+      },
+      script,
+      "second",
+      { workspace },
+    );
+
+    expect(next.outcome).toBe("completed");
+    expect(await Deno.readTextFile(join(workspace, ".job-task"))).toBe(
+      spec.task,
+    );
+    expect(script.requests[0].transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: "Use the previous edits",
+      }),
+    ]));
+  });
 
   for (const replace of [false, true]) {
     it(`continues history with its own result file and ${replace ? "replaced" : "inherited"} instructions`, async () => {

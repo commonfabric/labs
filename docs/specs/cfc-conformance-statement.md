@@ -201,6 +201,20 @@ class.
   the marker (it carries no `ignoreReadForCommit`) together with the digest
   invalidation `cfc-commit-preparation.md` describes; no test naming the
   property was located.
+- A module-policy manifest consultation is not a commit freshness dependency
+  (under-taint against the pinned text). `Runtime.#readCfcPolicyManifest` in
+  `runtime.ts` adds no precondition, and the sink-request gate in
+  `cfc/prepare.ts` binds no consumed origin into the commit. The pinned
+  §4.4.1 gives a consultation the grant discipline, and §18.6.2 forbids
+  exempting verification dependencies from commit freshness checks; this
+  implements [specs#109](https://github.com/commonfabric/specs/pull/109)
+  ahead of its ruling. A present manifest is verified against its digest when
+  read, and a missing one fails the write gate, the sink gate and the flow
+  join (spec §5.3.2), so neither releases more than the manifest at its
+  digest allows. In a space the transaction writes, the manifest read keeps
+  the stale-read freshness of any read there. The render ceiling still
+  decides on the label left unrewritten when a manifest is missing, which
+  predates this and is tracked as top/3726.
 
 ## 3. Reference restrictions a dereference does not yet consume (§8.2.4, §18.7)
 
@@ -417,6 +431,19 @@ dials.
   to proceed ahead of unresolved specs dependencies does not supply a ruling;
   the gap still needs one and a reconciled pin. This entry and
   `cfc-enforcement-matrix.md` §4 record the additional gap.
+- The display's render resolver nominates, as a §4.9.3 membership candidate,
+  each space the render read from whose digest a committed module-policy
+  subject is, and the ACL point query decides as for any candidate
+  (`membershipSpacesInConfidentiality` in
+  `runtime/runner/src/cfc/render-ceiling.ts`). This implements
+  [specs#110](https://github.com/commonfabric/specs/pull/110), open and
+  unruled and stacked on
+  [specs#49](https://github.com/commonfabric/specs/pull/49), whose §4.9.3
+  gives a committed subject no candidate. It admits more at strict: the
+  `cfcCommittedSubjectCandidates` dial defaults to on, and off restores
+  #49's text. This is a nonconforming semantic gap and does not satisfy the
+  correspondence procedure's step 4; it needs #110's ruling and a reconciled
+  pin.
   The new clause is absent on `user` and `session` stores, even when their
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;

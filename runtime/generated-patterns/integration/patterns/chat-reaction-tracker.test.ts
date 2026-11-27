@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
 import type {
@@ -8,6 +7,7 @@ import type {
   ReactionMessageInput,
   ReactionTotalEntry,
 } from "./chat-reaction-tracker.pattern.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const cloneMessageView = (
   entries: MessageReactionView[],

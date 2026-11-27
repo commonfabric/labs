@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema, Pattern } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
@@ -15,6 +14,7 @@ import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-m
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "@commonfabric/runner/fabric-special-object-brand";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { formatExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
+import { describe, it } from "@commonfabric/test-support/test";
 import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   assertPatternSchemasBackwardCompatible,

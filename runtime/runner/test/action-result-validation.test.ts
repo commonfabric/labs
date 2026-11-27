@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
@@ -6,6 +5,7 @@ import {
   FabricBytes,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { validateAndCheckReactives } from "../src/runner.ts";
 import { isReactiveMarker } from "../src/builder/types.ts";
 import { normalizeSandboxResult } from "../src/sandbox/result-normalization.ts";

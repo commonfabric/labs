@@ -10,6 +10,7 @@ import {
   iifeCalls,
   parseModule,
 } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // `emitCallExpression` has a dedicated branch for an authored zero-argument
 // inline IIFE — `(() => ...)()` — that reads a cell from a reactive position.
@@ -51,7 +52,7 @@ function mapCallbackBody(output: ts.SourceFile): ts.Node {
   return extractedCallbackBody(output, "__cfPattern_1");
 }
 
-Deno.test(
+test(
   "zero-arg IIFE reading an element cell inside a map callback wraps the read into a reactive lift",
   async () => {
     const output = await transformRender(
@@ -70,7 +71,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "zero-arg IIFE mixing an outer cell and an element cell tracks both dependencies",
   async () => {
     const output = await transformRender(
@@ -95,7 +96,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "zero-arg IIFE read inside a filter predicate is wrapped while the chain lowers",
   async () => {
     const output = await transformRender(
@@ -110,7 +111,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "zero-arg IIFE decomposing through a local alias is preserved verbatim",
   async () => {
     const output = await transformRender(
@@ -126,7 +127,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "zero-arg IIFE projecting an object-literal property is preserved verbatim",
   async () => {
     const output = await transformRender(
@@ -141,7 +142,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "zero-arg IIFE reading a top-level cell inside an ifElse branch wraps the whole IIFE in a lift applied to that cell",
   async () => {
     // This test covers the `createLiftAppliedCall` sub-path directly: a

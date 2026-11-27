@@ -61,11 +61,16 @@
 // constructible on a principal the ACL does not grant (pin 2), which is
 // the general statement anyway: the remount never decides.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { LoopbackStorageManager } from "../src/executor/loopback-storage.ts";

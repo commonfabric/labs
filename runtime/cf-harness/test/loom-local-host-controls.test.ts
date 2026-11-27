@@ -12,6 +12,7 @@ import type {
   CreateHarnessPromptLoopOptions,
   HarnessPromptLoopResult,
 } from "../src/prompt-loop.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const ioBuffers = (): {
   io: CfHarnessCliIO;
@@ -30,7 +31,7 @@ const ioBuffers = (): {
   };
 };
 
-Deno.test("local Loom batch informational controls bypass provider and auth state", async () => {
+test("local Loom batch informational controls bypass provider and auth state", async () => {
   const controls: Array<{
     args: readonly string[];
     expected: "help" | "capabilities";
@@ -86,7 +87,7 @@ Deno.test("local Loom batch informational controls bypass provider and auth stat
   }
 });
 
-Deno.test("local Loom batch control-looking prompt text does not bypass binding", async () => {
+test("local Loom batch control-looking prompt text does not bypass binding", async () => {
   const home = await Deno.makeTempDir();
   const io = ioBuffers();
   const host = await createLoomLocalCfHarnessHost({
@@ -109,7 +110,7 @@ Deno.test("local Loom batch control-looking prompt text does not bypass binding"
   );
 });
 
-Deno.test("local Loom batch rejects control argv before it bills a prompt run", async () => {
+test("local Loom batch rejects control argv before it bills a prompt run", async () => {
   const controlArgv: ReadonlyArray<readonly string[]> = [
     ["auth", "status", "openai-codex"],
     ["config", "set", "model-provider", "openai-codex"],
@@ -184,7 +185,7 @@ Deno.test("local Loom batch rejects control argv before it bills a prompt run", 
   }
 });
 
-Deno.test("local Loom batch runs a prompt whose own first word is a subcommand", async () => {
+test("local Loom batch runs a prompt whose own first word is a subcommand", async () => {
   // The guard reads the leading token, so `--prompt` is what separates "run
   // the models subcommand" from "ask the model about models". The rejection
   // above names this flag; a caller who follows it has to get a run.
@@ -239,7 +240,7 @@ Deno.test("local Loom batch runs a prompt whose own first word is a subcommand",
   assertEquals(prompt, "models are great");
 });
 
-Deno.test("local Loom batch executable exposes help and capabilities before setup", async () => {
+test("local Loom batch executable exposes help and capabilities before setup", async () => {
   const entrypoint = fromFileUrl(
     new URL("../src/loom-local-host-main.ts", import.meta.url),
   );
@@ -277,7 +278,7 @@ Deno.test("local Loom batch executable exposes help and capabilities before setu
   }
 });
 
-Deno.test("local Loom interactive executable reports a missing dedicated home on its protocol", async () => {
+test("local Loom interactive executable reports a missing dedicated home on its protocol", async () => {
   const entrypoint = fromFileUrl(
     new URL("../src/loom-local-host-main.ts", import.meta.url),
   );
@@ -303,7 +304,7 @@ Deno.test("local Loom interactive executable reports a missing dedicated home on
   assertEquals(new TextDecoder().decode(result.stderr), "");
 });
 
-Deno.test("local Loom host main classifies startup and batch routing failures in process", async () => {
+test("local Loom host main classifies startup and batch routing failures in process", async () => {
   const home = await Deno.makeTempDir();
 
   assertEquals(await runLoomLocalCfHarnessHostMain(["unknown"], {}), 1);

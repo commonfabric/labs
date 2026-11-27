@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import * as compiler from "../../src/harness/compiler-stack.ts";
@@ -8,6 +7,7 @@ import {
   computeEntryIdentity,
   resolveEntryIdentity,
 } from "../../src/harness/entry-identity.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // This file's isolated runtime installs the counting loader; the identity
 // parity tests use the real compiler stack in their own file. All three scans

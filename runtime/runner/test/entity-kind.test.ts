@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { hashOf } from "@commonfabric/data-model";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   COMPUTED_URI_SCHEME,

@@ -5,11 +5,11 @@
  * from the file alone but where this package's decoder refuses the text.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { sha256 } from "@commonfabric/content-hash";
 import { toUnpaddedBase64url } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricValue } from "@/interface.ts";
 import { UnknownValue } from "@/codec-common";

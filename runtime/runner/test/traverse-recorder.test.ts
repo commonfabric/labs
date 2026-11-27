@@ -7,13 +7,13 @@
  * how much one run may accumulate.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import type { Entity, Revision, State } from "@commonfabric/memory/interface";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   fixtureDocKey,

@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("PiecesController.listEntityIds", () => {
   it("opens the space session without requesting entity identifiers", async () => {

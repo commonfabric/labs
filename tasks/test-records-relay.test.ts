@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -13,6 +12,12 @@ import {
   shouldShipRun,
 } from "./test-records-relay.ts";
 import { gunzipToText } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const PAYLOAD = {
   workflow_run: {

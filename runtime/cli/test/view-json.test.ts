@@ -22,6 +22,7 @@ import type { Line, TokenClass } from "../lib/view/model.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter } from "../lib/view/diffedit.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The verbatim text of a set of lines — coloring must never change it. */
 function verbatim(lines: readonly Line[]): string {
@@ -37,9 +38,11 @@ function classesOf(lines: readonly Line[], token: string): Set<TokenClass> {
   return out;
 }
 
-Deno.test("json: language metadata selects JSON filenames", () => {
-  assertEquals(languageForFile("deno.json").id, "json");
-  assertEquals(languageForFile("/a/b/tsconfig.jsonc").id, "json");
+test("json: language metadata selects JSON filenames", () => {
+  assertEquals(languageForFile("package.json").id, "json");
+  assertEquals(languageForFile("deno.json").id, "jsonc");
+  assertEquals(languageForFile("/a/b/tsconfig.json").id, "jsonc");
+  assertEquals(languageForFile("/a/b/tsconfig.jsonc").id, "jsonc");
   assertEquals(languageForFile("records.jsonl").id, "json-lines");
   assertEquals(languageForFile("events.ndjson").id, "json-lines");
   assertEquals(languageForFile("EVENTS.NDJSON").id, "json-lines");
@@ -50,14 +53,14 @@ Deno.test("json: language metadata selects JSON filenames", () => {
   assertEquals(languageForFile(undefined).id, "plain-text");
 });
 
-Deno.test("json: language metadata selects JSON-shaped names without a JSON suffix", () => {
+test("json: language metadata selects JSON-shaped names without a JSON suffix", () => {
   assertEquals(
     languageForFile("runtime/shell/public/manifest.webmanifest").id,
     "json",
   );
   assertEquals(languageForFile("runtime/memory/memory.tldr").id, "json");
   assertEquals(languageForFile("/repo/deno.lock").id, "json");
-  assertEquals(languageForFile("bay.code-workspace").id, "json");
+  assertEquals(languageForFile("bay.code-workspace").id, "jsonc");
   assertEquals(languageForFile("ios/Package.resolved").id, "json");
   assertEquals(languageForFile("Cargo.lock").id, "toml");
   assertEquals(languageForFile("package.resolved").id, "plain-text");
@@ -75,7 +78,7 @@ Deno.test("json: language metadata selects JSON-shaped names without a JSON suff
   assertEquals(languageForFile("firebaserc").id, "plain-text");
 });
 
-Deno.test("json: shared .conf, .config, and .lock extensions need an opening brace in the source", () => {
+test("json: shared .conf, .config, and .lock extensions need an opening brace in the source", () => {
   const object = '{\n  "mode": "jni"\n}\n';
 
   assertEquals(languageForSource("swift-java.config", object).id, "json");
@@ -96,7 +99,7 @@ Deno.test("json: shared .conf, .config, and .lock extensions need an opening bra
   assertEquals(languageForFile("swift-java.config").id, "plain-text");
 });
 
-Deno.test("json: a shared .cfg extension needs an opening brace in the source", () => {
+test("json: a shared .cfg extension needs an opening brace in the source", () => {
   const syzkaller = '{\n\t"name": "gvisor",\n\t"cover": false\n}\n';
   const tlc = "\\* A model.\nSPECIFICATION Spec\nCONSTANT Keys = {k1}\n";
   const ini = "[defaults]\nroles_path = roles\n";
@@ -124,7 +127,7 @@ Deno.test("json: a shared .cfg extension needs an opening brace in the source", 
   );
 });
 
-Deno.test("json: line-oriented files use JSON token classes", () => {
+test("json: line-oriented files use JSON token classes", () => {
   const src = [
     '{"testId":"old","canonicalId":"new"}',
     '{"testId":"next","canonicalId":"current"}',
@@ -138,7 +141,7 @@ Deno.test("json: line-oriented files use JSON token classes", () => {
   assertEquals(verbatim(lines), src);
 });
 
-Deno.test("json: malformed records leave following records highlighted", () => {
+test("json: malformed records leave following records highlighted", () => {
   for (
     const malformed of [
       '{"broken":"unterminated',
@@ -165,7 +168,7 @@ Deno.test("json: malformed records leave following records highlighted", () => {
   }
 });
 
-Deno.test("json: large line-oriented records highlight without throwing", () => {
+test("json: large line-oriented records highlight without throwing", () => {
   const properties = Array.from(
     { length: 40_000 },
     (_, index) => `"key${index}":${index}`,
@@ -180,7 +183,7 @@ Deno.test("json: large line-oriented records highlight without throwing", () => 
   assertEquals(verbatim(lines), src);
 });
 
-Deno.test("json: line-oriented live edits preserve record isolation", () => {
+test("json: line-oriented live edits preserve record isolation", () => {
   const before = '{"event":"created","sequence":1}\n';
   const after = [
     '{"event":"created","sequence":1}',
@@ -216,7 +219,7 @@ Deno.test("json: line-oriented live edits preserve record isolation", () => {
   assertEquals(verbatim(recoveredLines), malformed);
 });
 
-Deno.test("json: line-oriented documents expose no partial structure", () => {
+test("json: line-oriented documents expose no partial structure", () => {
   const language = languageForFile("events.jsonl");
   const source = [
     '{"first":1}',
@@ -228,7 +231,7 @@ Deno.test("json: line-oriented documents expose no partial structure", () => {
   assertEquals(doc.definitions.size, 0);
 });
 
-Deno.test("json: one line-oriented record exposes its structure", () => {
+test("json: one line-oriented record exposes its structure", () => {
   const language = languageForFile("event.jsonl");
   const source = '{"event":"created","sequence":1}\n';
   const doc = language.parseDocument(source, "event.jsonl");
@@ -241,7 +244,7 @@ Deno.test("json: one line-oriented record exposes its structure", () => {
   assert(doc.definitions.has("sequence"));
 });
 
-Deno.test("json: keys, values, and literals get distinct classes", () => {
+test("json: keys, values, and literals get distinct classes", () => {
   const lines = jsonHighlightLines(
     `{ "name": "widget", "count": 42, "on": true, "off": false, "x": null }`,
   );
@@ -257,7 +260,7 @@ Deno.test("json: keys, values, and literals get distinct classes", () => {
   assert(classesOf(lines, ",").has("punctuation"));
 });
 
-Deno.test("json: brackets carry a nesting depth for rainbow coloring", () => {
+test("json: brackets carry a nesting depth for rainbow coloring", () => {
   const lines = jsonHighlightLines(`{ "a": [ 1 ] }`);
   const brackets = lines[0].spans.filter((s) => s.cls === "bracket");
   const byText = new Map(brackets.map((s) => [s.text, s.bracketDepth]));
@@ -269,7 +272,7 @@ Deno.test("json: brackets carry a nesting depth for rainbow coloring", () => {
   assertEquals(byText.get("]"), 1);
 });
 
-Deno.test("json: JSONC line and block comments are colored, not rejected", () => {
+test("json: JSONC line and block comments are colored, not rejected", () => {
   const src = [
     "{",
     "  // a line comment",
@@ -289,7 +292,7 @@ Deno.test("json: JSONC line and block comments are colored, not rejected", () =>
   assertEquals(verbatim(lines), src);
 });
 
-Deno.test("json: a bare non-BMP character stays one span", () => {
+test("json: a bare non-BMP character stays one span", () => {
   // Outside a string a lone astral char is invalid JSON, but reachable mid-edit;
   // it must not split at the UTF-16 surrogate boundary into two glyphs.
   const spans = jsonHighlightLines("😀").flatMap((l) => l.spans);
@@ -297,7 +300,7 @@ Deno.test("json: a bare non-BMP character stays one span", () => {
   assertEquals(spans[0].text, "😀");
 });
 
-Deno.test("json: coloring is byte-for-byte lossless", () => {
+test("json: coloring is byte-for-byte lossless", () => {
   const src = `{
   "emoji": "🎉 é ✓",
   "nums": [1, -2.5, 3e10],
@@ -306,7 +309,7 @@ Deno.test("json: coloring is byte-for-byte lossless", () => {
   assertEquals(verbatim(jsonHighlightLines(src)), src);
 });
 
-Deno.test("json: strings with escapes and signed-exponent numbers tokenise", () => {
+test("json: strings with escapes and signed-exponent numbers tokenise", () => {
   // A backslash escapes the next character, so an embedded quote does not end
   // the string; signed exponents scan their sign.
   const src = '{ "path": "a\\"b\\\\c", "big": 1e+9, "small": -2.5e-3 }';
@@ -317,7 +320,7 @@ Deno.test("json: strings with escapes and signed-exponent numbers tokenise", () 
   assertEquals(verbatim(lines), src);
 });
 
-Deno.test("json: a comment between a key and its colon still marks the key", () => {
+test("json: a comment between a key and its colon still marks the key", () => {
   // `nextSignificantIs` skips block and line comments while looking for the `:`
   // that proves a string is an object key.
   const src = '{\n  "a" /* c */: 1,\n  "b" // note\n  : 2\n}';
@@ -327,14 +330,14 @@ Deno.test("json: a comment between a key and its colon still marks the key", () 
   assertEquals(verbatim(lines), src);
 });
 
-Deno.test("json: a non-string object key is skipped, not treated as a member", () => {
+test("json: a non-string object key is skipped, not treated as a member", () => {
   // `{ 42: 1 }` is invalid JSON; the structure walk skips the number where a key
   // is expected rather than wedging, so the object contributes no members.
   const doc = jsonDocument('{ 42: 1, "ok": 2 }');
   assertEquals(doc.structure.map((n) => n.label), ["ok"]);
 });
 
-Deno.test("json: pathologically deep nesting degrades to no structure", () => {
+test("json: pathologically deep nesting degrades to no structure", () => {
   // Deep enough to overflow the structure walk's recursion; `jsonDocument`
   // catches it and returns coloring with an empty tree rather than throwing.
   const deep = "[".repeat(100000);
@@ -343,7 +346,7 @@ Deno.test("json: pathologically deep nesting degrades to no structure", () => {
   assertEquals(doc.lines.length, 1);
 });
 
-Deno.test("json: object keys form the navigation tree", () => {
+test("json: object keys form the navigation tree", () => {
   const src = `{
   "name": "widget",
   "tags": ["a", "b"],
@@ -368,7 +371,7 @@ Deno.test("json: object keys form the navigation tree", () => {
   assert(doc.definitions.has("z"));
 });
 
-Deno.test("json: a heading node's range points at its key", () => {
+test("json: a heading node's range points at its key", () => {
   const src = `{\n  "name": "widget"\n}`;
   const doc = jsonDocument(src);
   const name = doc.structure[0];
@@ -377,7 +380,7 @@ Deno.test("json: a heading node's range points at its key", () => {
   assertEquals(src.slice(name.nameOffset!, name.nameOffset! + 6), '"name"');
 });
 
-Deno.test("json: the incremental highlighter matches a whole re-highlight", () => {
+test("json: the incremental highlighter matches a whole re-highlight", () => {
   const before = `{ "a": 1, "b": 2 }`;
   const after = `{ "a": 10, "b": 2, "c": [true] }`;
   const hl = createJsonHighlighter(before);
@@ -394,7 +397,7 @@ Deno.test("json: the incremental highlighter matches a whole re-highlight", () =
   );
 });
 
-Deno.test("json: malformed input colors without throwing", () => {
+test("json: malformed input colors without throwing", () => {
   for (
     const bad of [
       '{ "unterminated: 1',
@@ -412,7 +415,7 @@ Deno.test("json: malformed input colors without throwing", () => {
   }
 });
 
-Deno.test("json: a .json file in a diff is colored and navigated as JSON", () => {
+test("json: a .json file in a diff is colored and navigated as JSON", () => {
   const root = Deno.makeTempDirSync();
   try {
     const file = `{\n  "name": "widget",\n  "count": 2\n}\n`;
@@ -472,7 +475,7 @@ Deno.test("json: a .json file in a diff is colored and navigated as JSON", () =>
   }
 });
 
-Deno.test("json: a .jsonl file in a diff uses JSON token classes", () => {
+test("json: a .jsonl file in a diff uses JSON token classes", () => {
   const diff = [
     "diff --git a/events.jsonl b/events.jsonl",
     "--- a/events.jsonl",
@@ -504,7 +507,7 @@ Deno.test("json: a .jsonl file in a diff uses JSON token classes", () => {
   assertEquals(verbatim(doc.lines), diff);
 });
 
-Deno.test("json: editing a line in a json diff recolors it as json", () => {
+test("json: editing a line in a json diff recolors it as json", () => {
   const diff = [
     "diff --git a/c.json b/c.json",
     "--- a/c.json",

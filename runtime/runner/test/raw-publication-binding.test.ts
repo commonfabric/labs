@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { createNodeFactory } from "../src/builder/module.ts";
 import { cellTx } from "../src/cell.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";

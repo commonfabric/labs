@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import type { AssetRecord } from "@commonfabric/iframe-sandbox";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   announceChange,

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createFrozenRequestSnapshot } from "../src/cfc/request-snapshot.ts";
 
 describe("CFC request snapshots", () => {

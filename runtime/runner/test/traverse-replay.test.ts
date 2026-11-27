@@ -14,6 +14,7 @@ import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { DATA_URI_MEDIA_TYPE } from "@commonfabric/data-model/codec-data-uri";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import { test } from "@commonfabric/test-support/test";
 import {
   diffOracles,
   listFixturePaths,
@@ -25,7 +26,7 @@ import {
   type TraverseFixture,
 } from "../src/traverse-recorder.ts";
 
-Deno.test("traverse replay matches golden oracles", async (t) => {
+test("traverse replay matches golden oracles", async (t) => {
   const fixtures = listFixturePaths();
   assert(fixtures.length > 0, "no fixtures found");
   for (const { name, path } of fixtures) {
@@ -48,7 +49,7 @@ Deno.test("traverse replay matches golden oracles", async (t) => {
   }
 });
 
-Deno.test("traverse replay records batched plain-schema reads", () => {
+test("traverse replay records batched plain-schema reads", () => {
   const space = "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh";
   const sourceId = "of:fixture-source";
   const rowIds = ["of:fixture-row-one", "of:fixture-row-two"];
@@ -112,7 +113,7 @@ Deno.test("traverse replay records batched plain-schema reads", () => {
   );
 });
 
-Deno.test("plain primitive-array traversal records indices after failure", () => {
+test("plain primitive-array traversal records indices after failure", () => {
   const space = "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh";
   const sourceId = "of:invalid-primitive-tail";
   const docs: Record<string, FabricValue> = {};
@@ -155,7 +156,7 @@ Deno.test("plain primitive-array traversal records indices after failure", () =>
   );
 });
 
-Deno.test("traverse replay refuses a fixture of another format version", async () => {
+test("traverse replay refuses a fixture of another format version", async () => {
   // A version-1 fixture names the traversal flag `includeMeta`, which this
   // replay does not read, so every invocation in it would replay as a
   // value-shaped traversal; the loader names the version instead.

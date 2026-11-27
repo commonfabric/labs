@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type AggregateCandidate,
@@ -11,6 +10,7 @@ import {
   seededRandom,
   shuffled,
 } from "../combine-order.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("chooseAggregateCandidate()", () => {
   // Scores come from a small set, so NaNs, signed zeros, and equal scores

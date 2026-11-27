@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join, normalize } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { createFileSystemHarnessArtifactStore } from "../src/artifacts.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
@@ -11,6 +10,7 @@ import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const sandbox: SandboxRuntime = {
   describe: () => ({

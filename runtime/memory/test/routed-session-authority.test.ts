@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { ServerMessage } from "../v2.ts";
 import { Server } from "../v2/server.ts";
 import { encodeMemoryBoundary, getMemoryProtocolFlags } from "../v2.ts";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 const principal = (await Identity.fromRaw(new Uint8Array(32).fill(31))).did();
 const space = (await Identity.fromRaw(new Uint8Array(32).fill(32))).did();
 const audience = (await Identity.fromRaw(new Uint8Array(32).fill(33))).did();

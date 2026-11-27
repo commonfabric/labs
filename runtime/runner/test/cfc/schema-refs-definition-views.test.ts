@@ -4,12 +4,12 @@
  * reference is resolved from, so that interning it hashes the map once.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   resolveCfcSchemaRef,

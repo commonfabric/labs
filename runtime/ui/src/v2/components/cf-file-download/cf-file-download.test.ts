@@ -6,13 +6,18 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import {
   createMockCellHandle,
   pushUpdate,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFFileDownload } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /**
  * Interface for accessing private members of CFFileDownload in tests.

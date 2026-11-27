@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ambiguousCells,
@@ -7,6 +6,7 @@ import {
   movedCells,
   type PatternAssignment,
 } from "./cause-assignments-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A built pattern's fields, as far as the cause assignment reads them. */
 interface Built {

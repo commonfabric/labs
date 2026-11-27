@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -576,7 +576,7 @@ describe("exchange at observation", () => {
 
   describe("a module policy named at many locations", () => {
     // The manifest is resolved once for the pass, not once per location: a
-    // resolution reads the manifest document and binds it into the commit.
+    // resolution reads the manifest document.
 
     const artifact = buildCfcPolicyArtifactManifest({
       formatVersion: 1,
@@ -688,6 +688,43 @@ describe("exchange at observation", () => {
       }, { rules: [] });
       return { reads, integrity };
     };
+
+    it("refuses a derivation whose manifest the space lacks, rather than join the clause as read", async () => {
+      // The rules a manifest carries may drop an alternative, and here they
+      // could only fire where the value is observed. A replica without the
+      // manifest holds each alternative on its own, as an evaluation that runs
+      // out of fuel does (§5.3.2; §4.4.1, commonfabric/specs#109, pending).
+      await withRuntime(async (runtime) => {
+        // Known to the runtime, so the derived write can install it, but not
+        // stored in the space the label was read from.
+        runtime.registerCfcPolicyManifests(undefined, [artifact]);
+        await seed(runtime, "unresolved", "row", [{
+          path: [],
+          origin: "derived",
+          observes: "value",
+          label: {
+            confidentiality: [
+              { anyOf: [SEALED, POLICY] } as CfcConfClause,
+            ],
+            integrity: [transformedBy(TALLY)],
+          },
+        }]);
+        const tx = runtime.edit();
+        setCfcImplementationIdentity(tx, DERIVE);
+        const value = runtime.getCell(space, "unresolved", undefined, tx)
+          .getRaw();
+        tx.writeOrThrow({
+          space,
+          scope: "space",
+          id: idOf(runtime, "derived", tx),
+          path: ["value"],
+        }, JSON.stringify(value));
+        tx.prepareCfc();
+        const settled = await tx.commit().settled;
+        expect(settled.error).toBeDefined();
+        expect(clausesOf(runtime, "derived")).toEqual([]);
+      }, { rules: [] });
+    });
 
     it("reads the manifest as often for many locations as for one", async () => {
       const { reads: one } = await deriveRows(1);

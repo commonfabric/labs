@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { reconstructOutcome, reconstructRevision } from "../reconstruct.ts";
 import { replayRangeFixture } from "./reconstruct-range-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("reconstruct", () => {
   for (const snapshots of [false, true]) {

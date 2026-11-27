@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { buildCallableScript } from "./callables.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("callables", () => {
   describe("buildCallableScript()", () => {

@@ -7,7 +7,6 @@
  */
 
 import { assert, assertEquals, assertFalse } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import ts from "typescript";
@@ -20,6 +19,7 @@ import {
   isImportedFromCommonFabric,
   symbolDeclaresCommonFabricDefault,
 } from "../../src/typescript/common-fabric-symbols.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 //
 // Test infrastructure

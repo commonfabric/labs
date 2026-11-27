@@ -1,5 +1,4 @@
 import { assert } from "@std/assert";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -7,6 +6,13 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { CompilerError } from "@commonfabric/js-compiler/errors";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { BuiltInCompileAndRunParams } from "commonfabric";
 
 import type { Pattern } from "../../src/builder/types.ts";

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
@@ -6,6 +5,12 @@ import { join } from "@std/path";
 
 import { FragmentWriter, resetFragmentWarningsForTesting } from "./fragment.ts";
 import { parseRecordLine, type TestRecord } from "./schema.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const RECORD: TestRecord = {
   line: "record",

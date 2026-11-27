@@ -30,11 +30,7 @@ import {
   propValue,
   setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
-import FormDemo, {
-  type Editing,
-  EditPerson,
-  type Person,
-} from "./form-demo.tsx";
+import FormDemo, { type Editing, EditPerson, type Person } from "./main.tsx";
 
 const ADA: Person = { name: "Ada", email: "ada@example.com", role: "admin" };
 const GRACE: Person = {

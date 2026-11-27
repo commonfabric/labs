@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { defer } from "@commonfabric/async/defer";
@@ -17,6 +16,12 @@ import {
   TestStorageManager,
 } from "./memory-v2-test-utils.ts";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner-document-release");
@@ -369,6 +374,9 @@ describe("document-release", () => {
     expect(loaded(id)).toBe(true);
     expect(confirmed(id)).toBe(false);
     expect(seen.at(-1)).toEqual({ n: 1 });
+    // The next pass owes the document its watch, so a read that reaches it
+    // through a link is told to start no load of its own.
+    expect(readerStorage.shouldPullDoc(space, id)).toBe(false);
 
     await releaseTwice();
     await readerStorage.synced();
@@ -520,6 +528,9 @@ describe("document-release", () => {
     await retracting.promise;
     expect(held(child)).toEqual({ value: { n: 1 } });
     expect(readerReplica().getSizes?.().watchedDocuments).toBe(1);
+    // Nothing asks the server for the child again, a read that reaches it
+    // through a link included.
+    expect(readerStorage.shouldPullDoc(space, child)).toBe(false);
     await write("child", 2);
     expect(held(child)).toEqual({ value: { n: 1 } });
 

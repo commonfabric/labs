@@ -2,10 +2,10 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { figmaMapping } from "./cf-tab-bar.figma.ts";
 import { CFTabBar, CFTabBarItem } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Mounts the markup in `html` and resolves with its first `selector`. */
 async function mountMarkup(html: string, selector: string) {

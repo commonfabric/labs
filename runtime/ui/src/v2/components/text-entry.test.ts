@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { targetsTextEntry } from "./text-entry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An event whose composed path starts at `element`. */
 function eventFrom(element: unknown): Event {

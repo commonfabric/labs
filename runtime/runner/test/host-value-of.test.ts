@@ -5,11 +5,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { type Cell, hostValueOf, sinkProjected } from "../src/cell.ts";
 import { isSigilLink } from "../src/link-types.ts";

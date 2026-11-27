@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { VDomOp } from "@commonfabric/html/vdom-ops";
 import { WorkerReconciler } from "@commonfabric/html/worker";
@@ -13,6 +12,7 @@ import { Identity } from "@commonfabric/identity";
 import { defaultRenderConfidentialityCeiling } from "@commonfabric/lib-shell/runtime";
 import { Runtime } from "@commonfabric/runner";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
+import { describe, it } from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../../../runner/src/storage/v2-emulate.ts";
 import { newSharedServer } from "../../../runner/test/memory-v2-test-utils.ts";
 

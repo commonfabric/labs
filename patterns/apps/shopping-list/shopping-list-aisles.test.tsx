@@ -20,7 +20,7 @@ import {
   propValue,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ShoppingList from "./shopping-list.tsx";
+import ShoppingList from "./main.tsx";
 
 // The model fails each item's aisle categorization.
 export const llmMocks = [

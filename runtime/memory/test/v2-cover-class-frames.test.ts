@@ -33,6 +33,7 @@ import {
   setServerExecutionConfig,
 } from "../v2.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const HELLO = {
   type: "hello",
@@ -203,7 +204,7 @@ const upsertFor = (
   return upsert;
 };
 
-Deno.test("ON arm: session frames carry the covering commit's class — authored transact, derived engine commit, none for a never-written doc — on both the watch.set response and the push frame", async () => {
+test("ON arm: session frames carry the covering commit's class — authored transact, derived engine commit, none for a never-written doc — on both the watch.set response and the push frame", async () => {
   setServerExecutionConfig(true);
   try {
     await withSessions("cover-class-on", async (context) => {
@@ -291,7 +292,7 @@ Deno.test("ON arm: session frames carry the covering commit's class — authored
   }
 });
 
-Deno.test("OFF arm: the field never appears — the exact upsert key set is the pre-predicate wire shape, byte-identical", async () => {
+test("OFF arm: the field never appears — the exact upsert key set is the pre-predicate wire shape, byte-identical", async () => {
   // EXPLICITLY false, not merely ambient-unset: the pin must hold against
   // the flag's declared OFF state, not against whatever the process
   // happened to inherit.

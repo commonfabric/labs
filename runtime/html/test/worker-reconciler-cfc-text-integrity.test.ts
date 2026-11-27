@@ -4,6 +4,8 @@ import type { CfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, KeepAsCell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -19,12 +21,8 @@ import type { WorkerVNode } from "../src/worker/types.ts";
 // documents the read passed through on the way to it carry. Every
 // unendorsed string below appears nowhere else, so a search of the emitted
 // operations for it is a search for the text having been shown.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
-Deno.test("worker reconciler CFC text integrity across links", async (t) => {
+test("worker reconciler CFC text integrity across links", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler cfc text integrity",
   );
@@ -118,7 +116,7 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
         for (const op of batch) ops.push(op);
       },
     }).mount(tree);
-    await t.settle();
+    await clock.settle();
     return {
       cancel,
       emitted: () => JSON.stringify(ops),
@@ -153,7 +151,7 @@ Deno.test("worker reconciler CFC text integrity across links", async (t) => {
           // that loses the integrity is hidden, the one that gains it shown.
           await write("text-signed-row", { name: ENDORSED });
           await write("text-forged-row", { name: UNENDORSED }, [endorsed]);
-          await t.settle();
+          await clock.settle();
           expect(page.texts()).toEqual([
             PLACEHOLDER,
             ENDORSED,

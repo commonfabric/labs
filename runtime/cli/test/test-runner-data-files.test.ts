@@ -8,10 +8,10 @@
  * supports, whether the run names it or the source does.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join, resolve } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/data-files");
 const DATA_FILE = join(FIXTURES, "data", "cities.json");

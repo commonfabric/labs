@@ -21,17 +21,17 @@ import {
   Writable,
 } from "commonfabric";
 
-import AnnotationManager from "../../apps/annotation-manager/annotation-manager.tsx";
-import Aside from "../../examples/aside/aside.tsx";
-import Bookmarks from "../../apps/bookmarks/bookmarks.tsx";
+import AnnotationManager from "../../apps/annotation-manager/main.tsx";
+import Aside from "../../examples/aside/main.tsx";
+import Bookmarks from "../../apps/bookmarks/main.tsx";
 import Chatbot from "../../system/chatbot/chatbot.tsx";
-import Cheeseboard from "../../apps/cheeseboard/cheeseboard.tsx";
-import FormDemo from "../../examples/form-demo/form-demo.tsx";
-import GroupChatLobby from "../../examples/group-chat-lobby/group-chat-lobby.tsx";
+import Cheeseboard from "../../apps/cheeseboard/main.tsx";
+import FormDemo from "../../examples/form-demo/main.tsx";
+import GroupChatLobby from "../../examples/group-chat-lobby/main.tsx";
 import GroupChatRoom from "../../examples/group-chat-room/group-chat-room.tsx";
-import ImageAnalysis from "../../apps/image-analysis/image-analysis.tsx";
-import LinkPreview from "../../examples/link-preview/link-preview.tsx";
-import MobileAppDemo from "../../examples/mobile-app-demo/mobile-app-demo.tsx";
+import ImageAnalysis from "../../apps/image-analysis/main.tsx";
+import LinkPreview from "../../examples/link-preview/main.tsx";
+import MobileAppDemo from "../../examples/mobile-app-demo/main.tsx";
 import NestedMapIfElseTest from "../nested-map-ifelse-test/nested-map-ifelse-test.tsx";
 import ProfileRosterLiveDemo from "../../examples/profile-roster-live-demo/profile-roster-live-demo.tsx";
 import RenderTest from "../render-test/render-test.tsx";
@@ -39,7 +39,7 @@ import {
   hasText,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import TextSwapper from "../../examples/text-swapper/text-swapper.tsx";
+import TextSwapper from "../../examples/text-swapper/main.tsx";
 
 export default pattern(() => {
   // ==========================================================================

@@ -2,10 +2,15 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 import { sampleBarLevels } from "./cf-audio-visualizer.ts";
 import { CFAudioVisualizer } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What the stand-in Web Audio objects were asked to do. */
 interface AudioRecord {

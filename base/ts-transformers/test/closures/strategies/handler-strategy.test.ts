@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -6,6 +5,7 @@ import type { TransformationDiagnostic } from "../../../src/core/mod.ts";
 import { COMMONFABRIC_TYPES } from "../../commonfabric-test-types.ts";
 import { transformSource } from "../../utils.ts";
 import { collect, parseModule } from "../../transformed-ast.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Each `onClick` attribute's initializer, keyed by its button's text. */
 async function onClickInitializers(

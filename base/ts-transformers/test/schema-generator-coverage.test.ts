@@ -8,6 +8,7 @@ import {
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * Drives the SchemaGeneratorTransformer end to end through the pipeline. Each
@@ -59,7 +60,7 @@ function propInitializer(
   return undefined;
 }
 
-Deno.test("numeric-literal types lower to NaN, Infinity, -Infinity and negatives", async () => {
+test("numeric-literal types lower to NaN, Infinity, -Infinity and negatives", async () => {
   // NaN has no numeric-literal form (emitted as the global NaN), positive and
   // negative infinity emit the Infinity identifier with an optional unary minus,
   // and a negative literal emits a unary-minus wrapper around a positive value.
@@ -105,7 +106,7 @@ export { s };
   assertEquals(propInitializer(schema, "maximum")!.getText(root), "NaN");
 });
 
-Deno.test("WriteAuthorizedBy attaches a writer-identity marker with file and path", async () => {
+test("WriteAuthorizedBy attaches a writer-identity marker with file and path", async () => {
   // The second type argument `typeof saver` is a simple identifier type-query,
   // so the schema gains an `ifc.writeAuthorizedBy.__ctWriterIdentityOf` marker
   // carrying the source file and the binding path.
@@ -120,7 +121,7 @@ export { s };
   assertEquals(marker.path, ["saver"]);
 });
 
-Deno.test("WriteAuthorizedBy with a qualified typeof binding attaches no marker", async () => {
+test("WriteAuthorizedBy with a qualified typeof binding attaches no marker", async () => {
   // A qualified `typeof container.save` is not a plain identifier type-query, so
   // the identity extraction bails and no writer-identity marker is emitted.
   const schema = await schemaValue(`/// <cts-enable />
@@ -133,7 +134,7 @@ export { s };
   assertEquals(schema.ifc, undefined);
 });
 
-Deno.test("UI-contract hint attaches to an object $UI property schema", async () => {
+test("UI-contract hint attaches to an object $UI property schema", async () => {
   // The `<UiAction>` in the UI slot records a hint that is grafted onto the
   // generated $UI property schema's `ifc.uiContract`.
   const out = await transformSource(
@@ -153,7 +154,7 @@ export default pattern<{ title: string }>((state) => ({
   assertEquals(contract.action, "SubmitDirectCommand");
 });
 
-Deno.test("UI-contract hint wraps a boolean-true $UI property as an ifc-only schema", async () => {
+test("UI-contract hint wraps a boolean-true $UI property as an ifc-only schema", async () => {
   // When the output type declares `[UI]: any`, the $UI property schema is the
   // boolean `true`; attaching the contract turns it into `{ ifc: { uiContract }}`.
   const out = await transformSource(
@@ -174,7 +175,7 @@ export default pattern<{ title: string }, Out>((state) => ({
   assertEquals((uiSchema.ifc as any).uiContract.action, "SubmitDirectCommand");
 });
 
-Deno.test("UI-contract hint on a whole boolean-true schema becomes an ifc-only schema", async () => {
+test("UI-contract hint on a whole boolean-true schema becomes an ifc-only schema", async () => {
   // An `any` output type makes the whole generated schema the boolean `true`,
   // so the contract is attached as `{ ifc: { uiContract } }` without a `not`.
   const out = await transformSource(
@@ -192,7 +193,7 @@ export default pattern<{ title: string }, any>((state) => ({
   assertEquals(output.not, undefined);
 });
 
-Deno.test("UI-contract hint on a whole boolean-false schema negates via not:true", async () => {
+test("UI-contract hint on a whole boolean-false schema negates via not:true", async () => {
   // A `never` output type makes the whole generated schema the boolean `false`,
   // so the contract is attached as `{ not: true, ifc: { uiContract } }`.
   const out = await transformSource(
@@ -210,7 +211,7 @@ export default pattern<{ title: string }, never>((state) => ({
   assertEquals((output.ifc as any).uiContract.action, "SubmitDirectCommand");
 });
 
-Deno.test("toSchema option object evaluates literals, arrays, nested objects and constants", async () => {
+test("toSchema option object evaluates literals, arrays, nested objects and constants", async () => {
   // The options bag is spread onto the emitted schema; booleans, null, arrays,
   // nested object literals and enum-constant references are all evaluated, while
   // an undefined-valued option is dropped.

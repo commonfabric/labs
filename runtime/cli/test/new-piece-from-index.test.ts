@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -17,6 +16,12 @@ import {
 } from "@commonfabric/pattern-index/client";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
 

@@ -13,7 +13,6 @@
  * starts from what it syncs, as a runtime in another process does.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
@@ -23,6 +22,12 @@ import {
   newLoopbackServer,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   instancePartialCause,
   namesInstancesByDefault,

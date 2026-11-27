@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   baselineKeyOf,
@@ -7,6 +6,7 @@ import {
   unjustifiedDeletions,
 } from "./check-baselines-append-only.ts";
 import { type Git, gitIn } from "./repository-files.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const BASE = "patterns/baselines";
 

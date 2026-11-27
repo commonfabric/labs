@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { beforeEach, describe, it } from "@std/testing/bdd";
 
 import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { nameSchema } from "@commonfabric/runner/schemas";
 import { NAME } from "@commonfabric/runner/shared";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 import type { XPieceList } from "../src/components/PieceList.ts";
 import type { XHeaderView } from "../src/views/HeaderView.ts";

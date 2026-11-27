@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -13,6 +12,12 @@ import {
 } from "../../src/tools/read-skill-resource.ts";
 import { readsDespiteMode } from "../support/reads-despite-mode.ts";
 import { createToolsSmallContext } from "../support/tools-small-context.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SKILL_MD = [
   "---",

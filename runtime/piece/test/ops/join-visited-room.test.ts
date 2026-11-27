@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { createSession, Identity } from "@commonfabric/identity";
@@ -12,6 +11,12 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { joinVisitedRoomOf } from "../../src/ops/join-visited-room.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { installCustomRoot } from "../install-custom-root.ts";

@@ -9,8 +9,9 @@ import {
   columnOriginUnavailableReason,
   ensureColumnOriginAvailable,
 } from "../v2/sqlite/column-origin.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("a bind failure is recorded and surfaces in the reason and the throw", async () => {
+test("a bind failure is recorded and surfaces in the reason and the throw", async () => {
   // Point @db/sqlite's own loader at a file that is not a library at all, so
   // the bind fails. ensureColumnOriginAvailable must resolve false, record
   // why, and make a later labeled read throw the reason. DENO_SQLITE_LOCAL

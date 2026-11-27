@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { globToRegExp } from "@std/path";
 
@@ -13,6 +12,7 @@ import {
   LANE_MEASUREMENT_SURFACE,
 } from "./lane-measurement.ts";
 import { ciObjectName, type TestRecord } from "./schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("lane-measurement", () => {
   describe("isLaneMeasurement()", () => {

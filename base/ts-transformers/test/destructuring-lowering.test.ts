@@ -13,6 +13,7 @@ import {
   getStaticDefaultTypeNode,
   toStringPath,
 } from "../src/transformers/destructuring-lowering.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -106,7 +107,7 @@ function printType(node: ts.TypeNode, sourceFile: ts.SourceFile): string {
   );
 }
 
-Deno.test("destructuring lowering converts static defaults to type nodes", () => {
+test("destructuring lowering converts static defaults to type nodes", () => {
   const { sourceFile, checker } = createProgram(`
     const text = "hello";
     const template = \`world\`;
@@ -220,7 +221,7 @@ Deno.test("destructuring lowering converts static defaults to type nodes", () =>
   );
 });
 
-Deno.test("destructuring lowering collects array and object bindings", () => {
+test("destructuring lowering collects array and object bindings", () => {
   const { sourceFile, checker } = createProgram(`
     declare const input: unknown;
     declare const dynamic: string;
@@ -281,7 +282,7 @@ Deno.test("destructuring lowering collects array and object bindings", () => {
   assertStringIncludes(unsupported[0]!, "Rest destructuring");
 });
 
-Deno.test("destructuring lowering creates key calls for static and dynamic paths", () => {
+test("destructuring lowering creates key calls for static and dynamic paths", () => {
   const { sourceFile } = createProgram("const dynamic = keyName;");
   const dynamic = findVariable(sourceFile, "dynamic").initializer!;
   const call = createPathRead(
@@ -305,7 +306,7 @@ Deno.test("destructuring lowering creates key calls for static and dynamic paths
   );
 });
 
-Deno.test("destructuring lowering reads a leading SELF segment as an element access", () => {
+test("destructuring lowering reads a leading SELF segment as an element access", () => {
   const { sourceFile } = createProgram("");
   const self = () =>
     ts.factory.createPropertyAccessExpression(

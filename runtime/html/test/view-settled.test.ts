@@ -11,6 +11,7 @@
 import { assertEquals } from "@std/assert";
 import { stub } from "@std/testing/mock";
 import { drainViewUpdates, viewSettled } from "../src/debug.ts";
+import { test } from "@commonfabric/test-support/test";
 
 interface FakeEl {
   children: FakeEl[];
@@ -43,7 +44,7 @@ function roots(...els: FakeEl[]): Iterable<Element> {
   return els as unknown as Iterable<Element>;
 }
 
-Deno.test("drainViewUpdates - churn detection", async (t) => {
+test("drainViewUpdates - churn detection", async (t) => {
   await t.step("a settled element is not churning", async () => {
     assertEquals(
       (await drainViewUpdates(roots(lit(Promise.resolve(true))))).churned,
@@ -113,7 +114,7 @@ Deno.test("drainViewUpdates - churn detection", async (t) => {
   });
 });
 
-Deno.test("viewSettled - loop", async (t) => {
+test("viewSettled - loop", async (t) => {
   await t.step(
     "polls idle each pass until the view settles",
     async () => {

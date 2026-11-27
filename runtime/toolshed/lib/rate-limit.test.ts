@@ -5,10 +5,10 @@
  * primitive, and that a caller cannot choose which bucket they land in.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createRateLimiter } from "@/lib/rate-limit.ts";
 import { clientKey } from "@/middlewares/rate-limit.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("token bucket", () => {
   it("allows a burst up to capacity, then refuses", () => {

@@ -1,4 +1,3 @@
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { dockerfileLanguage } from "../../../../../lib/view/languages/dockerfile/language.ts";
@@ -8,6 +7,7 @@ import type {
   StructureNode,
   TokenClass,
 } from "../../../../../lib/view/model.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 /** The source each colored line reconstructs. */
 function verbatim(lines: readonly Line[]): string {

@@ -373,6 +373,7 @@ the labs checkout and dispatches to `runtime/cli/mod.ts`.
 | `CF_CLI_TRACE_TIMINGS` | `0` | Set to `1` for detailed timing traces. |
 | `CF_SKIP_VERSION_CHECK` | _(unset)_ | Set to any non-empty value to skip the cf ↔ server version check. By default, server-touching commands compare this cf's commit (baked build metadata, or the checkout's HEAD for source runs) with the server's self-reported commit — the `gitSha` riding the `/_health` response the health check already fetches (same value as `/api/meta`) — and warn on stderr when they differ. Source runs grade the warning by git ancestry: cf newer than the server is the normal local-dev case and stays silent unless the command fails, where its note prints as neutral version context. Commit distance alone does not establish incompatibility or explain a failure. `cf piece call` suppresses the held note for confirmed unknown verbs, rejected payloads, and argument validation failures before dispatch; cf **older** than the server gets the loud OUTDATED warning immediately; diverged or unorderable pairs (including all compiled binaries, which carry no history) get the undirected wording immediately. |
 | `CF_ADOPT_SERVER_FLAGS` | `true` | Set to `false` to keep this process on its own `EXPERIMENTAL_*` posture instead of adopting the one the toolshed publishes on `/api/meta`. A cf binary is installed independently of the server it talks to, so by default it takes the deployment's experimental flags and lets an explicit `EXPERIMENTAL_*` override them per flag; this turns the mechanism off wholesale when a deployment publishes something this client cannot run. The client still reads `/api/meta` for the memory URL it may name (`MEMORY_PUBLIC_URL`). Read by every client that is not built alongside its server — cf, the pieces controller behind a FUSE mount, the agents host. See [the flag registry](./EXPERIMENTAL_OPTIONS.md#clients-that-are-not-built-alongside-their-server). |
+| `XDG_CACHE_HOME` | `~/.cache` | Where `cf` keeps the modules it compiles, under `common-fabric/compiled-modules`. A command that compiles a pattern for a space it connects to, such as `cf piece new` against a deployment that does not run the serving loop, compiles through that directory, so it reads what an earlier command compiled from the same source with the same compiler rather than compiling it again. On Linux, Deno keeps its own cache under this variable too. See [the CLI README](../../runtime/cli/README.md#where-a-piece-is-created). |
 | `CF_CLI_INTEGRATION_USE_LOCAL` | _(unset)_ | Used by integration tests to dispatch through local source rather than a built binary. |
 | `CF_LABS_ROOT` | _(unset)_ | Read by `bin/cf` only. Selects which labs checkout answers, overriding the nearest one walking up from the cwd. Must be a checkout (a directory with `runtime/cli/launcher.ts`) or `bin/cf` exits 2. Chooses the CLI, not the working directory. |
 
@@ -457,11 +458,12 @@ A test that needs a space of its own creates one with `createTestSpace` (or
 `@commonfabric/integration`, and addresses it by the DID that returns.
 
 Additionally, [`tasks/integration.ts`](../../tasks/integration.ts) sets
-`INTEGRATION_TEST_FLAGS` to whatever the variable already held in the
-environment, followed by a `--junit-path=…` naming where each package's JUnit
-report goes and the registration preload. The run's closing summary is read from those reports.
-Per-package `deno.jsonc` `integration` scripts pick it up via `$INTEGRATION_TEST_FLAGS`
-shell expansion to forward extra `deno test` flags (e.g. `--filter`).
+`CF_TEST_RECORDS_DIR` for each package to the run's spool, or to a scratch
+directory of its own where the run has none. The package's tests write their
+results there, and the run's closing summary is read from the results each
+package wrote. Per-package `deno.jsonc` `integration` scripts expand
+`$INTEGRATION_TEST_FLAGS`, which reaches them unchanged from the environment, to
+forward extra `deno test` flags (e.g. `--filter`).
 
 ---
 

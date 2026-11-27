@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { checkInertStance } from "../../src/cfc/custody-seal.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A closed object of `properties`, `required` as given. */
 const closed = (

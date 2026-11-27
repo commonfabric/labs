@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   extractNoColor,
@@ -13,7 +14,7 @@ import type { ColorOutput } from "./fixtures/color-mode-output.ts";
 
 const noEnv = () => undefined;
 
-Deno.test("extractNoColor strips the flag and reports it", () => {
+test("extractNoColor strips the flag and reports it", () => {
   assertEquals(extractNoColor(["--no-color", "piece", "ls"]), {
     noColor: true,
     args: ["piece", "ls"],
@@ -24,7 +25,7 @@ Deno.test("extractNoColor strips the flag and reports it", () => {
   });
 });
 
-Deno.test("extractNoColor leaves payload args after -- untouched", () => {
+test("extractNoColor leaves payload args after -- untouched", () => {
   // `--no-color` after `--` is a schema-derived flag for the target handler,
   // not a color directive; eating it would silently drop handler input.
   assertEquals(
@@ -44,7 +45,7 @@ Deno.test("extractNoColor leaves payload args after -- untouched", () => {
   );
 });
 
-Deno.test("safeEnvGet returns undefined instead of throwing", () => {
+test("safeEnvGet returns undefined instead of throwing", () => {
   // A present var reads through.
   Deno.env.set("CF_COLOR_MODE_TEST", "x");
   try {
@@ -58,7 +59,7 @@ Deno.test("safeEnvGet returns undefined instead of throwing", () => {
   assertEquals(safeEnvGet(""), undefined);
 });
 
-Deno.test("resolveColorEnabled follows a TTY by default", () => {
+test("resolveColorEnabled follows a TTY by default", () => {
   assert(resolveColorEnabled({
     noColorFlag: false,
     denoNoColor: false,
@@ -73,7 +74,7 @@ Deno.test("resolveColorEnabled follows a TTY by default", () => {
   }));
 });
 
-Deno.test("resolveColorEnabled disable overrides win over everything", () => {
+test("resolveColorEnabled disable overrides win over everything", () => {
   const forceEnv = (key: string) => key === "FORCE_COLOR" ? "1" : undefined;
   assertFalse(resolveColorEnabled({
     noColorFlag: true,
@@ -89,7 +90,7 @@ Deno.test("resolveColorEnabled disable overrides win over everything", () => {
   }));
 });
 
-Deno.test("resolveColorEnabled: NO_COLOR wins over both force vars (raw env)", () => {
+test("resolveColorEnabled: NO_COLOR wins over both force vars (raw env)", () => {
   // Reproduces the live bug at the env level: with NO_COLOR set, color must
   // stay off regardless of FORCE_COLOR/CLICOLOR_FORCE. denoNoColor is false
   // here because Deno pre-arbitrates FORCE_COLOR over NO_COLOR — the resolver
@@ -118,7 +119,7 @@ Deno.test("resolveColorEnabled: NO_COLOR wins over both force vars (raw env)", (
   }));
 });
 
-Deno.test("resolveColorEnabled honors FORCE_COLOR / CLICOLOR_FORCE when piped", () => {
+test("resolveColorEnabled honors FORCE_COLOR / CLICOLOR_FORCE when piped", () => {
   assert(resolveColorEnabled({
     noColorFlag: false,
     denoNoColor: false,
@@ -169,7 +170,7 @@ async function readColorOutput(): Promise<ColorOutput> {
   return JSON.parse(new TextDecoder().decode(output.stdout)) as ColorOutput;
 }
 
-Deno.test("setColorEnabled controls Cliffy version output", async () => {
+test("setColorEnabled controls Cliffy version output", async () => {
   // Guards the invariant behind the "@std/fmt/colors" import-map pin in
   // runtime/cli/deno.jsonc: our setColorEnabled() must reach the same module
   // instance Cliffy styles version/error output with. If Cliffy's @std/fmt
@@ -182,7 +183,7 @@ Deno.test("setColorEnabled controls Cliffy version output", async () => {
   expect(output.coloredVersion).toContain("\x1b[");
 });
 
-Deno.test("help colors follow the Cliffy help option", async () => {
+test("help colors follow the Cliffy help option", async () => {
   // Cliffy's HelpGenerator force-sets its own `colors` option while rendering,
   // so help output is controlled through Command.help(), not setColorEnabled —
   // mod.ts mirrors the resolved policy into main.help({ colors }).

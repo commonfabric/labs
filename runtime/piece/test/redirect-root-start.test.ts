@@ -9,7 +9,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -20,6 +19,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 

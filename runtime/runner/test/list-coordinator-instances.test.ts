@@ -1,7 +1,7 @@
 import { Identity } from "@commonfabric/identity";
 import { executionLeaseHolder } from "@commonfabric/memory/v2/execution-lease";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { Pattern } from "../src/builder/types.ts";
 import { filter } from "../src/builtins/filter.ts";

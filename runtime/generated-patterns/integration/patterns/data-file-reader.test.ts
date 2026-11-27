@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl } from "@std/path";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A scenario naming `dataFiles` gets them attached to the program the harness

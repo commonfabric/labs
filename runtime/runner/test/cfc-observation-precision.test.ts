@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcConfidentialityForObservationNode } from "../src/cfc/observation.ts";
 import {
@@ -8,6 +7,7 @@ import {
 } from "../src/cfc/label-view-core.ts";
 import { cfcLabelViewFromMetadata } from "../src/cfc/label-view-state.ts";
 import { llmDialogTestHelpers } from "../src/builtins/llm-dialog.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const { serializeForLLMObservation } = llmDialogTestHelpers;
 

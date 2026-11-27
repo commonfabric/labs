@@ -8,9 +8,9 @@
  * every pattern compiles against.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join, relative } from "@std/path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HERE = dirname(fromFileUrl(import.meta.url));
 

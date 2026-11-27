@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { reconcileTiles } from "../tiles-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The parts of the DOM `reconcileTiles()` uses, over a plain tree of nodes.
 // `tiles-client.browser.test.ts` runs the same function against a real DOM.

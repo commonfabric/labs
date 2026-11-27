@@ -1,14 +1,15 @@
 import { assertEquals, assertStrictEquals, assertThrows } from "@std/assert";
 import type { MemorySpace } from "@commonfabric/runner";
+import { test } from "@commonfabric/test-support/test";
 import { absPath, throwOnSpaceAuthorizationError } from "../lib/utils.ts";
 
 const SPACE = "did:key:z6Mk-cli-utils-authz-space" as MemorySpace;
 
-Deno.test("absPath resolves a relative path against the supplied directory", () => {
+test("absPath resolves a relative path against the supplied directory", () => {
   assertEquals(absPath("nested/file.ts", "/work"), "/work/nested/file.ts");
 });
 
-Deno.test("throwOnSpaceAuthorizationError rethrows the recorded denial", () => {
+test("throwOnSpaceAuthorizationError rethrows the recorded denial", () => {
   const denial = Object.assign(new Error("Principal lacks READ on space"), {
     name: "AuthorizationError",
   });
@@ -30,7 +31,7 @@ Deno.test("throwOnSpaceAuthorizationError rethrows the recorded denial", () => {
   assertEquals(asked, SPACE);
 });
 
-Deno.test("throwOnSpaceAuthorizationError is a no-op when the space is authorized", () => {
+test("throwOnSpaceAuthorizationError is a no-op when the space is authorized", () => {
   let asked: MemorySpace | undefined;
   throwOnSpaceAuthorizationError({
     authorizationError: (space) => {
@@ -41,7 +42,7 @@ Deno.test("throwOnSpaceAuthorizationError is a no-op when the space is authorize
   assertEquals(asked, SPACE);
 });
 
-Deno.test("throwOnSpaceAuthorizationError is a no-op when the status is unavailable", () => {
+test("throwOnSpaceAuthorizationError is a no-op when the status is unavailable", () => {
   // An emulated or older storage manager may not expose the per-space status;
   // the optional call resolves to undefined and nothing is thrown.
   throwOnSpaceAuthorizationError({}, SPACE);

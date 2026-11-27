@@ -9,11 +9,11 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   _internal as languageInternals,
   decodeLanguageInput,
   diffSemanticsFor,
+  filenameSettlesLanguage,
   indexLanguagesByName,
   languageForFile,
   languageForName,
@@ -32,6 +32,7 @@ import type { LanguageDecoder } from "../lib/view/languages/decoder.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import {
+  jsoncLanguage,
   jsonLanguage,
   jsonLinesLanguage,
 } from "../lib/view/languages/json/language.ts";
@@ -95,8 +96,9 @@ import {
 } from "../lib/view/diffdoc.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import type { Line } from "../lib/view/model.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("languageForFile: named files resolve and missing names use plain text", () => {
+test("languageForFile: named files resolve and missing names use plain text", () => {
   for (const ts of ["a.ts", "a.tsx", "a.mts", "a.cts", "a.js", "a.jsx"]) {
     assertEquals(languageForFile(ts).id, "typescript", ts);
   }
@@ -104,7 +106,7 @@ Deno.test("languageForFile: named files resolve and missing names use plain text
     assertEquals(languageForFile(name).id, "plain-text", name);
   }
   assertEquals(languageForFile("README.md").id, "markdown");
-  assertEquals(languageForFile("deno.jsonc").id, "json");
+  assertEquals(languageForFile("deno.jsonc").id, "jsonc");
   assertEquals(languageForFile("workflow.yml").id, "yaml");
   assertEquals(languageForFile("script.py").id, "python");
   expect(languageForFile("asset.png").id).toBe("binary");
@@ -120,7 +122,7 @@ Deno.test("languageForFile: named files resolve and missing names use plain text
   assertEquals(languageForTransformedOutput().id, "typescript");
 });
 
-Deno.test("language metadata matches extensions, exact names, and compound patterns", () => {
+test("language metadata matches extensions, exact names, and compound patterns", () => {
   const metadata: LanguageMetadata = {
     extensions: [".demo"],
     filenames: ["BUILD"],
@@ -150,7 +152,7 @@ Deno.test("language metadata matches extensions, exact names, and compound patte
   }
 });
 
-Deno.test("language metadata claims a shared extension only with its evidence", () => {
+test("language metadata claims a shared extension only with its evidence", () => {
   const metadata: LanguageMetadata = {
     extensions: [],
     filenames: [],
@@ -180,20 +182,20 @@ Deno.test("language metadata claims a shared extension only with its evidence", 
   assert(!metadataMatchesSharedExtension(metadata, undefined, "demo:"));
 });
 
-Deno.test("languageForFile: named JavaScript uses the TypeScript-family parser", () => {
+test("languageForFile: named JavaScript uses the TypeScript-family parser", () => {
   const source = "export const answer = 42;\n";
   const doc = languageForFile("answer.js").parseDocument(source, "answer.js");
   assertEquals(doc.text, source);
   assert(doc.lines[0].spans.some((span) => span.cls === "storageKeyword"));
 });
 
-Deno.test("languageForName: identifiers and aliases resolve explicit overrides", () => {
+test("languageForName: identifiers and aliases resolve explicit overrides", () => {
   assertEquals(languageForName("typescript"), typeScriptLanguage);
   assertEquals(languageForName("js"), typeScriptLanguage);
   assertEquals(languageForName("markdown"), markdownLanguage);
   assertEquals(languageForName("md"), markdownLanguage);
   assertEquals(languageForName("json"), jsonLanguage);
-  assertEquals(languageForName("jsonc"), jsonLanguage);
+  assertEquals(languageForName("jsonc"), jsoncLanguage);
   assertEquals(languageForName("json-lines"), jsonLinesLanguage);
   assertEquals(languageForName("jsonl"), jsonLinesLanguage);
   assertEquals(languageForName("ndjson"), jsonLinesLanguage);
@@ -283,6 +285,7 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
   expect(languageIds()).toEqual([
     "typescript",
     "markdown",
+    "jsonc",
     "json",
     "json-lines",
     "yaml",
@@ -341,8 +344,8 @@ Deno.test("languageForName: identifiers and aliases resolve explicit overrides",
     "js",
     "markdown",
     "md",
-    "json",
     "jsonc",
+    "json",
     "json-lines",
     "jsonl",
     "ndjson",
@@ -522,7 +525,7 @@ describe("language byte decoding", () => {
   });
 });
 
-Deno.test("language names reject ambiguous identifiers and aliases", () => {
+test("language names reject ambiguous identifiers and aliases", () => {
   const collidingLanguage = {
     ...markdownLanguage,
     id: "other-markdown",
@@ -542,7 +545,7 @@ Deno.test("language names reject ambiguous identifiers and aliases", () => {
   );
 });
 
-Deno.test("languageForSource: filenames precede direct and env shebangs", () => {
+test("languageForSource: filenames precede direct and env shebangs", () => {
   assertEquals(
     languageForSource(
       "tool",
@@ -682,7 +685,7 @@ Deno.test("languageForSource: filenames precede direct and env shebangs", () => 
   );
 });
 
-Deno.test("languageForSource: a launcher shebang is claimed by its subcommand", () => {
+test("languageForSource: a launcher shebang is claimed by its subcommand", () => {
   for (
     const shebang of [
       "#!/usr/bin/env -S uv run --script",
@@ -715,7 +718,7 @@ Deno.test("languageForSource: a launcher shebang is claimed by its subcommand", 
   }
 });
 
-Deno.test("languageForSource: malformed and option-only shebangs fall back safely", () => {
+test("languageForSource: malformed and option-only shebangs fall back safely", () => {
   assertEquals(languageForSource("tool", "#!   \n"), plainTextLanguage);
   assertEquals(
     languageForSource("tool", "#!/usr/bin/env -- python3\n"),
@@ -838,7 +841,20 @@ describe("languageMatchingSources()", () => {
   });
 });
 
-Deno.test("renderedLinesFor rejects a renderer that changes line topology", () => {
+describe("filenameSettlesLanguage()", () => {
+  it("returns true for a name a language claims, and false for no name or an unclaimed one", () => {
+    expect(filenameSettlesLanguage("deno.jsonc")).toBe(true);
+    expect(filenameSettlesLanguage("notes.xyz")).toBe(false);
+    expect(filenameSettlesLanguage(undefined)).toBe(false);
+  });
+
+  it("returns whether the host's name settles the host under a template suffix", () => {
+    expect(filenameSettlesLanguage("tsconfig.json.j2")).toBe(true);
+    expect(filenameSettlesLanguage("notes.xyz.j2")).toBe(false);
+  });
+});
+
+test("renderedLinesFor rejects a renderer that changes line topology", () => {
   assertEquals(
     renderedLinesFor(plainTextLanguage, "plain", "notes.txt"),
     undefined,
@@ -859,7 +875,7 @@ Deno.test("renderedLinesFor rejects a renderer that changes line topology", () =
   );
 });
 
-Deno.test("renderedLinesFor rejects malformed display lines", () => {
+test("renderedLinesFor rejects malformed display lines", () => {
   const malformed = (renderLines: () => Line[]) => ({
     ...markdownLanguage,
     id: "malformed",
@@ -932,7 +948,7 @@ function tempWorkspace(): {
   };
 }
 
-Deno.test("diffSemanticsFor: TypeScript answers over its own files in the diff", () => {
+test("diffSemanticsFor: TypeScript answers over its own files in the diff", () => {
   const { root, ws, done } = tempWorkspace();
   try {
     const model = parseDiff(DIFF)!;
@@ -973,7 +989,7 @@ Deno.test("diffSemanticsFor: TypeScript answers over its own files in the diff",
   }
 });
 
-Deno.test("typeScriptLanguage exposes both semantic services", () => {
+test("typeScriptLanguage exposes both semantic services", () => {
   const { root, ws, done } = tempWorkspace();
   try {
     // The single-document service: a blob yields a (lazy) service.
@@ -994,7 +1010,7 @@ Deno.test("typeScriptLanguage exposes both semantic services", () => {
   }
 });
 
-Deno.test("typeScriptLanguage identifies edits confined to quoted string contents", () => {
+test("typeScriptLanguage identifies edits confined to quoted string contents", () => {
   const highlightLocally = typeScriptLanguage.highlightDiffLineEditLocally!;
   const stringLine = typeScriptLanguage.highlightLines(
     '  "AAHED",',
@@ -1047,7 +1063,7 @@ Deno.test("typeScriptLanguage identifies edits confined to quoted string content
   );
 });
 
-Deno.test("diffSemanticsFor: a language with no matching files is skipped", () => {
+test("diffSemanticsFor: a language with no matching files is skipped", () => {
   // TypeScript offers a service, but the diff's only file is Markdown, so its
   // root-file set is empty and it contributes nothing.
   const maps: DiffMaps = {

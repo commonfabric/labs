@@ -6,7 +6,6 @@
  * match.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -21,6 +20,7 @@ import { diffSource } from "../lib/view/diffedit.ts";
 import { type EditableSource, fileSource } from "../lib/view/editsource.ts";
 import type { Key } from "../lib/view/keys.ts";
 import { Session } from "../lib/view/session.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const BOM = "﻿";
 

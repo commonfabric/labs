@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import * as path from "@std/path";
 import { readSpool } from "@commonfabric/test-support/records";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   collectSetReports,
   formatGateReport,

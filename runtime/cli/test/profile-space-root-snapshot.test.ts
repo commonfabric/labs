@@ -4,11 +4,16 @@
  * whose space it cannot open.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { getMemoryProtocolFlags } from "@commonfabric/memory/v2";
 import { close, open } from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import {

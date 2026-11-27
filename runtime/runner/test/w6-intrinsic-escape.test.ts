@@ -6,13 +6,13 @@
  * no escape may yield a number (a real clock).
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ensureSESLockdown,
   evaluateFunctionSourceInSES,
 } from "../src/sandbox/ses-runtime.ts";
 import { createModuleCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SRC = `function () {
   const out = {};

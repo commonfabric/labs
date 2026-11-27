@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { testIdentityKey } from "@commonfabric/test-support/records";
 
@@ -21,6 +20,7 @@ import {
 } from "./plan.ts";
 import type { Calibration, Manifest, ManifestEntry } from "./manifest.ts";
 import type { WithheldReason } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { sampleEntry, sampleManifest } from "./testing.ts";
 import {
   FLAKE_EXCLUSION_RATE,

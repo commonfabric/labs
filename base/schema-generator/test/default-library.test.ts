@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 import {
   isDefaultLibraryFileName,
   isDefaultLibrarySourceFile,
 } from "../src/typescript/default-library.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("default-library provenance", () => {
   it("recognizes the names the libraries ship under", () => {

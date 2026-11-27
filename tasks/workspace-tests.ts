@@ -8,12 +8,13 @@ import { decode, encode } from "@commonfabric/text/utf8";
 import {
   FragmentWriter,
   readEnv,
-  readJUnit,
-  readNameMaps,
+  readResults,
+  readSpool,
   recordingArguments,
   RECORDS_DIR_VARIABLE,
   recordsDir,
   SKIP_LIST_VARIABLE,
+  type TestRecord,
 } from "@commonfabric/test-support/records";
 import { pinShuffleSeed } from "@commonfabric/test-support/shuffle";
 import { withoutPackageParent } from "./package-layout.ts";
@@ -77,7 +78,6 @@ export async function testPackage(
   coverageRoot: string | undefined,
   log: string,
   extraEnv?: Record<string, string>,
-  junitPath?: string,
   recording: readonly string[] = [],
 ): Promise<PackageResult> {
   const startedAt = Date.now();
@@ -90,16 +90,8 @@ export async function testPackage(
   }
 
   // Trailing arguments to `deno task` append to the task's command line,
-  // which is what threads the flags down to the leaf `deno test`. The
-  // recording arguments travel with the JUnit path because they reach
-  // the leaf the same way and the report is what the preload's map is
-  // joined onto; a member whose task cannot take one cannot take the
-  // other.
-  const args = ["task", "test"];
-  if (junitPath !== undefined) {
-    args.push(`--junit-path=${junitPath}`);
-    for (const argument of recording) args.push(argument);
-  }
+  // which is what threads the flags down to the leaf `deno test`.
+  const args = ["task", "test", ...recording];
   const file = await Deno.open(log, {
     write: true,
     create: true,
@@ -151,41 +143,24 @@ export async function testPackage(
 }
 
 /**
- * The records of the JUnit report a member's leaf wrote, and the message
- * each failing one failed with. A leaf that wrote no report, because it
- * crashed before the end and `deno test` writes the file only at process
- * exit, has none, and a malformed report warns and has none. The name
- * maps a recording leaf's preload left in the spool are what give each
- * case its file; they are read here rather than once for the suite so
- * that a run killed part way through keeps the attribution of every
- * package that finished.
+ * What a member's tests recorded into `dir`, the directory its task was
+ * given as its spool: the results its tests wrote, as records of kind
+ * `unit` under the member's scope with the message each failure threw, and
+ * the records any other producer inside the task spooled there.
  */
-export async function readLeafReport(
-  junitPath: string,
+export async function readMemberRecords(
+  dir: string,
   scope: string,
-  memberPath: string,
-  spoolDir: string | undefined,
-): Promise<ReturnType<typeof readJUnit> | undefined> {
-  let xml: string;
-  try {
-    xml = await Deno.readTextFile(junitPath);
-  } catch {
-    return undefined;
+): Promise<{ records: TestRecord[]; failures: Map<TestRecord, string> }> {
+  const results = await readResults(dir, { kind: "unit", scope });
+  const spooled = await readSpool(dir);
+  for (const warning of [...results.warnings, ...spooled.warnings]) {
+    console.warn(`test records: ${warning}`);
   }
-  try {
-    const prefix = memberPath.replace(/^\.\//, "");
-    return readJUnit(xml, {
-      kind: "unit",
-      scope,
-      filePrefix: prefix,
-      fileByName: spoolDir === undefined
-        ? new Map()
-        : await readNameMaps(spoolDir, { ranIn: prefix }),
-    });
-  } catch (error) {
-    console.warn(`test summary: reading ${junitPath} failed: ${error}`);
-    return undefined;
-  }
+  return {
+    records: [...results.records, ...spooled.records],
+    failures: results.failures,
+  };
 }
 
 // Read the workspace member list from the root manifest. Parsed with the JSONC
@@ -215,8 +190,8 @@ export function assertTaskTestsIncluded(members: string[]): void {
 }
 
 // A member's leaf — its `test` task, or the `deno-test` that task hands
-// the flags to when it runs `tasks/run-member-tests.ts` — takes an
-// appended `--junit-path` whole when it runs exactly one `deno test`.
+// the flags to when it runs `tasks/run-member-tests.ts` — takes appended
+// flags whole when it runs exactly one `deno test`.
 // That is read from the task itself, so a package that lands with an
 // ordinary leaf is covered without being listed anywhere. A leaf carrying
 // a shell metacharacter puts the appended flag somewhere other than the
@@ -224,9 +199,8 @@ export function assertTaskTestsIncluded(members: string[]): void {
 //
 // A leaf that runs a script of its own cannot show what the script does
 // with the flags it is handed. `tasks/run-test-batches.ts` is the script
-// known to forward them: it hands them to its `deno test` runs and leaves
-// one report where the flag names. A leaf running any other script is kept
-// out: `identity` drives a browser harness that records through the
+// known to forward them: it hands them to each of its `deno test` runs. A
+// leaf running any other script is kept out: `identity` drives a browser harness that records through the
 // deno-web-test reporter instead.
 const FLAG_FORWARDING_RUNNER = "run-test-batches.ts";
 
@@ -313,7 +287,7 @@ const MEMBER_TEST_RUNNER = "run-member-tests.ts";
  * members that command is the one. A member running the wrapper above is
  * the exception: the wrapper hands the flags to that member's
  * `deno-test` and to nothing else, so that is the command whose shape
- * decides whether a report path and the preload can be used at all.
+ * decides whether the recording permissions can be appended at all.
  *
  * Reading through the wrapper here is what keeps this runner and the
  * test topology reading one thing. The topology already prefers a
@@ -387,31 +361,15 @@ export async function assertMemberTestTasksDefined(
 }
 
 /**
- * Whether an appended `--junit-path` reaches the `deno test` of a member
- * whose leaf is `task`, whole, so the runner can thread the flag and
- * ingest the XML it writes.
+ * Whether flags appended to a member's `deno task test` reach the `deno
+ * test` of its leaf `task`, whole, which is how the member's tests are
+ * permitted to record.
  */
-export function acceptsJUnitPath(task: string | undefined): boolean {
+export function acceptsAppendedFlags(task: string | undefined): boolean {
   if (task === undefined) return false;
   if (/[&;|<>]/.test(task)) return false;
   if (runsForwardingRunner(task)) return true;
   return /(^|\s)deno test(\s|$)/.test(task);
-}
-
-/**
- * Whether an appended `--preload` reaches this member's `deno test` and
- * loads once it gets there. A member naming its own import map is the one
- * that cannot: that map governs every module of the invocation, the
- * preload included, so a specifier the preload needs and the map does not
- * carry fails the whole run rather than the preload alone. What that
- * member gives up is the preload's name map, so its files come from the
- * report's own class names, which name the test file for a registration
- * with nothing of this repository's own between the file and
- * `Deno.test`.
- */
-export function acceptsPreload(task: string | undefined): boolean {
-  if (!acceptsJUnitPath(task)) return false;
-  return task === undefined || !/--import-map[= ]/.test(task);
 }
 
 /**
@@ -442,9 +400,9 @@ export function recordingSpool(
  * The flags the leaf `deno test` of a member's task runs under. A
  * forwarding runner's task line holds two lists: the runner process's
  * own flags, and after `--` the ones it hands its leaf. The leaf is what
- * loads the preload, so the leaf's list is the one that decides what
- * permission the preload has. Every other member runs its leaf directly,
- * and the whole line is that leaf's.
+ * runs the tests, so the leaf's list is the one that decides what
+ * permission they have. Every other member runs its leaf directly, and
+ * the whole line is that leaf's.
  */
 export function leafFlags(task: string): string[] {
   const tokens = task.split(/\s+/);
@@ -454,51 +412,24 @@ export function leafFlags(task: string): string[] {
 }
 
 /**
- * What each member's leaf takes to record, beyond the JUnit path: the
- * preload, and the permissions it needs to find the repository, read the
- * skip list where there is one, and leave its name map in the spool. A
- * member whose task cannot take the preload takes neither, and appears
- * with no arguments at all.
+ * What a member's leaf takes for its tests to record into `spool` and read
+ * the skip list where there is one: the permissions its own flags do not
+ * grant. A member whose task cannot take appended flags takes nothing,
+ * and its tests record only where its own flags already permit them to.
  */
 export async function memberRecordingArguments(
-  members: readonly string[],
+  member: string,
   spool: string,
   root: string | URL = Deno.cwd(),
   skipList?: string,
-): Promise<Map<string, string[]>> {
-  const rootPath = path.fromFileUrl(directoryUrl(root));
-  const recording = new Map<string, string[]>();
-  for (const member of members) {
-    const task = await leafTask(member, root);
-    recording.set(
-      member,
-      acceptsPreload(task)
-        ? recordingArguments(leafFlags(task ?? ""), {
-          spool,
-          root: rootPath,
-          skipList,
-        })
-        : [],
-    );
-  }
-  return recording;
+): Promise<string[]> {
+  const task = await leafTask(member, root);
+  return acceptsAppendedFlags(task)
+    ? recordingArguments(leafFlags(task ?? ""), { spool, skipList })
+    : [];
 }
 
-/** The members whose leaves take the flag, read from their manifests. */
-export async function junitCapableMembers(
-  members: readonly string[],
-  root: string | URL = Deno.cwd(),
-): Promise<Set<string>> {
-  const capable = new Set<string>();
-  for (const member of members) {
-    if (acceptsJUnitPath(await leafTask(member, root))) {
-      capable.add(member);
-    }
-  }
-  return capable;
-}
-
-// A filename-safe slug for a member's JUnit file, unique per member.
+// A filename-safe slug for a member's log and records, unique per member.
 function memberSlug(packageName: string): string {
   return packageName.replaceAll("/", "__").replace(/[^A-Za-z0-9_.-]+/g, "-");
 }
@@ -563,12 +494,12 @@ export async function runTests(
     : undefined;
 
   // Every package's output goes to a log file of its own in one directory,
-  // which a failing run keeps and names, and junit-capable leaves write
-  // their reports beside the logs. The summary is read from the reports.
-  // With recording on, each leaf is handed the recording preload as well,
-  // and its records are appended to the spool under the package's own
-  // scope; a fragment that cannot be opened turns recording off with a
-  // warning and never fails the suite.
+  // which a failing run keeps and names. Each package is handed a records
+  // directory of its own beside its log as its spool, which its tests write
+  // their results into; the summary is read from those. With recording on,
+  // what each package recorded is appended to the run's spool under the
+  // package's own scope; a fragment that cannot be opened turns recording
+  // off with a warning and never fails the suite.
   const logDir = await Deno.makeTempDir({ prefix: "deno-task-test-" });
   const spoolDir = recordResults
     ? recordingSpool(recordsDir(), workspaceCwd)
@@ -577,21 +508,12 @@ export async function runTests(
     ? FragmentWriter.open(spoolDir)
     : undefined;
   const workspaceUrl = path.toFileUrl(`${path.resolve(workspaceCwd)}/`);
-  const capable = await junitCapableMembers(members, workspaceUrl);
   // A skip list the run inherits reaches every member, each in a directory
   // of its own, so it is named to them by its absolute path.
   const inheritedSkipList = readEnv(SKIP_LIST_VARIABLE);
   const skipList = inheritedSkipList
     ? path.resolve(workspaceCwd, inheritedSkipList)
     : undefined;
-  const recording = spoolDir !== undefined
-    ? await memberRecordingArguments(
-      members,
-      spoolDir,
-      workspaceUrl,
-      skipList,
-    )
-    : new Map<string, string[]>();
 
   const tests: TestResult[] = [];
   const commands: FailedCommand[] = [];
@@ -605,9 +527,7 @@ export async function runTests(
       const packageName = getPackageName(memberPath);
       const packagePath = path.resolve(workspaceCwd, memberPath);
       const slug = memberSlug(packageName);
-      const junitPath = capable.has(memberPath)
-        ? path.join(logDir, `${slug}.xml`)
-        : undefined;
+      const memberSpool = path.join(logDir, `${slug}.records`);
       const result = await testPackage(
         memberPath,
         packageName,
@@ -615,19 +535,21 @@ export async function runTests(
         coverageRoot,
         path.join(logDir, `${slug}.log`),
         {
-          [RECORDS_DIR_VARIABLE]: spoolDir ?? "",
+          [RECORDS_DIR_VARIABLE]: memberSpool,
           ...(skipList === undefined ? {} : { [SKIP_LIST_VARIABLE]: skipList }),
         },
-        junitPath,
-        recording.get(memberPath),
+        await memberRecordingArguments(
+          memberPath,
+          memberSpool,
+          workspaceUrl,
+          skipList,
+        ),
       );
-      const report = junitPath === undefined
-        ? undefined
-        : await readLeafReport(junitPath, packageName, memberPath, spoolDir);
-      for (const record of report?.records ?? []) fragment?.append(record);
+      const report = await readMemberRecords(memberSpool, packageName);
+      for (const record of report.records) fragment?.append(record);
       const results = testResults(
-        report?.records ?? [],
-        report?.failures ?? new Map(),
+        report.records,
+        report.failures,
         (record) => unitRerun(memberPath, record.test.n),
       );
       for (const test of results) tests.push(test);

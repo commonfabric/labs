@@ -1,12 +1,12 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { dispatchArms, loadCliSuites, phaseAnnouncements } from "./cli.ts";
 
 /** The reader `integration.sh`'s arms are read with. */
 const stepsForTest = (body: string): string[] =>
   [...body.matchAll(/^ {4}cf_test_step_begin (\S+)$/gm)].map((f) => f[1]!);
 import type { Suite } from "./suite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const root = dirname(dirname(dirname(fromFileUrl(import.meta.url))));
 const suites = await loadCliSuites(root);

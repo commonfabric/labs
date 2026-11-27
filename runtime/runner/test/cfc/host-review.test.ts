@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   hostGestureProvenance,
   isTrustedGestureOn,
 } from "../../src/cfc/host-review.ts";
 import { markRendererTrustedEvent } from "../../src/cfc/ui-contract.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("host-review", () => {
   describe("hostGestureProvenance()", () => {

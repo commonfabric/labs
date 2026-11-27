@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createRouter } from "@/lib/create-app.ts";
 import { ingestGate } from "./gate.ts";
 import { BASE as PUSH_BASE } from "./ingest-push.routes.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("gate", () => {
   // The gate's ROUTING consequence: what the router does with the flag.

@@ -1,8 +1,13 @@
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { ensureColumnOriginAvailable } from "../v2/sqlite/column-origin.ts";
 import { ReadConnectionPool } from "../v2/sqlite/read-pool.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // `queryWithOrigins()` resolves column origins over FFI, which production
 // binds once before issuing one.
@@ -69,19 +74,21 @@ describe("ReadConnectionPool", () => {
     }
   });
 
-  it("pools a path's labeled and plain connections separately", () => {
-    // The two modes count as two entries, so a pool of one holds only the
-    // mode read last.
+  it("serves a path's labeled and ordinary reads from one connection", () => {
+    // A pool of one keeps the connection across both kinds of read, so each
+    // still reads the file after it is removed.
+
     const pool = new ReadConnectionPool(1);
     try {
       const a = makeDb("a");
       read(pool, a);
       pool.queryWithOrigins(a, "SELECT v FROM t");
+      expect(pool.accessForTestingOnly.byPath.size).toBe(1);
       Deno.removeSync(a);
       expect(pool.queryWithOrigins(a, "SELECT v FROM t").rows).toEqual([
         { v: "a" },
       ]);
-      expect(() => read(pool, a)).toThrow("unable to open database file");
+      expect(read(pool, a)).toEqual([{ v: "a" }]);
     } finally {
       pool.close();
     }

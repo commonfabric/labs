@@ -3,11 +3,11 @@
  * references selected from prior search results.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchema } from "@commonfabric/api";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { delegateTaskTool } from "../src/tools/delegate-task.ts";
 

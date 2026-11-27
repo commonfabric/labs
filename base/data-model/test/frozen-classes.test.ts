@@ -5,8 +5,8 @@
  * having to remember to name it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The package's source tree. */
 const SRC_DIR = new URL("../src/", import.meta.url);

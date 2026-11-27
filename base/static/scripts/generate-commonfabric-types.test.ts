@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -8,6 +7,7 @@ import {
   moduleSpecifierOf,
   readInlinedModule,
 } from "./generate-commonfabric-types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Tests for the `commonfabric` type generator.

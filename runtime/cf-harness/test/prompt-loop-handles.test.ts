@@ -5,16 +5,17 @@
  * strings that name addresses come back as tokens.
  */
 
+import { observedImageRead } from "./support/observed-image.ts";
 import { decodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
-import { describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, isCell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { HarnessArtifactStore } from "../src/artifacts.ts";
 import { CAPABILITY_PROBE_SENTINEL } from "../src/diagnostics.ts";
@@ -435,7 +436,9 @@ describe("prompt-loop address handles", () => {
       URI_A,
     );
     const engine = new CfHarnessEngine({
-      sandboxRuntime: new FakeSandboxRuntime(),
+      sandboxRuntime: new FakeSandboxRuntime([
+        observedImageRead(ONE_PIXEL_PNG),
+      ]),
       workspaceHostPath: workspace,
       runId,
       model: "gpt-5.4",

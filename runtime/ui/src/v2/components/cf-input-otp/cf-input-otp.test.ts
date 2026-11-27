@@ -1,10 +1,10 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { CFInputOTP } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A `cf-input-otp` with `properties` set, mounted in the document. */
 function mountOTP(properties: Partial<CFInputOTP> = {}): Promise<CFInputOTP> {

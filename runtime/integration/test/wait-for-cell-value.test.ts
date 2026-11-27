@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
@@ -7,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { STUCK_NET_MS } from "@commonfabric/test-support/stuck-net";
+import { describe, it } from "@commonfabric/test-support/test";
 import { defer } from "@commonfabric/async/defer";
 
 import { waitForCellValue } from "../wait-for-cell-value.ts";

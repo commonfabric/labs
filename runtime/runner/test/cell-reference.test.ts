@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   parseCellReference,
@@ -11,6 +10,7 @@ import {
   renderCellReference,
   renderReferenceContext,
 } from "../src/cell-reference.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const context: ReferenceContext = {
   space: "bakery",

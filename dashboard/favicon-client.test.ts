@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { paintStatusFavicon } from "./favicon-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const HREFS = {
   good: "/favicon.png?status=good",
@@ -51,7 +52,7 @@ function fixture(
   };
 }
 
-Deno.test("favicon client follows the worst tile and avoids redundant writes", () => {
+test("favicon client follows the worst tile and avoids redundant writes", () => {
   const healthy = fixture({});
   paintStatusFavicon(HREFS, HOUR, null, null, 0, undefined, healthy.root);
   assertEquals(healthy.href(), HREFS.good);
@@ -72,7 +73,7 @@ Deno.test("favicon client follows the worst tile and avoids redundant writes", (
   assertEquals(missing.writes(), 0);
 });
 
-Deno.test("favicon client combines server red age with elapsed browser time", () => {
+test("favicon client combines server red age with elapsed browser time", () => {
   const favicon = fixture({ bad: true });
   paintStatusFavicon(HREFS, HOUR, 1, HOUR - 10, 100, 109, favicon.root);
   assertEquals(favicon.href(), HREFS.bad);

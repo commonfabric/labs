@@ -8,7 +8,6 @@ import {
 } from "./support/on-linux.ts";
 import { InMemoryHarnessCredentialStore } from "../src/auth/credential-store.ts";
 import { parseHarnessInteractiveChatStdioCliOptions } from "../src/interactive-chat-stdio.ts";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { HarnessInteractiveChatService } from "../src/interactive-chat-service.ts";
@@ -16,6 +15,7 @@ import type { CreateHarnessPromptLoopOptions } from "../src/prompt-loop.ts";
 import { createHarnessRunState } from "../src/run-state.ts";
 import { DEFAULT_HARNESS_CHAT_POLICY } from "../src/contracts/interactive-chat.ts";
 import type { HarnessLoomAuthoringConfig } from "../src/loom-authoring.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Host-owned direct routing, independent of a model turn id. */
 const authoring: HarnessLoomAuthoringConfig = {

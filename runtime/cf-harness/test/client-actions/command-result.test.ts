@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   HARNESS_COMMAND_CATALOG_MODEL_MAX_BYTES,
 } from "../../src/client-actions/command-result.ts";
 import type { HarnessCommandCatalogEntry } from "../../src/contracts/client-command.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A catalog entry whose schema weighs about `schemaBytes`. */
 const entry = (

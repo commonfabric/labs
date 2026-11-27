@@ -3,9 +3,9 @@
  * directories between the root and the file.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { isTestFile } from "./test-files.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROOT = "/repo";
 

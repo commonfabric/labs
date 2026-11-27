@@ -29,7 +29,6 @@
 // undefined) — plus activate() itself refuses a runtime without the
 // flag (pinned by the stage-G suite).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getLogger } from "@commonfabric/logger";
@@ -66,6 +65,13 @@ import {
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   emptyServingLoopStats,
   type ServingLoopStats,
 } from "../src/executor/stats.ts";
@@ -83,6 +89,11 @@ import {
 } from "../src/index.ts";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { newSharedServer, TestStorageManager } from "./memory-v2-test-utils.ts";
+
+// This file runs on the real clock because it drives a real SpaceServer
+// directly under the same real-time policies as a live ExecutorHost: the flush
+// deadline.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("space root ensure space");
 const space = spaceSigner.did() as MemorySpace;

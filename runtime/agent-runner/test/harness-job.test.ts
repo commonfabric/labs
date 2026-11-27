@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { basename, join } from "@std/path";
 
 import {
@@ -15,6 +14,12 @@ import { FileHarnessProviderSettingsStore } from "@commonfabric/cf-harness/auth/
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
 import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { renderCellReference } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   HARNESS_JOB_GRANT_ENV_KEYS,
@@ -59,6 +64,7 @@ const SCRIPTED_ENV = {
 interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
+  openingResearchTask?: string;
   images?: readonly HarnessImageAttachment[];
   role?: string;
   systemPrompt?: string;
@@ -143,6 +149,7 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.openingResearchTask = prompt.openingResearchTask;
               seen.images = prompt.imageAttachments;
               seen.systemPrompt = prompt.systemPrompt;
               seen.maxModelTurns = prompt.maxModelTurns ??
@@ -187,6 +194,24 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
+
+  it("delivers the opening task as workspace data before the first turn", async () => {
+    const task = '{"source":"café\\n"}';
+    const spec = plainSpec({ task, taskDelivery: "file" });
+    const path = join(runRoot, "workspace", ".job-task");
+    const { seen } = await runScripted(spec, async (context) => {
+      expect(await Deno.readTextFile(path)).toBe(task);
+      return await answering("Titan")(context);
+    });
+
+    expect(seen.prompt).toContain(".job-task");
+    expect(seen.prompt).not.toContain(task);
+    expect(seen.openingResearchTask).toBe(task);
+    expect(seen.role).toBe("direct-command");
+    await expect(runScripted(spec, answering("Titan"))).rejects.toThrow(
+      Deno.errors.AlreadyExists,
+    );
+  });
 
   it("throws before preparing a workspace when the spec asks for progress with nowhere to publish it", async () => {
     await expect(
@@ -539,18 +564,20 @@ describe("runHarnessJob()", () => {
       expect(seen.loopOptions?.model).toBe("scripted");
     });
 
-    it("records the task's classification in the job's run state and orients the prompt by it", async () => {
-      const { result, seen } = await runScripted(
-        plainSpec({ task: "what's on Thursday?" }),
-        answering("Nothing."),
-        { classify: true },
-      );
+    for (const taskDelivery of [undefined, "file"] as const) {
+      it(`orients the prompt by the submitted task with ${taskDelivery ?? "inline"} delivery`, async () => {
+        const { result, seen } = await runScripted(
+          plainSpec({ task: "what's on Thursday?", taskDelivery }),
+          answering("Nothing."),
+          { classify: true },
+        );
 
-      expect(result.outcome).toBe("completed");
-      expect(seen.loopOptions?.engine?.getRunState().taskClassification)
-        .toMatchObject({ tags: ["find"], path: "rule" });
-      expect(seen.systemPrompt).not.toContain("When you delegate");
-    });
+        expect(result.outcome).toBe("completed");
+        expect(seen.loopOptions?.engine?.getRunState().taskClassification)
+          .toMatchObject({ tags: ["find"], path: "rule" });
+        expect(seen.systemPrompt).not.toContain("When you delegate");
+      });
+    }
 
     it("passes no fabric session and no input cell", async () => {
       const { result, seen } = await runScripted(

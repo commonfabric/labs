@@ -16,7 +16,6 @@
 
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   columnOriginAvailable,
   columnOriginUnavailableReason,
@@ -35,6 +34,7 @@ import {
   whenMatches,
 } from "../v2/sqlite/row-label.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The labeled read path resolves column origins over FFI, so a labeled query
 // cannot run at all without it (production binds it once before issuing one).
@@ -161,28 +161,6 @@ describe("row-label over a stored INTEGER", () => {
             ],
             integrity: [],
           },
-        ]);
-      } finally {
-        pool.close();
-      }
-    });
-  });
-
-  it("leaves an ordinary read on the connection it always used", () => {
-    // The labeled path is the one that has to see whole integers. An
-    // unlabeled `query()` keeps whatever the driver gave it before, so a
-    // consumer reading rows outside CFC sees no change from this.
-    withStore((path) => {
-      const pool = new ReadConnectionPool();
-      try {
-        const rows = pool.query(
-          path,
-          "SELECT source_id FROM messages ORDER BY id",
-        );
-        expect(rows.map((row) => typeof row.source_id)).toEqual([
-          "number",
-          "number",
-          "number",
         ]);
       } finally {
         pool.close();

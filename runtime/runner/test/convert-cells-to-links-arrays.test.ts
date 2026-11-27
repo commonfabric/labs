@@ -10,10 +10,10 @@
  * hole.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { convertCellsToLinks } from "../src/cell.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Own index keys of `array`, which a hole does not contribute. */
 function presentIndexes(array: readonly unknown[]): number[] {

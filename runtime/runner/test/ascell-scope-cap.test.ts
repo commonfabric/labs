@@ -17,10 +17,15 @@
  * check one hop later.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { isCell } from "../src/cell.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { externalizeSchema } from "../src/link-utils.ts";

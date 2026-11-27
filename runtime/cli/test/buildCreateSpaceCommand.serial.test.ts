@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   buildCreateSpaceCommand,
   type SpaceCommandDependencies,
 } from "../commands/piece.ts";
 import { withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const NEW_SPACE = "did:key:z6MkrZ1r5XBFZjBU34qyD8fueMbMRkKw17BZaq2ivKFjnz2z";
 

@@ -3,7 +3,6 @@
 // has no default-schema switch), while reads/writes stay unqualified and resolve
 // to the attached db because `main` lacks those tables. (spec 04, Q6->A)
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
@@ -15,6 +14,12 @@ import {
   runQuery,
   runWrite,
 } from "../v2/sqlite/exec.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("sqlite attach layer", () => {
   let db: Database;

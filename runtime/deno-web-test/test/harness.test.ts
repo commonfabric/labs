@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import {
@@ -14,6 +13,12 @@ import {
   TestController,
   TestHarness,
 } from "../harness/harness.js";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The part of an element the harness touches. */
 class StandInElement {

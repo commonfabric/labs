@@ -4,13 +4,13 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { INERT_RUNSC } from "./support/inert-runsc.ts";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
@@ -146,7 +146,7 @@ const runStdioCli = async (
   };
 };
 
-Deno.test("interactive NDJSON transport emits events and responses", async () => {
+test("interactive NDJSON transport emits events and responses", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -228,7 +228,7 @@ Deno.test("interactive NDJSON transport emits events and responses", async () =>
   );
 });
 
-Deno.test("interactive NDJSON transport waits for active turns before close after write failure", async () => {
+test("interactive NDJSON transport waits for active turns before close after write failure", async () => {
   const ready = Promise.withResolvers<void>();
   let loopFinished = false;
   let resolveLoop: (() => void) | undefined;
@@ -310,7 +310,7 @@ Deno.test("interactive NDJSON transport waits for active turns before close afte
   assertEquals(closeBeforeLoopFinished, false);
 });
 
-Deno.test("interactive NDJSON transport preserves write failure over close hook failure", async () => {
+test("interactive NDJSON transport preserves write failure over close hook failure", async () => {
   let closeCalls = 0;
   const service = new HarnessInteractiveChatService({
     onEvent: async () => {},
@@ -351,7 +351,7 @@ Deno.test("interactive NDJSON transport preserves write failure over close hook 
   assertEquals(closeCalls, 1);
 });
 
-Deno.test("interactive NDJSON transport calls close hook after normal completion", async () => {
+test("interactive NDJSON transport calls close hook after normal completion", async () => {
   const output: string[] = [];
   let closeCalls = 0;
   const service = new HarnessInteractiveChatService({
@@ -391,7 +391,7 @@ Deno.test("interactive NDJSON transport calls close hook after normal completion
   );
 });
 
-Deno.test({
+test({
   name: "interactive stdio persists and restores SQLite chat runtime state",
   // Dynamic SQLite imports load a native library that @db/sqlite does not unload.
   sanitizeResources: false,
@@ -568,7 +568,7 @@ Deno.test({
   },
 });
 
-Deno.test("interactive stdio CLI persists sessions across process invocations", async () => {
+test("interactive stdio CLI persists sessions across process invocations", async () => {
   const tempDir = await Deno.makeTempDir({
     prefix: "cf-harness-chat-stdio-cli-",
   });
@@ -659,7 +659,7 @@ Deno.test("interactive stdio CLI persists sessions across process invocations", 
   }
 });
 
-Deno.test("interactive stdio bounds in-memory event replay when configured", async () => {
+test("interactive stdio bounds in-memory event replay when configured", async () => {
   const output = captureOutputLines();
   await runHarnessInteractiveChatStdio({
     maxInMemoryEvents: 0,
@@ -707,7 +707,7 @@ Deno.test("interactive stdio bounds in-memory event replay when configured", asy
   });
 });
 
-Deno.test({
+test({
   name:
     "interactive stdio CLI reports invalid SQLite session DB startup failures",
   // Dynamic SQLite imports load a native library that @db/sqlite does not unload.
@@ -731,7 +731,7 @@ Deno.test({
   },
 });
 
-Deno.test("interactive stdio CLI parses runtime options", () => {
+test("interactive stdio CLI parses runtime options", () => {
   assertEquals(
     parseHarnessInteractiveChatStdioCliOptions([], {
       CF_HARNESS_CHAT_SESSION_DB: "/tmp/chat.sqlite",
@@ -818,7 +818,7 @@ Deno.test("interactive stdio CLI parses runtime options", () => {
   );
 });
 
-Deno.test("interactive NDJSON transport returns structured parse errors", async () => {
+test("interactive NDJSON transport returns structured parse errors", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: ["not json"],
@@ -841,7 +841,7 @@ Deno.test("interactive NDJSON transport returns structured parse errors", async 
   );
 });
 
-Deno.test("interactive NDJSON transport accepts list_events requests", async () => {
+test("interactive NDJSON transport accepts list_events requests", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -890,7 +890,7 @@ Deno.test("interactive NDJSON transport accepts list_events requests", async () 
   );
 });
 
-Deno.test("interactive NDJSON transport accepts list_turns requests", async () => {
+test("interactive NDJSON transport accepts list_turns requests", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -937,7 +937,7 @@ Deno.test("interactive NDJSON transport accepts list_turns requests", async () =
   );
 });
 
-Deno.test("interactive NDJSON transport rejects unsupported methods", async () => {
+test("interactive NDJSON transport rejects unsupported methods", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -962,7 +962,7 @@ Deno.test("interactive NDJSON transport rejects unsupported methods", async () =
   );
 });
 
-Deno.test("interactive NDJSON transport validates method-specific params", async () => {
+test("interactive NDJSON transport validates method-specific params", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -990,7 +990,7 @@ Deno.test("interactive NDJSON transport validates method-specific params", async
   );
 });
 
-Deno.test("interactive NDJSON transport keeps an answer that arrives while its request is still being written", async () => {
+test("interactive NDJSON transport keeps an answer that arrives while its request is still being written", async () => {
   const action = {
     kind: "open_loom",
     loomId: "loom-0123456789abcdef",
@@ -1093,7 +1093,7 @@ Deno.test("interactive NDJSON transport keeps an answer that arrives while its r
   );
 });
 
-Deno.test("interactive NDJSON transport settles typed command and catalog requests with the body the HTTP route takes", async () => {
+test("interactive NDJSON transport settles typed command and catalog requests with the body the HTTP route takes", async () => {
   const wire = (name: string): Record<string, unknown> =>
     JSON.parse(
       Deno.readTextFileSync(
@@ -1233,7 +1233,7 @@ Deno.test("interactive NDJSON transport settles typed command and catalog reques
   );
 });
 
-Deno.test("interactive NDJSON transport validates resolve_client_action and clientActions params", async () => {
+test("interactive NDJSON transport validates resolve_client_action and clientActions params", async () => {
   const output: string[] = [];
   const line = (requestId: string, method: string, params: unknown) =>
     JSON.stringify({
@@ -1312,7 +1312,7 @@ Deno.test("interactive NDJSON transport validates resolve_client_action and clie
   });
 });
 
-Deno.test("interactive NDJSON transport rejects malformed policy params", async () => {
+test("interactive NDJSON transport rejects malformed policy params", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -1344,7 +1344,7 @@ Deno.test("interactive NDJSON transport rejects malformed policy params", async 
   );
 });
 
-Deno.test("interactive NDJSON transport rejects malformed policy prompt slots", async () => {
+test("interactive NDJSON transport rejects malformed policy prompt slots", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -1381,7 +1381,7 @@ Deno.test("interactive NDJSON transport rejects malformed policy prompt slots", 
   );
 });
 
-Deno.test("interactive NDJSON transport accepts valid policy prompt slots", async () => {
+test("interactive NDJSON transport accepts valid policy prompt slots", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -1423,7 +1423,7 @@ Deno.test("interactive NDJSON transport accepts valid policy prompt slots", asyn
   );
 });
 
-Deno.test("interactive NDJSON transport accepts a policy naming the run's default tools", async () => {
+test("interactive NDJSON transport accepts a policy naming the run's default tools", async () => {
   // The default parent surface is what a run advertises, so a client that
   // submits it back must be understood — including whichever tools were added
   // to that surface most recently.
@@ -1461,7 +1461,7 @@ Deno.test("interactive NDJSON transport accepts a policy naming the run's defaul
   );
 });
 
-Deno.test("interactive NDJSON transport rejects malformed Browser Access leases", async () => {
+test("interactive NDJSON transport rejects malformed Browser Access leases", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -1490,7 +1490,7 @@ Deno.test("interactive NDJSON transport rejects malformed Browser Access leases"
   );
 });
 
-Deno.test("interactive NDJSON transport accepts valid Browser Access leases", async () => {
+test("interactive NDJSON transport accepts valid Browser Access leases", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -1527,7 +1527,7 @@ Deno.test("interactive NDJSON transport accepts valid Browser Access leases", as
   );
 });
 
-Deno.test("interactive NDJSON transport rejects invalid Browser Access profile mode", async () => {
+test("interactive NDJSON transport rejects invalid Browser Access profile mode", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -1561,11 +1561,11 @@ Deno.test("interactive NDJSON transport rejects invalid Browser Access profile m
   );
 });
 
-Deno.test("interactive stdio CLI help returns without starting the transport", async () => {
+test("interactive stdio CLI help returns without starting the transport", async () => {
   assertEquals(await runHarnessInteractiveChatStdioCli(["--help"]), undefined);
 });
 
-Deno.test("interactive stdio CLI accepts the batch entrypoint's provisioning flags", () => {
+test("interactive stdio CLI accepts the batch entrypoint's provisioning flags", () => {
   // The interactive host used to parse three flags and throw on everything
   // else, so an embedder could provision a batch run and not a chat session.
   // Loom shipped cf-harness chat on that gap: no loom mount, no Page RPC, so
@@ -1589,7 +1589,7 @@ Deno.test("interactive stdio CLI accepts the batch entrypoint's provisioning fla
   );
 });
 
-Deno.test("interactive stdio CLI accepts the inline --flag=value spelling", () => {
+test("interactive stdio CLI accepts the inline --flag=value spelling", () => {
   // Both spellings exist for every other flag on this parser, so both are part
   // of the contract; only the space-separated form was covered.
   assertEquals(
@@ -1611,7 +1611,7 @@ Deno.test("interactive stdio CLI accepts the inline --flag=value spelling", () =
   );
 });
 
-Deno.test("interactive stdio CLI rejects a zero model-turn budget", () => {
+test("interactive stdio CLI rejects a zero model-turn budget", () => {
   // 0 would mean "no model turns", which is not a smaller budget, it is a
   // session that cannot answer.
   assertThrows(
@@ -1625,7 +1625,7 @@ Deno.test("interactive stdio CLI rejects a zero model-turn budget", () => {
   );
 });
 
-Deno.test("interactive stdio CLI still rejects unknown arguments", () => {
+test("interactive stdio CLI still rejects unknown arguments", () => {
   assertThrows(
     () => parseHarnessInteractiveChatStdioCliOptions(["--not-a-flag"], {}),
     Error,
@@ -1633,7 +1633,7 @@ Deno.test("interactive stdio CLI still rejects unknown arguments", () => {
   );
 });
 
-Deno.test("interactive stdio CLI refuses a misspelled flag, naming the flag it meant", () => {
+test("interactive stdio CLI refuses a misspelled flag, naming the flag it meant", () => {
   const error = assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions(
@@ -1646,7 +1646,7 @@ Deno.test("interactive stdio CLI refuses a misspelled flag, naming the flag it m
   assertEquals(error.code, "invalid-request");
 });
 
-Deno.test("interactive stdio CLI refuses an undeclared flag without its value", () => {
+test("interactive stdio CLI refuses an undeclared flag without its value", () => {
   const error = assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions(["--api-key=sk-secret"], {}),
@@ -1656,7 +1656,7 @@ Deno.test("interactive stdio CLI refuses an undeclared flag without its value", 
   assertEquals(error.message.includes("sk-secret"), false);
 });
 
-Deno.test("interactive stdio CLI refuses a word starting with `-` without repeating it", () => {
+test("interactive stdio CLI refuses a word starting with `-` without repeating it", () => {
   const error = assertThrows(
     () =>
       parseHarnessInteractiveChatStdioCliOptions(
@@ -1671,7 +1671,7 @@ Deno.test("interactive stdio CLI refuses a word starting with `-` without repeat
   );
 });
 
-Deno.test("interactive stdio CLI refuses a flag given no value, rather than taking the next word as its value", () => {
+test("interactive stdio CLI refuses a flag given no value, rather than taking the next word as its value", () => {
   for (
     const [argv, flag] of [
       [["--chat-session-db", "--api-key=sk-secret"], "--chat-session-db"],
@@ -1691,7 +1691,7 @@ Deno.test("interactive stdio CLI refuses a flag given no value, rather than taki
   }
 });
 
-Deno.test("interactive stdio CLI refuses a positional argument without repeating it", () => {
+test("interactive stdio CLI refuses a positional argument without repeating it", () => {
   const error = assertThrows(
     () => parseHarnessInteractiveChatStdioCliOptions(["hunter2"], {}),
     Error,
@@ -1702,7 +1702,7 @@ Deno.test("interactive stdio CLI refuses a positional argument without repeating
   );
 });
 
-Deno.test("the standalone stdio entrypoint applies the flags it advertises", async () => {
+test("the standalone stdio entrypoint applies the flags it advertises", async () => {
   // The first version of this change wired only the Loom-local host, so the
   // standalone entrypoint parsed --host-mount, printed it in its usage text and
   // dropped it — the same "second entrypoint, no provisioning" defect this PR
@@ -1735,7 +1735,7 @@ Deno.test("the standalone stdio entrypoint applies the flags it advertises", asy
   }
 });
 
-Deno.test("a typo in a host-mount field is refused, not silently defaulted", async () => {
+test("a typo in a host-mount field is refused, not silently defaulted", async () => {
   // `mdoe=writable` used to fall through to the readonly default and provision
   // a mount the caller believed was writable.
   const source = await Deno.makeTempDir();
@@ -1778,7 +1778,7 @@ const linuxDefault = (): SandboxRuntimeSelection => {
   };
 };
 
-Deno.test("no provisioning flags hand on nothing but the sandbox runtime selection", async () => {
+test("no provisioning flags hand on nothing but the sandbox runtime selection", async () => {
   // The other half of the standalone-entrypoint contract: adding these flags
   // must not change what happens when nobody passes them, or every existing
   // embedder gets a behavior change for free. The one thing handed on is the
@@ -1803,14 +1803,14 @@ Deno.test("no provisioning flags hand on nothing but the sandbox runtime selecti
   assertEquals(seen[0].maxInMemoryEvents, 8);
 });
 
-Deno.test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
+test("resolveInteractiveProvisioning carries a turn budget without mounts", async () => {
   assertEquals(
     await resolveInteractiveProvisioning({ maxModelTurns: 32 }, Deno.cwd(), {}),
     { maxModelTurns: 32, ...linuxDefault() },
   );
 });
 
-Deno.test("interactive NDJSON transport reports a failed event write as a transport error", async () => {
+test("interactive NDJSON transport reports a failed event write as a transport error", async () => {
   const written: string[] = [];
   const requests = [
     JSON.stringify({
@@ -1868,7 +1868,7 @@ Deno.test("interactive NDJSON transport reports a failed event write as a transp
   );
 });
 
-Deno.test("interactive stdio refuses a session database another live process holds", async () => {
+test("interactive stdio refuses a session database another live process holds", async () => {
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const dir = await Deno.makeTempDir();
@@ -1946,7 +1946,7 @@ Deno.test("interactive stdio refuses a session database another live process hol
   );
 });
 
-Deno.test("interactive stdio still rejects with `HarnessChatStoreHeldError` when its error output is locked", async () => {
+test("interactive stdio still rejects with `HarnessChatStoreHeldError` when its error output is locked", async () => {
   const dir = await Deno.makeTempDir();
   const dbPath = join(dir, "chat.sqlite");
   const holder = await openSqliteHarnessChatSessionStore({
@@ -1974,7 +1974,7 @@ Deno.test("interactive stdio still rejects with `HarnessChatStoreHeldError` when
   }
 });
 
-Deno.test("interactive stdio still rejects with `HarnessChatStoreHeldError` when its error output fails to write", async () => {
+test("interactive stdio still rejects with `HarnessChatStoreHeldError` when its error output fails to write", async () => {
   const dir = await Deno.makeTempDir();
   const dbPath = join(dir, "chat.sqlite");
   const holder = await openSqliteHarnessChatSessionStore({
@@ -2002,7 +2002,7 @@ Deno.test("interactive stdio still rejects with `HarnessChatStoreHeldError` when
   }
 });
 
-Deno.test("interactive stdio writes one refusal line to its error output for a held session database", async () => {
+test("interactive stdio writes one refusal line to its error output for a held session database", async () => {
   const dir = await Deno.makeTempDir();
   const dbPath = join(dir, "chat.sqlite");
   const holder = await openSqliteHarnessChatSessionStore({
@@ -2068,7 +2068,7 @@ Deno.test("interactive stdio writes one refusal line to its error output for a h
   }
 });
 
-Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
+test("resolveInteractiveProvisioning selects the sandbox runtime the environment names", async () => {
   // Same derivation as the batch CLI, so a chat session and a batch run
   // launched from one environment execute in the same sandbox.
   const namedRunsc: SandboxRuntimeChoice = {
@@ -2140,7 +2140,7 @@ Deno.test("resolveInteractiveProvisioning selects the sandbox runtime the enviro
   }
 });
 
-Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its environment", async () => {
+test("the standalone stdio entrypoint selects the sandbox runtime from its environment", async () => {
   // The standalone entrypoint reads the process environment itself; the
   // Loom-local host is covered in its own suite.
   const previous = Deno.env.get("CF_HARNESS_SANDBOX_RUNTIME");
@@ -2162,7 +2162,7 @@ Deno.test("the standalone stdio entrypoint selects the sandbox runtime from its 
   }
 });
 
-Deno.test("interactive NDJSON transport refuses a protocol mismatch before the session starts", async () => {
+test("interactive NDJSON transport refuses a protocol mismatch before the session starts", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -2202,7 +2202,7 @@ Deno.test("interactive NDJSON transport refuses a protocol mismatch before the s
   assertEquals(decodeLines(output), [expected]);
 });
 
-Deno.test("interactive NDJSON transport starts a session whose protocol it serves and refuses a turn whose protocol it does not", async () => {
+test("interactive NDJSON transport starts a session whose protocol it serves and refuses a turn whose protocol it does not", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -2258,7 +2258,7 @@ Deno.test("interactive NDJSON transport starts a session whose protocol it serve
   );
 });
 
-Deno.test("interactive NDJSON transport echoes its client protocol on an accepted session and turn", async () => {
+test("interactive NDJSON transport echoes its client protocol on an accepted session and turn", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [
@@ -2341,7 +2341,7 @@ Deno.test("interactive NDJSON transport echoes its client protocol on an accepte
   );
 });
 
-Deno.test("interactive NDJSON transport refuses an answer carrying both an outcome and a typed settlement", async () => {
+test("interactive NDJSON transport refuses an answer carrying both an outcome and a typed settlement", async () => {
   const output: string[] = [];
   await runHarnessInteractiveChatNdjsonTransport({
     lines: [

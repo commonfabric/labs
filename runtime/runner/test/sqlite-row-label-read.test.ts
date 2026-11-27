@@ -6,7 +6,6 @@
 // attach, ceiling"; "Fail-closed rules").
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   all,
@@ -19,6 +18,7 @@ import {
   whenMatches,
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   computeRowLabelRead,

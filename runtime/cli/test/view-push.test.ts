@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { sgr, stripAnsi, term } from "../lib/view/ansi.ts";
 import type { EditableSource } from "../lib/view/editsource.ts";
@@ -21,23 +20,26 @@ import {
   pushRefused,
   realPushIo,
   relayText,
+  settleBoth,
 } from "../lib/view/push.ts";
 import { realFileGateway } from "../lib/view/filegateway.ts";
-import { dialogBox } from "../lib/view/render.ts";
+import { dialogBox, KEY_PLUG_MS, KEY_REACH } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
-import { ui } from "../lib/view/theme.ts";
+import { palette, ui } from "../lib/view/theme.ts";
 import {
   type BeginStep,
   link,
   plainText,
   quote,
   say,
+  type StepKind,
   words,
 } from "../lib/view/tasklog.ts";
 import {
   cellOf,
   drawnRows,
   fakeRelay,
+  fgCode,
   frameRows,
   mergedPayload,
   mouseKey,
@@ -45,6 +47,7 @@ import {
   pullRequestPayload,
   relayFrame,
 } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The question that asks `origin`'s server which branch is its default. */
 const ASK_ORIGIN_DEFAULT = "ls-remote --symref origin HEAD";
@@ -58,15 +61,13 @@ function symrefListing(branch: string): string {
   return `ref: refs/heads/${branch}\tHEAD\n0123456789abcdef\tHEAD\n`;
 }
 
-/** Query answers for a checkout of `feature` whose `origin` and `upstream`
- * have `main` as their default branch, on their servers and, for `origin`, as
- * git cached it on cloning. */
+/** Query answers for a checkout of `feature` whose `origin` has `main` as its
+ * default branch, on its server and as git cached it on cloning. */
 const FEATURE_CHECKOUT: Readonly<Record<string, string | null>> = {
   "rev-parse --absolute-git-dir": "/work/.git\n",
   "symbolic-ref --quiet HEAD": "refs/heads/feature\n",
   "symbolic-ref --quiet refs/remotes/origin/HEAD": "refs/remotes/origin/main\n",
   [ASK_ORIGIN_DEFAULT]: symrefListing("main"),
-  "ls-remote --symref upstream HEAD": symrefListing("main"),
 };
 
 const PUSH_FEATURE = "push --force-with-lease --force-if-includes --progress " +
@@ -218,6 +219,10 @@ function repositories() {
 
 const PATH_ONLY = { PATH: Deno.env.get("PATH") ?? "" };
 
+/** The step the push dialog shows while git pushes `feature` to `origin`,
+ * which it draws just before git starts. */
+const PUSHING = "Pushing feature to origin...";
+
 /** How a push of `feature` to `origin` that succeeded ends. */
 const PUSHED = say`Pushed ${"feature"} to ${"origin"}.`;
 
@@ -324,10 +329,11 @@ function mouseReport(down: boolean, at: { x: number; y: number }): string {
   return `\x1b[<0;${at.x + 1};${at.y + 1}${down ? "M" : "m"}`;
 }
 
-/** A GitHub API that finds no open pull request, says the merge method is
- * squashing, and fails each other request. */
+/** A GitHub API that finds no open pull request, says the default branch is
+ * `main` and the merge method is squashing, and fails each other request. */
 const unusedGitHub: GitHubApi = {
   find: () => Promise.resolve(null),
+  defaultBranch: () => Promise.resolve("main"),
   mergeMethod: () => Promise.resolve("squash"),
   create: () => Promise.reject(new Error("this test creates nothing")),
   merge: () => Promise.reject(new Error("this test merges nothing")),
@@ -349,7 +355,8 @@ function deferred<T = void>() {
  * something. `git` answers the viewer's questions about the repository,
  * `relay` connects it to the webhook relay, `open` opens pages, `github` and
  * `touchGate` create and merge pull requests, `pullRequestList` lists the
- * open ones, and `source` makes the document editable. `handlers` holds the
+ * open ones, `source` makes the document editable, and `columns` sets how
+ * wide the terminal is. `handlers` holds the
  * process signal handlers the pager adds, `exits` the codes it exits
  * with, `timers` how long each timer it set was for, `cancelled` how long
  * each it cancelled before it ran was for, and `spinners` each frame of the
@@ -369,6 +376,7 @@ function pagerHarness(
     pullRequestList = () => Promise.resolve(null),
     source,
     holdTimers = false,
+    columns = 80,
   }:
     & Partial<
       Pick<
@@ -379,6 +387,7 @@ function pagerHarness(
     & {
       readonly source?: EditableSource;
       readonly holdTimers?: boolean;
+      readonly columns?: number;
     } = {},
 ) {
   const writes: string[] = [];
@@ -424,7 +433,7 @@ function pagerHarness(
           else watchers.push(watcher);
         }
       },
-      consoleSize: () => ({ columns: 80, rows: 12 }),
+      consoleSize: () => ({ columns, rows: 12 }),
       env: () => undefined,
       addSignalListener: (signal, handler) => handlers.set(signal, handler),
       removeSignalListener: () => {},
@@ -587,9 +596,11 @@ describe("view-push", () => {
     });
 
     it("hands what follows the push to its callback, with no page when the server offers none, and appends what it says", async () => {
-      const handed: Array<[string, string | null]> = [];
-      const then = (branch: string, url: string | null) => {
-        handed.push([branch, url]);
+      // The callback is also handed origin's default branch: the one the
+      // push was given, or else the one origin's server names.
+      const handed: Array<[string, string | null, string]> = [];
+      const then = (branch: string, url: string | null, main: string) => {
+        handed.push([branch, url, main]);
         return url === null ? [] : say`Then this.`;
       };
 
@@ -602,12 +613,15 @@ describe("view-push", () => {
             fakeIo({ pushOutput: GITHUB_OFFER }).io,
             undefined,
             then,
+            undefined,
+            undefined,
+            "trunk",
           ),
         ),
       ).toBe("Pushed feature to origin. Then this.");
       expect(handed).toEqual([
-        ["feature", null],
-        ["feature", "https://github.com/fork/repo/pull/new/feature"],
+        ["feature", null, "main"],
+        ["feature", "https://github.com/fork/repo/pull/new/feature", "trunk"],
       ]);
     });
 
@@ -782,7 +796,7 @@ describe("view-push", () => {
         controller.signal,
         undefined,
         (output) => handed.push(output),
-        () => Promise.resolve(say`asked ${String(++asks)}`),
+        () => Promise.resolve(() => say`asked ${String(++asks)}`),
       );
 
       expect(plainText(summary)).toBe("Push aborted.");
@@ -809,14 +823,17 @@ describe("view-push", () => {
       });
       const asked: Array<[string, PushedBranch, string]> = [];
 
-      const summary = await pushBranch(io, undefined, undefined, undefined, (
-        branch,
-        pushed,
-        main,
-      ) => {
-        asked.push([branch, pushed, main]);
-        return Promise.resolve("asked");
-      });
+      const summary = await pushBranch(
+        io,
+        undefined,
+        undefined,
+        undefined,
+        (branch, pushed) =>
+          Promise.resolve((main: string) => {
+            asked.push([branch, pushed, main]);
+            return "asked";
+          }),
+      );
 
       expect(summary).toBe("asked");
       expect(asked).toEqual([
@@ -846,7 +863,7 @@ describe("view-push", () => {
         undefined,
         undefined,
         undefined,
-        () => Promise.resolve(say`asked ${String(++asks)}`),
+        () => Promise.resolve(() => say`asked ${String(++asks)}`),
       );
 
       expect(plainText(summary)).toBe(
@@ -854,6 +871,41 @@ describe("view-push", () => {
       );
       expect(asks).toBe(0);
       expect(ran).toEqual([]);
+    });
+
+    it("refuses the default branch it is given without preparing to ask, preparing for any other branch origin has", async () => {
+      for (const branch of ["trunk", "feature"]) {
+        const prepared: string[] = [];
+        const { io, ran } = fakeIo({
+          answers: {
+            "symbolic-ref --quiet HEAD": `refs/heads/${branch}\n`,
+            [`rev-parse --verify --quiet refs/remotes/origin/${branch}`]:
+              "0123456789abcdef\n",
+            [`rev-list --left-right --count refs/remotes/origin/${branch}...HEAD`]:
+              "0\t1\n",
+          },
+        });
+
+        const summary = await pushBranch(
+          io,
+          undefined,
+          undefined,
+          undefined,
+          (name) => {
+            prepared.push(name);
+            return Promise.resolve(() => say`asked`);
+          },
+          "trunk",
+        );
+
+        expect(plainText(summary)).toBe(
+          branch === "trunk"
+            ? "Rename the branch first. You were about to push your trunk branch."
+            : "asked",
+        );
+        expect(prepared).toEqual(branch === "trunk" ? [] : ["feature"]);
+        expect(ran).toEqual([]);
+      }
     });
 
     it("keeps to the default branch it is given, asking origin's server nothing", async () => {
@@ -914,6 +966,42 @@ describe("view-push", () => {
       }
     });
 
+    it("asks origin's server which branch is its default while it prepares to ask, before the server answers", async () => {
+      const { io, ran } = fakeIo({ answers: FEATURE_PUSHED });
+      let asked = false;
+      let answered = false;
+      let answeredWhenPrepared: boolean | undefined;
+      let askedWhilePreparing: boolean | undefined;
+
+      const summary = await pushBranch(
+        {
+          ...io,
+          queryAsync: async (args) => {
+            asked = true;
+            const answer = await io.queryAsync(args);
+            answered = true;
+            return answer;
+          },
+        },
+        undefined,
+        undefined,
+        undefined,
+        () => {
+          answeredWhenPrepared = answered;
+          return Promise.resolve().then(() => {
+            askedWhilePreparing = asked;
+            return (main: string) => `asked about ${main}`;
+          });
+        },
+      );
+
+      expect(answeredWhenPrepared).toBe(false);
+      expect(askedWhilePreparing).toBe(true);
+      expect(answered).toBe(true);
+      expect(summary).toBe("asked about main");
+      expect(ran).toEqual([]);
+    });
+
     it("pushes without asking when origin does not have the branch, or there is no `ask`", async () => {
       const cases: ReadonlyArray<
         readonly [Readonly<Record<string, string | null>>, boolean]
@@ -928,7 +1016,7 @@ describe("view-push", () => {
           undefined,
           undefined,
           ask
-            ? (branch) => Promise.resolve(String(asked.push(branch)))
+            ? (branch) => Promise.resolve(() => String(asked.push(branch)))
             : undefined,
         );
 
@@ -936,6 +1024,43 @@ describe("view-push", () => {
         expect(asked).toEqual([]);
         expect(ran).toEqual([PUSH_FEATURE]);
       }
+    });
+  });
+
+  describe("settleBoth()", () => {
+    it("resolves with what each resolves with, in order", async () => {
+      expect(await settleBoth(Promise.resolve(1), "two")).toEqual([1, "two"]);
+    });
+
+    it("rejects with the first rejection, in order, whichever rejects first", async () => {
+      const second = Promise.reject(new Error("second"));
+      second.catch(() => {});
+
+      await expect(
+        settleBoth(Promise.reject(new Error("first")), second),
+      ).rejects.toThrow("first");
+      await expect(settleBoth(Promise.resolve(1), second)).rejects.toThrow(
+        "second",
+      );
+    });
+
+    it("rejects only once the other has settled", async () => {
+      const events: string[] = [];
+      const second = deferred<string>();
+      const both = settleBoth(
+        Promise.reject(new Error("first")),
+        second.promise,
+      )
+        .catch((error) => events.push(`rejected: ${error.message}`));
+
+      // A rejection that does not wait for the second would land within
+      // these turns of the microtask queue.
+      for (let turn = 0; turn < 10; turn++) await null;
+      events.push("second settles");
+      second.resolve("second");
+      await both;
+
+      expect(events).toEqual(["second settles", "rejected: first"]);
     });
   });
 
@@ -1267,7 +1392,7 @@ describe("view-push", () => {
             undefined,
             () => [],
             undefined,
-            (_, pushed) => Promise.resolve(pushed),
+            (_, pushed) => Promise.resolve(() => pushed),
           );
 
         expect(await push()).toEqual(say`Pushed ${"feature"} to ${"origin"}.`);
@@ -1320,7 +1445,7 @@ describe("view-push", () => {
             undefined,
             () => [],
             undefined,
-            (_, remote) => Promise.resolve(remote),
+            (_, remote) => Promise.resolve(() => remote),
           ),
         ).toEqual({
           commit: git(work, env, "rev-parse", "HEAD"),
@@ -1964,7 +2089,7 @@ describe("view-push", () => {
       expect(session.exitMessage).toBeNull();
       expect(session.pullRequestQuitPending).toBe(false);
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       expect(session.pullRequestQuitPending).toBe(true);
       expect(session.taskDialogUp).toBe(true);
@@ -1987,7 +2112,7 @@ describe("view-push", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       expect(session.pullRequestQuitPending).toBe(false);
       expect(session.view().dialog!.body.join("\n")).not.toContain("Quitting");
       session.finishTask(PUSHED);
@@ -1999,11 +2124,37 @@ describe("view-push", () => {
       expect(session.exitMessage).toBe(PULL_REQUEST);
     });
 
+    it("quits for the pull request at once, without saying it is quitting, when its delay is 16 ms or less, waiting for a push still running to end", () => {
+      const ended = editableSession();
+      ended.beginTask("Push", () => {});
+      ended.finishTask(PUSHED);
+      const running = editableSession();
+      running.beginTask("Push", () => {});
+      const longer = editableSession();
+      longer.beginTask("Push", () => {});
+      longer.finishTask(PUSHED);
+
+      ended.quitForPullRequest(PULL_REQUEST, 16);
+      running.quitForPullRequest(PULL_REQUEST, 5);
+      longer.quitForPullRequest(PULL_REQUEST, 17);
+
+      expect(ended.quit).toBe(true);
+      expect(ended.exitMessage).toBe(PULL_REQUEST);
+      expect(running.quit).toBe(false);
+      expect(running.view().dialog!.body.join("\n")).not.toContain("Quitting");
+      running.finishTask(PUSHED);
+      expect(running.quit).toBe(true);
+      expect(running.exitMessage).toBe(PULL_REQUEST);
+      expect(longer.quit).toBe(false);
+      expect(longer.pullRequestQuitDelay).toBe(17);
+      expect(longer.view().dialog!.body.join("\n")).toContain("Quitting");
+    });
+
     it("quits for the pull request, keeping the address to print, when Quit is pressed while the dialog says it is quitting", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       session.handleKey({ name: "Q", char: "Q" });
 
@@ -2021,7 +2172,7 @@ describe("view-push", () => {
         }
         session.beginTask("Push", () => {});
         session.finishTask(PUSHED);
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(session.requestQuitFromSignal()).toBe(edited);
 
@@ -2038,7 +2189,7 @@ describe("view-push", () => {
       const session = editableSession();
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       session.handleKey({ name: "c", char: "c" });
       session.completePullRequestQuit();
@@ -2053,7 +2204,7 @@ describe("view-push", () => {
       session.finishTask(PUSHED);
       session.handleKey({ name: "c", char: "c" });
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
 
       expect(session.quit).toBe(false);
       session.beginTask("Push", () => {});
@@ -2069,12 +2220,30 @@ describe("view-push", () => {
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
 
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       session.completePullRequestQuit();
 
       expect(session.quit).toBe(false);
       expect(session.view().dialog?.title).toBe("Save Changes");
       session.handleKey({ name: "d", char: "d" });
+      expect(session.exitMessage).toBe(PULL_REQUEST);
+    });
+
+    it("asks at once to save unsaved edits when the pull request opens with a delay of 16 ms or less", () => {
+      const session = editableSession();
+      session.handleKey({ name: "e", char: "e" });
+      session.handleKey({ name: "X", char: "X" });
+      session.handleKey({ name: "escape" });
+      session.beginTask("Push", () => {});
+      session.finishTask(PUSHED);
+
+      session.quitForPullRequest(PULL_REQUEST, 16);
+
+      expect(session.quit).toBe(false);
+      expect(session.pullRequestQuitDelay).toBeNull();
+      expect(session.view().dialog?.title).toBe("Save Changes");
+      session.handleKey({ name: "d", char: "d" });
+      expect(session.quit).toBe(true);
       expect(session.exitMessage).toBe(PULL_REQUEST);
     });
 
@@ -2085,7 +2254,7 @@ describe("view-push", () => {
       session.handleKey({ name: "escape" });
       session.beginTask("Push", () => {});
       session.finishTask(PUSHED);
-      session.quitForPullRequest(PULL_REQUEST);
+      session.quitForPullRequest(PULL_REQUEST, 2000);
       session.completePullRequestQuit();
 
       session.handleKey({ name: "c", char: "c" });
@@ -2199,7 +2368,7 @@ describe("view-push", () => {
         session.beginWatchStep(say`Waiting for the pull request to open`);
         session.finishTask(PUSHED);
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session)).toEqual([
           "Pushed feature to origin.",
@@ -2208,6 +2377,20 @@ describe("view-push", () => {
           "Quitting... ◐",
         ]);
         expect(session.taskSpinning).toBe(true);
+      });
+
+      it("gives the pull request's address only once when how the task ended already gives it", () => {
+        const session = editableSession();
+        session.resize(80, 24);
+        session.beginTask("Land", () => {});
+        session.finishTask(say`Merged ${link(PULL_REQUEST)}`);
+
+        session.quitForPullRequest(PULL_REQUEST, 2000);
+
+        expect(shown(session)).toEqual([
+          `Merged ${PULL_REQUEST}`,
+          "Quitting... ◐",
+        ]);
       });
 
       it("shows the end of its output when it says it is quitting for the pull request, however far it was scrolled back", () => {
@@ -2220,7 +2403,7 @@ describe("view-push", () => {
         session.handleKey({ name: "home" });
         expect(shown(session)).not.toContain("Quitting... ◐");
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session).at(-1)).toBe("Quitting... ◐");
       });
@@ -2231,7 +2414,7 @@ describe("view-push", () => {
         session.beginTask("Push", () => {});
         session.beginWatchStep(say`Waiting for the pull request to open`);
 
-        session.quitForPullRequest(PULL_REQUEST);
+        session.quitForPullRequest(PULL_REQUEST, 2000);
 
         expect(shown(session)).toEqual([
           "Waiting for the pull request to open... ✓",
@@ -2249,6 +2432,215 @@ describe("view-push", () => {
         session.continueTask(() => {});
 
         expect(shown(session)).toEqual(["Pushed feature to origin."]);
+      });
+    });
+
+    describe("the security key", () => {
+      /** A session `width` columns by `height` rows showing the land dialog
+       * drawn with color `color`, its last step of `kind`, which the
+       * function returned shows is done. */
+      function landing(
+        { color = false, kind = "touch", width = 116, height = 32 }: {
+          readonly color?: boolean;
+          readonly kind?: StepKind;
+          readonly width?: number;
+          readonly height?: number;
+        } = {},
+      ): { session: Session; done: () => void } {
+        const session = new Session(
+          parseDocument("const a = 1;\n", "/work/main.ts"),
+          { color, showLineNumbers: false },
+          { width, height },
+          undefined,
+        );
+        session.beginTask("Land", () => {});
+        session.beginTaskStep(say`Merging`)();
+        const done = session.beginTaskStep(say`Touch the key`, kind);
+        return { session, done };
+      }
+
+      /** The five rows of `session`'s screen beside the task dialog's right
+       * edge that show the security key, from that edge to the screen's. */
+      function key(session: Session): string[] {
+        const rows = drawnRows(session).map(stripAnsi);
+        const { x, y } = cellOf(rows, "╗");
+        return rows.slice(y + 1, y + 6).map((row) => row.slice(x).trimEnd());
+      }
+
+      /** Moves the key in `session` on, a frame at a time, until `time`
+       * milliseconds after its step began or until it holds still, returning
+       * the key's rows as {@link key} gives them at each frame, the first
+       * before it moves. */
+      function advance(session: Session, time: number): string[][] {
+        const frames = [key(session)];
+        for (let at = 0, delay = session.keyFrameDelay; at < time;) {
+          if (delay === null || delay <= 0) break;
+          at += delay;
+          session.advanceKey();
+          frames.push(key(session));
+          delay = session.keyFrameDelay;
+        }
+        return frames;
+      }
+
+      /** The rows that show a plugged-in key whose light is `light`, as
+       * drawn without color. */
+      const plugged = (light: "──" | "━━") => [
+        `╟─${light}─╮`,
+        "║    │",
+        "║   ┃│",
+        "║    │",
+        `╟─${light}─╯`,
+      ];
+
+      it("draws none of the key when the step begins, the key being past the screen's edge, and none while a step waits for a person", () => {
+        const { session } = landing();
+        const { session: person } = landing({ kind: "person" });
+        advance(person, 350);
+
+        expect(key(session)).toEqual(Array(5).fill("║"));
+        expect(key(person)).toEqual(Array(5).fill("║"));
+        expect(session.keyFrameDelay).toBe(16);
+        expect(person.keyFrameDelay).toBe(null);
+      });
+
+      it("brings the key in from past the screen's edge, plug first, hides the part of the plug inside the dialog, and joins the key to the dialog's edge once it is plugged in, after 350 milliseconds", () => {
+        const { session } = landing();
+        const frames = advance(session, 350);
+
+        // Halfway through the time, the key has come a quarter of the way.
+        expect(frames[11]).toEqual([
+          "║",
+          "║          ╭────",
+          "║          │ ▪▪",
+          "║          ╰────",
+          "║",
+        ]);
+        expect(frames).toContainEqual([
+          "║   ╭────╮",
+          "║───┤    │",
+          "║▪▪ │   ┃│",
+          "║───┤    │",
+          "║   ╰────╯",
+        ]);
+        expect(frames.at(-2)).not.toEqual(plugged("━━"));
+        expect(frames.at(-1)).toEqual(plugged("━━"));
+        const rows = drawnRows(session).map(stripAnsi);
+        expect(rows.filter((row) => row.at(-1) !== " ")).toEqual([]);
+      });
+
+      it("draws the plug's end at the screen's last column in the key's first frame that shows any of it", () => {
+        const { session } = landing();
+        const top = cellOf(drawnRows(session).map(stripAnsi), "╗").y;
+        // The last column of each row the key's face takes.
+        const ends = () =>
+          drawnRows(session).map(stripAnsi).slice(top + 1, top + 6).map((
+            row,
+          ) => row.at(-1));
+        const frames = [ends()];
+        // Each frame is at least a millisecond after the one before.
+        while (
+          frames.length <= KEY_PLUG_MS &&
+          frames.at(-1)!.every((end) => end === " ")
+        ) {
+          session.advanceKey();
+          frames.push(ends());
+        }
+
+        expect(frames.length).toBeGreaterThan(2);
+        expect(frames.at(-1)).toEqual([" ", "╭", "│", "╰", " "]);
+      });
+
+      it("moves the dialog left, narrowing it, to leave room for the whole plugged-in key and its shadow on a narrow screen", () => {
+        const { session } = landing({ width: 60, height: 24 });
+        const { session: person } = landing({
+          kind: "person",
+          width: 60,
+          height: 24,
+        });
+        const edge = (session: Session) =>
+          cellOf(drawnRows(session).map(stripAnsi), "╗").x;
+        advance(session, 350);
+
+        expect(key(session)).toEqual(plugged("━━"));
+        expect(edge(session) + KEY_REACH).toBe(59);
+        expect(edge(person) + KEY_REACH).toBeGreaterThan(59);
+      });
+
+      it("draws no key beside a dialog too short to hold it, makes no room for one, and sets no frame for it", () => {
+        const { session } = landing({ width: 80, height: 7 });
+        const { session: person } = landing({
+          kind: "person",
+          width: 80,
+          height: 7,
+        });
+        const { session: taller } = landing({ width: 80, height: 8 });
+        const edge = (session: Session) =>
+          cellOf(drawnRows(session).map(stripAnsi), "╗").x;
+        advance(taller, 350);
+
+        expect(session.keyFrameDelay).toBe(null);
+        expect(drawnRows(session).join("")).not.toContain("┃");
+        expect(edge(session)).toBe(edge(person));
+        expect(drawnRows(taller).join("")).toContain("┃");
+        expect(edge(taller)).toBeLessThan(edge(person));
+      });
+
+      it("blinks the light along the plugged-in key's top and bottom edges while the step waits, and leaves it lit in another color once the key is touched, with a yellow touch pad", () => {
+        const { session, done } = landing({ color: true });
+        const light = () => {
+          const rows = drawnRows(session);
+          const top = cellOf(rows.map(stripAnsi), "╟─").y;
+          return [rows[top], rows[top + 4]].join("");
+        };
+        advance(session, 350);
+        const on = light();
+        advance(session, 300);
+        const off = light();
+        done();
+        const touched = light();
+
+        expect(on.split(fgCode(palette.lightOn)).length).toBe(3);
+        expect(off).not.toContain(fgCode(palette.lightOn));
+        expect(touched.split(fgCode(palette.blue)).length).toBe(3);
+        expect(touched).not.toContain(fgCode(palette.lightOn));
+        const pad = drawnRows(session)[
+          cellOf(drawnRows(session).map(stripAnsi), "┃").y
+        ];
+        expect(pad.slice(pad.lastIndexOf("║"))).toContain(
+          fgCode(palette.yellow),
+        );
+        expect(session.keyFrameDelay).toBe(null);
+      });
+
+      it("draws the light as a heavier line while it is lit, without color", () => {
+        const { session, done } = landing();
+        advance(session, 650);
+        const off = key(session);
+        done();
+
+        expect(off).toEqual(plugged("──"));
+        expect(key(session)).toEqual(plugged("━━"));
+      });
+
+      it("plugs the key in at once, its light off, when the step ends before the key is in", () => {
+        const { session } = landing();
+        advance(session, 100);
+
+        session.finishTask(say`Aborted.`);
+
+        expect(key(session)).toEqual(plugged("──"));
+        expect(session.keyFrameDelay).toBe(null);
+      });
+
+      it("starts the key over past the screen's edge when another step waits for a touch", () => {
+        const { session, done } = landing();
+        advance(session, 350);
+        done();
+
+        session.beginTaskStep(say`Touch the key again`, "touch");
+
+        expect(key(session)).toEqual(Array(5).fill("║"));
       });
     });
 
@@ -2404,7 +2796,7 @@ describe("view-push", () => {
         session.beginTask("Push", () => {});
         session.appendTaskOutput(`See ${PULL_REQUEST}.\n${LONG}\n`);
         session.finishTask(say`Done.`);
-        session.quitForPullRequest(OCTO_PULL_REQUEST);
+        session.quitForPullRequest(OCTO_PULL_REQUEST, 2000);
         return session;
       }
 
@@ -2530,7 +2922,7 @@ describe("view-push", () => {
             )
           ),
       }));
-      const running = harness.frame((text) => text.includes(" Abort "));
+      const running = harness.frame((text) => text.includes(PUSHING));
       const closable = harness.frame((text) => text.includes(" Close "));
 
       await harness.run(["P", () => running, "a", () => closable, "c"]);
@@ -2551,7 +2943,7 @@ describe("view-push", () => {
           ),
       }));
       const at = abortCell();
-      const running = harness.frame((text) => text.includes(" Abort "));
+      const running = harness.frame((text) => text.includes(PUSHING));
       const pressed = harness.frame((text) =>
         text.includes(" Abort ") &&
         cellOf(frameRows(text), "Abort").x === at.x + 1
@@ -2592,13 +2984,19 @@ describe("view-push", () => {
             ),
       }), { holdTimers: true });
       const retryable = harness.frame((text) => text.includes("Retry push"));
+      let retried = Promise.resolve();
       let drawn: string[] = [];
       let armed = 0;
 
       await harness.run([
         "P",
         () => retryable,
+        () => {
+          retried = harness.frame((text) => text.includes(PUSHING));
+          return Promise.resolve();
+        },
         "P",
+        () => retried,
         () => {
           const before = harness.writes.length;
           const spinners = harness.spinners.length;
@@ -2627,8 +3025,9 @@ describe("view-push", () => {
             })
           ),
       }));
+      const running = harness.frame((text) => text.includes(PUSHING));
 
-      await harness.run(["P"]);
+      await harness.run(["P", () => running]);
       const writesAtClose = harness.writes.length;
       await ended.promise;
 
@@ -2648,7 +3047,7 @@ describe("view-push", () => {
             )
           ),
       }));
-      const running = harness.frame((text) => text.includes(" Abort "));
+      const running = harness.frame((text) => text.includes(PUSHING));
 
       await harness.run([
         "P",
@@ -2732,7 +3131,7 @@ describe("view-push", () => {
             );
           },
         }));
-        const running = harness.frame((text) => text.includes(" Abort "));
+        const running = harness.frame((text) => text.includes(PUSHING));
         const failed = harness.frame((text) => text.includes("P Retry push"));
         const pushed = harness.frame((text) =>
           text.includes("Pushed feature to origin.")
@@ -2917,6 +3316,153 @@ describe("view-push", () => {
       });
     });
 
+    describe("the security key", () => {
+      /** Drives the viewer to create a pull request with touch-gate, whose
+       * request waits for the touch of a security key until each of
+       * `touches` resolves in turn, holding every timer. */
+      function touchHarness(...touches: Promise<void>[]) {
+        return pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit(
+              {
+                "cf-view.pullRequestTool": "touch-gate",
+                "cf-view.touchGateToken": "mine",
+              },
+              UPSTREAM,
+            ),
+            touchGate: () => ({
+              ...unusedGitHub,
+              create: async (_request, step) => {
+                for (const touch of touches) {
+                  const touched = step(say`Touch the security key`, "touch");
+                  await touch;
+                  touched();
+                }
+                return OCTO_PULL_REQUEST;
+              },
+            }),
+            holdTimers: true,
+            columns: 100,
+          },
+        );
+      }
+
+      /** Runs the frames of the key that `harness` holds, one at a time,
+       * until it has written one showing the key plugged in with its light
+       * on, and returns what each frame wrote. */
+      function plugIn(harness: ReturnType<typeof touchHarness>): string[] {
+        const written = harness.writes.length;
+        const frames = () => harness.writes.slice(written);
+        // Each frame is at least a millisecond after the one before.
+        for (let frame = 0; frame <= KEY_PLUG_MS; frame++) {
+          if (frames().some((text) => text.includes("╟─━━─╮"))) break;
+          harness.releaseTimers();
+        }
+        return frames();
+      }
+
+      it("brings the key in from past the screen's edge, each frame when it is due, then blinks its light until it is touched, writing only the rows each frame changes", async () => {
+        const touch = deferred<void>();
+        const harness = touchHarness(touch.promise);
+        const waiting = harness.frame((text) =>
+          text.includes("Touch the security key")
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+        let timersWhenWaiting = 0;
+        let frames: string[] = [];
+        let blinks: string[] = [];
+        let timersWhenTouched = 0;
+        let writesWhenTouched = 0;
+        let timersWhenDue = 0;
+        let writesWhenDue = 0;
+
+        await harness.run([
+          "P",
+          async () => {
+            await waiting;
+            timersWhenWaiting = harness.timers.length;
+            frames = plugIn(harness);
+            const written = harness.writes.length;
+            harness.releaseTimers();
+            harness.releaseTimers();
+            blinks = harness.writes.slice(written);
+            touch.resolve();
+            await closable;
+            timersWhenTouched = harness.timers.length;
+            writesWhenTouched = harness.writes.length;
+            // The frame still pending when the key was touched comes due.
+            harness.releaseTimers();
+            timersWhenDue = harness.timers.length;
+            writesWhenDue = harness.writes.length;
+          },
+          "c",
+        ]);
+
+        // The draw that first shows the step sets the key's first timer
+        // after it writes, so that timer is the last one set by then.
+        const timers = harness.timers.slice(
+          timersWhenWaiting - 1,
+          timersWhenTouched,
+        );
+        const plugging = timers.slice(0, frames.length);
+        expect(plugging.reduce((sum, delay) => sum + delay, 0)).toBe(350);
+        expect(timers.slice(frames.length)).toEqual([300, 300, 300]);
+        expect(frames.filter((frame) => frame.includes("═"))).toEqual([]);
+        // The key's first frames move it less than a column, writing no rows.
+        const shown = frames.find((frame) => frame.includes("║"))!;
+        expect(shown).toContain("╭");
+        expect(shown).not.toContain("▪");
+        expect(blinks.map((frame) => frame.includes("╟─━━─╮"))).toEqual([
+          false,
+          true,
+        ]);
+        expect(blinks[0]).toContain("╟────╮");
+        const closed = harness.writes.find((text) => text.includes(" Close "))!;
+        expect(closed).toContain("╟─━━─╮");
+        expect(writesWhenDue).toBe(writesWhenTouched);
+        expect(timersWhenDue).toBe(timersWhenTouched);
+      });
+
+      it("starts the key over at once, cancelling the blink it had set, when another step waits for a touch", async () => {
+        const first = deferred<void>();
+        const harness = touchHarness(first.promise, new Promise(() => {}));
+        const waiting = harness.frame((text) =>
+          text.includes("Touch the security key")
+        );
+        let timersWhenPlugged = 0;
+
+        await harness.run([
+          "P",
+          async () => {
+            await waiting;
+            plugIn(harness);
+            timersWhenPlugged = harness.timers.length;
+            const restarted = harness.frame((text) =>
+              text.includes("Touch the security key ✓")
+            );
+            first.resolve();
+            await restarted;
+          },
+        ]);
+
+        const set = harness.timers.slice(timersWhenPlugged - 1);
+        expect(set).toEqual([300, 16]);
+        expect(harness.cancelled).toEqual(set);
+      });
+
+      it("cancels the key's next frame when the viewer closes", async () => {
+        const harness = touchHarness(new Promise<never>(() => {}));
+        const waiting = harness.frame((text) =>
+          text.includes("Touch the security key")
+        );
+
+        await harness.run(["P", () => waiting]);
+
+        expect(harness.cancelled).toEqual([16]);
+      });
+    });
+
     describe("asking before pushing a branch origin has", () => {
       /** A GitHub API that finds pull request 7 of `octo/repo` open. */
       const findingGitHub: GitHubApi = {
@@ -2951,6 +3497,45 @@ describe("view-push", () => {
         );
         return { ...harness, ran, asked };
       }
+
+      it("looks for the pull request while origin's server is asked for its default branch, asking whether to push once it answers", async () => {
+        const answer = deferred();
+        const harness = pagerHarness(() => {
+          const { io } = fakeIo({ answers: FEATURE_PUSHED });
+          return {
+            ...io,
+            queryAsync: async (args) => {
+              await answer.promise;
+              return io.queryAsync(args);
+            },
+          };
+        }, { git: viewerGit({}, UPSTREAM), github: findingGitHub });
+        const asked = harness.frame((text) => text.includes(" Cancel "));
+        let unanswered = "";
+
+        await harness.run([
+          "P",
+          () => {
+            unanswered = harness.writes.join("");
+            answer.resolve();
+            return asked;
+          },
+          "c",
+        ]);
+
+        expect(unanswered).toContain(`${ASKED_ORIGIN}...`);
+        expect(unanswered).toContain(
+          "Looking for the pull request of feature in octo/repo...",
+        );
+        // The question that decides whether to push is shown first.
+        expect(unanswered.indexOf(ASKED_ORIGIN)).toBeLessThan(
+          unanswered.indexOf("Looking for the pull request"),
+        );
+        expect(unanswered).not.toContain(" Cancel ");
+        expect(harness.writes.join("")).toContain(
+          "Pull request 7 is open from it:",
+        );
+      });
 
       it("asks again whether to push when Retry push follows a failure to ask origin which branch is its default", async () => {
         let asks = 0;
@@ -3147,6 +3732,7 @@ describe("view-push", () => {
           },
         });
         const looking = harness.frame((text) =>
+          text.includes(`${ASKED_ORIGIN}... ✓`) &&
           text.includes("Looking for the pull request")
         );
         const asked = harness.frame((text) => text.includes(" Cancel "));
@@ -3175,6 +3761,39 @@ describe("view-push", () => {
             "Stopped looking for its pull request.",
           );
       });
+      it("stops the push on Abort while origin's server has not answered, asking nothing", async () => {
+        const harness = pagerHarness((signal) => {
+          const { io } = fakeIo({ answers: FEATURE_PUSHED });
+          return {
+            ...io,
+            queryAsync: () =>
+              new Promise((resolve) =>
+                signal.addEventListener("abort", () => resolve(null))
+              ),
+          };
+        }, {
+          git: viewerGit({}, UPSTREAM),
+          github: {
+            ...unusedGitHub,
+            find: (_, signal) =>
+              new Promise((_, reject) =>
+                signal.addEventListener("abort", () => reject(signal.reason))
+              ),
+          },
+        });
+        const looking = harness.frame((text) =>
+          text.includes(`${ASKED_ORIGIN}...`) &&
+          text.includes("Looking for the pull request")
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => looking, "a", () => closable, "c"]);
+
+        const shown = harness.writes.join("");
+        expect(shown).toContain("Push aborted.");
+        expect(shown).not.toContain(" Cancel ");
+        expect(shown).not.toContain("Stopped looking for its pull request.");
+      });
     });
 
     describe("watching for the pull request", () => {
@@ -3195,7 +3814,7 @@ describe("view-push", () => {
             },
           }),
           {
-            git: viewerGit(),
+            git: viewerGit({ ...QUITTING, "cf-view.quitDelay": "6300" }),
             relay: (address) => address === RELAY ? relay.connect : undefined,
           },
         );
@@ -3216,6 +3835,8 @@ describe("view-push", () => {
         expect(connectedBeforePage).toBe(true);
         const shown = harness.writes.find((text) => text.includes(" Close "))!;
         expect(shown).toContain("Waiting for the pull request to open");
+        expect(harness.timers).toContain(6300);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${PULL_REQUEST}\\n$`),
         );
@@ -3422,7 +4043,7 @@ describe("view-push", () => {
           }),
           { git: viewerGit(), relay: () => relay.connect },
         );
-        const running = harness.frame((text) => text.includes(" Abort "));
+        const running = harness.frame((text) => text.includes(PUSHING));
         const closable = harness.frame((text) => text.includes(" Close "));
 
         await harness.run(["P", () => running, "a", () => closable, "c"]);
@@ -3710,16 +4331,11 @@ describe("view-push", () => {
         );
       });
 
-      it("creates it into the branch upstream's server names as its default, titled as the first commit that branch lacks, whatever git cached on cloning", async () => {
+      it("creates it into the branch GitHub names as upstream's default, titled as the first commit that branch lacks, whatever git cached on cloning", async () => {
         const created: CreateRequest[] = [];
+        const asked: string[] = [];
         const harness = pagerHarness(
-          () =>
-            fakeIo({
-              pushOutput: GITHUB_OFFER,
-              answers: {
-                "ls-remote --symref upstream HEAD": symrefListing("trunk"),
-              },
-            }).io,
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
           {
             git: viewerGit({ "cf-view.pullRequestTool": "api" }, {
               ...UPSTREAM,
@@ -3734,6 +4350,10 @@ describe("view-push", () => {
             }),
             github: {
               ...unusedGitHub,
+              defaultBranch: (repository) => {
+                asked.push(repository);
+                return Promise.resolve("trunk");
+              },
               create: (request) => {
                 created.push(request);
                 return Promise.resolve(OCTO_PULL_REQUEST);
@@ -3745,6 +4365,10 @@ describe("view-push", () => {
 
         await harness.run(["P", () => closable, "c"]);
 
+        expect(asked).toEqual(["octo/repo"]);
+        expect(harness.writes.join("")).toContain(
+          "Asking GitHub which branch is the default of octo/repo... ✓",
+        );
         expect(created).toEqual([{
           repository: "octo/repo",
           head: "fork:feature",
@@ -3754,52 +4378,177 @@ describe("view-push", () => {
         }]);
       });
 
-      it("fails, offering to retry, when upstream's server names no default branch or cannot be asked", async () => {
-        for (const listing of ["0123456789abcdef\tHEAD\n", null]) {
+      it("creates it, and again when Create PR is pressed, into origin's default branch as the push learned it, or else the one GitHub names for upstream, asking for each once", async () => {
+        for (const fork of [false, true]) {
           const created: CreateRequest[] = [];
-          const harness = pagerHarness(
-            () =>
-              fakeIo({
-                pushOutput: GITHUB_OFFER,
-                answers: { "ls-remote --symref upstream HEAD": listing },
-              }).io,
-            {
-              git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
-              github: {
-                ...unusedGitHub,
-                create: (request) => {
-                  created.push(request);
-                  return Promise.resolve(OCTO_PULL_REQUEST);
-                },
+          const asked: string[] = [];
+          const askedGitHub: string[] = [];
+          const harness = pagerHarness(() => {
+            const { io } = fakeIo({
+              pushOutput: GITHUB_OFFER,
+              answers: { [ASK_ORIGIN_DEFAULT]: symrefListing("trunk") },
+            });
+            return {
+              ...io,
+              queryAsync: (args) => {
+                asked.push(args.join(" "));
+                return io.queryAsync(args);
               },
+            };
+          }, {
+            git: viewerGit(
+              { "cf-view.pullRequestTool": "api" },
+              fork ? UPSTREAM : {
+                [
+                  "rev-list --reverse --no-merges --right-only --cherry-pick " +
+                  "--end-of-options refs/remotes/origin/trunk...HEAD --"
+                ]: "c2\n",
+                "-c log.showSignature=false log -1 --format=%s%x00%b c2 --":
+                  "Add the widget\0",
+              },
+            ),
+            github: {
+              ...unusedGitHub,
+              defaultBranch: (repository) => {
+                askedGitHub.push(repository);
+                return Promise.resolve("main");
+              },
+              create: (request) =>
+                created.push(request) === 1
+                  ? Promise.reject(new Error("no network"))
+                  : Promise.resolve(OCTO_PULL_REQUEST),
             },
+          });
+          const failed = harness.frame((text) => text.includes("P Create PR"));
+          // The retry ends with the pull request created, or with git unable
+          // to compare the branch with a base branch it never fetched.
+          const retried = harness.frame((text) =>
+            text.includes(`Created ${OCTO_PULL_REQUEST}`) ||
+            text.includes("git cannot compare")
           );
-          const closable = harness.frame((text) => text.includes(" Close "));
 
-          await harness.run(["P", () => closable, "c"]);
+          await harness.run(["P", () => failed, "p", () => retried, "c"]);
 
-          expect(created).toEqual([]);
-          const shown = harness.writes.find((text) =>
-            text.includes(" Close ")
-          )!;
-          expect(shown).toContain(
-            "Asking upstream which branch is its default... ✗",
-          );
-          expect(shown).toContain(
-            "Creating the pull request failed: upstream's",
-          );
-          expect(shown).toContain(
-            "default branch is unknown. To retry, press Create PR.",
-          );
+          expect(asked).toEqual([ASK_ORIGIN_DEFAULT]);
+          expect(askedGitHub).toEqual(fork ? ["octo/repo"] : []);
+          const request = fork
+            ? {
+              repository: "octo/repo",
+              head: "fork:feature",
+              base: "main",
+              title: "Fix the frobnicator",
+              body: "It was broken.",
+            }
+            : {
+              repository: "fork/repo",
+              head: "feature",
+              base: "trunk",
+              title: "Add the widget",
+              body: "",
+            };
+          expect(created).toEqual([request, request]);
         }
       });
 
-      it("gives the created pull request's address in the dialog, saying it is quitting, for two seconds before it quits", async () => {
+      it("fails, offering to retry, when GitHub cannot say which branch is upstream's default, and asks again when Create PR is pressed", async () => {
+        const created: CreateRequest[] = [];
+        let asks = 0;
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              defaultBranch: () =>
+                ++asks === 1
+                  ? Promise.reject(new Error("no network"))
+                  : Promise.resolve("main"),
+              create: (request) => {
+                created.push(request);
+                return Promise.resolve(OCTO_PULL_REQUEST);
+              },
+            },
+          },
+        );
+        const failed = harness.frame((text) => text.includes("P Create PR"));
+        let createdWhenFailed = -1;
+        const retried = harness.frame((text) =>
+          text.includes(`Created ${OCTO_PULL_REQUEST}`)
+        );
+
+        await harness.run([
+          "P",
+          async () => {
+            await failed;
+            createdWhenFailed = created.length;
+          },
+          "p",
+          () => retried,
+          "c",
+        ]);
+
+        expect(createdWhenFailed).toBe(0);
+        expect(asks).toBe(2);
+        expect(created.map(({ base }) => base)).toEqual(["main"]);
+        const shown = harness.writes.find((text) =>
+          text.includes("P Create PR")
+        )!;
+        expect(shown).toContain(
+          "Asking GitHub which branch is the default of octo/repo... ✗",
+        );
+        expect(shown).toContain(
+          "Creating the pull request failed: no network.",
+        );
+        expect(shown).toContain("To retry, press Create PR.");
+      });
+
+      it("keeps the branch GitHub named as upstream's default when the search for the open pull request fails, asking only for the pull request when Create PR is pressed", async () => {
+        const created: CreateRequest[] = [];
+        let searches = 0;
+        let asks = 0;
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              find: () =>
+                ++searches === 1
+                  ? Promise.reject(new Error("no network"))
+                  : Promise.resolve(null),
+              defaultBranch: () => {
+                asks++;
+                return Promise.resolve("main");
+              },
+              create: (request) => {
+                created.push(request);
+                return Promise.resolve(OCTO_PULL_REQUEST);
+              },
+            },
+          },
+        );
+        const failed = harness.frame((text) => text.includes("P Create PR"));
+        const retried = harness.frame((text) =>
+          text.includes(`Created ${OCTO_PULL_REQUEST}`)
+        );
+
+        await harness.run(["P", () => failed, "p", () => retried, "c"]);
+
+        expect(searches).toBe(2);
+        expect(asks).toBe(1);
+        expect(created.map(({ base }) => base)).toEqual(["main"]);
+      });
+
+      it("gives the created pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits", async () => {
         const harness = pagerHarness(
           () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
           {
             git: viewerGit(
-              { "cf-view.pullRequestTool": "api", ...QUITTING },
+              {
+                "cf-view.pullRequestTool": "api",
+                "cf-view.quitDelay": "250",
+                ...QUITTING,
+              },
               UPSTREAM,
             ),
             github: {
@@ -3816,13 +4565,47 @@ describe("view-push", () => {
         );
         expect(quitting).toBeGreaterThan(-1);
         expect(harness.writes[quitting]).toContain(
-          `Pull request: ${OCTO_PULL_REQUEST}`,
+          `Created ${OCTO_PULL_REQUEST}`,
         );
+        expect(harness.writes[quitting]).not.toContain("Pull request:");
         expect(harness.writes[quitting]).toContain(" Close ");
-        expect(harness.timers).toContain(2000);
+        expect(harness.timers).toContain(250);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );
+      });
+
+      it("quits for the created pull request at once, without saying it is quitting, when the settings set a delay of 16 ms or less", async () => {
+        for (const delay of ["16", "5"]) {
+          const harness = pagerHarness(
+            () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+            {
+              git: viewerGit(
+                {
+                  "cf-view.pullRequestTool": "api",
+                  "cf-view.quitDelay": delay,
+                  ...QUITTING,
+                },
+                UPSTREAM,
+              ),
+              github: {
+                ...unusedGitHub,
+                create: () => Promise.resolve(OCTO_PULL_REQUEST),
+              },
+            },
+          );
+
+          await harness.run(["P", forever]);
+
+          expect(harness.writes.join("")).toContain(OCTO_PULL_REQUEST);
+          expect(harness.writes.join("")).not.toContain("Quitting...");
+          expect(harness.timers).not.toContain(16);
+          expect(harness.timers).not.toContain(2000);
+          expect(harness.writes.at(-1)).toMatch(
+            new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
+          );
+        }
       });
 
       it("creates it with touch-gate and the token the settings name, showing what the touch approves, and stays up while quitting is off", async () => {
@@ -3894,7 +4677,92 @@ describe("view-push", () => {
               : `Pushed feature to origin. Created ${OCTO_PULL_REQUEST}`,
           );
           expect(shown).toContain(OCTO_PULL_REQUEST);
+          if (listed) expect(shown).not.toContain("Asking GitHub");
         }
+      });
+
+      it("shows the search for the open pull request done once GitHub answers it, while GitHub has not said which branch is upstream's default", async () => {
+        let looked = Promise.resolve();
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            github: {
+              ...unusedGitHub,
+              defaultBranch: async () => {
+                await looked;
+                return "main";
+              },
+              create: () => Promise.resolve(OCTO_PULL_REQUEST),
+            },
+          },
+        );
+        looked = harness.frame((text) =>
+          text.includes(
+            "Looking for the pull request of feature in octo/repo... ✓",
+          ) &&
+          text.includes(
+            "Asking GitHub which branch is the default of octo/repo...",
+          )
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(harness.writes.join("")).toContain(
+          `Created ${OCTO_PULL_REQUEST}`,
+        );
+        expect(harness.writes.join("")).toContain(
+          "Asking GitHub which branch is the default of octo/repo... ✓",
+        );
+      });
+
+      it("asks GitHub for upstream's default branch while it asks for the open pull request, once the user's list names none", async () => {
+        const events: string[] = [];
+        const harness = pagerHarness(
+          () => fakeIo({ pushOutput: GITHUB_OFFER }).io,
+          {
+            git: viewerGit({ "cf-view.pullRequestTool": "api" }, UPSTREAM),
+            pullRequestList: () => {
+              events.push("read the list");
+              return Promise.resolve(null);
+            },
+            github: {
+              ...unusedGitHub,
+              find: () => {
+                events.push("ask for the pull request");
+                return Promise.resolve(null).then((found) => {
+                  events.push("pull request answered");
+                  return found;
+                });
+              },
+              defaultBranch: () => {
+                events.push("ask for the default branch");
+                return Promise.resolve("main").then((branch) => {
+                  events.push("default branch answered");
+                  return branch;
+                });
+              },
+              create: () => Promise.resolve(OCTO_PULL_REQUEST),
+            },
+          },
+        );
+        const closable = harness.frame((text) => text.includes(" Close "));
+
+        await harness.run(["P", () => closable, "c"]);
+
+        expect(events[0]).toBe("read the list");
+        expect(events.slice(1, 3).sort()).toEqual([
+          "ask for the default branch",
+          "ask for the pull request",
+        ]);
+        expect(events.slice(3).sort()).toEqual([
+          "default branch answered",
+          "pull request answered",
+        ]);
+        expect(harness.writes.join("")).toContain(
+          `Created ${OCTO_PULL_REQUEST}`,
+        );
       });
 
       it("creates nothing when GitHub, asked because the list names none, says one is open", async () => {
@@ -3916,6 +4784,9 @@ describe("view-push", () => {
         const shown = harness.writes.find((text) => text.includes(" Close "))!;
         expect(shown).toContain("Pull request 7 is open:");
         expect(shown).toContain(OCTO_PULL_REQUEST);
+        expect(shown).toContain(
+          "Asking GitHub which branch is the default of octo/repo... ✓",
+        );
       });
 
       it("tries again with the settings as they are when Create PR is pressed, and says when they no longer create pull requests", async () => {
@@ -4571,12 +5442,13 @@ describe("view-push", () => {
           .toContain(`Merged ${OCTO_PULL_REQUEST}`);
       });
 
-      it("gives the merged pull request's address in the dialog, saying it is quitting, for two seconds before it quits, when the settings say to", async () => {
+      it("gives the merged pull request's address in the dialog, saying it is quitting, for the delay the settings set before it quits, when the settings say to", async () => {
         const harness = pagerHarness(() => fakeIo().io, {
           git: viewerGit(
             {
               "cf-view.pullRequestTool": "touch-gate",
               "cf-view.touchGateToken": "mine",
+              "cf-view.quitDelay": "7900",
               ...QUITTING,
             },
             UPSTREAM,
@@ -4594,8 +5466,10 @@ describe("view-push", () => {
           text.includes("Quitting...")
         )!;
         expect(quitting).toContain(" Land ");
-        expect(quitting).toContain(`Pull request: ${OCTO_PULL_REQUEST}`);
-        expect(harness.timers).toContain(2000);
+        expect(quitting).toContain(`Merged ${OCTO_PULL_REQUEST}`);
+        expect(quitting).not.toContain("Pull request:");
+        expect(harness.timers).toContain(7900);
+        expect(harness.timers).not.toContain(2000);
         expect(harness.writes.at(-1)).toMatch(
           new RegExp(`\\x1b\\[\\?1049l${OCTO_PULL_REQUEST}\\n$`),
         );

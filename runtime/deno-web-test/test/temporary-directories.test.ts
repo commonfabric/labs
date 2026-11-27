@@ -15,9 +15,8 @@
  * profile removal follows those waits.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { removeDirectory } from "@commonfabric/test-support/remove-directory";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RUN_DIRECTORY_PREFIX } from "../manifest.ts";
 import { runDenoWebTest } from "./utils.ts";

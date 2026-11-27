@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { NormalizedFullLink } from "../src/link-types.ts";
@@ -10,6 +9,7 @@ import {
 import { ImmutableCellStore } from "../src/immutable-cell.ts";
 import type { URI } from "../src/sigil-types.ts";
 import { acquireSchemaRegistryLease } from "../src/schema-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mkk89bC3JrVqKie71YEcc5M1SMVxuCgNx6zLZ8SYJsxALi";
 

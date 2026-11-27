@@ -5,7 +5,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   internSchema,
@@ -13,6 +12,7 @@ import {
   isNontrivialSchema,
   toDeepFrozenSchema,
 } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { resolveSchema, resolveSchemaForValue } from "../src/schema.ts";

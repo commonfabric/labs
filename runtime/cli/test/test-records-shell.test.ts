@@ -6,13 +6,13 @@
  * of the printf.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import {
   parseRecordLine,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HELPERS = fromFileUrl(
   new URL("../integration/test-records.sh", import.meta.url),

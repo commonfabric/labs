@@ -1,9 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { runInActionExecution } from "../src/builder/action-context.ts";
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { handler, lift } from "../src/builder/module.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 /**
  * Identity E5 (design Phase 4): builder artifacts are module-scope

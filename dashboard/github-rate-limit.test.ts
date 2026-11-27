@@ -7,7 +7,6 @@ import {
 } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   type GitHubPrimaryRateLimit,
   GitHubRateLimitBudget,
@@ -23,6 +22,7 @@ import {
   performanceGithub,
   performanceGithubDownload,
 } from "./lib.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const RESET = 2_000_000_000;
 
@@ -73,7 +73,7 @@ async function tokenKey(token: string): Promise<string> {
   ).join("");
 }
 
-Deno.test("GitHub performance budget rejects invalid configuration", () => {
+test("GitHub performance budget rejects invalid configuration", () => {
   for (const fraction of [0, 1.1, Number.NaN]) {
     assertThrows(
       () => new GitHubRateLimitBudget({ fraction }),
@@ -90,7 +90,7 @@ Deno.test("GitHub performance budget rejects invalid configuration", () => {
   }
 });
 
-Deno.test("GitHub performance budget rejects every malformed primary field", async () => {
+test("GitHub performance budget rejects every malformed primary field", async () => {
   const malformed: GitHubPrimaryRateLimit[] = [
     { limit: 0, used: 0, remaining: 0, reset: RESET },
     { limit: 100, used: -1, remaining: 100, reset: RESET },
@@ -108,7 +108,7 @@ Deno.test("GitHub performance budget rejects every malformed primary field", asy
   }
 });
 
-Deno.test("GitHub performance budget reports rejected in-memory probes", async () => {
+test("GitHub performance budget reports rejected in-memory probes", async () => {
   for (
     const [index, [reason, described]] of ([
       [new Error("offline"), "offline"],
@@ -124,7 +124,7 @@ Deno.test("GitHub performance budget reports rejected in-memory probes", async (
   }
 });
 
-Deno.test("GitHub performance budget handles incomplete and older response headers", async () => {
+test("GitHub performance budget handles incomplete and older response headers", async () => {
   const budget = new GitHubRateLimitBudget({ now: () => 1_900_000_000_000 });
   const first = await budget.reserve(
     "token",
@@ -156,7 +156,7 @@ Deno.test("GitHub performance budget handles incomplete and older response heade
   );
 });
 
-Deno.test("GitHub performance budget rejects malformed stored ledgers", async () => {
+test("GitHub performance budget rejects malformed stored ledgers", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const key = "a".repeat(64);
   const cases: unknown[] = [
@@ -196,7 +196,7 @@ Deno.test("GitHub performance budget rejects malformed stored ledgers", async ()
   }
 });
 
-Deno.test("GitHub performance budget rejects an invalid stored probe", async () => {
+test("GitHub performance budget rejects an invalid stored probe", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   try {
     const budget = new GitHubRateLimitBudget({
@@ -212,7 +212,7 @@ Deno.test("GitHub performance budget rejects an invalid stored probe", async () 
   }
 });
 
-Deno.test("GitHub performance ledger preserves write failures during cleanup", async () => {
+test("GitHub performance ledger preserves write failures during cleanup", async () => {
   for (const cleanupFails of [false, true]) {
     const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
     const file = `${directory}/ledger.json`;
@@ -241,7 +241,7 @@ Deno.test("GitHub performance ledger preserves write failures during cleanup", a
   }
 });
 
-Deno.test("GitHub performance ledger reports lock cleanup failures", async () => {
+test("GitHub performance ledger reports lock cleanup failures", async () => {
   for (const stage of ["unlock", "close"] as const) {
     const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
     try {
@@ -269,7 +269,7 @@ Deno.test("GitHub performance ledger reports lock cleanup failures", async () =>
   }
 });
 
-Deno.test("GitHub performance ledger cleans up a reservation lease that cannot lock", async () => {
+test("GitHub performance ledger cleans up a reservation lease that cannot lock", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const open = Deno.open;
   try {
@@ -292,7 +292,7 @@ Deno.test("GitHub performance ledger cleans up a reservation lease that cannot l
   }
 });
 
-Deno.test("GitHub performance ledger reports reservation close failures", async () => {
+test("GitHub performance ledger reports reservation close failures", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const open = Deno.open;
   const remove = Deno.remove;
@@ -329,7 +329,7 @@ Deno.test("GitHub performance ledger reports reservation close failures", async 
   }
 });
 
-Deno.test("GitHub performance ledger reports failed rejected-reservation cleanup", async () => {
+test("GitHub performance ledger reports failed rejected-reservation cleanup", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const open = Deno.open;
   try {
@@ -352,7 +352,7 @@ Deno.test("GitHub performance ledger reports failed rejected-reservation cleanup
   }
 });
 
-Deno.test("GitHub performance ledger reports failed abandoned-reservation cleanup", async () => {
+test("GitHub performance ledger reports failed abandoned-reservation cleanup", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const open = Deno.open;
@@ -384,7 +384,7 @@ Deno.test("GitHub performance ledger reports failed abandoned-reservation cleanu
   }
 });
 
-Deno.test("GitHub performance ledger closes a lease after its write rolls back", async () => {
+test("GitHub performance ledger closes a lease after its write rolls back", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const rename = Deno.rename;
@@ -414,7 +414,7 @@ Deno.test("GitHub performance ledger closes a lease after its write rolls back",
   }
 });
 
-Deno.test("GitHub performance ledger reports reservation liveness failures", async () => {
+test("GitHub performance ledger reports reservation liveness failures", async () => {
   for (const stage of ["open", "lock"] as const) {
     const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
     const file = `${directory}/ledger.json`;
@@ -456,7 +456,7 @@ Deno.test("GitHub performance ledger reports reservation liveness failures", asy
   }
 });
 
-Deno.test("GitHub performance ledger treats a missing reservation lease as expired", async () => {
+test("GitHub performance ledger treats a missing reservation lease as expired", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const token = "missing-lease";
@@ -490,7 +490,7 @@ Deno.test("GitHub performance ledger treats a missing reservation lease as expir
   }
 });
 
-Deno.test("GitHub performance ledger reports an expired-lease removal failure", async () => {
+test("GitHub performance ledger reports an expired-lease removal failure", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const token = "expired-removal";
@@ -531,7 +531,7 @@ Deno.test("GitHub performance ledger reports an expired-lease removal failure", 
   }
 });
 
-Deno.test("GitHub performance budget rejects a primary window that expires during its probe", async () => {
+test("GitHub performance budget rejects a primary window that expires during its probe", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   let now = 1_900_000_000_000;
   try {
@@ -553,7 +553,7 @@ Deno.test("GitHub performance budget rejects a primary window that expires durin
   }
 });
 
-Deno.test("GitHub performance reservation completion is idempotent", async () => {
+test("GitHub performance reservation completion is idempotent", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   try {
     const budget = new GitHubRateLimitBudget({
@@ -570,7 +570,7 @@ Deno.test("GitHub performance reservation completion is idempotent", async () =>
   }
 });
 
-Deno.test("GitHub performance ledger serializes concurrent reservations before taking file locks", async () => {
+test("GitHub performance ledger serializes concurrent reservations before taking file locks", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   let held = false;
@@ -631,7 +631,7 @@ async function readLine(stream: ReadableStream<Uint8Array>): Promise<string> {
   return value.slice(0, value.indexOf("\n"));
 }
 
-Deno.test("GitHub performance budget reserves concurrent requests below the 80% ceiling", async () => {
+test("GitHub performance budget reserves concurrent requests below the 80% ceiling", async () => {
   const budget = new GitHubRateLimitBudget({ now: () => 1_900_000_000_000 });
   let probes = 0;
   const probe = () => {
@@ -659,7 +659,7 @@ Deno.test("GitHub performance budget reserves concurrent requests below the 80% 
   );
 });
 
-Deno.test("GitHub performance budget reads a new primary window after reset", async () => {
+test("GitHub performance budget reads a new primary window after reset", async () => {
   let now = 1_900_000_000_000;
   const budget = new GitHubRateLimitBudget({ now: () => now });
   let probes = 0;
@@ -682,7 +682,7 @@ Deno.test("GitHub performance budget reads a new primary window after reset", as
   assertEquals(probes, 2);
 });
 
-Deno.test("GitHub performance budget also keeps REST request points below 80% per minute", async () => {
+test("GitHub performance budget also keeps REST request points below 80% per minute", async () => {
   const budget = new GitHubRateLimitBudget({
     now: () => 1_900_000_000_000,
     restPointsPerMinute: 5,
@@ -702,7 +702,7 @@ Deno.test("GitHub performance budget also keeps REST request points below 80% pe
   assertStringIncludes(error.message, "REST request points");
 });
 
-Deno.test("GitHub performance budget uses the most conservative primary fields", async () => {
+test("GitHub performance budget uses the most conservative primary fields", async () => {
   const budget = new GitHubRateLimitBudget({ now: () => 1_900_000_000_000 });
   await assertRejects(
     () =>
@@ -718,7 +718,7 @@ Deno.test("GitHub performance budget uses the most conservative primary fields",
   );
 });
 
-Deno.test("GitHub performance reservations are shared by budget instances", async () => {
+test("GitHub performance reservations are shared by budget instances", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const options = { now: () => 1_900_000_000_000, file };
@@ -751,7 +751,7 @@ Deno.test("GitHub performance reservations are shared by budget instances", asyn
   }
 });
 
-Deno.test("GitHub performance reservations are shared by dashboard processes", async () => {
+test("GitHub performance reservations are shared by dashboard processes", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const module = new URL("./github-rate-limit.ts", import.meta.url).href;
@@ -809,7 +809,7 @@ Deno.test("GitHub performance reservations are shared by dashboard processes", a
   assertEquals(status?.success, true, stderr);
 });
 
-Deno.test("GitHub performance reservations stay counted across a primary reset", async () => {
+test("GitHub performance reservations stay counted across a primary reset", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   let now = 1_900_000_000_000;
@@ -850,7 +850,7 @@ Deno.test("GitHub performance reservations stay counted across a primary reset",
   }
 });
 
-Deno.test("GitHub REST point history survives a dashboard restart", async () => {
+test("GitHub REST point history survives a dashboard restart", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const options = {
@@ -879,7 +879,7 @@ Deno.test("GitHub REST point history survives a dashboard restart", async () => 
   }
 });
 
-Deno.test("GitHub performance reservations become recoverable when completion cannot update the ledger", async () => {
+test("GitHub performance reservations become recoverable when completion cannot update the ledger", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   let now = 1_900_000_000_000;
@@ -915,7 +915,7 @@ Deno.test("GitHub performance reservations become recoverable when completion ca
   }
 });
 
-Deno.test("GitHub performance requests preserve an unreadable shared ledger", async () => {
+test("GitHub performance requests preserve an unreadable shared ledger", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const malformed = "{not json";
@@ -939,7 +939,7 @@ Deno.test("GitHub performance requests preserve an unreadable shared ledger", as
   }
 });
 
-Deno.test("GitHub performance requests fail closed when the ledger cannot be locked", async () => {
+test("GitHub performance requests fail closed when the ledger cannot be locked", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/missing/ledger.json`;
   const budget = new GitHubRateLimitBudget({ file });
@@ -954,7 +954,7 @@ Deno.test("GitHub performance requests fail closed when the ledger cannot be loc
   }
 });
 
-Deno.test("a rejected performance reservation removes its unused lease", async () => {
+test("a rejected performance reservation removes its unused lease", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const budget = new GitHubRateLimitBudget({
@@ -977,7 +977,7 @@ Deno.test("a rejected performance reservation removes its unused lease", async (
   }
 });
 
-Deno.test("expired reservation leases remain until their ledger removal commits", async () => {
+test("expired reservation leases remain until their ledger removal commits", async () => {
   const directory = await Deno.makeTempDir({ prefix: "github-rate-limit-" });
   const file = `${directory}/ledger.json`;
   const reset = 1_900_000_001;
@@ -1046,7 +1046,7 @@ Deno.test("expired reservation leases remain until their ledger removal commits"
   }
 });
 
-Deno.test("ordinary dashboard GitHub requests stay outside the ledger while the next performance probe refreshes the primary total", async () => {
+test("ordinary dashboard GitHub requests stay outside the ledger while the next performance probe refreshes the primary total", async () => {
   const token = `ordinary-request-${crypto.randomUUID()}`;
   const ledgerFile = dashboardCacheFile(
     "fabric-wall-github-rate-limit.json",
@@ -1114,7 +1114,7 @@ Deno.test("ordinary dashboard GitHub requests stay outside the ledger while the 
   }
 });
 
-Deno.test("performance GitHub requests stop after the rate probe reaches 80%", async () => {
+test("performance GitHub requests stop after the rate probe reaches 80%", async () => {
   const token = `rate-limit-test-${crypto.randomUUID()}`;
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
@@ -1145,7 +1145,7 @@ Deno.test("performance GitHub requests stop after the rate probe reaches 80%", a
   }
 });
 
-Deno.test("performance GitHub requests can consume the request that reaches 80%", async () => {
+test("performance GitHub requests can consume the request that reaches 80%", async () => {
   const token = `rate-limit-test-${crypto.randomUUID()}`;
   const originalFetch = globalThis.fetch;
   const calls: string[] = [];
@@ -1179,7 +1179,7 @@ Deno.test("performance GitHub requests can consume the request that reaches 80%"
   }
 });
 
-Deno.test("performance GitHub requests report unusable rate-limit responses", async () => {
+test("performance GitHub requests report unusable rate-limit responses", async () => {
   const originalFetch = globalThis.fetch;
   try {
     for (
@@ -1214,7 +1214,7 @@ Deno.test("performance GitHub requests report unusable rate-limit responses", as
   }
 });
 
-Deno.test("an unusable rate-limit response does not wait for body cleanup", async () => {
+test("an unusable rate-limit response does not wait for body cleanup", async () => {
   const originalFetch = globalThis.fetch;
   let cancelled = false;
   const response = new Response(
@@ -1243,7 +1243,7 @@ Deno.test("an unusable rate-limit response does not wait for body cleanup", asyn
   }
 });
 
-Deno.test("GitHub download helpers return response bodies without JSON decoding", async () => {
+test("GitHub download helpers return response bodies without JSON decoding", async () => {
   const originalFetch = globalThis.fetch;
   const calls: { path: string; signal: AbortSignal | null | undefined }[] = [];
   const token = `download-${crypto.randomUUID()}`;

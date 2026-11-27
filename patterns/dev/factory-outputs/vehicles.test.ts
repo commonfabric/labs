@@ -11,24 +11,25 @@ import {
   normalizeVehicles,
   type Vehicle,
 } from "./vehicles.ts";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // normalizePlateId
 //
 
-Deno.test("normalizePlateId: uppercases and strips non-alphanumerics", () => {
+test("normalizePlateId: uppercases and strips non-alphanumerics", () => {
   assertEquals(normalizePlateId("7abc-123!"), "7ABC123");
 });
 
-Deno.test("normalizePlateId: already clean plate unchanged", () => {
+test("normalizePlateId: already clean plate unchanged", () => {
   assertEquals(normalizePlateId("ABC123"), "ABC123");
 });
 
-Deno.test("normalizePlateId: all special chars → empty string", () => {
+test("normalizePlateId: all special chars → empty string", () => {
   assertEquals(normalizePlateId("---"), "");
 });
 
-Deno.test("normalizePlateId: empty string → empty string", () => {
+test("normalizePlateId: empty string → empty string", () => {
   assertEquals(normalizePlateId(""), "");
 });
 
@@ -36,17 +37,17 @@ Deno.test("normalizePlateId: empty string → empty string", () => {
 // modelsForMake
 //
 
-Deno.test("modelsForMake: returns models for a known make", () => {
+test("modelsForMake: returns models for a known make", () => {
   const models = modelsForMake("Honda");
   assertEquals(models.includes("Civic"), true);
   assertEquals(models.includes("Accord"), true);
 });
 
-Deno.test("modelsForMake: returns empty array for unknown make", () => {
+test("modelsForMake: returns empty array for unknown make", () => {
   assertEquals(modelsForMake("FakeMake"), []);
 });
 
-Deno.test("modelsForMake: returns empty array for empty string", () => {
+test("modelsForMake: returns empty array for empty string", () => {
   assertEquals(modelsForMake(""), []);
 });
 
@@ -54,7 +55,7 @@ Deno.test("modelsForMake: returns empty array for empty string", () => {
 // formatVehicle
 //
 
-Deno.test("formatVehicle: full vehicle", () => {
+test("formatVehicle: full vehicle", () => {
   const v: Vehicle = {
     plateId: "ABC123",
     plateState: "CA",
@@ -65,7 +66,7 @@ Deno.test("formatVehicle: full vehicle", () => {
   assertEquals(formatVehicle(v), "Red Honda Civic — ABC123 (CA)");
 });
 
-Deno.test("formatVehicle: plate only (no descriptor)", () => {
+test("formatVehicle: plate only (no descriptor)", () => {
   const v: Vehicle = {
     plateId: "XYZ",
     plateState: "NY",
@@ -76,7 +77,7 @@ Deno.test("formatVehicle: plate only (no descriptor)", () => {
   assertEquals(formatVehicle(v), "XYZ (NY)");
 });
 
-Deno.test("formatVehicle: no plateState", () => {
+test("formatVehicle: no plateState", () => {
   const v: Vehicle = {
     plateId: "XYZ",
     plateState: "",
@@ -91,7 +92,7 @@ Deno.test("formatVehicle: no plateState", () => {
 // normalizeVehicle
 //
 
-Deno.test("normalizeVehicle: normalizes plate and defaults state", () => {
+test("normalizeVehicle: normalizes plate and defaults state", () => {
   const result = normalizeVehicle({
     plateId: "7abc-123!",
     plateState: "",
@@ -103,7 +104,7 @@ Deno.test("normalizeVehicle: normalizes plate and defaults state", () => {
   assertEquals(result.plateState, "CA");
 });
 
-Deno.test("normalizeVehicle: uppercases provided state", () => {
+test("normalizeVehicle: uppercases provided state", () => {
   const result = normalizeVehicle({
     plateId: "X1",
     plateState: "wa",
@@ -114,7 +115,7 @@ Deno.test("normalizeVehicle: uppercases provided state", () => {
   assertEquals(result.plateState, "WA");
 });
 
-Deno.test("normalizeVehicle: invalid state falls back to CA", () => {
+test("normalizeVehicle: invalid state falls back to CA", () => {
   // Junk codes ("XX", "ZZ", whitespace) would otherwise pollute downstream
   // classification matches keyed on (plateId, plateState).
   const xx = normalizeVehicle({
@@ -136,7 +137,7 @@ Deno.test("normalizeVehicle: invalid state falls back to CA", () => {
   assertEquals(blanks.plateState, "CA");
 });
 
-Deno.test("normalizeVehicle: valid make kept, invalid make dropped", () => {
+test("normalizeVehicle: valid make kept, invalid make dropped", () => {
   const valid = normalizeVehicle({
     plateId: "P1",
     plateState: "CA",
@@ -156,7 +157,7 @@ Deno.test("normalizeVehicle: valid make kept, invalid make dropped", () => {
   assertEquals(invalid.make, "");
 });
 
-Deno.test("normalizeVehicle: model dropped when make is invalid (cascade)", () => {
+test("normalizeVehicle: model dropped when make is invalid (cascade)", () => {
   const result = normalizeVehicle({
     plateId: "P1",
     plateState: "CA",
@@ -168,7 +169,7 @@ Deno.test("normalizeVehicle: model dropped when make is invalid (cascade)", () =
   assertEquals(result.model, "");
 });
 
-Deno.test("normalizeVehicle: model dropped when not in make's list (stale cascade)", () => {
+test("normalizeVehicle: model dropped when not in make's list (stale cascade)", () => {
   // Honda does not have Camry
   const result = normalizeVehicle({
     plateId: "P1",
@@ -181,7 +182,7 @@ Deno.test("normalizeVehicle: model dropped when not in make's list (stale cascad
   assertEquals(result.model, "");
 });
 
-Deno.test("normalizeVehicle: model kept when valid make+model combo", () => {
+test("normalizeVehicle: model kept when valid make+model combo", () => {
   const result = normalizeVehicle({
     plateId: "P1",
     plateState: "CA",
@@ -193,7 +194,7 @@ Deno.test("normalizeVehicle: model kept when valid make+model combo", () => {
   assertEquals(result.model, "Civic");
 });
 
-Deno.test("normalizeVehicle: valid color kept", () => {
+test("normalizeVehicle: valid color kept", () => {
   const result = normalizeVehicle({
     plateId: "P1",
     plateState: "CA",
@@ -204,7 +205,7 @@ Deno.test("normalizeVehicle: valid color kept", () => {
   assertEquals(result.color, "Red");
 });
 
-Deno.test("normalizeVehicle: invalid color dropped", () => {
+test("normalizeVehicle: invalid color dropped", () => {
   const result = normalizeVehicle({
     plateId: "P1",
     plateState: "CA",
@@ -219,7 +220,7 @@ Deno.test("normalizeVehicle: invalid color dropped", () => {
 // normalizeVehicles
 //
 
-Deno.test("normalizeVehicles: drops blank-plate entries", () => {
+test("normalizeVehicles: drops blank-plate entries", () => {
   const result = normalizeVehicles([
     { plateId: "---", plateState: "CA", color: "", make: "", model: "" },
     { plateId: "ABC123", plateState: "NY", color: "", make: "", model: "" },
@@ -228,7 +229,7 @@ Deno.test("normalizeVehicles: drops blank-plate entries", () => {
   assertEquals(result[0].plateId, "ABC123");
 });
 
-Deno.test("normalizeVehicles: dedupes by plateId|plateState, keeps first", () => {
+test("normalizeVehicles: dedupes by plateId|plateState, keeps first", () => {
   const result = normalizeVehicles([
     { plateId: "DUP001", plateState: "CA", color: "Red", make: "", model: "" },
     { plateId: "DUP001", plateState: "CA", color: "Blue", make: "", model: "" },
@@ -237,7 +238,7 @@ Deno.test("normalizeVehicles: dedupes by plateId|plateState, keeps first", () =>
   assertEquals(result[0].color, "Red");
 });
 
-Deno.test("normalizeVehicles: same plateId different state → both kept", () => {
+test("normalizeVehicles: same plateId different state → both kept", () => {
   const result = normalizeVehicles([
     { plateId: "ABC123", plateState: "CA", color: "", make: "", model: "" },
     { plateId: "ABC123", plateState: "NY", color: "", make: "", model: "" },
@@ -245,11 +246,11 @@ Deno.test("normalizeVehicles: same plateId different state → both kept", () =>
   assertEquals(result.length, 2);
 });
 
-Deno.test("normalizeVehicles: empty list → empty list", () => {
+test("normalizeVehicles: empty list → empty list", () => {
   assertEquals(normalizeVehicles([]), []);
 });
 
-Deno.test("normalizeVehicles: normalizes each entry", () => {
+test("normalizeVehicles: normalizes each entry", () => {
   const result = normalizeVehicles([
     {
       plateId: "abc-123",

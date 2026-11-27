@@ -10,7 +10,6 @@
  * that turn on the distinction set the flag rather than assuming a default.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { hashOf } from "@commonfabric/data-model";
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
@@ -19,6 +18,7 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { fromURI, toURI } from "../src/uri-utils.ts";
 
 const hash = hashOf({ causal: { test: "uri-utils" } });

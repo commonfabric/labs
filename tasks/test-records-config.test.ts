@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +7,7 @@ import {
   storeBucket,
   storePrefix,
 } from "./test-records-config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const KEY = {
   client_email: "test-records-gh-octocat@proj.iam.gserviceaccount.com",

@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONValue } from "@commonfabric/api";
 import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { Cell } from "../src/cell.ts";
 import { createRef } from "../src/create-ref.ts";
 import { DerivedInternalCellIds } from "../src/derived-internal-cell-ids.ts";

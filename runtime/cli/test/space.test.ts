@@ -6,7 +6,6 @@
 // The library's semantics are covered in runtime/state-inspector/test/; this
 // suite guards the command surface and its exit codes.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import { clonePaths } from "@commonfabric/state-inspector";
@@ -15,6 +14,7 @@ import { REAP_SPACE, reapSpaceStore } from "./space-reap-store.ts";
 import { join, toFileUrl } from "@std/path";
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
 import { cellDatabaseFilePrefix } from "@commonfabric/memory/v2/storage-path";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * `CliResult` streams are line arrays; join before substring assertions.

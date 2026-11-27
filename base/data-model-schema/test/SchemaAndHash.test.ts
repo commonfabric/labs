@@ -11,10 +11,10 @@
  * rather than discovering it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FabricHash } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { SchemaAndHash } from "@/SchemaAndHash.ts";
 import { toDeepFrozenSchema } from "@/schema-copy.ts";
 

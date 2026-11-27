@@ -996,9 +996,8 @@ export function sqliteDatabase(
       // bake nulls over a good prior value. The prior handle stays; a runtime
       // that resolves fully (the creator, at least) writes the inline form.
       if (prior === undefined || dbTablesResolved(tables)) {
-        // RAW write, not `.set()`: this first action run can execute inside
-        // the pattern's builder frame, where `set` anchors every object
-        // in an array — splitting a rule's term list into per-element entity
+        // RAW write, not `.set()`: this action run carries the builtin's run
+        // frame, under which `set` anchors every object in an array — splitting a rule's term list into per-element entity
         // docs (the very shape the materialization above exists to avoid).
         // The raw write stores the subtree verbatim; `onlyIfDifferent` keeps
         // an unchanged re-derivation write-free (no hash churn per runtime).
@@ -1138,9 +1137,15 @@ export function sqliteQuery(
   _awaitSync?: boolean,
   publicationBinding?: NormalizedFullLink,
 ): RawBuiltinResult {
-  let initialized = false;
-  let selectedResult: Cell<QueryState>;
-  let resultScope: CellScope | undefined;
+  /**
+   * The result cell an accepted transaction linked into the node's output,
+   * with the scope it was minted at. Unset until such a transaction has been
+   * accepted, so that every run until then links it again.
+   */
+  let published: { result: Cell<QueryState>; scope: CellScope } | undefined;
+
+  /** Runs that linked the result cell and whose transactions are unsettled. */
+  let publishing = 0;
 
   // One owner signal covers query work and completion writebacks. Unsent
   // endings also observe it: cancellation releases the result store's
@@ -1246,16 +1251,17 @@ export function sqliteQuery(
         "sqlite: cross-space served queries require a complete scoped reader identity",
       );
     }
-    const needsPublication = !initialized || resultScope !== scope;
+    const kept = published?.scope === scope ? published.result : undefined;
+    const needsPublication = kept === undefined;
+    const result = kept ?? makeResultCell<QueryState>(
+      runtime,
+      parentCell,
+      cause,
+      "sqliteQuery",
+      tx,
+      scope,
+    );
     if (needsPublication) {
-      selectedResult = makeResultCell<QueryState>(
-        runtime,
-        parentCell,
-        cause,
-        "sqliteQuery",
-        tx,
-        scope,
-      );
       // The control state this node keeps — `/pending`, `/requestHash`,
       // `/requestKey`, `/error` — holds what the issuing transaction read. A
       // request hash is a function of the parameters, so a parameter derived
@@ -1272,13 +1278,10 @@ export function sqliteQuery(
       // stays `makeResultCell` rather than `ownedCell` because the cause and
       // the result link it sets are this builtin's, and the cause is the
       // stored cell's identity.
-      recordRuntimeOwnedStore(tx, parentCell, selectedResult);
-      enrollRuntimeOwnedStore(tx, parentCell, selectedResult);
-      initialized = true;
-      resultScope = scope;
+      recordRuntimeOwnedStore(tx, parentCell, result);
+      enrollRuntimeOwnedStore(tx, parentCell, result);
     }
 
-    const result = selectedResult;
     const instanceKey = effectTargetKey(
       "sqliteQuery:staging",
       result,
@@ -1352,6 +1355,25 @@ export function sqliteQuery(
     if (servedRun || needsPublication) {
       sendResult(tx, result);
       recordPublication(tx);
+    }
+    // The scheduler runs this same action again after a stale-basis
+    // rejection, and a serving runtime's wave can still withdraw a commit
+    // that succeeded, so a run whose link did not land leaves the next run
+    // to make it. A write equal to what this runtime already holds, its own
+    // unconfirmed writes included, is not sent. A run that starts while an
+    // earlier linking run is unsettled may therefore send no link, and if
+    // that earlier run is then refused, no accepted transaction carries one.
+    // So only the acceptance of a run that started with no linking run
+    // unsettled marks the link as made.
+    if (needsPublication) {
+      const alone = publishing === 0;
+      publishing++;
+      onAcceptance(tx, () => {
+        publishing--;
+        if (alone) published = { result, scope };
+      }, () => {
+        publishing--;
+      });
     }
 
     if (!inputs?.db || typeof inputs.sql !== "string") return;

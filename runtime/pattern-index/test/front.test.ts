@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { PatternIndexError } from "../src/client.ts";
 import {
   patternIndexFailure,
   patternIndexSearchRequest,
 } from "../src/front.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("front", () => {
   describe("patternIndexSearchRequest()", () => {

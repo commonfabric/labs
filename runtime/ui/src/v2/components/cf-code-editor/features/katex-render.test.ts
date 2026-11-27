@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import katex from "katex";
 
 import { KATEX_STYLES, renderFormula } from "./katex-render.ts";
 import { KATEX_STYLES_VERSION } from "./katex-styles.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The markup `renderFormula` returns for `tex`, failing if it returns none. */
 function htmlOf(tex: string, display = false): string {

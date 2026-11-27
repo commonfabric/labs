@@ -1,10 +1,15 @@
 import { settle } from "./dom.ts";
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { FabricBridge } from "../src/bridge.ts";
 import { CommonIframeSandboxElement } from "../src/index.ts";

@@ -2,12 +2,12 @@
 // column for the CFC write-ceiling check. Security-critical → fail closed on
 // anything it can't confidently attribute.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   parseWriteParamColumns,
   parseWriteTable,
 } from "../v2/sqlite/write-targets.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("parseWriteParamColumns — determinable shapes", () => {
   it("INSERT with explicit column list", () => {

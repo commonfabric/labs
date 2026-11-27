@@ -8,8 +8,6 @@
  * write, which is the failure OW50 exists to surface rather than reproduce.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import {
   CFC_VERDICT_REASON,
@@ -18,6 +16,7 @@ import {
   untaggedReason,
   verdictReason,
 } from "../src/cfc/verdict-reason.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cfc-verdict-reason", () => {
   it("keeps the human-readable text after the token", () => {

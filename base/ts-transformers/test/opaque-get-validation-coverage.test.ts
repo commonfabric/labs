@@ -1,9 +1,9 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { validateSource } from "./utils.ts";
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function getOpaqueGetErrors(diagnostics: readonly TransformationDiagnostic[]) {
   return diagnostics.filter((d) =>
@@ -11,7 +11,7 @@ function getOpaqueGetErrors(diagnostics: readonly TransformationDiagnostic[]) {
   );
 }
 
-Deno.test(
+test(
   "opaque-get flags .get() on a destructured pattern-callback parameter",
   async () => {
     // isReactiveExpression: identifier bound to a pattern-callback parameter is
@@ -39,7 +39,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get flags .get() on a member of the whole pattern input parameter",
   async () => {
     // isPatternCallbackParameter: the whole pattern input parameter (not
@@ -65,7 +65,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get flags .get() on a local initialized from computed()",
   async () => {
     // isReactiveInitializer: a local variable initialized directly from a
@@ -88,7 +88,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get flags .get() on a local initialized from a wrapped reactive-origin call",
   async () => {
     // isReactiveInitializer unwrapping: the reactive-origin call is wrapped in
@@ -114,7 +114,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get flags .get() on a local initialized through each wrapper spelling",
   async () => {
     // isReactiveInitializer reads the shared transparent-wrapper set, so every
@@ -153,7 +153,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get flags .get() on a binding destructured from a reactive local",
   async () => {
     // isReactiveExpression binding-element branch: a value destructured out of
@@ -179,7 +179,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get flags .get() when the pattern callback is parenthesized",
   async () => {
     // isPatternCallbackParameter walks up from the enclosing function to its
@@ -206,7 +206,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get does not flag .get() on an unresolvable identifier",
   async () => {
     // isReactiveExpression bails out when the receiver identifier has no
@@ -230,7 +230,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "opaque-get does not flag .get() on a Writable cell",
   async () => {
     // A .get() on a genuine Cell/Writable must NOT be flagged by this

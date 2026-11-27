@@ -7,11 +7,11 @@
 // already-settled W, and each leaked sink would keep triggering
 // scheduler work for the rest of the runtime's life.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { waitForSettled } from "../src/executor/watermark.ts";
 import type { Runtime } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space = "did:key:z6Mk-watermark-test" as MemorySpace;
 

@@ -4,13 +4,13 @@
  * and the flags a serving runtime forces over it.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   experimentalPosture,
   publishExperimentalPosture,
   publishServingExperimentalOverrides,
 } from "./experimental-posture.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("experimental-posture", () => {
   it("reports nothing before a Runtime has published one", () => {

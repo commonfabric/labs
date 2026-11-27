@@ -1,7 +1,6 @@
 /** Pins request and publication ownership around served program resolution. */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -11,6 +10,12 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   fetchProgram,

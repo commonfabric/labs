@@ -2,12 +2,17 @@
 // extends a bare HTMLElement as it loads, so it can only load once the test
 // has installed one.
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { XOmniLayout } from "../src/components/OmniLayout.ts";
 import { installBrowserGlobals, installGlobals } from "./browser-globals.ts";
 import { templateListeners, templateMarkup } from "./lit-template-markup.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The resize handle a render binds its drag listeners to. */
 class StandInHandle extends EventTarget {

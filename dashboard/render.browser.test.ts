@@ -16,6 +16,7 @@ import {
   type TileLayoutFixture,
 } from "./tile-layout-fixtures.ts";
 import { SPARKLINE_HEIGHT } from "./tile-render-values.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const pixel = (value: number): number => Math.round(value * 1000) / 1000;
 const assertPixelAligned = (
@@ -291,7 +292,7 @@ function assertStandardTileLayout(
   }
 }
 
-Deno.test("every standard tile shares text baselines and fits under benchmarks", async () => {
+test("every standard tile shares text baselines and fits under benchmarks", async () => {
   const standard = TILE_LAYOUT_FIXTURES.filter(({ wide }) => !wide);
   const tiles = standard.map(({ label, view }) => renderTile(label, view)).join("");
   const fixture = document.createElement("div");
@@ -333,7 +334,7 @@ Deno.test("every standard tile shares text baselines and fits under benchmarks",
   }
 });
 
-Deno.test("a link tile whose chart holds links keeps them apart from its own", async () => {
+test("a link tile whose chart holds links keeps them apart from its own", async () => {
   const trust = TILE_LAYOUT_FIXTURES.find(({ label }) => label === "labs ci trust");
   assertExists(trust?.view.href);
   const fixture = document.createElement("div");
@@ -393,7 +394,7 @@ Deno.test("a link tile whose chart holds links keeps them apart from its own", a
   }
 });
 
-Deno.test("a linked bottom-chart tile keeps its flex layout", async () => {
+test("a linked bottom-chart tile keeps its flex layout", async () => {
   const fixture = document.createElement("div");
   fixture.innerHTML = `<style>
     ${TILE_BOX_RULE}

@@ -17,8 +17,8 @@ and leans on everything shared.
   `@commonfabric/test-support/records` in this repository — the identity
   with three required parts and an optional variant, the NDJSON line codecs
   with untrusted-input validation, the spool lifecycle with kernel-released
-  locks, the JUnit ingester, the create-only store client, and the validating
-  reader. Vendor or import it rather than reimplementing; the schema version
+  locks, the reader that turns the results a test process spools into
+  records, the create-only store client, and the validating reader. Vendor or import it rather than reimplementing; the schema version
   (`v1` in object paths) is shared across repositories.
 - **Personal keys**: scoped to people, not repositories. A key minted once
   through this repository's minting workflow writes
@@ -59,12 +59,13 @@ and leans on everything shared.
    runner, shard labels never in identity, file paths only where the file
    genuinely is the test.
 5. **Producers.** Three classes cover every surface:
-   - Jobs that already write JUnit XML: add the ship step with a
-     `--junit kind=...,scope=...,prefix=...,glob=...` specification and
-     you are done — leaf cases become records, and a container (a
-     `describe`, or a test that runs steps) becomes one only when it
-     failed on its own account, as the record spec's "CI movement"
-     section describes.
+   - Deno test files: register every test through
+     `@commonfabric/test-support/test`, which writes how each test went
+     into the spool `CF_TEST_RECORDS_DIR` names. The runner that starts
+     the tests reads those lines back with `readResults`, giving the kind
+     and scope, and gets one record per test. A group (a `describe`, or a
+     test that runs steps) becomes a record only when it failed on its own
+     account, as the record spec's "CI movement" section describes.
    - Harnesses with per-result callbacks: append through the library's
      `FragmentWriter`, gated on `CF_TEST_RECORDS_DIR`.
    - Command-level checks: wrap with a `run-recorded`-style task that

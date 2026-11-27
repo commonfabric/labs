@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { researchSections } from "./research-result.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("research-result", () => {
   it("returns empty text for every part before a result arrives", () => {

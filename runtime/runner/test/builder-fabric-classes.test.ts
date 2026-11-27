@@ -13,7 +13,6 @@
  * rather than a hand-copied list that someone has to remember to extend.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { StaticCache } from "@commonfabric/static";
 import { FabricInstance, FabricPrimitive } from "@commonfabric/data-model";
@@ -31,6 +30,7 @@ import {
   FabricKeyPair,
   FabricUnavailable,
 } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { createBuilder } from "../src/builder/factory.ts";
 import { getRuntimeModuleExports } from "../src/sandbox/runtime-modules.ts";
 

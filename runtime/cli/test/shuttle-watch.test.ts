@@ -15,10 +15,10 @@
 
 import { unicodeWidth } from "@std/cli/unicode-width";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { PiecePlace } from "../lib/shuttle/place.ts";
 import { ArmedWatch, eventLine, watchEntries } from "../lib/shuttle/watch.ts";

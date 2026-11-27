@@ -13,12 +13,17 @@
  * source docs remain to cold-load from.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { injectCfHelpers } from "@commonfabric/ts-transformers";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { Engine } from "../../runner/src/harness/engine.ts";
 import type {
   CacheableModule,

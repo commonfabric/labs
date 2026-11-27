@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { recordEntryChange, type TransplantChanges } from "./tree.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Returns a `TransplantChanges` holding `entryChanges` and nothing else. */
 function changesWith(

@@ -249,7 +249,10 @@ export {
 export {
   currentPatternKey,
   formerPatternKey,
+  formerPatternKeys,
   mainNamesPattern,
+  type PatternKeyMoves,
+  patternKeyMovesIn,
 } from "./pattern-key-moves.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
@@ -313,6 +316,7 @@ export {
   setPatternRepository,
   setPatternSource,
   setPieceReconciliation,
+  stampCreatedFromOrigin,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "./runner.ts";
 export {
@@ -447,6 +451,10 @@ export {
 } from "./result-schema-meta.ts";
 export type { ModuleByteCache } from "./runtime.ts";
 export type { CompiledModuleArtifact } from "./harness/types.ts";
+export {
+  type CompileClaims,
+  CompileTurns,
+} from "./harness/compile-interleave.ts";
 export {
   getCompileCacheRuntimeVersion,
   sourceDocKey,

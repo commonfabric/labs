@@ -21,6 +21,7 @@
  */
 
 import type { JSONSchema, Pattern } from "@commonfabric/runner";
+import { inputsNeededToRun } from "@commonfabric/pattern-index/standalone";
 import { validateSchemaDefinition } from "@commonfabric/runner/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
@@ -74,7 +75,12 @@ export type Finding =
   /** The current contract is not a well-formed schema on its own terms. */
   | { kind: "invalid-schema"; pattern: string; role: string; detail: string }
   /** Baselines outlived their source: pieces tracking this path are pinned. */
-  | { kind: "retired"; pattern: string; baselines: string[] };
+  | { kind: "retired"; pattern: string; baselines: string[] }
+  /**
+   * A `main.tsx` entry, which a repository offers as standalone, requires
+   * these inputs and gives them no default, so it cannot run alone.
+   */
+  | { kind: "not-standalone"; pattern: string; inputs: string[] };
 
 /**
  * How much of the base64url SHA-256 goes in a filename. The hash only has to
@@ -272,6 +278,26 @@ export function checkPattern(
   return findings;
 }
 
+/**
+ * Check that a pattern a repository offers as standalone can run alone.
+ *
+ * In a repository `<name>/main.tsx` is a pattern's standalone entry, so a
+ * `main.tsx` under `patterns/` (`offered`) has to run with no other piece
+ * wired in: every input it requires carries a default. Connector views, whose
+ * host fills their inputs in, live in other trees and are not offered.
+ */
+export function checkRunsAlone(
+  pattern: string,
+  offered: boolean,
+  current: PatternContract | undefined,
+): Finding[] {
+  if (!offered || current === undefined) return [];
+  const inputs = inputsNeededToRun(current.argumentSchema);
+  return inputs.length === 0
+    ? []
+    : [{ kind: "not-standalone", pattern, inputs }];
+}
+
 //
 // Baseline store
 //
@@ -279,8 +305,30 @@ export function checkPattern(
 // than only against the real `patterns` layout.
 //
 
-/** Read every recorded contract for a pattern. Absent directory → none. */
+/**
+ * Read every recorded contract for a pattern: those recorded under each of
+ * `recordedKeys`, which are `key` alone unless the pattern moved, when
+ * `baselineKeysByPattern` gives every key it had. A baseline never moves, so
+ * a pattern's move deletes none. Absent directories → none.
+ */
 export async function readBaselines(
+  baselinesDir: string,
+  key: string,
+  recordedKeys: readonly string[] = [key],
+): Promise<Baseline[]> {
+  const baselines: Baseline[] = [];
+  for (const recordedKey of recordedKeys) {
+    for (
+      const baseline of await readBaselinesUnder(baselinesDir, recordedKey)
+    ) {
+      baselines.push(baseline);
+    }
+  }
+  return baselines.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** The contracts recorded under one key. Absent directory → none. */
+async function readBaselinesUnder(
   baselinesDir: string,
   key: string,
 ): Promise<Baseline[]> {

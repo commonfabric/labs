@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import { join } from "@std/path";
@@ -21,6 +20,12 @@ import {
   FragmentWriter,
 } from "./fragment.ts";
 import type { RunContext, TestRecord } from "./schema.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const CONTEXT: RunContext = {
   schema: 1,

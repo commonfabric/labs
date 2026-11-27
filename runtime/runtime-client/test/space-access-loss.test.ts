@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { assertType, type IsExact } from "@std/testing/types";
 
@@ -12,6 +11,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { renderSpaceAccessProviderFor } from "@/backends/runtime-processor.ts";

@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFVGroup } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** The classes on the group a `cf-vgroup` mounted with `properties` renders. */
 async function groupClasses(properties: Partial<CFVGroup> = {}) {

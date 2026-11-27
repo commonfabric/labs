@@ -22,6 +22,7 @@ import type {
   RuntimeTelemetryMarker,
   SchedulerTestStorageManager,
 } from "./scheduler-test-utils.ts";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 describe("handler dependency pulling", () => {
   let storageManager: SchedulerTestStorageManager;

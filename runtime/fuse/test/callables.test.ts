@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { JSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { classifyCallableEntry, isHandlerCell } from "../callables.ts";
 

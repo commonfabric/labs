@@ -1,6 +1,5 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   discardBuffer,
   handleHasBufferedContent,
@@ -10,11 +9,12 @@ import {
   validateVirtualFileRange,
 } from "./handles.ts";
 import { O_RDONLY, O_RDWR, O_WRONLY } from "./platform.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-Deno.test("HandleMap marks empty truncates as pending without treating them as buffered writes", () => {
+test("HandleMap marks empty truncates as pending without treating them as buffered writes", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
 
@@ -30,7 +30,7 @@ Deno.test("HandleMap marks empty truncates as pending without treating them as b
   assertEquals(handleHasBufferedContent(handle), true);
 });
 
-Deno.test("HandleMap clears pending truncates when content arrives", () => {
+test("HandleMap clears pending truncates when content arrives", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
 
@@ -44,7 +44,7 @@ Deno.test("HandleMap clears pending truncates when content arrives", () => {
   assertEquals(handleHasPendingChanges(handle), true);
 });
 
-Deno.test("HandleMap clears sibling pending truncates when content arrives", () => {
+test("HandleMap clears sibling pending truncates when content arrives", () => {
   const handles = new HandleMap();
   const writer = handles.open(1n, O_RDWR, encoder.encode("hello"));
   const duplicate = handles.open(1n, O_RDWR, encoder.encode("hello"));
@@ -65,7 +65,7 @@ Deno.test("HandleMap clears sibling pending truncates when content arrives", () 
   assertEquals(handleHasPendingChanges(duplicateHandle), false);
 });
 
-Deno.test("HandleMap truncates every open handle for an inode", () => {
+test("HandleMap truncates every open handle for an inode", () => {
   const handles = new HandleMap();
   const first = handles.open(1n, O_RDWR, encoder.encode("first"));
   const second = handles.open(1n, O_RDWR, encoder.encode("second"));
@@ -90,7 +90,7 @@ Deno.test("HandleMap truncates every open handle for an inode", () => {
   assertEquals(firstHandle?.truncatePending, false);
 });
 
-Deno.test("HandleMap only marks the truncating handle pending when provided", () => {
+test("HandleMap only marks the truncating handle pending when provided", () => {
   const handles = new HandleMap();
   const stale = handles.open(1n, O_RDWR, encoder.encode("stale"));
   const truncating = handles.open(1n, O_RDWR, encoder.encode("current"));
@@ -114,7 +114,7 @@ Deno.test("HandleMap only marks the truncating handle pending when provided", ()
   assertEquals(handleHasBufferedContent(truncatingHandle), true);
 });
 
-Deno.test("HandleMap rejects invalid and oversized write allocations", () => {
+test("HandleMap rejects invalid and oversized write allocations", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, new Uint8Array(0));
 
@@ -129,7 +129,7 @@ Deno.test("HandleMap rejects invalid and oversized write allocations", () => {
   assertEquals(handle?.dirty, false);
 });
 
-Deno.test("HandleMap rejects oversized truncates without resizing buffers", () => {
+test("HandleMap rejects oversized truncates without resizing buffers", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDWR, encoder.encode("hello"));
 
@@ -140,7 +140,7 @@ Deno.test("HandleMap rejects oversized truncates without resizing buffers", () =
   assertEquals(new TextDecoder().decode(handles.get(fh)?.buffer), "hello");
 });
 
-Deno.test("validateVirtualFileRange classifies invalid and too-large ranges", () => {
+test("validateVirtualFileRange classifies invalid and too-large ranges", () => {
   assertEquals(validateVirtualFileRange(-1, 1), {
     ok: false,
     reason: "invalid",
@@ -158,7 +158,7 @@ Deno.test("validateVirtualFileRange classifies invalid and too-large ranges", ()
   });
 });
 
-Deno.test("HandleMap stores stable write targets on open handles", () => {
+test("HandleMap stores stable write targets on open handles", () => {
   const handles = new HandleMap();
   const writeTarget = { kind: "value", target: { jsonPath: ["title"] } };
   const fh = handles.open(
@@ -171,7 +171,7 @@ Deno.test("HandleMap stores stable write targets on open handles", () => {
   assertEquals(handles.get(fh)?.writeTarget, writeTarget);
 });
 
-Deno.test("HandleMap tracks CFC truncate and write authorization separately", () => {
+test("HandleMap tracks CFC truncate and write authorization separately", () => {
   const handles = new HandleMap();
   const fh = handles.open(
     1n,
@@ -189,7 +189,7 @@ Deno.test("HandleMap tracks CFC truncate and write authorization separately", ()
   assertEquals(handles.hasCfcAuthorization(fh, "write"), true);
 });
 
-Deno.test("HandleMap buffers a read-only handle from a read snapshot", () => {
+test("HandleMap buffers a read-only handle from a read snapshot", () => {
   const handles = new HandleMap();
   const snapshot = encoder.encode("generated once");
   const fh = handles.open(1n, O_RDONLY, undefined, { readSnapshot: snapshot });
@@ -204,13 +204,13 @@ Deno.test("HandleMap buffers a read-only handle from a read snapshot", () => {
   assertEquals(handleHasPendingChanges(handle), false);
 });
 
-Deno.test("HandleMap leaves a read-only handle unbuffered without a snapshot", () => {
+test("HandleMap leaves a read-only handle unbuffered without a snapshot", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDONLY, encoder.encode("stored"));
   assertEquals(handleHasBufferedContent(handles.get(fh)), false);
 });
 
-Deno.test("HandleMap carries a snapshot's publish time on the handle", () => {
+test("HandleMap carries a snapshot's publish time on the handle", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDONLY, undefined, {
     readSnapshot: encoder.encode("v1"),
@@ -221,7 +221,7 @@ Deno.test("HandleMap carries a snapshot's publish time on the handle", () => {
   assertEquals(handles.get(fh)?.readSnapshotMtime, 1_700_000_000_500);
 });
 
-Deno.test("HandleMap ignores a snapshot time without a snapshot", () => {
+test("HandleMap ignores a snapshot time without a snapshot", () => {
   const handles = new HandleMap();
   const fh = handles.open(1n, O_RDONLY, encoder.encode("stored"), {
     readSnapshotMtime: 1_700_000_000_500,

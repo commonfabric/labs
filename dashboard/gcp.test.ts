@@ -7,6 +7,7 @@
 import { assertEquals, assertThrows } from "@std/assert";
 import { encodeBase64 } from "@std/encoding/base64";
 import { bqRows, METADATA_TOKEN_URL, saAssertion } from "./gcp.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const b64urlToBytes = (s: string): Uint8Array<ArrayBuffer> => {
   const bin = atob(s.replaceAll("-", "+").replaceAll("_", "/") + "=".repeat((4 - (s.length % 4)) % 4));
@@ -20,7 +21,7 @@ const b64urlToJson = (s: string) => JSON.parse(new TextDecoder().decode(b64urlTo
 const toPem = (der: ArrayBuffer): string =>
   `-----BEGIN PRIVATE KEY-----\n${encodeBase64(der)}\n-----END PRIVATE KEY-----`;
 
-Deno.test("saAssertion: signs a verifiable RS256 JWT with the expected claims", async () => {
+test("saAssertion: signs a verifiable RS256 JWT with the expected claims", async () => {
   const pair = await crypto.subtle.generateKey(
     { name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" },
     true,
@@ -52,20 +53,20 @@ Deno.test("saAssertion: signs a verifiable RS256 JWT with the expected claims", 
   assertEquals(claims.exp, now + 3600);
 });
 
-Deno.test("bqRows: flattens a jobs.query grid, empty cells become ''", () => {
+test("bqRows: flattens a jobs.query grid, empty cells become ''", () => {
   const json = { jobComplete: true, rows: [{ f: [{ v: "123.45" }, { v: "svc" }] }, { f: [{ v: null }] }] };
   assertEquals(bqRows(json), [["123.45", "svc"], [""]]);
 });
 
-Deno.test("bqRows: a response with no rows yields an empty grid", () => {
+test("bqRows: a response with no rows yields an empty grid", () => {
   assertEquals(bqRows({ jobComplete: true }), []);
 });
 
-Deno.test("bqRows: an incomplete job is an error, not silently empty", () => {
+test("bqRows: an incomplete job is an error, not silently empty", () => {
   assertThrows(() => bqRows({ jobComplete: false }), Error, "did not complete");
 });
 
-Deno.test("metadata token URL matches the documented key", () => {
+test("metadata token URL matches the documented key", () => {
   // Workload Identity is the only auth the deployed dashboard has, and this path is
   // the whole of it. Spelled "service-account" it returns a 404, the cloud spend tile
   // reads that as a dead source and grays out, and nothing says why. Nothing in a

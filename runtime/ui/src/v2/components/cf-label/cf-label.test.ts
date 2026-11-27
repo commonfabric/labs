@@ -2,8 +2,8 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFLabel } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A label for `id`, mounted beside a control with that id. */
 async function labelBeside<T extends HTMLElement>(

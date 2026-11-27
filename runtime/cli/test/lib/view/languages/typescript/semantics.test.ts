@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { basename, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -14,6 +13,7 @@ import {
   TEXT,
   X_DEFINITION,
 } from "./program-fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An offset that throws when it is compared with a number. */
 const OFFSET_THAT_THROWS = {

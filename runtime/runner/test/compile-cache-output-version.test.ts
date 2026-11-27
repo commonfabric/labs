@@ -1,4 +1,3 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import {
@@ -22,6 +21,12 @@ import {
   PERSISTED_CACHE_VARIANTS,
 } from "../src/compilation-cache/cache-variants.ts";
 import type { CacheableModule } from "../src/harness/types.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const REPO_ROOT = fromFileUrl(new URL("../../../", import.meta.url));
 

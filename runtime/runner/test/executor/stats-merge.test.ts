@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   DERIVED_COMMITS_BY_SPACE_MAX,
   emptyServingLoopStats,
@@ -11,6 +10,7 @@ import {
   closedHostServingLoopStats,
   mergeServingLoopStats,
 } from "../../src/executor/stats-merge.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The counters of a host with nothing counted, with `over` laid over them. */
 const statsWith = (over: Partial<ServingLoopStats>): ServingLoopStats => ({

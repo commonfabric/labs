@@ -15,10 +15,12 @@ import type {
 import type { HarnessCredentialOwnerRef } from "./run-manifest.ts";
 import type {
   HarnessAllowedSkillScript,
+  HarnessReviewedSkillEvidence,
   HarnessSkillScriptExecutionTarget,
 } from "./skill.ts";
 import type { BuiltinToolId } from "./tool-descriptor.ts";
 
+export const IMAGE_REVIEW_SUBAGENT_PROFILE = "image-review" as const;
 export const DEFAULT_SUBAGENT_PROFILE = "default" as const;
 export const BROWSER_SUBAGENT_PROFILE = "browser" as const;
 export const WEB_FETCH_SUBAGENT_PROFILE = "web_fetch" as const;
@@ -320,6 +322,7 @@ export const HARNESS_SUBAGENT_PROFILES = [
   WEB_FETCH_SUBAGENT_PROFILE,
   WEB_SEARCH_SUBAGENT_PROFILE,
   PATTERN_AUTHOR_SUBAGENT_PROFILE,
+  IMAGE_REVIEW_SUBAGENT_PROFILE,
 ] as const;
 
 export type HarnessDelegableSubagentProfile =
@@ -486,6 +489,13 @@ export const getHarnessSubagentProfileConfig = (
   provider: HarnessModelProviderId = "openai-compatible-gateway",
 ): HarnessSubagentProfileConfig => {
   switch (profile) {
+    case IMAGE_REVIEW_SUBAGENT_PROFILE:
+      return {
+        ...DEFAULT_SUBAGENT_PROFILE_CONFIG,
+        profile,
+        allowedToolIds: [],
+        maxModelTurns: 1,
+      };
     case DEFAULT_SUBAGENT_PROFILE:
       return DEFAULT_SUBAGENT_PROFILE_CONFIG;
     case BROWSER_SUBAGENT_PROFILE:
@@ -563,6 +573,14 @@ export interface HarnessSubagentRunManifest {
   skillScriptExecutionTarget?: HarnessSkillScriptExecutionTarget;
   maxModelTurns: number;
   returnPolicy: HarnessSubagentReturnPolicy;
+
+  /**
+   * The review that let this child keep its parent's prompt-slot binding
+   * although it holds skill text from a handle. Absent for a child given no
+   * skill through a handle, which keeps that binding without one, and for a
+   * child whose skill no review covered, which ran as `quote`.
+   */
+  reviewedSkill?: HarnessReviewedSkillEvidence;
   createdAt: string;
   inputSummary: HarnessSubagentInputSummary;
   confidentialityCeiling?: HarnessSubagentConfidentialityCeiling;
@@ -716,6 +734,9 @@ export interface DelegateTaskToolInput {
   context?: string;
   maxModelTurns?: number;
   returnSchema?: JSONSchema;
+
+  /** Ordered output IDs of frames already observed by this author. */
+  imageOutputIds?: readonly string[];
 
   /** Published patterns selected from this parent's prior search results. */
   patternRefs?: readonly DelegateTaskPatternRef[];

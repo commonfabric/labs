@@ -23,6 +23,7 @@ import {
 import { LIVE_PAGE_UPDATE } from "./live-page-client.ts";
 import { livePage, livePageResponse } from "./live-page.ts";
 import { faviconHref } from "./favicon.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const MINUTE = 60_000;
 const HOUR = 3_600_000;
@@ -66,7 +67,7 @@ function rowRepos(html: string): string[] {
     .map((match) => match[1]);
 }
 
-Deno.test("ci jobs page: a job carries its result, duration, and when it ran", () => {
+test("ci jobs page: a job carries its result, duration, and when it ran", () => {
   const html = pageHtml(collection(), NOW);
 
   assertStringIncludes(html, "<title>CI jobs</title>");
@@ -85,7 +86,7 @@ Deno.test("ci jobs page: a job carries its result, duration, and when it ran", (
   );
 });
 
-Deno.test("ci jobs page: the summary counts each state of a job", () => {
+test("ci jobs page: the summary counts each state of a job", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -118,7 +119,7 @@ Deno.test("ci jobs page: the summary counts each state of a job", () => {
   }
 });
 
-Deno.test("ci jobs page: a job with a run in progress has a running dot after its name", () => {
+test("ci jobs page: a job with a run in progress has a running dot after its name", () => {
   const running = "https://github.com/commonfabric/loom/actions/runs/7";
   const html = pageHtml(
     collection({
@@ -151,7 +152,7 @@ Deno.test("ci jobs page: a job with a run in progress has a running dot after it
   assertStringIncludes(html, `<dt>running</dt><dd>2</dd>`);
 });
 
-Deno.test("ci jobs page: jobs are ordered worst first, then by name", () => {
+test("ci jobs page: jobs are ordered worst first, then by name", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -172,7 +173,7 @@ Deno.test("ci jobs page: jobs are ordered worst first, then by name", () => {
   assertStringIncludes(html, "Workflows with no verdict · 1");
 });
 
-Deno.test("ci jobs page: two jobs in one repository sort by workflow", () => {
+test("ci jobs page: two jobs in one repository sort by workflow", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -191,7 +192,7 @@ Deno.test("ci jobs page: two jobs in one repository sort by workflow", () => {
   );
 });
 
-Deno.test("ci jobs page: a job with no run is listed apart, linked at its workflow", () => {
+test("ci jobs page: a job with no run is listed apart, linked at its workflow", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -218,7 +219,7 @@ Deno.test("ci jobs page: a job with no run is listed apart, linked at its workfl
   assertEquals([...html.matchAll(/data-sort="-1"/g)].length, 0);
 });
 
-Deno.test("ci jobs page: a job whose workflow changed since it failed says so", () => {
+test("ci jobs page: a job whose workflow changed since it failed says so", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -249,7 +250,7 @@ Deno.test("ci jobs page: a job whose workflow changed since it failed says so", 
   assertStringIncludes(html, `<dt>failing</dt><dd>0</dd>`);
 });
 
-Deno.test("ci jobs page: a job whose run left no timing shows dashes, not a made-up time", () => {
+test("ci jobs page: a job whose run left no timing shows dashes, not a made-up time", () => {
   const html = pageHtml(
     collection({
       jobs: [job({ startedAt: undefined, ranMs: undefined })],
@@ -260,7 +261,7 @@ Deno.test("ci jobs page: a job whose run left no timing shows dashes, not a made
   assertEquals([...html.matchAll(/<td class="measure[^>]*>—<\/td>/g)].length, 3);
 });
 
-Deno.test("ci jobs page: unreadable repositories get their own section", () => {
+test("ci jobs page: unreadable repositories get their own section", () => {
   const html = pageHtml(
     collection({ unreadableRepos: ["commonfabric/pond"] }),
     NOW,
@@ -274,7 +275,7 @@ Deno.test("ci jobs page: unreadable repositories get their own section", () => {
   assert(!none.includes("Repositories that could not be read"));
 });
 
-Deno.test("ci jobs page: a repository or workflow name carrying markup is escaped", () => {
+test("ci jobs page: a repository or workflow name carrying markup is escaped", () => {
   const html = pageHtml(
     collection({
       jobs: [job({ workflow: `<img src=x onerror="alert(1)">` })],
@@ -293,7 +294,7 @@ Deno.test("ci jobs page: a repository or workflow name carrying markup is escape
   assertStringIncludes(html, `?name=%3Cscript%3E">&lt;script&gt;</a>`);
 });
 
-Deno.test("ci jobs page: a job's status is a shape as well as a color", () => {
+test("ci jobs page: a job's status is a shape as well as a color", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -315,7 +316,7 @@ Deno.test("ci jobs page: a job's status is a shape as well as a color", () => {
   }
 });
 
-Deno.test("ci jobs page: every column carries the value it sorts on", () => {
+test("ci jobs page: every column carries the value it sorts on", () => {
   const html = pageHtml(
     collection({
       jobs: [job({ event: "schedule", ranMs: 92_000 })],
@@ -342,7 +343,7 @@ Deno.test("ci jobs page: every column carries the value it sorts on", () => {
   );
 });
 
-Deno.test("ci jobs page: a job with nothing to measure sorts apart from the measured", () => {
+test("ci jobs page: a job with nothing to measure sorts apart from the measured", () => {
   const html = pageHtml(
     collection({
       jobs: [job({ status: "warn", result: "auth failed", startedAt: undefined, ranMs: undefined, event: undefined })],
@@ -354,7 +355,7 @@ Deno.test("ci jobs page: a job with nothing to measure sorts apart from the meas
   assertStringIncludes(html, `data-sort=""`);
 });
 
-Deno.test("ci jobs page: every row links to its repository's page and to what GitHub has on its job", () => {
+test("ci jobs page: every row links to its repository's page and to what GitHub has on its job", () => {
   const html = pageHtml(
     collection({
       jobs: [
@@ -421,14 +422,14 @@ Deno.test("ci jobs page: every row links to its repository's page and to what Gi
   assertStringIncludes(html, "td a{color:var(--accent)");
 });
 
-Deno.test("ci jobs page: nothing collected yet says so rather than showing an empty table", () => {
+test("ci jobs page: nothing collected yet says so rather than showing an empty table", () => {
   const html = pageHtml(undefined, NOW);
 
   assertStringIncludes(html, "has not finished a collection yet");
   assert(!html.includes("<table>"));
 });
 
-Deno.test("ci jobs page: the tab's favicon wears the ci tile's color", () => {
+test("ci jobs page: the tab's favicon wears the ci tile's color", () => {
   const iconOf = (collected: CiJobs | undefined) =>
     pageHtml(collected, NOW).match(/<link rel="icon"[^>]*href="([^"]*)"/)
       ?.[1];
@@ -454,7 +455,7 @@ Deno.test("ci jobs page: the tab's favicon wears the ci tile's color", () => {
   assertEquals(iconOf(undefined), "data:,");
 });
 
-Deno.test("ci jobs page: the response is the page as HTML", async () => {
+test("ci jobs page: the response is the page as HTML", async () => {
   const response = livePageResponse(ciJobsPage(collection(), NOW));
 
   assertEquals(response.status, 200);
@@ -466,7 +467,7 @@ Deno.test("ci jobs page: the response is the page as HTML", async () => {
   assertEquals(CI_JOBS_PATH, "/ci");
 });
 
-Deno.test("ci jobs page: the page is live, with everything it renders inside main", () => {
+test("ci jobs page: the page is live, with everything it renders inside main", () => {
   const html = pageHtml(collection(), NOW);
   const main = html.slice(html.indexOf("<main>"), html.indexOf("</main>"));
 
@@ -480,7 +481,7 @@ Deno.test("ci jobs page: the page is live, with everything it renders inside mai
   assert(html.indexOf("const sortTable") < html.indexOf("new EventSource"));
 });
 
-Deno.test("ci jobs page: each row carries the key it was served in order of", () => {
+test("ci jobs page: each row carries the key it was served in order of", () => {
   // A job's key is its own, whatever the jobs around it are, and two
   // workflows one repository gives the same name have keys of their own.
   const html = pageHtml(
@@ -630,7 +631,7 @@ class FakePage extends FakeRoot {
   }
 }
 
-Deno.test("ci jobs sorting: a column of numbers sorts as numbers, up then down", () => {
+test("ci jobs sorting: a column of numbers sorts as numbers, up then down", () => {
   const table = new FakeTable([["b", "200"], ["a", "9"], ["c", "40"]]);
 
   sortTable(table, { column: 1, descending: false });
@@ -643,13 +644,13 @@ Deno.test("ci jobs sorting: a column of numbers sorts as numbers, up then down",
   assertEquals(table.marks(), ["none", "descending"]);
 });
 
-Deno.test("ci jobs sorting: a cell with no key sorts on its text", () => {
+test("ci jobs sorting: a cell with no key sorts on its text", () => {
   const table = new FakeTable([["zed", "1"], ["amp", "2"], ["loom", "3"]]);
   sortTable(table, { column: 0, descending: false });
   assertEquals(table.order(), ["amp", "loom", "zed"]);
 });
 
-Deno.test("ci jobs sorting: equal values keep the order the rows were served in", () => {
+test("ci jobs sorting: equal values keep the order the rows were served in", () => {
   const table = new FakeTable([["worst", "5"], ["middle", "5"], ["best", "1"]]);
 
   sortTable(table, { column: 1, descending: false });
@@ -662,7 +663,7 @@ Deno.test("ci jobs sorting: equal values keep the order the rows were served in"
   assertEquals(table.order(), ["best", "worst", "middle"]);
 });
 
-Deno.test("ci jobs sorting: a table without a body is refused", () => {
+test("ci jobs sorting: a table without a body is refused", () => {
   const table = new FakeTable([]);
   table.tBodies = [];
   assertThrows(
@@ -672,7 +673,7 @@ Deno.test("ci jobs sorting: a table without a body is refused", () => {
   );
 });
 
-Deno.test("ci jobs sorting: a heading sorts up on its first click and down on its next", () => {
+test("ci jobs sorting: a heading sorts up on its first click and down on its next", () => {
   const table = new FakeTable([["b", "2"], ["a", "1"], ["c", "3"]]);
   followSorting(new FakePage([table]));
 
@@ -684,7 +685,7 @@ Deno.test("ci jobs sorting: a heading sorts up on its first click and down on it
   assertEquals(table.marks(), ["descending", "none"]);
 });
 
-Deno.test("ci jobs sorting: a new column starts ascending after one sorted descending", () => {
+test("ci jobs sorting: a new column starts ascending after one sorted descending", () => {
   const table = new FakeTable([["b", "2"], ["a", "1"]]);
   followSorting(new FakePage([table]));
 
@@ -695,7 +696,7 @@ Deno.test("ci jobs sorting: a new column starts ascending after one sorted desce
   assertEquals(table.order(), ["a", "b"]);
 });
 
-Deno.test("ci jobs sorting: a table not marked sortable is left alone", () => {
+test("ci jobs sorting: a table not marked sortable is left alone", () => {
   const table = new FakeTable([["b", "2"], ["a", "1"]], false);
   const page = new FakePage([table]);
   followSorting(page);
@@ -706,7 +707,7 @@ Deno.test("ci jobs sorting: a table not marked sortable is left alone", () => {
   assertEquals(table.order(), ["b", "a"]);
 });
 
-Deno.test("ci jobs sorting: a rendering arrives sorted the way the reader sorted the page", () => {
+test("ci jobs sorting: a rendering arrives sorted the way the reader sorted the page", () => {
   const table = new FakeTable([["b", "2"], ["a", "1"]]);
   const page = new FakePage([table]);
   followSorting(page);
@@ -722,7 +723,7 @@ Deno.test("ci jobs sorting: a rendering arrives sorted the way the reader sorted
   assertEquals(rendering.marks(), ["none", "descending"]);
 });
 
-Deno.test("ci jobs sorting: a rendering arriving before any sort stays as served", () => {
+test("ci jobs sorting: a rendering arriving before any sort stays as served", () => {
   const page = new FakePage([new FakeTable([["b", "2"], ["a", "1"]])]);
   followSorting(page);
 
@@ -732,7 +733,7 @@ Deno.test("ci jobs sorting: a rendering arriving before any sort stays as served
   assertEquals(rendering.marks(), ["none", "none"]);
 });
 
-Deno.test("ci jobs sorting: a heading that arrived in a rendering sorts the table it was placed in", () => {
+test("ci jobs sorting: a heading that arrived in a rendering sorts the table it was placed in", () => {
   const table = new FakeTable([["b", "2"], ["a", "1"]]);
   const page = new FakePage([table]);
   followSorting(page);

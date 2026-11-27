@@ -3,7 +3,6 @@
  * `MEMORY_DIR`, so this file runs serially.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { completion } from "../commands/completion.ts";
@@ -12,6 +11,7 @@ import { tokenizeLine } from "../lib/completion/mod.ts";
 import { liveCandidates } from "../lib/completion/providers.ts";
 import { main } from "../commands/main.ts";
 import { captureStderr, withEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Runs `cf completion complete` for `cf pie`, with `log` as `console.log`. */
 async function completePie(log: (...data: unknown[]) => void): Promise<void> {

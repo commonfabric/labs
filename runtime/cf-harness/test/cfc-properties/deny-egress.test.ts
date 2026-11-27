@@ -17,7 +17,6 @@
  * here is that the refusal reaches an artifact and that a check can see it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FileSystemHarnessArtifactStore } from "../../src/artifacts.ts";
@@ -40,6 +39,7 @@ import {
   seedLabeledSecret,
   TOTAL_RESULT_SCHEMA,
 } from "./support/episode.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The seeded secret, which no model-visible text may carry. */
 const SECRET = "s3cr3t";

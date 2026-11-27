@@ -1,9 +1,9 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { IframePresentation } from "@commonfabric/iframe-sandbox";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { ContextConsumer } from "@lit/context";
 import { LitElement } from "lit";
 import {

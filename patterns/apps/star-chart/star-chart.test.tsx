@@ -19,7 +19,7 @@ import StarChart, {
   streakEndingAt,
   withDayToggled,
   withStarEarned,
-} from "./star-chart.tsx";
+} from "./main.tsx";
 
 const earned = (date: string): DayRecord => ({
   date,

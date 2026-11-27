@@ -568,7 +568,8 @@ CREATE INDEX IF NOT EXISTS idx_currency_read_entity
   ON currency_read (branch, entity_space, entity, entity_scope_key);
 -- What a piece writes, whoever it runs for: the declared write surface of
 -- every computation registered under it (owned = 0), and the cells it owns
--- (owned = 1), which are state a write to is no staleness of.
+-- (owned > 0), which are state a write to is no staleness of. owned = 2 is
+-- an owned cell an absent instance of which reads as its default.
 CREATE TABLE IF NOT EXISTS currency_write (
   branch TEXT    NOT NULL,
   piece  TEXT    NOT NULL,

@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isPlaceCompileFailure } from "../src/harness/compile-failure.ts";
 import type { ModuleCompileRequest } from "../src/harness/module-compile.ts";
 import { COMPILE_WORKER_LOGGER_PREFIX } from "../src/harness/module-compile-worker.ts";
 import { ModuleCompilerPool } from "../src/harness/module-compiler-pool.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A request to compile a one-module program whose entry is `main`. */
 function requestFor(main: string): ModuleCompileRequest {

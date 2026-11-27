@@ -1,6 +1,6 @@
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 import { ModuleDelegationRegistry } from "../src/module-delegations.ts";
 
 const spaceA = "did:key:z6MkModuleDelegationRegistrySpaceA";

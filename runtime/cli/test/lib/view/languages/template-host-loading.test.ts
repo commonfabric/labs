@@ -4,11 +4,11 @@
  * its first case runs.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { languageForName } from "../../../../lib/view/languages/language.ts";
 import type { Line, TokenClass } from "../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every class the colored lines give to an exact fragment. */
 function classesOf(lines: readonly Line[], text: string): TokenClass[] {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -6,6 +5,7 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import { decodeMemoryBoundary } from "@commonfabric/memory/v2";
 import { transportClosedError } from "@commonfabric/memory/v2/client";
 import { Server, SessionRegistry } from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
 import { ServerTransport } from "../../../memory/test/support/server-transport.ts";
 import { LoopbackStorageManager } from "../../src/executor/loopback-storage.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -10,6 +9,7 @@ import {
 } from "../v2.ts";
 import { respondToHello } from "../v2/handshake.ts";
 import { parseClientMessage } from "../v2/server.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The `hello` a server parses from a client that sent `protocol`. */
 const helloFromWire = (protocol: string): HelloMessage => {

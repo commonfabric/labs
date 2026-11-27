@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { aclDocId } from "../acl.ts";
 import {
@@ -20,6 +19,12 @@ import {
   type SessionLifecycleEvent,
   SessionRegistry,
 } from "../v2/session-registry.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The space the demand is carried into. */
 const SOURCE = "did:key:z6Mk-carried-demand-source";

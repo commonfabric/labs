@@ -4,10 +4,8 @@
  * of a value it derives and an event sent to it bring it back.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
-import { withStuckNet } from "@commonfabric/test-support/stuck-net";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import {
@@ -23,6 +21,13 @@ import {
   startServingMemoryServer,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
   confirmServedInstantiate,
@@ -36,7 +41,8 @@ const space = aliceSigner.did() as MemorySpace;
 
 /**
  * A list a verb adds a child to, each child with a verb and the values it
- * derives, which `child` declares: the pattern `Child` given its `title`.
+ * derives, which `child` declares: the pattern `Child` given its `title`. The
+ * parent has a derivation of its own over each child's `upper`.
  */
 const programWith = (child: string): RuntimeProgram => ({
   main: "/main.tsx",
@@ -72,8 +78,16 @@ const addChild = handler<
 });
 
 export default pattern<{ seed?: string }>(() => {
-  const children = new Writable<unknown[]>([]).for("children");
-  return { [NAME]: "Parent", children, addChild: addChild({ children }) };
+  const children = new Writable<{ upper?: string }[]>([]).for("children");
+  const uppers = computed(() =>
+    children.get().map((child) => child?.upper ?? "")
+  );
+  return {
+    [NAME]: "Parent",
+    children,
+    uppers,
+    addChild: addChild({ children }),
+  };
 });
 `,
   }],
@@ -87,7 +101,7 @@ const Child = pattern<{ title: Writable<string> }>(({ title }) => {
 });
 `);
 
-/** Each child derives `greeting` from what a fetch answers. */
+/** Each child derives `greeting` from what a fetch answers, as well. */
 const FETCHING_PROGRAM = programWith(`
 const Child = pattern<{ title: Writable<string> }>(({ title }) => {
   const upper = computed(() => title.get().toUpperCase());
@@ -189,12 +203,11 @@ describe("served-handler-child", () => {
   };
 
   /**
-   * Makes a parent of `program` and has it add a child, and returns a client's
-   * cell for the parent's list of children, which the client has not read.
+   * Makes a parent of `program` and returns a client's cell for it, which the
+   * client has not read. Its verb is the one {@link addSecondChild} sends to.
    */
-  const addChildUnread = async (
+  const makeParent = async (
     pieces: PiecesController,
-    title: string,
     program: RuntimeProgram = PROGRAM,
   ): Promise<Cell<unknown>> => {
     const { pieceId } = await host.runLifecycleVerb(space, {
@@ -212,7 +225,20 @@ describe("served-handler-child", () => {
     );
     addChildVerb = parent.key("addChild" as never)
       .asSchemaFromLinks() as Cell<unknown>;
-    await send(addChildVerb, { title });
+    return parent as Cell<unknown>;
+  };
+
+  /**
+   * Makes a parent of `program` and has it add a child, and returns a client's
+   * cell for the parent's list of children, which the client has not read.
+   */
+  const addChildUnread = async (
+    pieces: PiecesController,
+    title: string,
+    program: RuntimeProgram = PROGRAM,
+  ): Promise<Cell<unknown>> => {
+    const parent = await makeParent(pieces, program);
+    await send(addChildVerb!, { title });
     return parent.key("children" as never) as Cell<unknown>;
   };
 
@@ -671,6 +697,27 @@ describe("served-handler-child", () => {
     const upper = child.key("upper") as Cell<unknown>;
     expect(await pullFromServer(pieces.runtime, upper)).toBe(true);
     expect(upper.get()).toBe("FIRST");
+  });
+
+  it("gives a demanded derivation of the parent the value a new child derives", async () => {
+    // A Topics board's index reads what each topic derives. The parent's
+    // derivation is demanded before the child exists, and reruns once the
+    // handler adds one. If the child stops before that rerun reads its value,
+    // nothing has written the value and nothing starts the child to write it.
+    const pieces = await clientPieces();
+    const parent = await makeParent(pieces);
+    const uppers = (parent.key("uppers" as never) as Cell<unknown>).asSchema(
+      { type: "array", items: { type: "string" } } as const,
+    );
+    const cancel = uppers.sink(() => {});
+    expect(await pullFromServer(pieces.runtime, uppers)).toBe(true);
+    expect(uppers.get()).toEqual([]);
+
+    await send(addChildVerb!, { title: "first" });
+
+    expect(await pullFromServer(pieces.runtime, uppers)).toBe(true);
+    expect(uppers.get()).toEqual(["FIRST"]);
+    cancel();
   });
 
   it("handles an event, and a read then sees what it changed", async () => {

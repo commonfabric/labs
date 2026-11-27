@@ -14,6 +14,7 @@ import {
   addFirstUserPromptCacheBreakpoint,
   type ResponsesInputItem,
 } from "../src/model/responses-protocol.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const GATEWAY = "https://gateway.test";
 
@@ -70,7 +71,7 @@ const completedResponse = (output: unknown[]) => ({
   output,
 });
 
-Deno.test("gpt-5.6 turns go to the Responses API with reasoning enabled", async () => {
+test("gpt-5.6 turns go to the Responses API with reasoning enabled", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completedResponse([{
@@ -105,7 +106,7 @@ Deno.test("gpt-5.6 turns go to the Responses API with reasoning enabled", async 
   assertEquals(result.assistant.content, "Done.");
 });
 
-Deno.test("gpt-5.6 tool calls survive alongside reasoning", async () => {
+test("gpt-5.6 tool calls survive alongside reasoning", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completedResponse([
@@ -147,7 +148,7 @@ Deno.test("gpt-5.6 tool calls survive alongside reasoning", async () => {
   assertEquals(state.output[0].encrypted_content, "encrypted-reasoning-blob");
 });
 
-Deno.test("reasoning items are replayed on the following turn", async () => {
+test("reasoning items are replayed on the following turn", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completedResponse([{
@@ -211,7 +212,7 @@ Deno.test("reasoning items are replayed on the following turn", async () => {
   });
 });
 
-Deno.test("non-OpenAI models and native tools stay on Chat Completions", async () => {
+test("non-OpenAI models and native tools stay on Chat Completions", async () => {
   // The gateway cannot translate the Responses schema for Vertex-backed
   // models, and provider-native tools have no Responses equivalent there.
   assertEquals(usesResponsesApi("gpt-5.6-sol", []), true);
@@ -234,7 +235,7 @@ Deno.test("non-OpenAI models and native tools stay on Chat Completions", async (
   assertEquals(captured[0].url, `${GATEWAY}/v1/chat/completions`);
 });
 
-Deno.test("a chat turn with no content field is handled", async () => {
+test("a chat turn with no content field is handled", async () => {
   // gemini-3.5-flash returns `{role, thinking_blocks, tool_calls}` on a
   // tool-call-only turn — `content` is absent, not null. Treating that as an
   // array threw `Cannot read properties of undefined (reading 'flatMap')` and
@@ -262,7 +263,7 @@ Deno.test("a chat turn with no content field is handled", async () => {
   assertEquals(result.assistant.toolCalls?.[0].id, "call-1");
 });
 
-Deno.test("resuming with a different model drops the stale continuation", async () => {
+test("resuming with a different model drops the stale continuation", async () => {
   // The CLI pins the provider on resume but not the model, so
   // `--resume-run X --model other` is legal. Encrypted reasoning is bound to
   // the model that produced it, so it is dropped rather than failing the run.
@@ -305,7 +306,7 @@ Deno.test("resuming with a different model drops the stale continuation", async 
   assertEquals(result.assistant.content, "resumed");
 });
 
-Deno.test("native tools on an OpenAI model fail with a named error", async () => {
+test("native tools on an OpenAI model fail with a named error", async () => {
   // Chat Completions is the only path that serves native tools, and it rejects
   // function tools while reasoning is on — so this combination must not route
   // silently into a provider 400.
@@ -321,7 +322,7 @@ Deno.test("native tools on an OpenAI model fail with a named error", async () =>
   );
 });
 
-Deno.test("the web_search profile keeps a non-OpenAI model", () => {
+test("the web_search profile keeps a non-OpenAI model", () => {
   // The guard above is only unreachable while this stays true.
   assertEquals(WEB_SEARCH_SUBAGENT_MODEL.startsWith("gpt-"), false);
   assertEquals(
@@ -333,7 +334,7 @@ Deno.test("the web_search profile keeps a non-OpenAI model", () => {
   );
 });
 
-Deno.test("the Responses turn stays stateless", async () => {
+test("the Responses turn stays stateless", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completedResponse([{
@@ -357,7 +358,7 @@ Deno.test("the Responses turn stays stateless", async () => {
   assertEquals(Array.isArray(body.input), true);
 });
 
-Deno.test("prompt_cache_key is bounded to the provider limit", async () => {
+test("prompt_cache_key is bounded to the provider limit", async () => {
   // Subagent run ids are `<parent>.subagent.<n>` and grow with nesting depth.
   // The provider rejects prompt_cache_key above 64 characters outright, which
   // would fail every model turn in a deeply delegated run.
@@ -385,7 +386,7 @@ Deno.test("prompt_cache_key is bounded to the provider limit", async () => {
   assertEquals(captured[2].body.prompt_cache_key, "run-short");
 });
 
-Deno.test("cache affinity, explicit breakpoint, and reasoning are configurable", async () => {
+test("cache affinity, explicit breakpoint, and reasoning are configurable", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completedResponse([{
@@ -418,7 +419,7 @@ Deno.test("cache affinity, explicit breakpoint, and reasoning are configurable",
   });
 });
 
-Deno.test("explicit cache breakpoint selects the last cacheable user block", () => {
+test("explicit cache breakpoint selects the last cacheable user block", () => {
   const original: ResponsesInputItem[] = [
     {
       type: "message",
@@ -475,7 +476,7 @@ Deno.test("explicit cache breakpoint selects the last cacheable user block", () 
   assertEquals(imageContent[0].prompt_cache_breakpoint, { mode: "explicit" });
 });
 
-Deno.test("explicit cache breakpoint requires cacheable user content", () => {
+test("explicit cache breakpoint requires cacheable user content", () => {
   assertThrows(
     () =>
       addFirstUserPromptCacheBreakpoint([{
@@ -488,7 +489,7 @@ Deno.test("explicit cache breakpoint requires cacheable user content", () => {
   );
 });
 
-Deno.test("GPT-5.6 cache controls fail before sending an older model", async () => {
+test("GPT-5.6 cache controls fail before sending an older model", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [completedResponse([])]);
 
@@ -504,7 +505,7 @@ Deno.test("GPT-5.6 cache controls fail before sending an older model", async () 
   assertEquals(captured.length, 0);
 });
 
-Deno.test("unsupported GPT-5.6 reasoning effort fails before sending", async () => {
+test("unsupported GPT-5.6 reasoning effort fails before sending", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [completedResponse([])]);
 
@@ -516,7 +517,7 @@ Deno.test("unsupported GPT-5.6 reasoning effort fails before sending", async () 
   assertEquals(captured.length, 0);
 });
 
-Deno.test("Responses usage includes cache details and an estimated cost", async () => {
+test("Responses usage includes cache details and an estimated cost", async () => {
   const captured: Captured[] = [];
   const response = completedResponse([{
     type: "message",
@@ -550,7 +551,7 @@ Deno.test("Responses usage includes cache details and an estimated cost", async 
   });
 });
 
-Deno.test("a turn without a system message sends no instructions", async () => {
+test("a turn without a system message sends no instructions", async () => {
   const captured: Captured[] = [];
   const client = clientWith(captured, [
     completedResponse([{

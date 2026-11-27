@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -12,6 +11,7 @@ import {
   unwrapTypeParentheses,
 } from "../../src/typescript/type-node.ts";
 import { createTestProgram, createTestProgramFromFiles } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The type node the alias `name` in `sourceFile` names. */
 function aliasedNode(sourceFile: ts.SourceFile, name: string): ts.TypeNode {

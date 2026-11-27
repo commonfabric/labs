@@ -15,7 +15,6 @@
  * outright.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -37,6 +36,7 @@ import { DEEP_FREEZE, IS_DEEP_FROZEN } from "@/fabric-bases";
 import { FabricLink } from "@/fabric-instances";
 import { subFreeze, subIsDeepFrozen } from "./fixtures.ts";
 import { fabricFromJsonValue, jsonFromFabricValue } from "@/codecs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("FabricLink", () => {
   it("extends `FabricInstance` (not `FabricPrimitive`)", () => {

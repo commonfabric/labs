@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { MAX_TRIGGER_TRACE_HISTORY } from "../../src/scheduler/constants.ts";
@@ -10,6 +9,7 @@ import {
 } from "../../src/scheduler/diagnostics.ts";
 import type { TriggerTraceEntry } from "../../src/scheduler/types.ts";
 import type { ErrorHandler, ErrorWithContext } from "../../src/runtime.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A trace entry told apart from its neighbors by `changeIndex`. */
 function traceEntry(changeIndex: number): TriggerTraceEntry {

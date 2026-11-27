@@ -12,11 +12,11 @@
  * the same discipline the checker itself holds to.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { inheritedCfcPostureReport } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   HARNESS_CELL_LABELS_TYPE,

@@ -2,10 +2,15 @@ import { createTestSpace, env, Page } from "@commonfabric/integration";
 import { sleep } from "@commonfabric/async/sleep";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForText } from "./cfc-browser-helpers.ts";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { TEST_HTTP } from "./flags.ts";
 import {
   initializePiecesController,
@@ -45,7 +50,7 @@ describe("fetch json integration test", () => {
             "..",
             "examples",
             "fetch-json",
-            "fetch-json.tsx",
+            "main.tsx",
           ),
         ),
         { start: true },

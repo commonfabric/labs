@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { validateBashCurlCommand } from "../src/tools/bash-curl-policy.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const expectAllowed = (command: string) =>
   expect(validateBashCurlCommand(command)).toEqual({ allowed: true });

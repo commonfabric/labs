@@ -7,10 +7,15 @@ import {
   waitForCondition,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assert } from "@std/assert";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   PiecesController,
@@ -47,7 +52,7 @@ describe("instantiate-pattern integration test", () => {
           "..",
           "examples",
           "instantiate-pattern",
-          "instantiate-pattern.tsx",
+          "main.tsx",
         ),
       ),
       { start: true },

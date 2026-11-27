@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertThrows } from "@std/assert";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   buildCfcPolicyArtifactManifest,
   buildCfcPolicySnapshot,

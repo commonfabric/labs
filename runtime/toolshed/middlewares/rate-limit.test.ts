@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createRouter, createTestApp } from "@/lib/create-app.ts";
 import { createRateLimiter, rateLimit } from "@/middlewares/rate-limit.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("rate-limit", () => {
   describe("rateLimit()", () => {

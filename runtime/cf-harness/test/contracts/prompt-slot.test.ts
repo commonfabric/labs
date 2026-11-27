@@ -1,13 +1,15 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
   normalizePromptSlotBinding,
+  type PromptSlotBinding,
+  promptSlotBindingAtMost,
 } from "../../src/contracts/prompt-slot.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A binding that passes every check, with every optional field present. */
-const complete = {
+const complete: PromptSlotBinding = {
   type: CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
   source: { type: "test.prompt-slot", subject: "complete" },
   role: "direct-command",
@@ -98,5 +100,26 @@ describe("prompt-slot", () => {
         expect(() => normalizePromptSlotBinding(input)).toThrow(message);
       });
     }
+  });
+
+  describe("promptSlotBindingAtMost()", () => {
+    it("lowers a direct-command binding to quote and keeps every other field", () => {
+      expect(promptSlotBindingAtMost(complete, "quote")).toEqual({
+        ...complete,
+        role: "quote",
+      });
+    });
+
+    it("lowers a context binding to quote", () => {
+      expect(
+        promptSlotBindingAtMost({ ...complete, role: "context" }, "quote").role,
+      ).toBe("quote");
+    });
+
+    it("returns a binding already at or below the ceiling unchanged", () => {
+      const quoted: PromptSlotBinding = { ...complete, role: "quote" };
+      expect(promptSlotBindingAtMost(quoted, "quote")).toBe(quoted);
+      expect(promptSlotBindingAtMost(quoted, "direct-command")).toBe(quoted);
+    });
   });
 });

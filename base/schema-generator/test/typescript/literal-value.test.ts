@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { extractLiteralValue } from "../../src/typescript/literal-value.ts";
 import { createTestProgram } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The literal value read from the initializer of `const value` in `source`. */
 async function literalOf(

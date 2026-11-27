@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { ExportResultCode } from "@opentelemetry/core";
@@ -9,6 +8,7 @@ import {
   otlpExporter,
   provider,
 } from "@/lib/otel.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Every case here needs the module's provider as it is before any
 // registration or shutdown, both of which happen at most once per module

@@ -8,9 +8,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ExternalLocation, type Landing } from "../lib/shuttle/external.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HOME = "/home/someone";
 

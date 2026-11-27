@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -16,6 +15,12 @@ import {
   ProtocolError,
   toDocumentPath,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const setOp = (id: string, value: unknown) =>
   ({ op: "set", id, value: { value } }) as never;

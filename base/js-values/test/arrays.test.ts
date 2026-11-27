@@ -10,13 +10,13 @@
  * element.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isArrayIndexPropertyName,
   isArrayWithOnlyIndexProperties,
   isInertArray,
 } from "@commonfabric/js-values/arrays";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("arrays", () => {
   describe("isArrayIndexPropertyName()", () => {

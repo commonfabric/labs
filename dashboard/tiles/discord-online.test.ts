@@ -13,6 +13,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import type { Ctx, Tile } from "../types.ts";
 import { buildSnapshot, discordOnline, loadHistory } from "./discord-online.ts";
 import type * as discordOnlineModule from "./discord-online.ts";
@@ -204,7 +205,7 @@ function connect(w: Wire, tile: Tile = discordOnline, heartbeatMs = 41_250) {
   return view;
 }
 
-Deno.test("discord online: neither the token nor the guild id alone earns a color", async () => {
+test("discord online: neither the token nor the guild id alone earns a color", async () => {
   const cases: Record<string, string>[] = [{}, { DISCORD_BOT_TOKEN: "tok" }, { DISCORD_GUILD_ID: "g1" }];
   for (const env of cases) {
     const v = await discordOnline.collect(ctx(env));
@@ -214,7 +215,7 @@ Deno.test("discord online: neither the token nor the guild id alone earns a colo
   }
 });
 
-Deno.test("discord snapshot: an online user with no member record counts as a visitor, not team", () => {
+test("discord snapshot: an online user with no member record counts as a visitor, not team", () => {
   const snap = buildSnapshot({
     id: "g1",
     roles: [{ id: "team", name: "Team", color: 255, position: 5 }],
@@ -231,7 +232,7 @@ Deno.test("discord snapshot: an online user with no member record counts as a vi
   assertEquals(snap.teamColor, "#0000ff"); // a decimal Discord color, zero-padded
 });
 
-Deno.test("discord snapshot: a colorless Team role uses the visitor gray", () => {
+test("discord snapshot: a colorless Team role uses the visitor gray", () => {
   const online = [{ user: { id: "a" }, status: "online" }];
   const members = [{ user: { id: "a" }, roles: ["team"] }];
   // The role exists and is counted, but carries Discord's "no color" sentinel.
@@ -246,7 +247,7 @@ Deno.test("discord snapshot: a colorless Team role uses the visitor gray", () =>
   assertEquals(colorless.teamColor, VISITOR_GREY);
 });
 
-Deno.test("discord snapshot: Team Member remains an alias for Team", () => {
+test("discord snapshot: Team Member remains an alias for Team", () => {
   const legacy = buildSnapshot({
     id: "g1",
     roles: [{ id: "legacy", name: "Team Member", color: 0x123456, position: 5 }],
@@ -259,7 +260,7 @@ Deno.test("discord snapshot: Team Member remains an alias for Team", () => {
   assertEquals(legacy.teamColor, "#123456");
 });
 
-Deno.test("discord snapshot: Team and Team Member roles are counted together", () => {
+test("discord snapshot: Team and Team Member roles are counted together", () => {
   const snap = buildSnapshot({
     id: "g1",
     roles: [
@@ -285,7 +286,7 @@ Deno.test("discord snapshot: Team and Team Member roles are counted together", (
   assertEquals(snap.teamColor, "#2ecc71");
 });
 
-Deno.test("discord snapshot: absent Team aliases do not produce a valid snapshot", () => {
+test("discord snapshot: absent Team aliases do not produce a valid snapshot", () => {
   const missing = buildSnapshot({
     id: "g1",
     roles: [{ id: "g1", name: "@everyone", color: 0, position: 0 }],
@@ -295,7 +296,7 @@ Deno.test("discord snapshot: absent Team aliases do not produce a valid snapshot
   assertEquals(missing, null);
 });
 
-Deno.test("discord online: the history is read from disk once and carried from poll to poll", async (t) => {
+test("discord online: the history is read from disk once and carried from poll to poll", async (t) => {
   // The tile module loads the history file once, on the first poll that
   // records a sample, and each later poll works on what that load left. These
   // steps poll a copy of the module no other test has polled, so the first of
@@ -396,7 +397,7 @@ Deno.test("discord online: the history is read from disk once and carried from p
   });
 });
 
-Deno.test("discord online: the identify frame carries the token and the privileged intents", async () => {
+test("discord online: the identify frame carries the token and the privileged intents", async () => {
   await withWire({}, async (w) => {
     const view = connect(w);
     const identify = w.socket().frames()[0] as {
@@ -424,7 +425,7 @@ Deno.test("discord online: the identify frame carries the token and the privileg
   });
 });
 
-Deno.test("discord online: heartbeats go out at the gateway's interval; a dead socket's tick is swallowed", async () => {
+test("discord online: heartbeats go out at the gateway's interval; a dead socket's tick is swallowed", async () => {
   await withWire({}, async (w) => {
     const view = connect(w, discordOnline, 41_250);
     assertEquals(w.beatMs, 41_250); // the interval HELLO asked for, not one of our own
@@ -442,7 +443,7 @@ Deno.test("discord online: heartbeats go out at the gateway's interval; a dead s
   });
 });
 
-Deno.test("discord online: an invalid session (op 9) -> gray, never a false green", async () => {
+test("discord online: an invalid session (op 9) -> gray, never a false green", async () => {
   await withWire({}, async (w) => {
     const view = connect(w);
     w.socket().deliver({ op: 9 });
@@ -453,7 +454,7 @@ Deno.test("discord online: an invalid session (op 9) -> gray, never a false gree
   });
 });
 
-Deno.test("discord online: missing Team aliases -> gray", async () => {
+test("discord online: missing Team aliases -> gray", async () => {
   await withWire({}, async (w) => {
     const view = connect(w);
     w.socket().deliver({
@@ -471,7 +472,7 @@ Deno.test("discord online: missing Team aliases -> gray", async () => {
   });
 });
 
-Deno.test("discord online: noise and another guild's members never finish the poll; a close -> gray", async () => {
+test("discord online: noise and another guild's members never finish the poll; a close -> gray", async () => {
   await withWire({}, async (w) => {
     const view = connect(w);
     // Frames that are not JSON, and frames that are not text at all.
@@ -494,7 +495,7 @@ Deno.test("discord online: noise and another guild's members never finish the po
   });
 });
 
-Deno.test("discord online: a socket error -> gray", async () => {
+test("discord online: a socket error -> gray", async () => {
   await withWire({}, async (w) => {
     const view = connect(w);
     w.socket().onerror!();
@@ -504,7 +505,7 @@ Deno.test("discord online: a socket error -> gray", async () => {
   });
 });
 
-Deno.test("discord online: a gateway that never sends the guild times out -> gray", async () => {
+test("discord online: a gateway that never sends the guild times out -> gray", async () => {
   await withWire({}, async (w) => {
     const view = discordOnline.collect(ctx(LIVE));
     // No HELLO, so no heartbeat was ever started and there is none to stop.
@@ -518,7 +519,7 @@ Deno.test("discord online: a gateway that never sends the guild times out -> gra
   });
 });
 
-Deno.test("discord online: a gateway that refuses the connection -> gray with the reason", async () => {
+test("discord online: a gateway that refuses the connection -> gray with the reason", async () => {
   await withWire({
     connect: () => {
       throw new Error("dns error: gateway.discord.gg");
@@ -531,7 +532,7 @@ Deno.test("discord online: a gateway that refuses the connection -> gray with th
   });
 });
 
-Deno.test("discord history: an unreadable store starts from an empty history", async () => {
+test("discord history: an unreadable store starts from an empty history", async () => {
   // ensureLoaded runs at most once per process, so only one path through its try is
   // reachable that way. loadHistory is the same read without the once-only flag.
   // Every one of these is a first-run or a damaged store, and none of them is an

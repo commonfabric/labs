@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   CFC_ATOM_TYPE,
@@ -9,6 +8,7 @@ import {
   CFC_LABEL_READ_FAILED_ATOM,
   type IFCLabel,
 } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   ownerConsoleDisplay,

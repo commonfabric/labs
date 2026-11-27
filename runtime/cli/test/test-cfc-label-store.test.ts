@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -9,6 +8,7 @@ import {
   cfcLabelViewForDereferenceTraces,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { runTestPattern } from "../lib/test-runner.ts";
 
 describe("test-cfc-label-store", {

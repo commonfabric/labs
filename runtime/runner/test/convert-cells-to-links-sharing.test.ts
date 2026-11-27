@@ -5,11 +5,11 @@
  * rewrite one of the two positions into a pointer at the other.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricConvertibleJsValue } from "@commonfabric/data-model";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { convertCellsToLinks } from "../src/cell.ts";
 

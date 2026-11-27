@@ -2,6 +2,7 @@ import { assert, assertEquals, assertThrows } from "@std/assert";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
 import { refuseAtCommitBoundary } from "./refused-commit.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
@@ -140,11 +141,11 @@ async function runNavigateHandlerTest(conditional: boolean): Promise<void> {
   }
 }
 
-Deno.test("handler can update local state and still navigate", async () => {
+test("handler can update local state and still navigate", async () => {
   await runNavigateHandlerTest(false);
 });
 
-Deno.test("conditional handler still navigates after it hides itself", async () => {
+test("conditional handler still navigates after it hides itself", async () => {
   await runNavigateHandlerTest(true);
 });
 
@@ -213,17 +214,17 @@ async function runCancelledDeferredNavigateTest(
   }
 }
 
-Deno.test(
+test(
   "stopping a parent tombstones a direct deferred navigateTo result",
   async () => await runCancelledDeferredNavigateTest(false),
 );
 
-Deno.test(
+test(
   "stopping a parent tombstones a nested deferred navigateTo result",
   async () => await runCancelledDeferredNavigateTest(true),
 );
 
-Deno.test("navigateTo is idempotent for one result cell", async () => {
+test("navigateTo is idempotent for one result cell", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const navigations: string[] = [];
   const runtime = new Runtime({
@@ -313,7 +314,7 @@ Deno.test("navigateTo is idempotent for one result cell", async () => {
   }
 });
 
-Deno.test(
+test(
   "navigateTo retries navigation after a rejected post-commit transaction",
   async () => {
     const storageManager = StorageManager.emulate({ as: signer });
@@ -393,7 +394,7 @@ Deno.test(
   },
 );
 
-Deno.test("navigateTo async callback is tracked by runtime.settled", async () => {
+test("navigateTo async callback is tracked by runtime.settled", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   let callbackCompleted = false;
   const callbackStart = Promise.withResolvers<void>();
@@ -456,7 +457,7 @@ Deno.test("navigateTo async callback is tracked by runtime.settled", async () =>
   }
 });
 
-Deno.test("navigateTo contains a rejected async callback", async () => {
+test("navigateTo contains a rejected async callback", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const failure = new Error("shell navigation failed");
   const logged: unknown[][] = [];
@@ -500,7 +501,7 @@ Deno.test("navigateTo contains a rejected async callback", async () => {
   }
 });
 
-Deno.test(
+test(
   "navigateTo's legacy arm refuses to run without a navigateCallback",
   async () => {
     // The OFF arm checks for the callback before it resolves the target or

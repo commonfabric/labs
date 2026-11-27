@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -9,6 +8,12 @@ import {
   toggleTheme,
 } from "../src/lib/theme-preference.ts";
 import { installGlobals } from "./browser-globals.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const STORAGE_KEY = "cf-theme-preference";
 

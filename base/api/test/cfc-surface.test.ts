@@ -39,8 +39,9 @@ import type {
   WriteAuthorizedBy,
 } from "@commonfabric/api/cfc";
 import { cfcAtom } from "@commonfabric/api/cfc";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("CFC API surface preserves the authored runtime value shape", () => {
+test("CFC API surface preserves the authored runtime value shape", () => {
   const aliasNames = CFC_CANONICAL_ALIAS_NAMES;
   const currentPrincipal: CurrentPrincipal = { __ctCurrentPrincipal: true };
   const explicitAlternative: AnyOf<readonly ["reader-a", "reader-b"]> = {};
@@ -253,7 +254,7 @@ Deno.test("CFC API surface preserves the authored runtime value shape", () => {
   assertEquals(currentPrincipal, { __ctCurrentPrincipal: true });
 });
 
-Deno.test("a CFC alias holds the `null` and `undefined` its payload holds", () => {
+test("a CFC alias holds the `null` and `undefined` its payload holds", () => {
   // The carrier distributes over the payload's members and leaves `null` and
   // `undefined` beside them, so these assignments type-check.
   const missing: Confidential<string | null, readonly ["secret"]> = null;
@@ -269,7 +270,7 @@ Deno.test("a CFC alias holds the `null` and `undefined` its payload holds", () =
   assertEquals(titleOf({ title: "delta" }), "delta");
 });
 
-Deno.test("a value of a generic payload's type is assignable to its CFC alias", () => {
+test("a value of a generic payload's type is assignable to its CFC alias", () => {
   // The carrier's tag is the same type in both branches of its deferred
   // conditional, so these return statements type-check while `T` is a type
   // parameter.

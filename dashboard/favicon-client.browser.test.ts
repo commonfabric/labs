@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { paintStatusFavicon } from "./favicon-client.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const HREFS = {
   good: "/favicon.png?status=good",
@@ -53,7 +54,7 @@ function paint(
     ?.getAttribute("href") ?? null;
 }
 
-Deno.test("dashboard status and server red age select the favicon", () => {
+test("dashboard status and server red age select the favicon", () => {
   arrange("unknown");
   assertEquals(paint(), HREFS.good);
 

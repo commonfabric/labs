@@ -3,7 +3,7 @@ import {
   findElement,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import LinkPreview from "./link-preview.tsx";
+import LinkPreview from "./main.tsx";
 
 export default pattern(() => {
   const fallback = LinkPreview({});

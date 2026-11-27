@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { REPO, WORKFLOW_FILE } from "./ci-check-lib.ts";
 import {
@@ -11,6 +10,7 @@ import {
   orderJobName,
   seedHasRun,
 } from "./test-order-tomorrow.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SEED = 20261029;
 const COMMIT = "60cd866374f5b59bdf16c8469ad3f71cd35ac040";

@@ -1,8 +1,8 @@
 import { assert, assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { env, waitForCondition } from "@commonfabric/integration";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { ShellIntegration } from "../../integration/shell-utils.ts";
 import { clickPierce, pierce } from "./shadow-dom.ts";

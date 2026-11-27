@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { deepFreeze, isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { selectorSchemaForLink } from "../src/storage/v2.ts";

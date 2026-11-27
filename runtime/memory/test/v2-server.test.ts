@@ -1,10 +1,10 @@
 import { assertEquals, assertExists } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 import { debugStr, taggedHashStringOf } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { FabricValue } from "@commonfabric/api";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { parseClientMessage, Server, SessionRegistry } from "../v2/server.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
@@ -248,7 +248,7 @@ const assertCommitBurstBeforeFanout = async (
   }
 };
 
-Deno.test("memory v2 server keeps publication locks independent per space", async () => {
+test("memory v2 server keeps publication locks independent per space", async () => {
   const server = createServer("memory://memory-v2-publication-lock-spaces");
   const internals = server.accessForTestingOnly;
   const firstEntered = Promise.withResolvers<void>();
@@ -282,7 +282,7 @@ Deno.test("memory v2 server keeps publication locks independent per space", asyn
   assertEquals(sameSpaceEntered, true);
 });
 
-Deno.test("memory v2 server parser ignores transact invocation and authorization payloads", () => {
+test("memory v2 server parser ignores transact invocation and authorization payloads", () => {
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({
       type: "transact",
@@ -319,7 +319,7 @@ Deno.test("memory v2 server parser ignores transact invocation and authorization
   );
 });
 
-Deno.test("memory v2 server parses a watch removal naming watch ids, and refuses one naming anything else", () => {
+test("memory v2 server parses a watch removal naming watch ids, and refuses one naming anything else", () => {
   const request = {
     type: "session.watch.remove" as const,
     requestId: "remove-1",
@@ -342,7 +342,7 @@ Deno.test("memory v2 server parses a watch removal naming watch ids, and refuses
   );
 });
 
-Deno.test("memory v2 server parses entity identifier listing requests", () => {
+test("memory v2 server parses entity identifier listing requests", () => {
   assertEquals(
     parseClientMessage(encodeMemoryBoundary({
       type: "entity-id.list",
@@ -403,7 +403,7 @@ Deno.test("memory v2 server parses entity identifier listing requests", () => {
   );
 });
 
-Deno.test("memory v2 server rejects unknown entity identifier sessions before dispatch", async () => {
+test("memory v2 server rejects unknown entity identifier sessions before dispatch", async () => {
   const server = createServer("memory://memory-v2-entity-id-dispatch-session");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -436,7 +436,7 @@ Deno.test("memory v2 server rejects unknown entity identifier sessions before di
   }
 });
 
-Deno.test("memory v2 entity identifier methods report session and query errors", async () => {
+test("memory v2 entity identifier methods report session and query errors", async () => {
   const sessions = new SessionRegistry();
   const server = new Server({
     sessions,
@@ -494,7 +494,7 @@ Deno.test("memory v2 entity identifier methods report session and query errors",
   }
 });
 
-Deno.test("memory v2 server rejects oversized unpaginated identifier responses", async () => {
+test("memory v2 server rejects oversized unpaginated identifier responses", async () => {
   const sessions = new SessionRegistry();
   const server = new Server({
     sessions,
@@ -559,7 +559,7 @@ Deno.test("memory v2 server rejects oversized unpaginated identifier responses",
   }
 });
 
-Deno.test("memory v2 session registry scopes session ids by space", () => {
+test("memory v2 session registry scopes session ids by space", () => {
   const sessions = new SessionRegistry();
   const first = sessions.open(
     "did:key:z6Mk-space-one",
@@ -580,7 +580,7 @@ Deno.test("memory v2 session registry scopes session ids by space", () => {
   assertExists(second.sessionToken);
 });
 
-Deno.test("memory v2 server consumes a challenged session open", async () => {
+test("memory v2 server consumes a challenged session open", async () => {
   const audience = "did:key:z6Mk-memory-v2-server-audience";
   let now = 1_000_000;
   const server = new Server({
@@ -649,7 +649,7 @@ Deno.test("memory v2 server consumes a challenged session open", async () => {
   }
 });
 
-Deno.test("memory v2 server rejects an expired session open challenge", async () => {
+test("memory v2 server rejects an expired session open challenge", async () => {
   const audience = "did:key:z6Mk-memory-v2-server-expired-audience";
   let now = 1_000_000;
   const server = new Server({
@@ -696,7 +696,7 @@ Deno.test("memory v2 server rejects an expired session open challenge", async ()
   }
 });
 
-Deno.test("memory v2 server rejects invalid session open auth metadata", async () => {
+test("memory v2 server rejects invalid session open auth metadata", async () => {
   const server = createServer(
     "memory://memory-v2-server-invalid-session-open-auth",
   );
@@ -766,7 +766,7 @@ Deno.test("memory v2 server rejects invalid session open auth metadata", async (
   }
 });
 
-Deno.test("memory v2 server rejects session open before issuing challenge", async () => {
+test("memory v2 server rejects session open before issuing challenge", async () => {
   const server = createServer(
     "memory://memory-v2-server-session-open-before-challenge",
   );
@@ -797,7 +797,7 @@ Deno.test("memory v2 server rejects session open before issuing challenge", asyn
   }
 });
 
-Deno.test("memory v2 server consumes challenge before denied session open", async () => {
+test("memory v2 server consumes challenge before denied session open", async () => {
   const audience = "did:key:z6Mk-memory-v2-server-denied-audience";
   const space = "did:key:z6Mk-memory-v2-server-denied-space";
   const server = new Server({
@@ -856,7 +856,7 @@ Deno.test("memory v2 server consumes challenge before denied session open", asyn
   }
 });
 
-Deno.test("memory v2 server allows the same session id in different spaces", async () => {
+test("memory v2 server allows the same session id in different spaces", async () => {
   const server = createServer("memory://memory-v2-server-session-scope");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -906,7 +906,7 @@ Deno.test("memory v2 server allows the same session id in different spaces", asy
   }
 });
 
-Deno.test("memory v2 dirty refresh stays on the connection's mounted space", async () => {
+test("memory v2 dirty refresh stays on the connection's mounted space", async () => {
   const server = createServer("memory://memory-v2-server-refresh-space-scope");
   const first = server.connect(() => {});
   const second = server.connect(() => {});
@@ -938,7 +938,7 @@ Deno.test("memory v2 dirty refresh stays on the connection's mounted space", asy
   }
 });
 
-Deno.test("memory v2 server direct writes schedule dirty refreshes without connections", async () => {
+test("memory v2 server direct writes schedule dirty refreshes without connections", async () => {
   const time = new FakeTime();
   const server = createServer(
     "memory://memory-v2-server-direct-write-no-connections",
@@ -982,7 +982,7 @@ Deno.test("memory v2 server direct writes schedule dirty refreshes without conne
   }
 });
 
-Deno.test("memory v2 server direct document helpers round-trip values", async () => {
+test("memory v2 server direct document helpers round-trip values", async () => {
   const server = createServer("memory://memory-v2-server-direct-documents");
   const space = "did:key:z6Mk-memory-v2-server-direct-documents";
   const contents = {
@@ -1006,7 +1006,7 @@ Deno.test("memory v2 server direct document helpers round-trip values", async ()
   }
 });
 
-Deno.test("memory v2 server binds resumed sessions to the original principal", async () => {
+test("memory v2 server binds resumed sessions to the original principal", async () => {
   const server = new Server({
     store: new URL("memory://memory-v2-server-session-principal"),
     authorizeSessionOpen: authorizeLoopbackSessionOpen,
@@ -1069,7 +1069,7 @@ Deno.test("memory v2 server binds resumed sessions to the original principal", a
   }
 });
 
-Deno.test("memory v2 server requires sessions to be opened on the current connection", async () => {
+test("memory v2 server requires sessions to be opened on the current connection", async () => {
   const server = createServer("memory://memory-v2-server-connection-sessions");
   const firstMessages: ServerMessage[] = [];
   const secondMessages: ServerMessage[] = [];
@@ -1190,7 +1190,7 @@ Deno.test("memory v2 server requires sessions to be opened on the current connec
   }
 });
 
-Deno.test("memory v2 server transfers session ownership and rejects stale resume tokens", async () => {
+test("memory v2 server transfers session ownership and rejects stale resume tokens", async () => {
   const server = createServer("memory://memory-v2-server-session-takeover");
   const firstMessages: ServerMessage[] = [];
   const secondMessages: ServerMessage[] = [];
@@ -1297,7 +1297,7 @@ Deno.test("memory v2 server transfers session ownership and rejects stale resume
   }
 });
 
-Deno.test("memory v2 server does not open a session for a connection that closed during admission", async () => {
+test("memory v2 server does not open a session for a connection that closed during admission", async () => {
   // The close detached the connection's sessions before the open finished,
   // so a session it opened would be held by a connection that is gone and
   // would never expire.
@@ -1342,7 +1342,7 @@ Deno.test("memory v2 server does not open a session for a connection that closed
   }
 });
 
-Deno.test("memory v2 server rejects handshakes when modernCellRep flags disagree", async () => {
+test("memory v2 server rejects handshakes when modernCellRep flags disagree", async () => {
   const server = createServer("memory://memory-v2-server-handshake-flags");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -1371,7 +1371,7 @@ Deno.test("memory v2 server rejects handshakes when modernCellRep flags disagree
   }
 });
 
-Deno.test("memory v2 server accepts optional-capability flag mismatch", async () => {
+test("memory v2 server accepts optional-capability flag mismatch", async () => {
   const server = createServer(
     "memory://memory-v2-server-handshake-optional-flag",
   );
@@ -1394,7 +1394,7 @@ Deno.test("memory v2 server accepts optional-capability flag mismatch", async ()
   }
 });
 
-Deno.test("memory v2 server rejects unsafe spaces before opening a store", async () => {
+test("memory v2 server rejects unsafe spaces before opening a store", async () => {
   const server = createServer("memory://memory-v2-server-unsafe-space");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -1423,7 +1423,7 @@ Deno.test("memory v2 server rejects unsafe spaces before opening a store", async
   }
 });
 
-Deno.test("memory v2 server opens sessions, commits documents, and answers graph queries", async () => {
+test("memory v2 server opens sessions, commits documents, and answers graph queries", async () => {
   const server = createServer("memory://memory-v2-server-basic");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -1519,7 +1519,7 @@ Deno.test("memory v2 server opens sessions, commits documents, and answers graph
   }
 });
 
-Deno.test("memory v2 server rejects legacy live graph.query subscriptions", async () => {
+test("memory v2 server rejects legacy live graph.query subscriptions", async () => {
   const server = createServer("memory://memory-v2-server-subscribe-reject");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -1569,7 +1569,7 @@ Deno.test("memory v2 server rejects legacy live graph.query subscriptions", asyn
   }
 });
 
-Deno.test("memory v2 server watch sets expand to previously hidden nodes after retargets", async () => {
+test("memory v2 server watch sets expand to previously hidden nodes after retargets", async () => {
   const server = createServer("memory://memory-v2-server-watch-expansion");
   const messages: ServerMessage[] = [];
   const writerMessages: ServerMessage[] = [];
@@ -1694,7 +1694,7 @@ Deno.test("memory v2 server watch sets expand to previously hidden nodes after r
   }
 });
 
-Deno.test("memory v2 server retracts what a shrink retarget stops reaching in the effect frame, and nothing later", async () => {
+test("memory v2 server retracts what a shrink retarget stops reaching in the effect frame, and nothing later", async () => {
   const time = new FakeTime();
   const server = createServer(
     "memory://memory-v2-server-watch-shrink-no-reconcile",
@@ -1828,7 +1828,7 @@ Deno.test("memory v2 server retracts what a shrink retarget stops reaching in th
   }
 });
 
-Deno.test("memory v2 server does not send watch effects after a connection closes mid-refresh", async () => {
+test("memory v2 server does not send watch effects after a connection closes mid-refresh", async () => {
   const server = createServer("memory://memory-v2-server-close-during-refresh");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -1881,7 +1881,7 @@ Deno.test("memory v2 server does not send watch effects after a connection close
   }
 });
 
-Deno.test("memory v2 server refreshes watched docs by syncing only the touched entity", async () => {
+test("memory v2 server refreshes watched docs by syncing only the touched entity", async () => {
   const server = createServer("memory://memory-v2-server-incremental-watch");
   const messages: ServerMessage[] = [];
   const writerMessages: ServerMessage[] = [];
@@ -2005,7 +2005,7 @@ Deno.test("memory v2 server refreshes watched docs by syncing only the touched e
   }
 });
 
-Deno.test("memory v2 server watch.add bootstraps only the newly added watch", async () => {
+test("memory v2 server watch.add bootstraps only the newly added watch", async () => {
   const server = createServer("memory://memory-v2-server-watch-add");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -2105,7 +2105,7 @@ Deno.test("memory v2 server watch.add bootstraps only the newly added watch", as
   }
 });
 
-Deno.test("memory v2 server can bootstrap watches with session.watch.add", async () => {
+test("memory v2 server can bootstrap watches with session.watch.add", async () => {
   const server = createServer("memory://memory-v2-server-watch-add-bootstrap");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -2172,7 +2172,7 @@ Deno.test("memory v2 server can bootstrap watches with session.watch.add", async
   }
 });
 
-Deno.test("memory v2 server treats duplicate watch ids in session.watch.add as no-op or protocol errors", async () => {
+test("memory v2 server treats duplicate watch ids in session.watch.add as no-op or protocol errors", async () => {
   const server = createServer("memory://memory-v2-server-watch-add-replace");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -2381,7 +2381,7 @@ Deno.test("memory v2 server treats duplicate watch ids in session.watch.add as n
   }
 });
 
-Deno.test("memory v2 server rolls back failed watch.add mutations", async () => {
+test("memory v2 server rolls back failed watch.add mutations", async () => {
   const server = createServer("memory://memory-v2-server-watch-add-rollback");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -2516,7 +2516,7 @@ Deno.test("memory v2 server rolls back failed watch.add mutations", async () => 
   }
 });
 
-Deno.test("memory v2 server watch set replacement emits removes for entities that leave scope", async () => {
+test("memory v2 server watch set replacement emits removes for entities that leave scope", async () => {
   const server = createServer("memory://memory-v2-server-watch-replace");
   const messages: ServerMessage[] = [];
   const connection = server.connect((message) => messages.push(message));
@@ -2621,21 +2621,21 @@ Deno.test("memory v2 server watch set replacement emits removes for entities tha
   }
 });
 
-Deno.test("memory v2 server accepts same-client commit bursts before fan-out", async () => {
+test("memory v2 server accepts same-client commit bursts before fan-out", async () => {
   await assertCommitBurstBeforeFanout(
     "memory-v2-same-client-commit-burst",
     1,
   );
 });
 
-Deno.test("memory v2 server accepts cross-client commit bursts before fan-out", async () => {
+test("memory v2 server accepts cross-client commit bursts before fan-out", async () => {
   await assertCommitBurstBeforeFanout(
     "memory-v2-cross-client-commit-burst",
     2,
   );
 });
 
-Deno.test("memory v2 server elides own set heads and delivers own patch heads through watches", async () => {
+test("memory v2 server elides own set heads and delivers own patch heads through watches", async () => {
   const server = createServer("memory://memory-v2-server-suppress-own-watch");
   const writerMessages: ServerMessage[] = [];
   const observerMessages: ServerMessage[] = [];
@@ -2800,7 +2800,7 @@ Deno.test("memory v2 server elides own set heads and delivers own patch heads th
   }
 });
 
-Deno.test("memory v2 server classifies own-write echo by the head-producing op", async () => {
+test("memory v2 server classifies own-write echo by the head-producing op", async () => {
   const server = createServer("memory://memory-v2-server-echo-classification");
   const messages: ServerMessage[] = [];
   const writer = server.connect((message) => messages.push(message));
@@ -3132,7 +3132,7 @@ describe("v2-server", () => {
   });
 });
 
-Deno.test("memory v2 server suppresses own patch heads when the own-write echo config is off", async () => {
+test("memory v2 server suppresses own patch heads when the own-write echo config is off", async () => {
   setOwnWriteEchoConfig(false);
   const server = createServer("memory://memory-v2-server-echo-config-off");
   const messages: ServerMessage[] = [];
@@ -3208,7 +3208,7 @@ Deno.test("memory v2 server suppresses own patch heads when the own-write echo c
   }
 });
 
-Deno.test("memory v2 server delivers a foreign-moved head to the earlier own-set writer", async () => {
+test("memory v2 server delivers a foreign-moved head to the earlier own-set writer", async () => {
   const server = createServer("memory://memory-v2-server-echo-foreign-moved");
   const firstMessages: ServerMessage[] = [];
   const secondMessages: ServerMessage[] = [];
@@ -3318,7 +3318,7 @@ Deno.test("memory v2 server delivers a foreign-moved head to the earlier own-set
   }
 });
 
-Deno.test("memory v2 server returns conflicts before deferred caught-up session sync", async () => {
+test("memory v2 server returns conflicts before deferred caught-up session sync", async () => {
   // Verdict-first is the design (CT-1927): the rejection returns inline and
   // the deferred sync (with its marker) follows on the batch pass.
   const server = createServer("memory://memory-v2-server-conflict-flush", 20);
@@ -3480,7 +3480,7 @@ Deno.test("memory v2 server returns conflicts before deferred caught-up session 
   }
 });
 
-Deno.test("memory v2 server empty caught-up sync preserves previous fromSeq", async () => {
+test("memory v2 server empty caught-up sync preserves previous fromSeq", async () => {
   // Verdict-first is the design (CT-1927): the rejection returns inline and
   // the deferred sync (with its marker) follows on the batch pass.
   const server = createServer(
@@ -3565,7 +3565,7 @@ Deno.test("memory v2 server empty caught-up sync preserves previous fromSeq", as
   }
 });
 
-Deno.test("memory v2 server processes back-to-back websocket messages in receive order before returning conflicts", async () => {
+test("memory v2 server processes back-to-back websocket messages in receive order before returning conflicts", async () => {
   // Verdict-first is the design (CT-1927): the rejection returns inline and
   // the deferred sync (with its marker) follows on the batch pass.
   const server = createServer(
@@ -3717,7 +3717,7 @@ Deno.test("memory v2 server processes back-to-back websocket messages in receive
   }
 });
 
-Deno.test("memory v2 server waits for queued receives before rerunning scheduled watch refresh", async () => {
+test("memory v2 server waits for queued receives before rerunning scheduled watch refresh", async () => {
   const time = new FakeTime();
   // Pins the TIMER pipeline's drain-wait choreography.
   const server = createServer(
@@ -3935,7 +3935,7 @@ Deno.test("memory v2 server waits for queued receives before rerunning scheduled
   }
 });
 
-Deno.test("memory v2 server reruns scheduled watch refresh after max deferral", async () => {
+test("memory v2 server reruns scheduled watch refresh after max deferral", async () => {
   const time = new FakeTime();
   // Pins the TIMER pipeline's deferral choreography (its gated sync stub
   // scripts the batched pass).

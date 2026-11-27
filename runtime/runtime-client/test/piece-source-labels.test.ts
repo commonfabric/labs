@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { describeOrigin, sourceOperationLabel } from "@/piece-source-labels.ts";
@@ -6,6 +5,7 @@ import type {
   PieceOriginKind,
   PieceSourceRevisionOperation,
 } from "@/protocol/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("piece-source-labels", () => {
   describe("describeOrigin()", () => {

@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
@@ -7,6 +6,12 @@ import { parseOwnerReleaseByIntentRecord } from "@commonfabric/memory/v2/cfc-own
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   type ReleasableClause,

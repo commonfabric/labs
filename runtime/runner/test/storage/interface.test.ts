@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   type ReplicaLoadFailure,
   ReplicaLoadFailureError,
 } from "../../src/storage/interface.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const failure: ReplicaLoadFailure = {
   failureClass: "connection",

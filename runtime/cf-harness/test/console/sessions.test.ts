@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   CONSOLE_TASK_PREVIEW_LIMIT,
@@ -9,6 +8,7 @@ import {
   type HarnessChatSessionStatus,
   type HarnessChatTurnRecord,
 } from "../../src/contracts/interactive-chat.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const session = (
   sessionId: string,

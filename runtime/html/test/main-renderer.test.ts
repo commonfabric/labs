@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   $conn,
@@ -9,6 +8,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
 import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 import { MockDoc } from "../src/mock-doc.ts";
 import {
   VDomRenderer,

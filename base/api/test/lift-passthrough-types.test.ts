@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   ComparableCell,
@@ -7,6 +6,7 @@ import type {
   ReadonlyCell,
 } from "@commonfabric/api";
 import type { Same } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // `lift` is ambient in this package — the callable lives in the runner's
 // builder — so every probe below sits inside a function that is never called.

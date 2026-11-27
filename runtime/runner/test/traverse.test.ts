@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { type CellScope, resolveScopeKey } from "@commonfabric/memory/v2";
-import { describe, it } from "@std/testing/bdd";
 
 import type { SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -18,6 +17,7 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import { maxOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {

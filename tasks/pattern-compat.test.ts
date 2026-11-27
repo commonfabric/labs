@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs/exists";
 import type { JSONSchema } from "@commonfabric/runner";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CommandOutput } from "./command-output.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import {
@@ -98,6 +103,44 @@ describe("pattern-compat", () => {
     writeBaseline(baselinesDir, key, contract, RECORDED_AT);
 
   describe("judgeCompatibility()", () => {
+    describe("a main.tsx entry", () => {
+      const NEEDS_IDS: PatternContract = {
+        argumentSchema: {
+          type: "object",
+          properties: { ids: { type: "array" } },
+          required: ["ids"],
+        },
+        resultSchema: RESULT_WITH_TITLE,
+      };
+
+      it("fails when it requires an input with no default, naming the input", async () => {
+        await record("demo/main.tsx", NEEDS_IDS);
+
+        const shown = await judge({
+          "patterns/demo/main.tsx": patternModule(NEEDS_IDS),
+        });
+
+        expect(shown.code).toBe(1);
+        expect(shown.err).toContain(
+          "demo/main.tsx\n  is a main.tsx entry, which is offered as " +
+            "standalone, but requires ids with no default",
+        );
+      });
+
+      it("passes for the same contract in a file of another name, or outside patterns/", async () => {
+        await record("demo/part.tsx", NEEDS_IDS);
+        await record("agent-sessions-debug/main.tsx", NEEDS_IDS);
+
+        const shown = await judge({
+          "patterns/demo/part.tsx": patternModule(NEEDS_IDS),
+          "connectors/agents/debug-view/main.tsx": patternModule(NEEDS_IDS),
+        });
+
+        expect({ code: shown.code, err: shown.err })
+          .toEqual({ code: 0, err: undefined });
+      });
+    });
+
     describe("a pattern with no baseline", () => {
       it("fails, naming the contract and the command that records it", async () => {
         const sink: RecordSink = { records: [] };
@@ -474,7 +517,7 @@ describe("pattern-compat", () => {
 
     // The whole gate, over one pattern of this checkout and its baselines.
 
-    const counter = ["--only", "examples/counter/counter.tsx"];
+    const counter = ["--only", "examples/counter/main.tsx"];
 
     it("compiles a real pattern and proves it against its recorded baselines, writing no record unasked", async () => {
       const said: string[] = [];
@@ -489,7 +532,7 @@ describe("pattern-compat", () => {
       expect(shown?.code).toBe(0);
       expect(said).toEqual([
         "Checking update compatibility for 1 patterns.",
-        "[1/1] examples/counter/counter.tsx",
+        "[1/1] examples/counter/main.tsx",
       ]);
       expect(shown?.out).toContain(
         "\n1 pattern(s) can be updated from every recorded contract.",
@@ -503,7 +546,7 @@ describe("pattern-compat", () => {
       );
 
       expect(spooled.map((record) => [record.test.n, record.outcome]))
-        .toEqual([["pattern-compat examples/counter/counter.tsx", "pass"]]);
+        .toEqual([["pattern-compat examples/counter/main.tsx", "pass"]]);
     });
   });
 });

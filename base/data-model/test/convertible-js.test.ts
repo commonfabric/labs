@@ -22,10 +22,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { isArrayWithOnlyIndexProperties } from "@commonfabric/js-values/arrays";
 import { isInertPlainObject } from "@commonfabric/js-values/objects";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { DummyLiveEnvironment } from "./fabric-instances/fixtures.ts";
 import {

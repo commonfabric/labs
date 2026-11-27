@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -9,6 +8,7 @@ import {
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { preloadProfiles } from "../../src/backends/preload-profiles.ts";
 import { RuntimeProcessor } from "../../src/backends/runtime-processor.ts";

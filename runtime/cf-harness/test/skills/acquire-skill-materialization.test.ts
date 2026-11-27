@@ -1,6 +1,5 @@
 import { join, normalize } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { createFileSystemHarnessArtifactStore } from "../../src/artifacts.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
@@ -15,6 +14,12 @@ import type {
   SandboxRuntimeMountDescription,
   SandboxShellRequest,
 } from "../../src/sandbox/types.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const REGISTRY_ID = "zubair-trabzada/ai-finance-claude/finance-budget";
 const COMMIT_SHA = "dd93980e2f9a1d4c4d50a6e1a3cbb6e2b7a91f3c";

@@ -1,5 +1,3 @@
-/// <reference path="./clock.d.ts" />
-
 /**
  * How a `SpaceReplica` settles its commits around the moments a verdict, a
  * reset, or a catch-up marker can interleave with: a pending layer that
@@ -9,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
@@ -24,6 +21,13 @@ import {
 import type { AppliedCommit } from "@commonfabric/memory/v2/engine";
 import type * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import type {
   IStorageSubscription,

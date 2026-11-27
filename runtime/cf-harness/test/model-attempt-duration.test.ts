@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { OpenAICodexOAuthCredential } from "../src/auth/types.ts";
 import {
   type OpenAIChatCompletionAttemptDiagnostic,
@@ -15,6 +14,7 @@ import {
 } from "../src/gateway/openai-client.ts";
 import type { HarnessModelAttemptDiagnostic } from "../src/model/client.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Hands out `readings` in order, repeating the last one once they run out, so

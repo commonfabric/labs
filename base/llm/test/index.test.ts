@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as root from "@commonfabric/llm";
 import * as client from "@commonfabric/llm/client";
 import * as types from "@commonfabric/llm/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("index", () => {
   it("exports everything the client and types entry points export", () => {

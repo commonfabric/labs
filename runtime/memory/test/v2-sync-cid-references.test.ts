@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { decomposeSchema } from "../../runner/src/schema-decompose.ts";
 import {

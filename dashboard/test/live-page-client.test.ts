@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type IconHolder,
@@ -8,6 +7,7 @@ import {
   updateIcon,
   updateMain,
 } from "../live-page-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The parts of the DOM `reconcileMain()` uses, over a plain tree of nodes.
 // `live-page-client.browser.test.ts` runs the same function against a real

@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import { asObjectSchema, getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Stream with a declared result", () => {
   // A verb's declared result rides a second type parameter on `Stream` (verb
@@ -127,7 +127,7 @@ interface SchemaRoot {
     // arriving through a piece's ARGUMENT schema the argument-role
     // additionalProperties rule refuses the open→closed direction against
     // every recorded baseline ("additional properties accepted previously
-    // would now be rejected" — measured on calendar/calendar.tsx,
+    // would now be rejected" — measured on calendar/main.tsx,
     // lunch-poll/poll-option-card.tsx, notes/note.tsx). Landing the emission
     // needs that migration step first; the sequencing finding is recorded in
     // docs/history/plans/pattern-verb-contract-implementation.md (WS-C and

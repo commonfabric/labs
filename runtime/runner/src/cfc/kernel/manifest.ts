@@ -378,10 +378,14 @@ export const MANIFEST: readonly ManifestRow[] = [
     lean: "`Cfc/InputCeiling.lean`: declaration resolution",
     relation: "missing",
     decidedToday: "unknown",
-    note: "`verifyInputRequirements` in `cfc/prepare.ts` reads " +
-      "`ifc.maxConfidentiality` as written, with no binding instantiation " +
-      "and no ambiguity check; `instantiateAtomPattern` in " +
-      "`cfc/atom-pattern.ts` is the generic instantiation",
+    note: "`requirementBoundEntries` in `cfc/prepare.ts` binds the " +
+      "runtime placeholders in `ifc.maxConfidentiality` and " +
+      "`ifc.requiredIntegrity` (`CurrentPrincipal` to the acting " +
+      "principal, a lowered `PolicyOf` subject to the owning space) and " +
+      "`verifyInputRequirements` refuses one left unbound; `{ var }` " +
+      "patterns are not instantiated and there is no ambiguity check, and " +
+      "`instantiateAtomPattern` in `cfc/atom-pattern.ts` is the generic " +
+      "instantiation",
   },
   {
     file: BOUNDARIES,

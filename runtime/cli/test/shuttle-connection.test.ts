@@ -25,9 +25,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { PiecesController } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { SpaceConfig } from "../lib/piece.ts";
 import {

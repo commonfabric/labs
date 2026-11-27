@@ -1652,7 +1652,7 @@ export function validateAndTransform(
     (missing, sourceSpace) => {
       unservedHop ??= missing;
       // Absent link targets get an async load kicked (cross-space always;
-      // same-space only when the replica has never seen the doc); the
+      // same-space only when `shouldPullDoc()` reserves the load); the
       // tracked read re-runs the reader on arrival. A served per-instance
       // run's absent target loads AS that run's instance (stage A — the
       // runner's explicit-instance read).

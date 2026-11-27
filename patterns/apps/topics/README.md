@@ -180,15 +180,15 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   mention pivot from it; `cardRowsByActivity` takes the seven scalars a card
   uses per topic (`CardSource`: the six it shows, and `createdAt` as the sort's
   fallback for a topic that has never run), orders the topics by activity and
-  builds one row per card for the `CARD_LIMIT` (200) most recently active — the
-  badge, title, snippet and caption as plain strings, plus the topic as a
-  reference for the Open link; `mentionableIndex` takes the three display
-  strings per topic and builds the mention universe; `namesTable` takes the
-  namespace map and builds one row per numbered member, for a caller's reverse
-  lookup, without reading through any of them. None expands a topic's thread,
-  verbs, or rendered UI. The card derivation alone reads prose: the body string,
-  whole, which it cuts to its 120-character snippet — and nothing else of the
-  topic.
+  builds one row per topic that has arrived (one still mid-sync gets its row on
+  the next run), most recently active first — the badge, title, snippet and
+  caption as plain strings, plus the topic as a reference for the Open link;
+  `mentionableIndex` takes the three display strings per topic and builds the
+  mention universe; `namesTable` takes the namespace map and builds one row per
+  numbered member, for a caller's reverse lookup, without reading through any of
+  them. None expands a topic's thread, verbs, or rendered UI. The card
+  derivation alone reads prose: the body string, whole, which it cuts to its
+  120-character snippet — and nothing else of the topic.
 
   The card rows are strings, and that is deliberate: the card list is a mapped
   sub-pattern, and every helper call or conditional in a mapped body —
@@ -201,15 +201,28 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   every load. The card keeps only the two conditionals it cannot precompute (the
   badge and the snippet line are present or absent).
 
-  The board shows at most `CARD_LIMIT` cards because each card costs a piece per
-  viewer, not just a row. Every card is an instance of the mapped sub-pattern,
-  and a browser rendering the list watches each one. Under server execution each
-  watched instance is demand, so the server starts every card, and the topic it
-  links to, for every viewer. On a copy of the team's board at 3,441 topics, one
-  viewer of the unbounded list took a serving worker past its 8 GB heap limit;
-  bounded to 200, the worker settled at 2.6 GB with the board open in two tabs.
-  When the board holds more, a caption gives the limit and how many topics the
-  board holds.
+  A session shows the board's cards a page at a time, `CARD_PAGE` (50) of them
+  at first, because each card costs a piece per viewer, not just a row. Every
+  card is an instance of the mapped sub-pattern, and a browser rendering the
+  list watches each one. Under server execution each watched instance is demand,
+  so the server starts every card, and the topic it links to, for every viewer.
+  On a copy of the team's board at 3,441 topics, one viewer of the unbounded
+  list took a serving worker past its 8 GB heap limit. While the board holds
+  more topics than the session shows, a "Show more…" button adds another page.
+  The page bounds what a session shows and demands, not the board-wide
+  derivation: `cardRowsByActivity` builds the rows of every topic, not only of
+  those a session shows, once per change to the board, since a session may ask
+  for any number of them.
+
+  How many cards a session shows is that session's own count, a
+  `Writable.perSession`, so a press in one session grows no other session's list
+  and starts no cards for it. The count reaches no board-wide work: the
+  session's list is the first rows of the one `cardRowsByActivity` builds, so a
+  session reads the list of rows and follows each link to its row, reads none of
+  the topics behind them, and holds each row it shows as a link to it. That
+  list, and the cards mapped from it, are stored per session, which is what
+  keeps each session's cards its own; a page load is a new session, so it starts
+  at one page again.
 
   What each reader of a topic gets is then its own declared schema's business.
   The published `index` declares the six scalars a survey reads, so a survey

@@ -1,7 +1,6 @@
 /** Contract admission and binding preservation at the Piece link boundary. */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { valueEqual } from "@commonfabric/data-model";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
@@ -13,6 +12,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { assertSuppliedLinkSchemasCompatible } from "../../src/ops/piece-controller.ts";
 import { PieceInputPathError } from "../../src/ops/piece-input-path.ts";

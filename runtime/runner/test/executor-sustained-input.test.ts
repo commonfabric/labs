@@ -1,7 +1,8 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import { maxOf } from "@commonfabric/collections/math";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { readWatermarkSeq } from "../src/executor/watermark-engine.ts";
 import { awaitAdmitted, awaitEach } from "./support/serving-waits.ts";
 import {
@@ -9,6 +10,11 @@ import {
   type SustainedInputFixture,
   sustainedInputSpace,
 } from "./support/sustained-input.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// flush deadline must cut real settles while input keeps arriving, which is the
+// wall-clock behavior under test.
+useRealClock();
 
 describe("SpaceServer", () => {
   let fixture: SustainedInputFixture | undefined;

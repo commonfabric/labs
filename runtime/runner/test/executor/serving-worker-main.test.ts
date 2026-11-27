@@ -4,12 +4,17 @@
  * it over the worker's own port.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity, realmValueFromKeyPair } from "@commonfabric/identity";
 import { getLLMUrl } from "@commonfabric/llm";
 import { processInstanceId } from "@commonfabric/memory/v2/execution-lease";
 import type { Server } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { ServingPortBridge } from "../../src/executor/serving-port-bridge.ts";
 import type { ServingWorkerInit } from "../../src/executor/serving-port-protocol.ts";
 import {

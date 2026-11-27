@@ -2,9 +2,11 @@ export {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  enclosingNames,
   isMainRun,
   isSeed,
   localObjectName,
+  NAME_SEPARATOR,
   objectNameSlug,
   parseContextLine,
   parseRecordLine,
@@ -35,6 +37,7 @@ export type { CoverageFigures } from "./lane-measurement.ts";
 export {
   AGENT_VARIABLE,
   agentLabel,
+  commonFabricCacheDir,
   defaultSpoolRoot,
   readEnv,
   RECORDS_DIR_VARIABLE,
@@ -76,36 +79,31 @@ export {
 } from "./spool.ts";
 export type { HeldSpool, SpoolContents } from "./spool.ts";
 export {
-  activeCapture,
-  asDefinition,
-  buildCapture,
-  enclosingNames,
-  fileForName,
-  installRegistrationCapture,
-  NAME_MAP_PREFIX,
-  NAME_MAP_SUFFIX,
-  NAME_SEPARATOR,
   parseSkipList,
-  readNameMaps,
-  readRegistrations,
-  repositoryPathOf,
   serializeSkipList,
   SKIP_LIST_VARIABLE,
-} from "./registration.ts";
-export type { NameMap, RegistrationCapture, SkipList } from "./registration.ts";
+} from "./skip-list.ts";
+export type { SkipList } from "./skip-list.ts";
 export type { WholeRun } from "./whole-run.ts";
 export { markWholeRun, readWholeRuns } from "./whole-run.ts";
-export { preloadArgument, recordingArguments } from "./preload-path.ts";
-export type { RecordingPaths } from "./preload-path.ts";
+export { recordingArguments } from "./recording-arguments.ts";
+export type { RecordingPaths } from "./recording-arguments.ts";
 export {
-  ingestJUnit,
-  isRelativeSourcePath,
-  JUnitParseError,
-  parseJUnit,
-  readJUnit,
-  recordedCases,
-} from "./junit.ts";
-export type { IngestJUnitOptions, JUnitCase } from "./junit.ts";
+  parseResultsLine,
+  readRegistered,
+  readResults,
+  RESULTS_PREFIX,
+  RESULTS_SUFFIX,
+  resultsFiles,
+  ResultsWriter,
+} from "./results.ts";
+export type {
+  Outcome,
+  ReadResultsOptions,
+  RegisteredLine,
+  ResultLine,
+  Results,
+} from "./results.ts";
 export {
   importRsaSigningKey,
   METADATA_TOKEN_URL,
@@ -141,9 +139,13 @@ export { recordsSpooledBy } from "./testing.ts";
 export {
   declaredSchema,
   digestIdentities,
+  isDay,
   MANIFEST_SCHEMA_VERSION,
   MANIFESTS_LOOKED_BACK,
+  parseCiJob,
+  parseDisagreement,
   parseManifest,
+  parseSeenRun,
   SELECTION_AREA,
   serializeManifest,
   writtenAhead,
@@ -156,13 +158,16 @@ export {
 export type {
   Calibration,
   CalibrationHealth,
+  CiJob,
   CoverageBaseline,
+  Disagreement,
   FlakeEvidence,
   LanePlan,
   Manifest,
   ManifestEntry,
   PreviousSuiteHealth,
   ScoreInputs,
+  SeenRun,
   SuiteFit,
   SuiteHealth,
   UnavailableEntry,

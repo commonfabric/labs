@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { assets, StaticCache } from "@commonfabric/static";
 import { SANDBOX_WITHHELD_GLOBALS } from "@commonfabric/pattern-contract/sandbox-contract";
+import { test } from "@commonfabric/test-support/test";
 import { createCallbackCompartmentGlobals } from "../src/sandbox/compartment-globals.ts";
 import { ensureSESLockdown } from "../src/sandbox/ses-runtime.ts";
 
@@ -100,7 +101,7 @@ function definedInCompartment(name: string): boolean {
   return evaluateInCompartment(`typeof globalThis.${name}`) !== "undefined";
 }
 
-Deno.test("the compiler declares no global the sandbox lacks", async () => {
+test("the compiler declares no global the sandbox lacks", async () => {
   const declared = await compilerDeclaredGlobals();
   // Guard against the matcher finding nothing and the test passing vacuously.
   // `JSON` is a `declare var`, `atob` a `declare function`, and `Reflect` a
@@ -122,7 +123,7 @@ Deno.test("the compiler declares no global the sandbox lacks", async () => {
   );
 });
 
-Deno.test("no withheld global is declared by the compiler", async () => {
+test("no withheld global is declared by the compiler", async () => {
   const declared = new Set(await compilerDeclaredGlobals());
   const stillDeclared = SANDBOX_WITHHELD_GLOBALS.filter((name) =>
     declared.has(name)
@@ -137,7 +138,7 @@ Deno.test("no withheld global is declared by the compiler", async () => {
   );
 });
 
-Deno.test("every withheld global is really absent from a compartment", () => {
+test("every withheld global is really absent from a compartment", () => {
   // A withheld name that is present is a stale entry: the type libraries are
   // hiding a global the sandbox would have been happy to provide.
   const withheldButPresent = SANDBOX_WITHHELD_GLOBALS.filter((name) =>
@@ -152,7 +153,7 @@ Deno.test("every withheld global is really absent from a compartment", () => {
   );
 });
 
-Deno.test("the NaN side channel stays closed inside a compartment", () => {
+test("the NaN side channel stays closed inside a compartment", () => {
   // `Float32Array`/`Float64Array` are withheld because a NaN's spare mantissa
   // bits can carry a payload. Reading bytes as a float still mints such a NaN,
   // but writing one back out is what completes the channel, and lockdown

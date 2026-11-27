@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { existsSync } from "@std/fs";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
@@ -6,6 +5,12 @@ import {
   readDenoConfig,
   runDenoCommandWithTemporaryLock,
 } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   acceptedInPart,
   acceptedMoveProblems,

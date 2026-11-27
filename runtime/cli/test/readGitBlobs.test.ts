@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { _internal } from "../lib/view/diffdoc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const encoder = new TextEncoder();
 const objects = Array.from(

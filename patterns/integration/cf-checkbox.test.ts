@@ -1,8 +1,13 @@
 import { createTestSpace, env } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { type DID, Identity } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   PiecesController,
@@ -18,7 +23,7 @@ const { API_URL, FRONTEND_URL } = env;
 const testComponents = [
   {
     name: "cf-checkbox-cell",
-    file: "examples/cf-checkbox-cell/cf-checkbox-cell.tsx",
+    file: "examples/cf-checkbox-cell/main.tsx",
   },
 ];
 

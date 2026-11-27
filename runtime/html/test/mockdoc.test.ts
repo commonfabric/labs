@@ -1,8 +1,8 @@
 import { assert, assertEquals } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { MockDoc } from "../src/mock-doc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("MockDoc", () => {
   it("should render as innerHTML", () => {

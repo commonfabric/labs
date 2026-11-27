@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { ActionStats } from "../src/telemetry.ts";
 import {
   AUTO_DEBOUNCE_DELAY_MS,

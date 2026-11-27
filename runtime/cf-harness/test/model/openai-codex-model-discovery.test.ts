@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { OpenAICodexOAuthCredential } from "../../src/auth/types.ts";
 import { HarnessControlError } from "../../src/control-errors.ts";
 import { OpenAICodexResponsesClient } from "../../src/model/openai-codex-responses.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const credential: OpenAICodexOAuthCredential = {
   type: "oauth",

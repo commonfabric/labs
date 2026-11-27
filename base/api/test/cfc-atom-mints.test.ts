@@ -1,5 +1,6 @@
 import { assertEquals, assertFalse } from "@std/assert";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { test } from "@commonfabric/test-support/test";
 
 //
 // Epic B1: mint helpers for the exchange-rule atom families (spec §15).
@@ -9,7 +10,7 @@ import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 // must land verbatim.
 //
 
-Deno.test("cfcAtom mints confidentiality principals and Expires", () => {
+test("cfcAtom mints confidentiality principals and Expires", () => {
   assertEquals(cfcAtom.user("did:key:alice"), {
     type: CFC_ATOM_TYPE.User,
     subject: "did:key:alice",
@@ -24,7 +25,7 @@ Deno.test("cfcAtom mints confidentiality principals and Expires", () => {
   });
 });
 
-Deno.test("cfcAtom mints hash-bound policy references (spec §4.4.2)", () => {
+test("cfcAtom mints hash-bound policy references (spec §4.4.2)", () => {
   assertEquals(cfcAtom.policyRef("share-flow", "did:key:alice", "h1"), {
     type: CFC_ATOM_TYPE.Policy,
     name: "share-flow",
@@ -39,7 +40,7 @@ Deno.test("cfcAtom mints hash-bound policy references (spec §4.4.2)", () => {
   });
 });
 
-Deno.test("cfcAtom mints exact module-policy references (spec §4.4.2)", () => {
+test("cfcAtom mints exact module-policy references (spec §4.4.2)", () => {
   assertEquals(
     cfcAtom.modulePolicyRef(
       "sha256:module",
@@ -58,7 +59,7 @@ Deno.test("cfcAtom mints exact module-policy references (spec §4.4.2)", () => {
   );
 });
 
-Deno.test("cfcAtom mints HasRole facts", () => {
+test("cfcAtom mints HasRole facts", () => {
   assertEquals(cfcAtom.hasRole("did:key:alice", "space:x", "reader"), {
     type: CFC_ATOM_TYPE.HasRole,
     principal: "did:key:alice",
@@ -67,7 +68,7 @@ Deno.test("cfcAtom mints HasRole facts", () => {
   });
 });
 
-Deno.test("cfcAtom.boundaryContext omits absent optionals", () => {
+test("cfcAtom.boundaryContext omits absent optionals", () => {
   assertEquals(cfcAtom.boundaryContext("sinkClass"), {
     type: CFC_ATOM_TYPE.BoundaryContext,
     key: "sinkClass",
@@ -87,7 +88,7 @@ Deno.test("cfcAtom.boundaryContext omits absent optionals", () => {
   );
 });
 
-Deno.test("cfcAtom.caveatScreened prunes undefined optionals, keeps supplied ones", () => {
+test("cfcAtom.caveatScreened prunes undefined optionals, keeps supplied ones", () => {
   const source = { "/": "src-doc" };
   const detector = cfcAtom.builtin("detector-v1");
   const minimal = cfcAtom.caveatScreened({
@@ -125,7 +126,7 @@ Deno.test("cfcAtom.caveatScreened prunes undefined optionals, keeps supplied one
   assertEquals(full.screenedAt, 99);
 });
 
-Deno.test("cfcAtom.disclosureRendered / disclosureAcknowledged mint render-bound evidence", () => {
+test("cfcAtom.disclosureRendered / disclosureAcknowledged mint render-bound evidence", () => {
   const source = { "/": "src-doc" };
   const renderRef = { seq: 7, rootRef: { "/": "root" } };
   const rendered = cfcAtom.disclosureRendered({
@@ -169,7 +170,7 @@ Deno.test("cfcAtom.disclosureRendered / disclosureAcknowledged mint render-bound
   );
 });
 
-Deno.test("cfcAtom.disclaimerAttached mints sink-emission evidence", () => {
+test("cfcAtom.disclaimerAttached mints sink-emission evidence", () => {
   const source = { "/": "src-doc" };
   const attached = cfcAtom.disclaimerAttached({
     sink: "sendMail",
@@ -191,7 +192,7 @@ Deno.test("cfcAtom.disclaimerAttached mints sink-emission evidence", () => {
   );
 });
 
-Deno.test("cfcAtom.caveatAssessment mints scoped assessor judgments", () => {
+test("cfcAtom.caveatAssessment mints scoped assessor judgments", () => {
   const source = { "/": "src-doc" };
   const assessor = cfcAtom.builtin("assessor-v1");
   const minimal = cfcAtom.caveatAssessment({

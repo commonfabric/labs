@@ -1,9 +1,15 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { type Stub, stub } from "@std/testing/mock";
 
 import { getLogger } from "@commonfabric/logger";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   type DeployedClientParams,
@@ -1432,6 +1438,7 @@ describe("deployment-meta", () => {
         "viewScopedReplication",
         "webViewScopedReplication",
         "pieceCreatorRecord",
+        "cfcCommittedSubjectCandidates",
         "sharedMemoryConnection",
         "instanceNames",
       ]);

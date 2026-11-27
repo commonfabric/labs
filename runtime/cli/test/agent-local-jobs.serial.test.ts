@@ -5,11 +5,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { ValidationError } from "@cliffy/command";
 
 import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import type { LocalJobsConfig } from "@commonfabric/agent-runner/local-jobs/service";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   type AgentRunnerCommandConfig,
   type AgentRunnerCommandDeps,

@@ -4,10 +4,11 @@ import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { BASE58_ALPHABET } from "@commonfabric/memory/v2/routed-directory";
+import { test } from "@commonfabric/test-support/test";
 import { identity } from "@/lib/identity.ts";
 import { MemoryRouterPolicy } from "@/routes/storage/memory-router.ts";
 
-Deno.test("private Memory policy refuses public/wildcard addresses and unknown ownership", async () => {
+test("private Memory policy refuses public/wildcard addresses and unknown ownership", async () => {
   const router = await Identity.fromRaw(new Uint8Array(32).fill(17));
   const space = await Identity.fromRaw(new Uint8Array(32).fill(18));
   const root = Deno.makeTempDirSync();
@@ -197,7 +198,7 @@ Deno.test("private Memory policy refuses public/wildcard addresses and unknown o
   }
 });
 
-Deno.test("private Memory policy places unlisted spaces by the directory's rule", async () => {
+test("private Memory policy places unlisted spaces by the directory's rule", async () => {
   const router = await Identity.fromRaw(new Uint8Array(32).fill(17));
   const peer = await Identity.fromRaw(new Uint8Array(32).fill(19));
   const dids = await Promise.all(

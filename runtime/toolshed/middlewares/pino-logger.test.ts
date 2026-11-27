@@ -1,13 +1,13 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   redactHeaders,
   serializeRequest,
   serializeResponse,
 } from "./pino-logger.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("redactHeaders removes sensitive Headers values", () => {
+test("redactHeaders removes sensitive Headers values", () => {
   assertEquals(
     redactHeaders(
       new Headers({
@@ -30,7 +30,7 @@ Deno.test("redactHeaders removes sensitive Headers values", () => {
   );
 });
 
-Deno.test("redactHeaders handles plain objects case-insensitively", () => {
+test("redactHeaders handles plain objects case-insensitively", () => {
   assertEquals(
     redactHeaders({
       Authorization: "Bearer secret",
@@ -51,14 +51,14 @@ Deno.test("redactHeaders handles plain objects case-insensitively", () => {
   );
 });
 
-Deno.test("redactHeaders preserves non-header values", () => {
+test("redactHeaders preserves non-header values", () => {
   assertEquals(redactHeaders(undefined), undefined);
   assertEquals(redactHeaders(null), null);
   assertEquals(redactHeaders("headers unavailable"), "headers unavailable");
   assertEquals(redactHeaders([]), []);
 });
 
-Deno.test("response serializer redacts sensitive headers", () => {
+test("response serializer redacts sensitive headers", () => {
   assertEquals(
     serializeResponse({
       statusCode: 200,

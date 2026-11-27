@@ -1,8 +1,8 @@
 import { rebaseUpdates, type Update } from "@codemirror/collab";
 import { ChangeSet, Text } from "@codemirror/state";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   createDefaultOperationCodecRegistry,

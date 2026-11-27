@@ -2581,7 +2581,7 @@ PR):
   dispatch-only deferral, the sqlite-query LOCAL exemption, and
   drop-on-park. Pins: `executor-outbox-budget.test.ts` (cap + FIFO
   drain, local exemption, token pacing, close-drops — real-clock,
-  listed in the preload). NEW implementation surfaces below spec
+  through `useRealClock()`). NEW implementation surfaces below spec
   granularity, FLAGGED in the Phase-6 PR rather than silently
   normative: (i) the LOCAL_EFFECT_KINDS exemption set (sqlite-query
   is the one shipped non-egress effect kind); (ii) the 16-outstanding

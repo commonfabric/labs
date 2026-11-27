@@ -1,11 +1,11 @@
 // First, so that the document it installs is there when CodeMirror loads.
 import { settle, window } from "../../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import type { FieldAnchors } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   type EditorHighlight,

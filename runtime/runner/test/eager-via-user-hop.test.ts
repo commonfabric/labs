@@ -9,6 +9,7 @@
 
 import { assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -47,7 +48,7 @@ const run = async (
   }
 };
 
-Deno.test("flag ON: a space→session narrowing writes the chained space→user→session redirects", async () => {
+test("flag ON: a space→session narrowing writes the chained space→user→session redirects", async () => {
   await run(true, async (runtime) => {
     const tx = runtime.edit();
     const cell = runtime.getCell(
@@ -100,7 +101,7 @@ Deno.test("flag ON: a space→session narrowing writes the chained space→user�
   });
 });
 
-Deno.test("flag OFF: the same narrowing keeps today's ONE hop (space slot links straight to session)", async () => {
+test("flag OFF: the same narrowing keeps today's ONE hop (space slot links straight to session)", async () => {
   await run(false, async (runtime) => {
     const tx = runtime.edit();
     const cell = runtime.getCell(
@@ -134,7 +135,7 @@ Deno.test("flag OFF: the same narrowing keeps today's ONE hop (space slot links 
   });
 });
 
-Deno.test("flag ON: an OMITTED session-scoped property gets the chained eager redirects", async () => {
+test("flag ON: an OMITTED session-scoped property gets the chained eager redirects", async () => {
   await run(true, async (runtime) => {
     const tx = runtime.edit();
     const cell = runtime.getCell(
@@ -182,7 +183,7 @@ Deno.test("flag ON: an OMITTED session-scoped property gets the chained eager re
   });
 });
 
-Deno.test("flag ON: a pattern run whose output scope is DISCOVERED session-narrow writes the chained redirects at the result binding (pattern-binding.ts's narrowestReadScope branch — OW12)", async () => {
+test("flag ON: a pattern run whose output scope is DISCOVERED session-narrow writes the chained redirects at the result binding (pattern-binding.ts's narrowestReadScope branch — OW12)", async () => {
   await run(true, async (runtime) => {
     // The run's READS discover the narrowing: the computed reads a
     // PerSession cell, the tx's narrowestReadScope ratchet lands on
@@ -285,7 +286,7 @@ Deno.test("flag ON: a pattern run whose output scope is DISCOVERED session-narro
   });
 });
 
-Deno.test("flag ON: rewriting a parent that omits an ALREADY-materialized session property re-enqueues no redirect writes (thread r3731191457 probe)", async () => {
+test("flag ON: rewriting a parent that omits an ALREADY-materialized session property re-enqueues no redirect writes (thread r3731191457 probe)", async () => {
   await run(true, async (runtime) => {
     const schema = {
       type: "object",

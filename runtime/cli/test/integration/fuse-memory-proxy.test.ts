@@ -1,7 +1,6 @@
 /** Tests frame relay and trace ordering in the FUSE memory proxy. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   decodeMemoryBoundary,
@@ -21,6 +20,7 @@ import {
   TraceBeforeRelayQueue,
 } from "../../integration/fuse-memory-proxy.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("fuse-memory-proxy", () => {
   it("persists a trace before relaying its upstream frame", async () => {

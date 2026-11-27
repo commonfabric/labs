@@ -5,6 +5,7 @@ import {
   relateShasIn,
   resolveCliGitSha,
 } from "../lib/build-info.ts";
+import { test } from "@commonfabric/test-support/test";
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
   const { success, stdout, stderr } = await new Deno.Command("git", {
@@ -43,7 +44,7 @@ async function makeLabsLikeRepo(root: string): Promise<string> {
   return await git(root, "rev-parse", "HEAD");
 }
 
-Deno.test("gitShaForCliLibDir", async (t) => {
+test("gitShaForCliLibDir", async (t) => {
   const tempDir = await Deno.makeTempDir({ prefix: "build-info-git-" });
   try {
     await t.step("reports HEAD for a real labs checkout", async () => {
@@ -100,7 +101,7 @@ Deno.test("gitShaForCliLibDir", async (t) => {
   }
 });
 
-Deno.test("relateShasIn", async (t) => {
+test("relateShasIn", async (t) => {
   const repo = await Deno.makeTempDir({ prefix: "build-info-relate-" });
   try {
     // main: A -> B (HEAD); branch "other": A -> C.
@@ -179,7 +180,7 @@ Deno.test("relateShasIn", async (t) => {
   }
 });
 
-Deno.test("resolveCliGitSha reports this checkout's HEAD for a source run", async () => {
+test("resolveCliGitSha reports this checkout's HEAD for a source run", async () => {
   // Under `deno test` this is a source run (`Deno.build.standalone` false),
   // so resolution must come from git against the checkout containing
   // lib/build-info.ts — this repository (itself a worktree in worktree-based

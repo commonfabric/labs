@@ -1,7 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   DEFAULT_SKILL_SCAN_LIMITS,
   discoverHarnessSkills,
@@ -10,6 +9,13 @@ import {
   parseHarnessSkillFile,
 } from "../src/skills/registry.ts";
 import { readsDespiteMode } from "./support/reads-despite-mode.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 const writeSkill = async (
   root: string,
@@ -36,7 +42,7 @@ const writeSkillResource = async (
   }
 };
 
-Deno.test("parseHarnessSkillFile handles simple frontmatter and continued descriptions", () => {
+test("parseHarnessSkillFile handles simple frontmatter and continued descriptions", () => {
   const parsed = parseHarnessSkillFile([
     "---",
     "name: cf",
@@ -59,7 +65,7 @@ Deno.test("parseHarnessSkillFile handles simple frontmatter and continued descri
   assertEquals(parsed.body.trim(), "# CF CLI");
 });
 
-Deno.test({
+test({
   name:
     "discoverHarnessSkills scans skills, records diagnostics, and builds sandbox paths",
   permissions: { read: true, write: true },
@@ -265,7 +271,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "discoverHarnessSkills rejects symlinked skills that resolve outside the root",
   permissions: { read: true, write: true },
@@ -308,7 +314,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "discoverHarnessSkills skips resources that resolve outside the skill directory",
   permissions: { read: true, write: true },
@@ -354,7 +360,7 @@ Deno.test({
   },
 });
 
-Deno.test("loadHarnessSkillContextFromText wraps handle-delivered text with token provenance", async () => {
+test("loadHarnessSkillContextFromText wraps handle-delivered text with token provenance", async () => {
   const result = await loadHarnessSkillContextFromText({
     text: "# Trip skill\n\nList flights before hotels.\n",
     handleToken: "cfh:a:3kk78",
@@ -382,7 +388,7 @@ Deno.test("loadHarnessSkillContextFromText wraps handle-delivered text with toke
   assertEquals(result.activation.handleToken, "cfh:a:3kk78");
   assertEquals(result.activation.runId, "run-from-text");
   assertEquals(result.activation.activatedAt, "2026-04-15T19:00:00.000Z");
-  assertEquals(result.activation.cfcPromptRole, "context");
+  assertEquals(result.activation.cfcPromptRole, "quote");
   assertEquals(result.activation.digest.startsWith("sha256:"), true);
   // No registry directory stands behind a handle-delivered skill.
   assertEquals(result.activation.skillPath, undefined);
@@ -391,7 +397,7 @@ Deno.test("loadHarnessSkillContextFromText wraps handle-delivered text with toke
   assertEquals(result.activation.sandboxSkillDir, undefined);
 });
 
-Deno.test("loadHarnessSkillContextFromText digests the exact text it wrapped", async () => {
+test("loadHarnessSkillContextFromText digests the exact text it wrapped", async () => {
   const first = await loadHarnessSkillContextFromText({
     text: "same text",
     handleToken: "cfh:a:3kk78",
@@ -423,7 +429,7 @@ Deno.test("loadHarnessSkillContextFromText digests the exact text it wrapped", a
   expect(first.activation.digest).not.toBe(changed.activation.digest);
 });
 
-Deno.test({
+test({
   name:
     "loadHarnessSkillContext returns structured context and activation artifacts",
   permissions: { read: true, write: true },
@@ -517,7 +523,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "loadHarnessSkillContext rejects missing skill names with available choices",
   permissions: { read: true, write: true },

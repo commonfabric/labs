@@ -11,6 +11,7 @@ import {
   sampleManifest,
   serializeManifest,
 } from "@commonfabric/test-support/records";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   corpusSeconds,
@@ -58,7 +59,7 @@ function storeOf(objects: Record<string, string>): typeof fetch {
   }) as typeof fetch;
 }
 
-Deno.test("generatedAtOf reads the time out of a manifest's name", () => {
+test("generatedAtOf reads the time out of a manifest's name", () => {
   assertEquals(
     generatedAtOf(`${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`),
     "2026-08-20T04:00:00.000Z",
@@ -66,7 +67,7 @@ Deno.test("generatedAtOf reads the time out of a manifest's name", () => {
   assertEquals(generatedAtOf(`${PREFIX}/state/2026-08-20-a.json.gz`), undefined);
 });
 
-Deno.test("newestManifest takes the newest object under the prefix", async () => {
+test("newestManifest takes the newest object under the prefix", async () => {
   const older = sampleManifest({ generatedAt: "2026-08-20T00:00:00.000Z" });
   const newer = sampleManifest({ generatedAt: "2026-08-20T04:00:00.000Z" });
   const found = await newestManifest({
@@ -80,7 +81,7 @@ Deno.test("newestManifest takes the newest object under the prefix", async () =>
   assertEquals(found?.generatedAt, "2026-08-20T04:00:00.000Z");
 });
 
-Deno.test("newestManifest reports a body that is not a manifest", async () => {
+test("newestManifest reports a body that is not a manifest", async () => {
   await assertRejects(
     () =>
       newestManifest({
@@ -94,7 +95,7 @@ Deno.test("newestManifest reports a body that is not a manifest", async () => {
   );
 });
 
-Deno.test("newestManifest reports a manifest whose lane names a test outside its corpus", async () => {
+test("newestManifest reports a manifest whose lane names a test outside its corpus", async () => {
   const stray = JSON.stringify({ k: "unit", s: "x", n: "y" });
   const manifest = sampleManifest({
     lanes: [{
@@ -114,14 +115,14 @@ Deno.test("newestManifest reports a manifest whose lane names a test outside its
   );
 });
 
-Deno.test("the reader looks where the publisher writes", () => {
+test("the reader looks where the publisher writes", () => {
   // Two spellings of the area would part company the first time either
   // moved, and what that produces is a reader listing objects that are
   // all refused: a fault where a figure should be.
   assertEquals(`${manifestPrefix(() => undefined)}/`, TEST_SELECTION_PREFIX);
 });
 
-Deno.test("a version ahead is named even where its shape dropped a field", async () => {
+test("a version ahead is named even where its shape dropped a field", async () => {
   // A later shape may drop a field this reader requires, as the
   // calibration has already lost one. Deciding from the body's declared
   // version holds there; offering the body under this reader's own
@@ -145,7 +146,7 @@ Deno.test("a version ahead is named even where its shape dropped a field", async
   assertStringIncludes(error.reason, `schema ${ahead}`);
 });
 
-Deno.test("a broken body of a shape this reader does read is a plain fault", async () => {
+test("a broken body of a shape this reader does read is a plain fault", async () => {
   // The reader reads earlier shapes, so an earlier one it cannot parse is
   // a broken object rather than one from further ahead. Naming its shape
   // would say the dashboard cannot read that shape, which is false, and would
@@ -168,7 +169,7 @@ Deno.test("a broken body of a shape this reader does read is a plain fault", asy
   assertEquals(error instanceof ManifestSchemaError, false);
 });
 
-Deno.test("a broken body of this reader's own version is a plain fault", async () => {
+test("a broken body of this reader's own version is a plain fault", async () => {
   const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
   const error = await assertRejects(
     () =>
@@ -186,7 +187,7 @@ Deno.test("a broken body of this reader's own version is a plain fault", async (
   assertEquals(error instanceof ManifestSchemaError, false);
 });
 
-Deno.test("newestManifest names a version it cannot read", async () => {
+test("newestManifest names a version it cannot read", async () => {
   const name = `${PREFIX}/manifest-2026-08-20T04:00:00.000Z-a.json.gz`;
   const later = MANIFEST_SCHEMA_VERSION + 1;
   const error = await assertRejects(
@@ -208,7 +209,7 @@ Deno.test("newestManifest names a version it cannot read", async () => {
   );
 });
 
-Deno.test("a tile and the page name a schema rather than saying nothing useful", async () => {
+test("a tile and the page name a schema rather than saying nothing useful", async () => {
   const error = new ManifestSchemaError("a.json.gz", 1);
   const source: TestSelectionSource = {
     latest: () => Promise.reject(error),
@@ -234,7 +235,7 @@ Deno.test("a tile and the page name a schema rather than saying nothing useful",
   assertEquals(body.includes("temporarily unavailable"), false);
 });
 
-Deno.test("a body that is not an object declares no version", async () => {
+test("a body that is not an object declares no version", async () => {
   // A body is untrusted input, and JSON has values that are not objects.
   // Neither of these declares a version, and asking one whether it owns a
   // field is a question only an object answers.
@@ -249,7 +250,7 @@ Deno.test("a body that is not an object declares no version", async () => {
   }
 });
 
-Deno.test("a version inherited from the prototype is not a declared one", async () => {
+test("a version inherited from the prototype is not a declared one", async () => {
   // A body declares a version in its own field or not at all. Reading an
   // inherited one would refuse an object that is no manifest at all, and
   // refuse it for the life of the process.
@@ -272,7 +273,7 @@ Deno.test("a version inherited from the prototype is not a declared one", async 
   }
 });
 
-Deno.test("newestManifest reports nothing when the store holds none", async () => {
+test("newestManifest reports nothing when the store holds none", async () => {
   assertEquals(await newestManifest({ fetchImpl: storeOf({}) }), undefined);
 });
 
@@ -294,7 +295,7 @@ function storeRefusing(answer: () => Promise<Response>): typeof fetch {
   }) as typeof fetch;
 }
 
-Deno.test("newestManifest reports a refused manifest", async () => {
+test("newestManifest reports a refused manifest", async () => {
   // Listed but not readable, which is what a manifest deleted between
   // the listing and the read looks like.
   for (const status of [403, 404, 500]) {
@@ -311,7 +312,7 @@ Deno.test("newestManifest reports a refused manifest", async () => {
   }
 });
 
-Deno.test("newestManifest reports a failed read", async () => {
+test("newestManifest reports a failed read", async () => {
   await assertRejects(
     () =>
       newestManifest({
@@ -322,7 +323,7 @@ Deno.test("newestManifest reports a failed read", async () => {
   );
 });
 
-Deno.test("newestManifest reports an unreachable store", async () => {
+test("newestManifest reports an unreachable store", async () => {
   await assertRejects(
     () =>
       newestManifest({
@@ -354,7 +355,7 @@ function reading(
   };
 }
 
-Deno.test("both test tiles are unknown when there is no manifest", async () => {
+test("both test tiles are unknown when there is no manifest", async () => {
   const empty: TestSelectionSource = {
     latest: () => Promise.resolve(undefined),
     history: () => Promise.resolve({ samples: [], errors: [] }),
@@ -371,7 +372,7 @@ Deno.test("both test tiles are unknown when there is no manifest", async () => {
   }
 });
 
-Deno.test("the flake tile is green when nothing is withheld as flaky", async () => {
+test("the flake tile is green when nothing is withheld as flaky", async () => {
   const tile = makeTestFlakes({
     source: reading(sampleManifest()),
     now: () => Date.parse("2026-08-20T00:30:00.000Z"),
@@ -384,7 +385,7 @@ Deno.test("the flake tile is green when nothing is withheld as flaky", async () 
   assertEquals(view.sub, `${FLAKE_WINDOW_FALLBACK_DAYS} days of runs · 30m old`);
 });
 
-Deno.test("the flake tile counts what selection held back, and points at them", async () => {
+test("the flake tile counts what selection held back, and points at them", async () => {
   const longName = "space > flakes with a name that keeps going past the tile limit";
   const noisy = sampleEntry({ k: "unit", s: "memory", n: longName, v: "worker" }, {
     flakeRate: 0.4,
@@ -403,10 +404,10 @@ Deno.test("the flake tile counts what selection held back, and points at them", 
   // A source with no history adds no chart or test names to the tile.
   assertEquals(view.extra, undefined);
   assertEquals(view.href, "/test-selection#flaky");
-  assertEquals(view.hint, "flakes ↗");
+  assertEquals(view.hint, "flakes ↗ · as JSON at /test-selection/flaky.json");
 });
 
-Deno.test("the selection tile says what share of the corpus's tests and test time would run", async () => {
+test("the selection tile says what share of the corpus's tests and test time would run", async () => {
   // One test of two, and a quarter of the time.
   const entry = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 1800 });
   const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 5400 });
@@ -433,7 +434,7 @@ Deno.test("the selection tile says what share of the corpus's tests and test tim
   assertEquals(view.hint, "lanes ↗");
 });
 
-Deno.test("the selected time counts each identity a lane names at its own cost", () => {
+test("the selected time counts each identity a lane names at its own cost", () => {
   const a = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 2 });
   const b = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 3 });
   const c = sampleEntry({ k: "unit", s: "memory", n: "c" }, { cost: 5 });
@@ -463,7 +464,7 @@ Deno.test("the selected time counts each identity a lane names at its own cost",
   );
 });
 
-Deno.test("a share under ten percent keeps a decimal place", () => {
+test("a share under ten percent keeps a decimal place", () => {
   assertEquals(shareLabel(294, 10_000), "2.9%");
   assertEquals(shareLabel(0, 1), "0.0%");
   assertEquals(shareLabel(996, 10_000), "10%");
@@ -471,7 +472,7 @@ Deno.test("a share under ten percent keeps a decimal place", () => {
   assertEquals(shareLabel(0, 0), "—");
 });
 
-Deno.test("the selection tile counts a test measured at no cost", async () => {
+test("the selection tile counts a test measured at no cost", async () => {
   const free = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 0 });
   const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 0 });
   const manifest = sampleManifest({
@@ -492,7 +493,7 @@ Deno.test("the selection tile counts a test measured at no cost", async () => {
   assertEquals(view.sub, "1 of 2 · 0m of 0m");
 });
 
-Deno.test("the selection tile is unknown for a manifest with no tests", async () => {
+test("the selection tile is unknown for a manifest with no tests", async () => {
   const view = await makeTestSelection({
     source: reading(sampleManifest({ entries: [] })),
     now: () => Date.parse("2026-08-20T05:00:00.000Z"),
@@ -502,7 +503,7 @@ Deno.test("the selection tile is unknown for a manifest with no tests", async ()
   assertEquals(view.sub, "selection manifest has no tests");
 });
 
-Deno.test("the selection tile goes amber once the manifest has gone stale", async () => {
+test("the selection tile goes amber once the manifest has gone stale", async () => {
   const view = await makeTestSelection({
     source: reading(sampleManifest()),
     now: () => Date.parse("2026-08-21T04:00:00.000Z"),
@@ -514,14 +515,14 @@ Deno.test("the selection tile goes amber once the manifest has gone stale", asyn
   assertEquals(view.sub, "0 of 1 · 0m of 0m");
 });
 
-Deno.test("the lane budget comes from the manifest that named it", () => {
+test("the lane budget comes from the manifest that named it", () => {
   assertEquals(laneBudgetOf({ LANE_BUDGET_SECONDS: 180 }), 180);
   assertEquals(laneBudgetOf({}), LANE_BUDGET_FALLBACK_SECONDS);
   assertEquals(laneBudgetOf({ LANE_BUDGET_SECONDS: 0 }), LANE_BUDGET_FALLBACK_SECONDS);
   assertEquals(laneBudgetOf({ LANE_BUDGET_SECONDS: "x" }), LANE_BUDGET_FALLBACK_SECONDS);
 });
 
-Deno.test("the selection tile goes red when a lane is past its budget", async () => {
+test("the selection tile goes red when a lane is past its budget", async () => {
   const heavy = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 400 });
   const manifest = sampleManifest({
     entries: [heavy],
@@ -546,7 +547,7 @@ Deno.test("the selection tile goes red when a lane is past its budget", async ()
   );
 });
 
-Deno.test("the selection tile goes amber while a test is too long for any lane", async () => {
+test("the selection tile goes amber while a test is too long for any lane", async () => {
   const huge = sampleEntry({ k: "integration", s: "cli", n: "acl.sh" }, { cost: 900 });
   const other = sampleEntry({ k: "unit", s: "memory", n: "b" }, { cost: 1 });
   const manifest = sampleManifest({
@@ -571,7 +572,7 @@ Deno.test("the selection tile goes amber while a test is too long for any lane",
   assertEquals(view.hint, "lanes ↗");
 });
 
-Deno.test("the selection tile counts every test no lane can hold", async () => {
+test("the selection tile counts every test no lane can hold", async () => {
   const heavy = (n: string) =>
     sampleEntry({ k: "integration", s: "cli", n }, { cost: 900 });
   const manifest = sampleManifest({
@@ -589,7 +590,7 @@ Deno.test("the selection tile counts every test no lane can hold", async () => {
   assertEquals(view.sub, "2 tests too long for any lane");
 });
 
-Deno.test("a lane past its budget outranks the tests no lane can hold", async () => {
+test("a lane past its budget outranks the tests no lane can hold", async () => {
   const heavy = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 400 });
   const huge = sampleEntry({ k: "integration", s: "cli", n: "acl.sh" }, { cost: 900 });
   const manifest = sampleManifest({
@@ -609,7 +610,7 @@ Deno.test("a lane past its budget outranks the tests no lane can hold", async ()
   assertEquals(view.sub, `fullest lane 400s of ${LANE_BUDGET_FALLBACK_SECONDS}s`);
 });
 
-Deno.test("the selection tile goes red when the publisher found the cost model broken", async () => {
+test("the selection tile goes red when the publisher found the cost model broken", async () => {
   const heavy = sampleEntry({ k: "unit", s: "memory", n: "a" }, { cost: 400 });
   const manifest = sampleManifest({
     entries: [heavy],
@@ -634,7 +635,7 @@ Deno.test("the selection tile goes red when the publisher found the cost model b
   assertEquals(view.href, `${TEST_SELECTION_PATH}#${HEALTH_SECTION_ID}`);
 });
 
-Deno.test("the selection tile stays green for a cost model that holds", async () => {
+test("the selection tile stays green for a cost model that holds", async () => {
   const view = await makeTestSelection({
     source: reading(sampleManifest({
       health: {
@@ -649,7 +650,7 @@ Deno.test("the selection tile stays green for a cost model that holds", async ()
   assertEquals(view.href, TEST_SELECTION_PATH);
 });
 
-Deno.test("the selection tile serves the page both tiles link to", async () => {
+test("the selection tile serves the page both tiles link to", async () => {
   const tile = makeTestSelection({ source: reading(sampleManifest()) });
   const route = tile.routes?.find((r) => r.path === TEST_SELECTION_PATH);
   assertExists(route);
@@ -662,7 +663,7 @@ Deno.test("the selection tile serves the page both tiles link to", async () => {
   assertStringIncludes(await response.text(), "<title>Test selection</title>");
 });
 
-Deno.test("both tiles link into the page the route serves", async () => {
+test("both tiles link into the page the route serves", async () => {
   const source = reading(sampleManifest());
   const flakes = await makeTestFlakes({ source }).collect(CTX);
   const selection = await makeTestSelection({ source }).collect(CTX);
@@ -670,7 +671,7 @@ Deno.test("both tiles link into the page the route serves", async () => {
   assertEquals(flakes.href?.split("#")[0], TEST_SELECTION_PATH);
 });
 
-Deno.test("a tile lets a store failure through, for the dashboard to gray it", async () => {
+test("a tile lets a store failure through, for the dashboard to gray it", async () => {
   // The dashboard turns a collection that throws into a gray tile carrying the
   // reason, which is what separates an unreadable store from an empty one.
   const failing: TestSelectionSource = {
@@ -687,7 +688,7 @@ Deno.test("a tile lets a store failure through, for the dashboard to gray it", a
   }
 });
 
-Deno.test("the page says a store could not be read, rather than that it is empty", async () => {
+test("the page says a store could not be read, rather than that it is empty", async () => {
   const tile = makeTestSelection({
     source: {
       latest: () => Promise.reject(new Error("no network")),

@@ -290,10 +290,10 @@ connection sets `int64` — so a stored `4294967303` arrives as `7`, and a
 label derived from that is a label for another key's rows. Two paths read
 rule inputs, and each answers it where it reads:
 
-- the **read** side runs labeled queries (`queryWithOrigins`, issued only for
-  a db that declares `ifc` or a row rule) on an `int64` connection, where a
-  value past 2^53 arrives as a `bigint`. Ordinary reads keep the connection
-  and the values they have always had.
+- the **read** side opens every pooled connection with `int64`, for labeled
+  queries (`queryWithOrigins`) and ordinary ones alike, so a value past 2^53
+  arrives as a `bigint` (Section [01](./01-api.md), "The `Row` type
+  argument").
 - **commit evaluation** runs on the engine connection, which serves
   everything and cannot flip mode for this, so SQLite renders instead: the
   affected rowid as text (the read-back addresses the row that was written
@@ -733,9 +733,9 @@ Phase 2's per-column label is a join — clause concatenation for confidentialit
 is never unioned when labels of different values fold into a derived one.
 
 Demos:
-[`cfc-row-label-mailbox`](../../../patterns/examples/cfc-row-label-mailbox/main.tsx)
+[`cfc-row-label-mailbox`](../../../patterns/examples/cfc-row-label-mailbox/cfc-row-label-mailbox.tsx)
 (rule + ceiling + skip + aggregate refusal end to end) and
-[`cfc-row-label-records`](../../../patterns/examples/cfc-row-label-records/main.tsx)
+[`cfc-row-label-records`](../../../patterns/examples/cfc-row-label-records/cfc-row-label-records.tsx)
 (per-row ∧ per-column composition on one row). e2e:
 [`sqlite-cfc-row-label.test.ts`](../../../runtime/runner/integration/sqlite-cfc-row-label.test.ts)
 (3.a/3.b) and

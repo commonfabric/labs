@@ -15,7 +15,7 @@ implemented as the gates below. Method inherited from the v1 learning run
   task wires both servers and storage correctly.
 - **Workloads are uninstrumented and byte-identical across arms.** v1's
   own measurement probes warmed the measured path and understated its
-  cost. Measurement reads counters and JUnit timings from outside.
+  cost. Measurement reads counters and test timings from outside.
 - Arms run adjacent in alternating order (same load window), ≥3 paired
   repetitions for any latency claim, with one-minute machine load ≤5
   throughout every eligible run. Record the workload and server heads,
