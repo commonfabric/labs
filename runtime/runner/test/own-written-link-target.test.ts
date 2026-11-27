@@ -5,6 +5,7 @@ import { taggedHashStringOf } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   afterEach,
   beforeEach,
@@ -259,17 +260,22 @@ describe("own-written link target", () => {
       // `--expose-gc` and the real clock, which this package's test task
       // does not give, so the helper runs in a process of its own.
 
-      const helper = new URL(
-        "./own-written-link-target-release-helper.ts",
-        import.meta.url,
-      );
-      // Spawned by name so the launch matches the task's `--allow-run=deno`
-      // grant, which resolves the name through PATH the same way.
-      const output = await new Deno.Command("deno", {
-        args: ["run", "-A", "--v8-flags=--expose-gc", fromFileUrl(helper)],
-        stdout: "piped",
-        stderr: "piped",
-      }).output();
+      const output = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("../../../", import.meta.url)),
+        args: (lock) => [
+          "run",
+          "-A",
+          "--frozen",
+          `--lock=${lock}`,
+          "--v8-flags=--expose-gc",
+          fromFileUrl(
+            new URL(
+              "./own-written-link-target-release-helper.ts",
+              import.meta.url,
+            ),
+          ),
+        ],
+      });
       const stdout = new TextDecoder().decode(output.stdout);
       expect(
         output.success,

@@ -3590,7 +3590,8 @@ export class Runtime {
    * a rejecting-selector sync delivers only the root doc, so a link can
    * point at a doc no selector ever walked — those are fetched only when
    * `shouldPullDoc()` reserves the fetch, which for an absent doc it does
-   * once until the doc is dropped or the fetch fails, so reads of genuinely
+   * once until the doc is dropped or the kicked sync rejects (one that
+   * resolves carrying an error keeps the reservation), so reads of genuinely
    * absent optional values do not become repeated server queries.
    * Fire-and-forget, but registered as a cross-space promise so
    * `storageManager.synced()` and `Cell.pull()`'s convergence loop can await

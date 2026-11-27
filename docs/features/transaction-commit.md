@@ -87,11 +87,14 @@ sessions change it. Such a read returns `confirmed: true` without a `seq`:
 loading the document with `sync()` establishes its watch and brings in current
 state. So does the first read that resolves a link to the document while the
 replica has nothing to show that the document is watched: it starts that load
-without waiting for it. A read under a schema is kept current by its own load,
-which asks the server to follow the links the schema covers. Immutable content
-needs no continuing watch. Every read counts, a `sample()` as much as a
-`get()`. When they all are confirmed and the replica can say, it also returns
-the commit sequence the read is complete through: the `toSeq` of the
+without waiting for it, except for a session-scoped document of a runtime that
+keeps those to itself and for a replica that reads the space's store directly,
+neither of which needs one. A read under a schema is kept current by its own
+load, which asks the server to follow the links the schema covers. Immutable
+content needs no continuing watch, and a link read starts no load for it. Every
+read counts, a `sample()` as much as a `get()`. When they all are confirmed and
+the replica can say, it also returns the commit sequence the read is complete
+through: the `toSeq` of the
 last server push the replica applied whole, so that every commit at or below it
 that touched a document the read consumed is reflected in what it read. A read
 assembled from separate pulls has no such sequence, since one pull can see a

@@ -3779,7 +3779,8 @@ function followPointerOnce(
       // walked); the receiver decides whether a fetch is actually needed —
       // Runtime.ensureLinkedDocLoaded kicks same-space targets only when
       // `shouldPullDoc()` reserves the load, which for an absent doc it
-      // does once until the doc is dropped or the load fails, so reads of
+      // does once until the doc is dropped or the kicked sync rejects (one
+      // that resolves carrying an error keeps the reservation), so reads of
       // genuinely absent optional values do not turn into repeated server
       // queries. The reported link carries the selector's target-rooted
       // path (minus its "value" prefix) and schema so the fetch covers the
