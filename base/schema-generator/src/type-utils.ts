@@ -322,8 +322,10 @@ function rejectNonSerializableCollection(type: ts.Type): void {
  * symbol name. Filters out anonymous ("__type") and wrapper/container names
  * that we do not want to promote into top-level definitions. A `typeNode`
  * that names a wrapper (`wrapperKindOfReference()`) leaves the type unnamed,
- * though the type is the wrapper's payload; a type of the module's own that
- * shares a wrapper's name is no wrapper, and leaves the name to the type.
+ * though the type is the wrapper's payload. A reference to a type of the
+ * module's own that shares a wrapper's name names no wrapper there, but the
+ * filters on the type's own name below still leave a type named `Default`,
+ * `Stream`, `SqliteDb` or a cell wrapper's name unnamed, whatever declares it.
  */
 export function getNamedTypeKey(
   type: ts.Type,

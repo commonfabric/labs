@@ -39,7 +39,14 @@
  * directory. Anything more on the command line prints the usage and exits 2.
  */
 
-import { dirname, fromFileUrl, join, relative, resolve } from "@std/path";
+import {
+  dirname,
+  fromFileUrl,
+  join,
+  relative,
+  resolve,
+  SEPARATOR,
+} from "@std/path";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 export const DEMO_PATH = "runtime/cli/integration/verb-session-demo.sh";
@@ -511,9 +518,10 @@ if (import.meta.main) {
     console.error("usage: check-verb-session-sync.ts [doc [demo]]");
     Deno.exit(2);
   }
-  // Named from the repository root, as `DOC_DEMOS` names its documents.
+  // Named from the repository root with `/` between segments, as `DOC_DEMOS`
+  // names its documents.
   const [mdPath, shPath] = Deno.args.map((arg) =>
-    relative(REPO_ROOT, resolve(arg))
+    relative(REPO_ROOT, resolve(arg)).replaceAll(SEPARATOR, "/")
   );
   Deno.exit(await main({ mdPath, shPath }));
 }

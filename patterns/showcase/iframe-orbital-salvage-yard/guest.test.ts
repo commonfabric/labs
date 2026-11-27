@@ -583,6 +583,12 @@ describe("iframe-orbital-salvage-yard/guest", () => {
 
       const loading = load(parts, { watch });
       await started.promise;
+      // Hiding the page disconnects the bridge, which then fails the load:
+      // the yard is torn down once, all the same.
+      const engine = EngineStore.Instances.at(-1);
+      if (!engine) throw new Error("The yard started no engine.");
+      let releases = 0;
+      engine.onReleaseEffectsObservable.add(() => releases++);
       dispatchEvent(new Event("pagehide"));
       page = await loading;
       release();
@@ -597,6 +603,7 @@ describe("iframe-orbital-salvage-yard/guest", () => {
       expect(manifest()).toEqual([]);
       expect(state.writes).toEqual([]);
       expect(parts.frames.pending).toBe(false);
+      expect(releases).toBe(1);
     });
 
     it("throws for a document without one of its controls", async () => {

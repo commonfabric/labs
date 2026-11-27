@@ -915,6 +915,7 @@ cameraReadout.textContent = cameraDescription();
 canvas.style.cursor = "grab";
 
 function dispose(): void {
+  if (signal.aborted) return;
   abort.abort();
   if (drag && canvas.hasPointerCapture(drag.pointerId)) {
     canvas.releasePointerCapture(drag.pointerId);
