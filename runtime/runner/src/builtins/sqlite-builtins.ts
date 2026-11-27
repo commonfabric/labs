@@ -70,6 +70,7 @@ import {
 } from "../executor/effect-completion.ts";
 import type { CfcReadOnExceed } from "../cfc/read-ceiling.ts";
 import {
+  readCeilingOfRun,
   requireWaveAcceptance,
   type WaveRunContext,
   waveRunContextOf,
@@ -143,8 +144,10 @@ export const SQLITE_UNSENT_REFUSAL =
 /**
  * The read ceiling a query issued on `tx` reads under: the runtime's own
  * `cfcReadMaxConfidentiality` met with the ceiling the run's session
- * carries (`WaveRunContext.readCeiling` — the client's declared ceiling,
- * stamped by the serving loop onto every run it serves as that session),
+ * carries (`WaveRunContext.sessionReadCeiling` — the client's declared
+ * ceiling, stamped by the serving loop onto every run it serves for that
+ * session; a session-scoped result is that session's alone, so it binds
+ * here whatever the run, per wave.ts `readCeilingOfRun`),
  * so a served run is bounded by the client that demanded it exactly as the
  * client's own run would be. The mode meets toward `fail`: either side
  * saying `fail` stands, else either side's `skip`; neither source can turn
@@ -159,7 +162,10 @@ export function effectiveReadCeiling(
   maxConfidentiality: readonly CfcConfClause[] | undefined;
   onExceed: CfcReadOnExceed | undefined;
 } {
-  const carried = runContext?.readCeiling;
+  const carried = readCeilingOfRun(runContext, {
+    materializedFor: "session",
+    flowLabelsPersist: runtime.cfcFlowLabels === "persist",
+  });
   if (carried === undefined) {
     return {
       maxConfidentiality: runtime.cfcReadMaxConfidentiality,

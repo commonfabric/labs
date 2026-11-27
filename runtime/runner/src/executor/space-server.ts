@@ -3068,6 +3068,9 @@ export class SpaceServer implements TransactionSealDestination {
         onEarlyEmitRefusal: () => {
           this.#options.stats.earlyEmitRefusals += 1;
         },
+        onSessionCeilingRefusal: () => {
+          this.#options.stats.sessionCeilingRefusals += 1;
+        },
         onUndemandedNarrowing: () => {
           this.#options.stats.undemandedNarrowingRuns += 1;
         },
@@ -3178,9 +3181,13 @@ export class SpaceServer implements TransactionSealDestination {
     const attributionFromScope = info.kind === "derivation" &&
       info.acting === undefined && principal !== undefined;
     const sessionId = info.scopeKeyIdentity?.sessionId;
-    const readCeiling = info.kind !== "bookkeeping" && sessionId !== undefined
-      ? this.#options.server.sessionReadCeiling(this.#options.space, sessionId)
-      : undefined;
+    const sessionReadCeiling =
+      info.kind !== "bookkeeping" && sessionId !== undefined
+        ? this.#options.server.sessionReadCeiling(
+          this.#options.space,
+          sessionId,
+        )
+        : undefined;
     // The S-A carriage (OW31; protocol.md §2b): a bookkeeping run
     // sanctioned to cross — the compile-cache / program materialization
     // writeback into the piece's own space — carries the TRIGGERING
@@ -3245,14 +3252,16 @@ export class SpaceServer implements TransactionSealDestination {
       ...(info.scopeKeyIdentity !== undefined
         ? { scopeKeyIdentity: info.scopeKeyIdentity }
         : {}),
-      // The read ceiling of the session this run acts as, read from the
-      // memory server's session record — the seam a declared ceiling (the
-      // client's signed `session.open` descriptor) and a server-assigned
-      // one both reach the run through. Stamped with the identity, before
-      // the run's first read, so the sqlite builtin's request hash and
-      // its flush read one value. Never for bookkeeping: the loop's own
-      // writes act as no session.
-      ...(readCeiling !== undefined ? { readCeiling } : {}),
+      // The read ceiling of the session the run's scoped addresses resolve
+      // to, read from the memory server's session record — the seam a
+      // declared ceiling (the client's signed `session.open` descriptor)
+      // and a server-assigned one both reach the run through. Stamped with
+      // the identity, before the run's first read, so the sqlite builtin's
+      // request hash and its flush read one value. Whether it bounds a read
+      // is wave.ts `readCeilingOfRun`'s decision: a shared instance resolved
+      // against this session does not act as it. Never for bookkeeping: the
+      // loop's own writes act as no session.
+      ...(sessionReadCeiling !== undefined ? { sessionReadCeiling } : {}),
       ...(info.actionScopeKey !== undefined
         ? { actionScopeKey: info.actionScopeKey }
         : {}),

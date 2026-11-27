@@ -55,7 +55,7 @@ const noteSchema = {
 
 type Result = { size: number; copied?: number; copy: Stream<unknown> };
 
-async function fixture() {
+async function fixture(scope: "space" | "session" = "space") {
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
   const errors: unknown[] = [];
   let reportError!: (error: unknown) => void;
@@ -144,20 +144,23 @@ async function fixture() {
         subject: alice.did(),
       }],
     });
+    const note = scope === "space"
+      ? "Writable<string>"
+      : "PerSession<Writable<string>>";
     const pattern = await first.runtime.patternManager.compilePattern({
       main: "/main.tsx",
       files: [{
         name: "/main.tsx",
         contents: `
-import { computed, handler, pattern, Stream, Writable } from "commonfabric";
-const copy = handler<unknown, { note: string; copied: Writable<number> }>(
-  (_event, { note, copied }) => { copied.set(note.length); },
+import { computed, handler, pattern, PerSession, Stream, Writable } from "commonfabric";
+const copy = handler<unknown, { note: ${note}; copied: Writable<number> }>(
+  (_event, { note, copied }) => { copied.set(note.get().length); },
 );
 export default pattern<
-  { note: string; copied: Writable<number> },
+  { note: ${note}; copied: Writable<number> },
   { size: number; copied: number; copy: Stream<unknown> }
 >(({ note, copied }) => ({
-  size: computed(() => note.length),
+  size: computed(() => note.get().length),
   copied,
   copy: copy({ note, copied }),
 }));
@@ -187,6 +190,17 @@ export default pattern<
     return {
       errors,
       firstError,
+      stats: () => host!.stats(),
+      /** The serving scheduler's first error, or `"quiet"` when the host
+       * settled without one, so a run that is not refused ends the test
+       * rather than leaving it waiting. */
+      async refusal(): Promise<string> {
+        await first.runtime.storageManager.synced();
+        return await Promise.race([
+          firstError.then(String),
+          host!.whenQuiescent().then(() => "quiet"),
+        ]);
+      },
       first: { runtime: first.runtime, result },
       async join(signer: typeof bob): Promise<
         { runtime: Runtime; result: Cell<Result> }
@@ -233,8 +247,21 @@ describe("executor-derivation-read-ceiling", () => {
     const f = await fixture();
     try {
       f.first.result.key("copy").send({});
-      await f.first.runtime.storageManager.synced();
-      expect(String(await f.firstError)).toMatch(/read ceiling/);
+      expect(await f.refusal()).toMatch(/read ceiling/);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reads a session's own instance under its ceiling, refusing a shared first run that turns out to be the session's", async () => {
+    const f = await fixture("session");
+    try {
+      // The node's first run is stamped as a shared instance and reads the
+      // bounded session's note; the seal refuses it once it discovers
+      // session scope, and the rerun, as the session's instance, is refused
+      // by the ceiling.
+      expect(await f.refusal()).toMatch(/read ceiling/);
+      expect(f.stats().sessionCeilingRefusals).toBeGreaterThan(0);
     } finally {
       await f.close();
     }

@@ -504,7 +504,8 @@ describe("cfc-cell-read-ceiling", () => {
     stampWaveRunContext(tx, {
       actionId: "test:cell-read-ceiling",
       kind: "event-handler",
-      readCeiling: { maxConfidentiality: [A] },
+      acting: { user: signer.did(), session: "s1" },
+      sessionReadCeiling: { maxConfidentiality: [A] },
     });
     try {
       expect(() => cell.withTx(tx).get()).toThrow(/read ceiling/);
@@ -523,7 +524,7 @@ describe("cfc-cell-read-ceiling", () => {
     stampWaveRunContext(tx, {
       actionId: "test:cell-read-ceiling",
       kind: "derivation",
-      readCeiling: { maxConfidentiality: [A] },
+      sessionReadCeiling: { maxConfidentiality: [A] },
     });
     try {
       expect(cell.withTx(tx).get()).toEqual({ secret: "withheld content" });
@@ -543,6 +544,33 @@ describe("cfc-cell-read-ceiling", () => {
       expect(() => bounded.withTx(boundedTx).get()).toThrow(/read ceiling/);
     } finally {
       boundedTx.abort();
+    }
+  });
+
+  it("keeps the demanding session's ceiling on a derivation when the runtime does not persist flow labels", async () => {
+    const link = await seed([B]);
+    // Without persisted flow labels the result would not carry the note's
+    // label to each reader, so the shared-instance exemption does not hold.
+    const reader = new Runtime({
+      apiUrl: new URL("http://toolshed.test"),
+      storageManager: storage,
+      cfcReadMaxConfidentiality: [A, B],
+      cfcEnforcementMode: "enforce-strict",
+      cfcFlowLabels: "observe",
+    });
+    readers.push(reader);
+    const cell = reader.getCellFromLink(link);
+    await cell.sync();
+    const tx = reader.edit();
+    stampWaveRunContext(tx, {
+      actionId: "test:cell-read-ceiling",
+      kind: "derivation",
+      sessionReadCeiling: { maxConfidentiality: [A] },
+    });
+    try {
+      expect(() => cell.withTx(tx).get()).toThrow(/read ceiling/);
+    } finally {
+      tx.abort();
     }
   });
 

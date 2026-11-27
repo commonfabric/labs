@@ -123,6 +123,7 @@ import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
+  readCeilingOfRun,
   type SupersededOutput,
   waveRunActorOf,
   waveRunContextOf,
@@ -3067,18 +3068,9 @@ export class Runtime {
   #buildCfcInstrumentation(): CfcInstrumentationHooks {
     const hooks: CfcInstrumentationHooks = {
       checkReadCeiling: (readingTx, address, options) => {
-        // A served derivation's cell reads do not meet the ceiling of the
-        // session whose demand scheduled it (serving-loop.md §3c). That
-        // session only stands in to resolve the run's addresses, and the
-        // result may be shared by every demander. The result carries its
-        // inputs' labels, so each session's own read of it meets that
-        // session's ceiling. A handler's cell reads still meet the carried
-        // ceiling, and the sqlite builtin applies it to a session-scoped
-        // query either way.
-        const context = waveRunContextOf(readingTx);
-        const carried = context?.kind === "derivation"
-          ? undefined
-          : context?.readCeiling;
+        const carried = readCeilingOfRun(waveRunContextOf(readingTx), {
+          flowLabelsPersist: this.cfcFlowLabels === "persist",
+        });
         const ceiling = carried === undefined
           ? this.cfcReadMaxConfidentiality
           : meetCfcObservationCeilings(
