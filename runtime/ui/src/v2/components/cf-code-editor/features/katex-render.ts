@@ -11,10 +11,11 @@
  */
 
 import katex from "katex";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import { KATEX_STYLES } from "./katex-styles.ts";
 
-/** KaTeX's markup for a formula, or KaTeX's message when it cannot parse it. */
+/** KaTeX's markup for a formula, or the reason KaTeX cannot set it. */
 export type RenderedFormula = { html: string } | { error: string };
 
 /**
@@ -36,8 +37,9 @@ const KATEX_OPTIONS = {
 
 /**
  * Sets `tex` with KaTeX, in display style when `display`. Returns KaTeX's
- * markup, which holds nothing of the author's but escaped text, or KaTeX's
- * message when it cannot parse `tex`. Throws whatever else KaTeX throws.
+ * markup, which holds nothing of the author's but escaped text, or, when
+ * KaTeX cannot set `tex`, the message of what it threw: its own message for
+ * TeX it cannot parse, and the engine's for TeX that nests too deeply to set.
  */
 export function renderFormula(tex: string, display: boolean): RenderedFormula {
   try {
@@ -48,8 +50,7 @@ export function renderFormula(tex: string, display: boolean): RenderedFormula {
       }),
     };
   } catch (error) {
-    if (!(error instanceof katex.ParseError)) throw error;
-    return { error: error.message };
+    return { error: describeFailure(error) };
   }
 }
 
