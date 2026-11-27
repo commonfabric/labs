@@ -49,6 +49,15 @@ type AuthoredRule = {
   readonly guard?: { readonly policyState: readonly FabricValue[] };
 };
 
+/** The JSON-shaped value a static policy declaration evaluates to. */
+type StaticValue =
+  | null
+  | string
+  | number
+  | boolean
+  | StaticValue[]
+  | { [key: string]: StaticValue };
+
 class StaticAuthoringError extends Error {
   constructor(readonly node: ts.Node, message: string) {
     super(message);
@@ -80,7 +89,7 @@ const propertyName = (node: ts.PropertyName): string | undefined => {
 const evaluateStatic = (
   input: ts.Expression,
   imports: AuthoringImports,
-): FabricValue => {
+): StaticValue => {
   const node = unwrapExpression(input);
   if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) {
     return node.text;
@@ -103,7 +112,7 @@ const evaluateStatic = (
   }
 
   if (ts.isObjectLiteralExpression(node)) {
-    const result: Record<string, FabricValue> = {};
+    const result: Record<string, StaticValue> = {};
     for (const property of node.properties) {
       if (!ts.isPropertyAssignment(property)) {
         throw new StaticAuthoringError(
@@ -199,7 +208,7 @@ const evaluateStatic = (
 };
 
 const expressionFromStatic = (
-  value: unknown,
+  value: StaticValue,
   factory: ts.NodeFactory,
 ): ts.Expression => {
   if (value === null) return factory.createNull();
@@ -213,17 +222,14 @@ const expressionFromStatic = (
       value.map((entry) => expressionFromStatic(entry, factory)),
     );
   }
-  if (isObjectNotArray(value)) {
-    return factory.createObjectLiteralExpression(
-      Object.entries(value).map(([key, field]) =>
-        factory.createPropertyAssignment(
-          factory.createStringLiteral(key),
-          expressionFromStatic(field, factory),
-        )
-      ),
-    );
-  }
-  throw new TypeError("unsupported static policy declaration value");
+  return factory.createObjectLiteralExpression(
+    Object.entries(value).map(([key, field]) =>
+      factory.createPropertyAssignment(
+        factory.createStringLiteral(key),
+        expressionFromStatic(field, factory),
+      )
+    ),
+  );
 };
 
 const collectVariables = (value: unknown, into: Set<string>): void => {
@@ -641,6 +647,14 @@ export class CfcPolicyAuthoringTransformer extends Transformer {
         type: "cfc-policy-authoring",
         message: error.message,
       });
+    const reportStaticErrors = (body: () => void): void => {
+      try {
+        body();
+      } catch (error) {
+        if (error instanceof StaticAuthoringError) report(error);
+        else throw error;
+      }
+    };
 
     for (const [name, declaration] of declarations) {
       if (!declaration.initializer) continue;
@@ -667,7 +681,7 @@ export class CfcPolicyAuthoringTransformer extends Transformer {
           );
           continue;
         }
-        try {
+        reportStaticErrors(() => {
           if (initializer.arguments.length !== 1) {
             throw new StaticAuthoringError(
               initializer,
@@ -680,10 +694,7 @@ export class CfcPolicyAuthoringTransformer extends Transformer {
             initializer,
             expressionFromStatic(authored, context.factory),
           );
-        } catch (error) {
-          if (error instanceof StaticAuthoringError) report(error);
-          else throw error;
-        }
+        });
       } else if (isCallOf(initializer.expression, imports.exchangeRules)) {
         handledCalls.add(initializer);
         if (renamedExports.has(name)) {
@@ -704,7 +715,7 @@ export class CfcPolicyAuthoringTransformer extends Transformer {
           );
           continue;
         }
-        try {
+        reportStaticErrors(() => {
           const argument = initializer.arguments[0] &&
             unwrapExpression(initializer.arguments[0]);
           if (
@@ -727,10 +738,7 @@ export class CfcPolicyAuthoringTransformer extends Transformer {
           });
           replacements.set(initializer, argument);
           ruleSets.push({ symbol: name, rules: names, node: declaration });
-        } catch (error) {
-          if (error instanceof StaticAuthoringError) report(error);
-          else throw error;
-        }
+        });
       }
     }
 

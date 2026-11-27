@@ -43,10 +43,13 @@ export default pattern<{ value: number }>(({ value }) => {
 `;
 
 /** Returns the authored location where `marker` begins. */
-function locationOf(marker: string): { line: number; col: number } {
-  const offset = SOURCE.indexOf(marker);
+function locationOf(
+  marker: string,
+  source = SOURCE,
+): { line: number; col: number } {
+  const offset = source.indexOf(marker);
   if (offset < 0) throw new Error(`Missing marker: \`${marker}\``);
-  const prefix = SOURCE.slice(0, offset);
+  const prefix = source.slice(0, offset);
   const lines = prefix.split("\n");
   return { line: lines.length, col: lines.at(-1)?.length ?? 0 };
 }
@@ -120,6 +123,61 @@ describe("builder-source-sites", () => {
       expect(output).not.toContain("__cfBindVerifiedBinding");
       expect(output).not.toContain("bindingName");
       expect(output).not.toContain("formatVersion");
+    } finally {
+      transformed.dispose();
+    }
+  });
+
+  it("records no site for a builder the compiler wrote itself", async () => {
+    // Lowering the computed-key destructure synthesizes a whole
+    // `lift(({ element, __cf_val_key }) => element[__cf_val_key])`; neither
+    // that call nor its callback has an authored position.
+    const source = `import { pattern, UI } from "commonfabric";
+
+const dynamicKey = "value" as const;
+
+interface Item {
+  value: number;
+}
+
+export default pattern<{ items: Item[] }>((state) => ({
+  [UI]: (
+    <div>
+      {state.items.map(({ [dynamicKey]: val }) => <span>{val}</span>)}
+    </div>
+  ),
+}));
+`;
+    const fileName = "/main.tsx";
+    const { program } = await batchTypeCheckFixtures(
+      { [fileName]: source },
+      { types: COMMONFABRIC_TYPES },
+    );
+    const original = program.getSourceFile(fileName);
+    if (!original) throw new Error("Fixture source was not loaded.");
+
+    const pipeline = new CommonFabricTransformerPipeline({
+      builderSourceSites: {
+        mapSite: (_name, site): BuilderSourceSite => ({
+          ...site,
+          line: site.line - 1,
+        }),
+      },
+    });
+    const transformed = ts.transform(original, pipeline.toFactories(program));
+    try {
+      const output = ts.createPrinter().printFile(transformed.transformed[0]);
+      expect(output).toContain(
+        "const __cfLift_1 = __cfHelpers.lift<",
+      );
+      const sites = pipeline.getBuilderSourceSites().get(fileName)?.sites ??
+        {};
+      expect(Object.hasOwn(sites, "__cfLift_1")).toBe(false);
+      // The authored map callback beside it still has its site.
+      expect(sites.__cfPattern_1).toEqual(
+        locationOf("({ [dynamicKey]: val }) =>", source),
+      );
+      expect(sites.default).toEqual(locationOf("(state) =>", source));
     } finally {
       transformed.dispose();
     }

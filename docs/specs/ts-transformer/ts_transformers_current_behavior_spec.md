@@ -1808,10 +1808,13 @@ Transforms `action(...)` to handler factory invocation:
   emitted `handler`, which is where the declared result would otherwise be
   lost: the rewritten call carries schemas rather than the authored type
   arguments. SchemaInjection lowers that slot (§10.3).
-- callback extraction supports arrow callbacks only, and reaches the arrow
-  through the transparent wrapper set (parentheses, `as`, `<T>x`, `satisfies`, `!`, and partially emitted nodes). The whole set comes off: a spelling left on hides the callback
-  from this strategy, and `action(...)` then survives into the emitted module,
-  where the runtime throws because `action` exists only to be lowered here
+- callback extraction supports a single arrow callback only, and reaches the
+  arrow through the transparent wrapper set (parentheses, `as`, `<T>x`, `satisfies`, `!`, and partially emitted nodes). The whole set comes off: a spelling left on hides the callback
+  from this strategy. Any other argument list — a named function reference, a
+  function expression, no argument, or extra arguments — is reported as
+  **Error** `action:unsupported-callback`, because `action(...)` would
+  otherwise survive into the emitted module, where the runtime throws since
+  `action` exists only to be lowered here
 
 ### 9.4 Array-method strategy
 
@@ -4972,7 +4975,8 @@ null when it does not apply. Current built-in behavior:
    result types can degrade schema precision (type arguments may be
    intentionally omitted).
 2. Action and JSX inline handler callback extraction currently unwraps arrow
-   functions only.
+   functions only; an `action` given anything else is reported as
+   `action:unsupported-callback`.
 3. Non-static destructuring defaults, rest destructuring, and unsupported
    computed destructuring keys in pattern callbacks remain non-lowerable and
    produce pattern-context diagnostics.

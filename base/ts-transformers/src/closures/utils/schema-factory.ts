@@ -114,28 +114,17 @@ export function createArrayMethodCallbackSchema(
 }
 
 /**
- * Build a TypeNode for a handler state parameter.
+ * Build a TypeNode for a handler's state: the captures object the rewritten
+ * handler is applied to.
  * Returns: { ...captures }
  */
 export function createHandlerStateSchema(
   captureTree: Map<string, CaptureTreeNode>,
-  stateParam: ts.ParameterDeclaration | undefined,
   context: TransformationContext,
 ): ts.TypeNode {
   const { checker, factory } = context;
   const typeRegistry = context.state.typeRegistry;
 
-  // Try explicit annotation first
-  if (stateParam) {
-    const explicit = tryExplicitParameterType(
-      stateParam,
-      checker,
-      typeRegistry,
-    );
-    if (explicit) return explicit.typeNode;
-  }
-
-  // Fallback: build from captures
   const paramsProperties = buildTypeElementsFromCaptureTree(
     captureTree,
     context,
@@ -167,23 +156,18 @@ export function createLiftAppliedInputSchema(
 
   // Add type element for original input UNLESS callback had zero parameters
   if (!hadZeroParameters) {
-    // Add type element for original input using the helper function
-    const inputTypeNode = expressionToTypeNode(originalInput, context);
-
-    // Check if the original input is an optional property access (e.g., config.multiplier where multiplier?: number)
-    let questionToken: ts.QuestionToken | undefined = undefined;
-    if (ts.isPropertyAccessExpression(originalInput)) {
-      if (isOptionalMemberSymbol(originalInput, checker)) {
-        questionToken = factory.createToken(ts.SyntaxKind.QuestionToken);
-      }
-    }
-
+    // An input read through an optional member (`config.multiplier` where
+    // `multiplier?: number`) is optional too. Its type, `T | undefined`, does
+    // not say so: the schema generator leaves a property out of `required`
+    // only for its `?`.
+    const optional = ts.isPropertyAccessExpression(originalInput) &&
+      isOptionalMemberSymbol(originalInput, checker);
     typeElements.push(
       factory.createPropertySignature(
         undefined,
         factory.createIdentifier(originalInputParamName),
-        questionToken,
-        inputTypeNode,
+        optional ? factory.createToken(ts.SyntaxKind.QuestionToken) : undefined,
+        expressionToTypeNode(originalInput, context),
       ),
     );
   }

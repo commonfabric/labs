@@ -93,6 +93,24 @@ describe("emitters", () => {
       expect(lifts(root)).toEqual([{ inputs: ["flag"], body: "!flag" }]);
       expect(rendered(root)).toBe("__cfLift_1({ flag: flag })");
     });
+
+    it("lifts an arithmetic negation of a reactive value inside a literal, and leaves one of a constant", async () => {
+      const root = await render("({ fixed: -1, signed: -count })");
+
+      expect(lifts(root)).toEqual([{ inputs: ["count"], body: "-count" }]);
+      expect(rendered(root)).toBe(
+        "({ fixed: -1, signed: __cfLift_1({ count: count }) })",
+      );
+    });
+
+    it("lifts the operand of `&&` that applies an operator other than `!` to a reactive value", async () => {
+      const root = await render("flag && +label");
+
+      expect(lifts(root)).toEqual([{ inputs: ["label"], body: "+label" }]);
+      const [when] = callsNamed(root, "when");
+      expect(when?.arguments.slice(-2).map((arg) => print(arg, root)))
+        .toEqual(["flag", "__cfLift_1({ label: label })"]);
+    });
   });
 
   describe("emitPropertyAccess()", () => {
