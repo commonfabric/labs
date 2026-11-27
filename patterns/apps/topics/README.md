@@ -120,19 +120,21 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   does not, in filing order, and asks every topic reporting no number to store
   the one the namespace holds for it, through that topic's own `recordName`.
   Every way of filing a topic numbers it, so the step finds work only where the
-  namespace lacks a topic the collection holds. Asking is the most a board can
-  do — a board writes a member's result and never a member's argument — so the
-  step reports what it allocated, what it found already stored, and what it
-  asked, and running it again completes whichever asking did not land. An empty
-  `pending` is the finished state, and a topic's published number is the signal
-  the step reads to reach it. A repeat over a board in that state writes nothing
-  at all — no namespace key and no event. Where a topic is still outstanding the
-  repeat is safe but not free: the step asks it again, that asking is itself a
-  write, and the topic stores the number if it has not already. `naming` is what
-  the board declares about those numbers, so a consumer reads the promise rather
-  than assuming one, and `namesTable` is the reverse lookup a caller uses to
-  find the board's number for a topic by identity, including one that publishes
-  none.
+  namespace lacks a topic the collection holds. It refuses to run before the
+  query listing the collection's topics has returned, since over rows that have
+  not arrived it would find nothing and report the board finished. Asking is the
+  most a board can do — a board writes a member's result and never a member's
+  argument — so the step reports what it allocated, what it found already
+  stored, and what it asked, and running it again completes whichever asking did
+  not land. An empty `pending` is the finished state, and a topic's published
+  number is the signal the step reads to reach it. A repeat over a board in that
+  state writes nothing at all — no namespace key and no event. Where a topic is
+  still outstanding the repeat is safe but not free: the step asks it again,
+  that asking is itself a write, and the topic stores the number if it has not
+  already. `naming` is what the board declares about those numbers, so a
+  consumer reads the promise rather than assuming one, and `namesTable` is the
+  reverse lookup a caller uses to find the board's number for a topic by
+  identity, including one that publishes none.
 
   Every demand for that property is declared OPTIONAL rather than defaulted, and
   the spelling is what lets the whole graft be applied over a board deployed
@@ -457,11 +459,12 @@ _update_: `bodyUpdatedBy`/`bodyUpdatedAt` stay unset.
 Invalid mutations **throw** instead of silently returning (verb contract rule
 4): an empty title, an empty comment body, a blank or non-http(s) link URL, a
 blank `agentName` on an authored-content verb — `backfillNames` included, which
-writes the namespace on someone's behalf — and a `recordName` naming something
-outside the number grammar or disagreeing with the number the topic already
-stores, all surface as a failed call — a nonzero CLI exit — never as apparent
-success. The UI composer wrappers keep their silent guards: an empty draft is a
-non-event in a composer, not a headless mutation.
+writes the namespace on someone's behalf — a `backfillNames` run before the
+board's topics have loaded, and a `recordName` naming something outside the
+number grammar or disagreeing with the number the topic already stores, all
+surface as a failed call — a nonzero CLI exit — never as apparent success. The
+UI composer wrappers keep their silent guards: an empty draft is a non-event in
+a composer, not a headless mutation.
 
 ## From the command line
 

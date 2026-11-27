@@ -392,8 +392,12 @@ export default pattern(() => {
   const action_empty_the_repair_namespace = action(() => {
     repairNames.set({});
   });
+  // The read of the board's topics is also what the step waits for: it
+  // refuses to run before the query listing them has returned, which
+  // without a reader can still be pending when the step runs.
   const assert_repair_namespace_is_empty = assert(() =>
     repair.topicCount === 2 &&
+    (repair.topics ?? []).length === 2 &&
     Object.keys(repairNames.get() ?? {}).length === 0 &&
     (repair.namesTable ?? []).length === 0
   );

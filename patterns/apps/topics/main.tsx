@@ -569,8 +569,10 @@ export interface TopicsOutput {
    * filing order, and ask every topic that reports no number to store the one
    * the namespace holds for it. Every way of filing a topic numbers it, so a
    * run finds work only where the namespace lacks a topic the collection
-   * holds. Idempotent: a run over topics that all report their numbers writes
-   * nothing and sends nothing. What one run cannot confirm is the asking, so
+   * holds. Refused while the board's topics have not loaded, since a run over
+   * rows that have not arrived would report the board finished. Idempotent: a
+   * run over topics that all report their numbers writes nothing and sends
+   * nothing. What one run cannot confirm is the asking, so
    * the result separates the topics it found numbered from the ones it asked,
    * and running it again completes whichever asking did not land. */
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
@@ -691,18 +693,32 @@ const addTopicHandler = handler<
   return { topic: piece, name };
 });
 
-/** Numbers the topics of the collection that the namespace lacks. */
+/**
+ * Numbers the topics of the collection that the namespace lacks. Refuses to
+ * run before the query listing them has returned: over rows that have not
+ * arrived it would find no topic, write nothing, and report the board
+ * finished.
+ */
 const backfillNamesHandler = handler<
   BackfillNamesEvent,
   Pick<BoardCreateState, "names"> & {
     /** The topics the board's collection holds, in filing order. */
     members: Writable<TopicDemand[] | Default<[]>>;
+
+    /** Whether the query `members` is read out of has returned. */
+    membersLoaded: boolean;
   },
   BackfillNamesResult
 >(
-  ({ agentName }, { names, members }) => {
+  ({ agentName }, { names, members, membersLoaded }) => {
     if (!topicAuthorFromAgent(agentName)) {
       rejectMutation("backfillNames", "agentName must be non-blank");
+    }
+    if (!membersLoaded) {
+      rejectMutation(
+        "backfillNames",
+        "the board's topics have not loaded yet; run it again",
+      );
     }
     return recordNames(members, names);
   },
@@ -824,7 +840,14 @@ export default pattern<TopicsInput, TopicsOutput>(({ names }) => {
   const hasProfile = profileName.trim().length > 0;
 
   const addTopic = addTopicHandler({ board, mentionable, names });
-  const backfill = backfillNamesHandler({ names, members: topicList });
+  // A members query that has not returned has no result yet, which is not a
+  // board of no topics.
+  const membersLoaded = computed<boolean>(() => members.result !== undefined);
+  const backfill = backfillNamesHandler({
+    names,
+    members: topicList,
+    membersLoaded,
+  });
 
   const submitTopic = submitProfileTopic({
     board,
