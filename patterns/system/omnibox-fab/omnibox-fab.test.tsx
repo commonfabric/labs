@@ -269,6 +269,9 @@ export default pattern(() => {
       { assertion: assert_external_pin_accumulates },
       { action: action_pin_replacing },
       { assertion: assert_external_pin_replaces },
+      // The chat's system prompt is computed; until that has run, the chat
+      // sends its default prompt, which lacks the extra rule.
+      { settle: true },
       { action: action_send_message },
       { settle: true },
       { assertion: assert_reply_peeks },
