@@ -25,9 +25,15 @@
  * because the label was read from that space and the commitment is its digest
  * (`membershipSpacesInConfidentiality`). Continuous integration runs the other
  * arm; run the reclassifying one by hand.
+ *
+ * The share needs server execution: its lift runs in the share space with the
+ * owner offline, which only a serving runtime does. With
+ * `EXPERIMENTAL_SERVER_EXECUTION` off nothing computes the window, so the
+ * suite is skipped rather than left waiting for it.
  */
 
 import { createTestSpace, env, type Page } from "@commonfabric/integration";
+import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { type Cell, cellEntityIdString } from "@commonfabric/runner";
@@ -54,6 +60,11 @@ import {
 } from "./cfc-browser-helpers.ts";
 
 const { API_URL, FRONTEND_URL } = env;
+
+const SERVER_EXECUTION = (() => {
+  const raw = Deno.env.get("EXPERIMENTAL_SERVER_EXECUTION");
+  return raw === undefined ? SERVER_EXECUTION_DEFAULT_ENABLED : raw === "true";
+})();
 
 const RECLASSIFYING =
   Deno.env.get("EXPERIMENTAL_PIECE_CREATOR_RECORD") === "true" &&
@@ -100,9 +111,12 @@ const valueWhere = <T>(cell: Cell<T>, ready: (value: T) => boolean) =>
   });
 
 describe(
-  `share-space reclassification across two browsers (${
-    RECLASSIFYING ? "reclassifying" : "flags off"
-  })`,
+  {
+    name: `share-space reclassification across two browsers (${
+      RECLASSIFYING ? "reclassifying" : "flags off"
+    })`,
+    ignore: !SERVER_EXECUTION,
+  },
   () => {
     const ownerShell = new ShellIntegration();
     const readerShell = new ShellIntegration();
