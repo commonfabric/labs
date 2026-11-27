@@ -5,7 +5,6 @@
 import { expect } from "@std/expect";
 import {
   buildRestoreDocument,
-  collectionIdOf,
   declaredRetirableLinks,
   deepEqual,
   findLink,
@@ -880,20 +879,6 @@ describe("topics-rehearsal-lib", () => {
         "boardCrossrefIndex",
         "board",
       ]);
-    });
-  });
-
-  describe("collectionIdOf", () => {
-    it("returns the database id a collection handle names", () => {
-      expect(
-        collectionIdOf({ guard: 5, id: "fid1:collection", index: {} }),
-      ).toBe("fid1:collection");
-    });
-
-    it("returns `undefined` for a value that is not a handle", () => {
-      expect(collectionIdOf(undefined)).toBeUndefined();
-      expect(collectionIdOf([{ id: "fid1:collection" }])).toBeUndefined();
-      expect(collectionIdOf({ id: 5 })).toBeUndefined();
     });
   });
 

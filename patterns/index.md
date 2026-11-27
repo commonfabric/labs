@@ -302,14 +302,14 @@ topic straight from the create. The board owns a member namespace through
 `product/collection-naming/naming.ts`: `addTopic` allocates the next decimal
 number and passes it into the topic it creates, in the same transaction as the
 add; each topic stores that number and publishes it as `shortName`, reading
-nothing of its board to report it; and `backfillNames` adds what the board held
-as a list to the collection and numbers it. Topics reference each other by CELL:
-the collection mirrors what each topic points at into two relation tables, and
-each topic asks them which topics mention it. Demonstrates: an indexed
-collection as a board's only membership, queries that return members as
-references, a join over a relation table by the asking piece's own reference,
-profile-native browser authorship on a shared piece, mergeable comment appends,
-session-scoped drafts, `multiUserTest` coverage.
+nothing of its board to report it; and `backfillNames` numbers any topic of the
+collection the namespace lacks. Topics reference each other by CELL: the
+collection mirrors what each topic points at into two relation tables, and each
+topic asks them which topics mention it. Demonstrates: an indexed collection as
+a board's only membership, queries that return members as references, a join
+over a relation table by the asking piece's own reference, profile-native
+browser authorship on a shared piece, mergeable comment appends, session-scoped
+drafts, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
 profile, mergeable, index, discovery, indexed collection, SQLite, query,
@@ -320,8 +320,6 @@ namespace, backfill
 
 ```ts
 interface TopicsInput {
-  // Topics a board held as a list; read only by adoptTopics and backfillNames
-  topics?: Writable<TopicDemand[] | Default<[]>>;
   // The member namespace: each decimal name to the topic it names, held as an
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
@@ -360,12 +358,8 @@ interface TopicsOutput {
   naming: NamingDeclaration;
   // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Adds the topics of the `topics` input from position `from`, at most
-  // `count` (200 at most and by default), to the collection; returns
-  // { adopted, next }, where `next` is absent at the end; idempotent
-  adoptTopics: Stream<AdoptTopicsEvent, AdoptTopicsResult>;
-  // Adopts the same way, then numbers every member the namespace lacks and
-  // asks each unnumbered topic to store its number; returns
+  // Numbers every topic of the collection the namespace lacks and asks each
+  // unnumbered topic to store its number; returns
   // { assigned, named, pending }; idempotent
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
   submitTopic: Stream<void>;

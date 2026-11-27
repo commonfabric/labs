@@ -32,7 +32,6 @@ import { type NamesMap } from "../../product/collection-naming/naming.ts";
 import Topics, {
   activityOrderOf,
   submitProfileTopic,
-  type TopicDemand,
   type TopicPiece,
 } from "./main.tsx";
 import Topic, {
@@ -1083,52 +1082,63 @@ export default pattern(() => {
 
   // --- Backlinks: a topic asks the board's collection who mentions it ---
 
-  // Topics the test holds, so that it reaches each one's verbs and outputs,
-  // wired to a board of their own and added to its collection through
-  // `adoptTopics`: the collection takes a write from the board's own verbs
-  // and from nothing else that holds its handle.
-  const keyedListed = new Writable<TopicDemand[]>([]);
-  const keyedBoard = Topics({ topics: keyedListed });
-  const keyedOne = Topic({ title: "Keyed one", board: keyedBoard.board });
-  const keyedTwo = Topic({ title: "Keyed two", board: keyedBoard.board });
-  const keyedThree = Topic({ title: "Keyed three", board: keyedBoard.board });
-  const action_keyed_board_takes_three = action(() => {
-    keyedListed.set([keyedOne, keyedTwo, keyedThree]);
-    keyedBoard.adoptTopics.send({ agentName: "Sol" });
+  // Three topics filed through the board, which adds each to its collection
+  // and hands each its handle. The namespace holds each topic itself under its
+  // number, so that is where the test reaches a topic's verbs and outputs,
+  // read as the topic it holds; the board's `topics` is where it finds each
+  // one to compare against.
+  const keyedNames = new Writable<Record<string, TopicPiece>>({});
+  const keyedBoard = Topics({ names: keyedNames });
+  const action_keyed_board_files_three = action(() => {
+    keyedBoard.addTopic.send({ title: "Keyed one", agentName: "Sol" });
+    keyedBoard.addTopic.send({ title: "Keyed two", agentName: "Sol" });
+    keyedBoard.addTopic.send({ title: "Keyed three", agentName: "Sol" });
   });
   const action_keyed_mentions = action(() => {
     // The first topic is mentioned by the second and the third, and by
     // itself, which earns it no backlink.
-    keyedTwo.mention?.send({ topic: keyedOne });
-    keyedThree.mention?.send({ topic: keyedOne });
-    keyedOne.mention?.send({ topic: keyedOne });
+    const one = keyedNames.key("1").resolveAsCell();
+    keyedNames.key("2").resolveAsCell().key("mention").send({ topic: one });
+    keyedNames.key("3").resolveAsCell().key("mention").send({ topic: one });
+    one.key("mention").send({ topic: one });
   });
   const assert_keyed_topic_lists_its_mentioners = assert(() => {
-    const first = (keyedOne.referencedBy ?? []) as object[];
+    const first = (keyedNames.key("1").key("referencedBy").get() ??
+      []) as object[];
     return first.length === 2 &&
-      first.some((topic) => equals(topic, keyedTwo)) &&
-      first.some((topic) => equals(topic, keyedThree)) &&
-      (keyedTwo.referencedBy ?? []).length === 0 &&
-      (keyedThree.referencedBy ?? []).length === 0;
+      first.some((topic) => equals(topic, keyedBoard.topics?.[1] as object)) &&
+      first.some((topic) => equals(topic, keyedBoard.topics?.[2] as object)) &&
+      (keyedNames.key("2").key("referencedBy").get() ?? []).length === 0 &&
+      (keyedNames.key("3").key("referencedBy").get() ?? []).length === 0;
   });
   // The whole graph as rows, which the board derives for a reader that asks:
-  // one row per topic, each mentioning topic listed once and never itself.
+  // one row per topic, each mentioning topic listed once and never itself,
+  // and the rows grouped under the number each topic carries.
   const assert_keyed_graph_has_a_row_per_topic = assert(() => {
     const rows = keyedBoard.crossrefs ?? [];
-    const first = rows.find((row) => equals(row.topic as object, keyedOne));
-    const second = rows.find((row) => equals(row.topic as object, keyedTwo));
+    const byName = keyedBoard.crossrefIndex?.byName ?? {};
+    const first = rows.find((row) =>
+      equals(row.topic as object, keyedBoard.topics?.[0] as object)
+    );
+    const second = rows.find((row) =>
+      equals(row.topic as object, keyedBoard.topics?.[1] as object)
+    );
     return rows.length === 3 &&
       (first?.mentionedBy ?? []).length === 2 &&
       (second?.mentionedBy ?? []).length === 0 &&
-      // None of the three has a number, so none is filed under one.
-      Object.keys(keyedBoard.crossrefIndex?.byName ?? {}).length === 0;
+      Object.keys(byName).join(",") === "1,2,3" &&
+      (byName["1"]?.[0]?.mentionedBy ?? []).length === 2;
   });
   const action_keyed_third_unmentions = action(() => {
-    keyedThree.unmention?.send({ topic: keyedOne });
+    keyedNames.key("3").resolveAsCell().key("unmention").send({
+      topic: keyedNames.key("1").resolveAsCell(),
+    });
   });
   const assert_keyed_unmention_drops_one_backlink = assert(() => {
-    const first = (keyedOne.referencedBy ?? []) as object[];
-    return first.length === 1 && equals(first[0], keyedTwo);
+    const first = (keyedNames.key("1").key("referencedBy").get() ??
+      []) as object[];
+    return first.length === 1 &&
+      equals(first[0], keyedBoard.topics?.[1] as object);
   });
   // Wired to this board's collection but never added to it: nothing the
   // collection holds mentions it.
@@ -1143,61 +1153,37 @@ export default pattern(() => {
   // --- Backlinks in filing order ---
 
   // Two topics mention a third, and the one filed first carries the later
-  // creation time. Filing order lists it first all the same, as the board's
-  // reference graph does.
-  const orderListed = new Writable<TopicDemand[]>([]);
-  const orderBoard = Topics({ topics: orderListed });
-  const orderTarget = Topic({ title: "Order target", board: orderBoard.board });
-  const filedFirst = Topic({
-    title: "Filed first",
-    createdAt: 200,
-    board: orderBoard.board,
+  // creation time, written into its input the way a recreate writes an
+  // exported topic's. Filing order lists it first all the same, as the
+  // board's reference graph does.
+  const orderNames = new Writable<Record<string, TopicPiece>>({});
+  const orderBoard = Topics({ names: orderNames });
+  const action_order_board_files_three = action(() => {
+    orderBoard.addTopic.send({ title: "Order target", agentName: "Sol" });
+    orderBoard.addTopic.send({ title: "Filed first", agentName: "Sol" });
+    orderBoard.addTopic.send({ title: "Filed second", agentName: "Sol" });
   });
-  const filedSecond = Topic({
-    title: "Filed second",
-    createdAt: 100,
-    board: orderBoard.board,
-  });
-  const action_order_board_takes_three = action(() => {
-    orderListed.set([orderTarget, filedFirst, filedSecond]);
-    orderBoard.adoptTopics.send({ agentName: "Sol" });
+  const action_order_creation_times = action(() => {
+    const createdAt = (name: string) =>
+      orderNames.key(name).resolveAsCell()
+        .getArgumentCell<{ createdAt: number }>()?.key("createdAt");
+    createdAt("2")?.set(200);
+    createdAt("3")?.set(100);
   });
   const action_order_mentions = action(() => {
-    filedSecond.mention?.send({ topic: orderTarget });
-    filedFirst.mention?.send({ topic: orderTarget });
+    const target = orderNames.key("1").resolveAsCell();
+    orderNames.key("3").resolveAsCell().key("mention").send({ topic: target });
+    orderNames.key("2").resolveAsCell().key("mention").send({ topic: target });
   });
   const assert_backlinks_follow_filing_order = assert(() => {
-    const backlinks = (orderTarget.referencedBy ?? []) as object[];
-    return backlinks.length === 2 &&
-      equals(backlinks[0], filedFirst) &&
-      equals(backlinks[1], filedSecond);
+    const backlinks = (orderNames.key("1").key("referencedBy").get() ??
+      []) as object[];
+    return orderBoard.topics?.[1]?.createdAt === 200 &&
+      orderBoard.topics?.[2]?.createdAt === 100 &&
+      backlinks.length === 2 &&
+      equals(backlinks[0], orderBoard.topics?.[1] as object) &&
+      equals(backlinks[1], orderBoard.topics?.[2] as object);
   });
-
-  // --- adoptTopics: a call adopts one batch of the list ---
-
-  // A board whose list holds three topics, adopted two at a time: the first
-  // call adopts the first two, and the second, starting at the `next` the
-  // first returned, adopts the third. A call that ignored its count would
-  // adopt all three at once and fail the first assertion.
-  const pagedListed = new Writable<TopicDemand[]>([]);
-  const pagedBoard = Topics({ topics: pagedListed });
-  const action_paged_board_adopts_two = action(() => {
-    pagedListed.set([
-      Topic({ title: "Paged one", board: pagedBoard.board }),
-      Topic({ title: "Paged two", board: pagedBoard.board }),
-      Topic({ title: "Paged three", board: pagedBoard.board }),
-    ]);
-    pagedBoard.adoptTopics.send({ agentName: "Sol", count: 2 });
-  });
-  const assert_paged_board_holds_two = assert(() =>
-    pagedBoard.topicCount === 2
-  );
-  const action_paged_board_adopts_the_rest = action(() => {
-    pagedBoard.adoptTopics.send({ agentName: "Sol", from: 2, count: 2 });
-  });
-  const assert_paged_board_holds_three = assert(() =>
-    pagedBoard.topicCount === 3
-  );
 
   // --- setTitle: the rename verb, direct interface only ---
 
@@ -1398,7 +1384,7 @@ export default pattern(() => {
       { action: action_drop_one_from_ui },
       { assertion: assert_ui_dropped_only_that_one },
       { assertion: assert_boardless_topic_has_no_backlinks },
-      { action: action_keyed_board_takes_three },
+      { action: action_keyed_board_files_three },
       { action: action_keyed_mentions },
       { assertion: assert_keyed_topic_lists_its_mentioners },
       { assertion: assert_keyed_graph_has_a_row_per_topic },
@@ -1406,13 +1392,10 @@ export default pattern(() => {
       { assertion: assert_keyed_unmention_drops_one_backlink },
       { render: strangerTopic[UI] },
       { assertion: assert_unlisted_topic_has_no_backlinks },
-      { action: action_order_board_takes_three },
+      { action: action_order_board_files_three },
+      { action: action_order_creation_times },
       { action: action_order_mentions },
       { assertion: assert_backlinks_follow_filing_order },
-      { action: action_paged_board_adopts_two },
-      { assertion: assert_paged_board_holds_two },
-      { action: action_paged_board_adopts_the_rest },
-      { assertion: assert_paged_board_holds_three },
       { action: action_rename_direct_topic },
       { assertion: assert_renamed_with_attribution },
       { render: directTopic[UI] },

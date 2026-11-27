@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # The Topics content-safety drill: deploy a board, seed it, snapshot the
 # store, export, clobber a topic the worst way a bad migration would, restore
-# it, prove the restore byte-exact, recreate the export on a fresh board the
-# way a board migrates to a new board pattern, and check how a topic's `board`
-# input is bound — the loop
+# it, prove the restore byte-exact, and recreate the export on a fresh board
+# the way a board migrates to a new board pattern — the loop
 # docs/history/plans/topics-migration-rehearsal.md's "restore drill" section makes
 # part of every clean rehearsal pass, runnable as one command.
 #
@@ -354,34 +353,6 @@ else
   cat "$WORK/recreate-resume.log" >&2
 fi
 
-step "bind a topic's board input"
-# `topics-bind-board.ts` leaves alone a topic whose `board` already reaches
-# the named board's collection, and refuses, leaving it as it is, a topic
-# whose `board` reaches another board's. The drill's topic was filed on the
-# first board, not on the fresh one.
-if deno run --allow-run --allow-read --allow-env \
-  "$REPO_ROOT/scripts/topics-bind-board.ts" --board "$BOARD" \
-  --space "$SPACE" --api-url "$API_URL" --piece "$TOPIC" \
-  > "$WORK/bind-own.log" 2>&1 &&
-  grep -q "board link present" "$WORK/bind-own.log"; then
-  ok "bind-board leaves a topic bound to its own board alone"
-else
-  bad "bind-board did not find the topic bound to its own board"
-  cat "$WORK/bind-own.log" >&2
-fi
-if deno run --allow-run --allow-read --allow-env \
-  "$REPO_ROOT/scripts/topics-bind-board.ts" --board "$FRESH" \
-  --space "$SPACE" --api-url "$API_URL" --piece "$TOPIC" \
-  > "$WORK/bind-other.log" 2>&1; then
-  bad "bind-board accepted a topic bound to another board"
-  cat "$WORK/bind-other.log" >&2
-elif grep -q "left as it is" "$WORK/bind-other.log"; then
-  ok "bind-board refuses a topic bound to another board"
-else
-  bad "bind-board failed for a reason other than the other board"
-  cat "$WORK/bind-other.log" >&2
-fi
-
 step "the namespace verbs' own results"
 # `backfillNames` returns the names it wrote. Asserted here rather than in a
 # pattern test for the reason the create's `name` is: a verb's result reaches
@@ -391,10 +362,10 @@ step "the namespace verbs' own results"
 # The board's one topic was named by its create, so a backfill over it as it
 # stands writes nothing — and an implementation that never wrote anything would
 # pass that just as well. So the namespace is emptied first, which is the state
-# a board filed before it numbered anything is actually in: members in the
-# list, no names for them. Now the run has something to write, and `assigned`
-# has to carry it. Last step in the drill, since it leaves the namespace
-# rebuilt rather than as the restore left it.
+# the step repairs: members in the board's collection, no names for them. Now
+# the run has something to write, and `assigned` has to carry it. Last step in
+# the drill, since it leaves the namespace rebuilt rather than as the restore
+# left it.
 printf '{}' | "${CF[@]}" cell set -q --piece "$BOARD" --space "$SPACE" \
   --api-url "$API_URL" names > /dev/null 2>&1
 CLEARED="$(

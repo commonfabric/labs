@@ -825,7 +825,7 @@ export interface TopicOutput extends TopicPiece {
    * Nothing needs that today. A board names a member by writing the piece into
    * its namespace, and every path that does so builds the piece inside the
    * verb (`addTopic`, the browser composer) or resolves it out of the board's
-   * own list (`backfillNames`); none of them takes a Topic as an argument, so
+   * collection (`backfillNames`); none of them takes a Topic as an argument, so
    * none reads one through a state schema. Cell-wrapping these two would buy
    * the capability at the cost of a `scope changed` break on every deployed
    * Topic, so it waits for a verb that needs it.

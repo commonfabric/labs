@@ -94,17 +94,12 @@ export interface TopicDemand extends TopicSummary {
   mentions: unknown[] | Default<[]>;
 
   /** The board's number for the topic, as the topic publishes it. Absent for
-   * a topic that stores none, which is one filed before the board numbered
-   * anything, until `backfillNames` has reached it. */
+   * a topic that stores none, such as one filed before its board numbered
+   * anything. */
   shortName?: string;
 }
 
 export interface TopicsInput {
-  /** Topics a board held as a list, before its topics were a collection.
-   * Nothing appends here. `backfillNames` adds each listed topic to the
-   * collection, which is the only place the board reads its topics from. */
-  topics?: Writable<TopicDemand[] | Default<[]>>;
-
   /** The board's member namespace: each name to the topic it names, held as an
    * unread reference. `addTopic` writes one key per create and `backfillNames`
    * one key per member it names; nothing rewrites the map whole. Reads as empty
@@ -161,46 +156,8 @@ export interface BackfillNamesEvent {
 }
 
 /**
- * How many listed topics one `adoptTopics` call adopts at most.
- *
- * Every adopted topic is read and written in the call's one transaction: its
- * mirrored fields, and up to seven database statements. On a copy of the
- * team's board, adopting its 3,281 topics in one transaction kept a serving
- * worker busy past the 60 seconds its host waits for a message, so the host
- * ended the worker and ran the call again in the next one, without end. A
- * batch of this size is a small fraction of that.
- */
-export const ADOPT_BATCH = 200;
-
-/** What `adoptTopics` takes: the agent running it, and which listed topics. */
-export interface AdoptTopicsEvent {
-  /** The agent running the step, checked as `addTopic` checks it. */
-  agentName: string;
-
-  /** The position in the board's list to adopt from: 0 when absent, and the
-   * `next` of the previous call after that. */
-  from?: number;
-
-  /** How many listed topics to adopt, from 1 to `ADOPT_BATCH`; `ADOPT_BATCH`
-   * when absent. */
-  count?: number;
-}
-
-/** What `adoptTopics` returns. */
-export interface AdoptTopicsResult {
-  /** How many listed topics the call added to the collection, counting those
-   * the collection already held, whose rows it refreshed. */
-  adopted: number;
-
-  /** The position to pass as `from` to adopt the topics after these. Absent
-   * once the call has reached the end of the list, which is the finished
-   * state. */
-  next?: number;
-}
-
-/**
  * What `backfillNames` returns: three lists of numbers in filing order, which
- * together cover every listed topic the run could number.
+ * together cover every topic of the collection the run could number.
  *
  * The split follows where each write lands, and three lists is what that
  * takes. The namespace is the board's own document, so `assigned` is what this
@@ -217,8 +174,8 @@ export interface AdoptTopicsResult {
  * reach it.
  */
 export interface BackfillNamesResult {
-  /** The numbers this run wrote into the namespace; empty when every listed
-   * topic was already in it, which is what a second run writes. */
+  /** The numbers this run wrote into the namespace; empty when every topic was
+   * already in it, which is what a second run writes. */
   assigned: string[];
 
   /** The numbers of the topics that already report them. The run sent these
@@ -608,15 +565,11 @@ export interface TopicsOutput {
    * reference plus the write-time facts the pattern resolved. */
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
 
-  /** Add every topic the board held as a list to its collection, which is
-   * where the board reads its topics from. Idempotent: a topic the collection
-   * holds already has its rows refreshed. */
-  adoptTopics: Stream<AdoptTopicsEvent, AdoptTopicsResult>;
-
-  /** Bring a board that held its topics as a list up to date: add every
-   * listed topic to the collection, as `adoptTopics` does, number every one
-   * the namespace does not hold, in filing order, and ask every topic that reports no number to store
-   * the one the namespace holds for it. Idempotent: a run over topics that all report their numbers writes
+  /** Number every topic the collection holds that the namespace does not, in
+   * filing order, and ask every topic that reports no number to store the one
+   * the namespace holds for it. Every way of filing a topic numbers it, so a
+   * run finds work only where the namespace lacks a topic the collection
+   * holds. Idempotent: a run over topics that all report their numbers writes
    * nothing and sends nothing. What one run cannot confirm is the asking, so
    * the result separates the topics it found numbered from the ones it asked,
    * and running it again completes whichever asking did not land. */
@@ -676,30 +629,6 @@ export const submitProfileTopic = handler<void, {
   newTitle.set("");
 });
 
-/**
- * Adds the topics of `listed` from position `from`, at most `count` of them,
- * to `board`. Returns how many it added and, unless it reached the end of the
- * list, the position after the last one. Adding one the collection holds
- * already refreshes its rows. An entry with nothing behind it is passed over.
- */
-function adoptListed(
-  listed: { get(): readonly unknown[] },
-  board: TopicBoard,
-  from = 0,
-  count = Infinity,
-): AdoptTopicsResult {
-  const entries = listed.get();
-  const end = Math.min(entries.length, from + count);
-  let adopted = 0;
-  for (let at = from; at < end; at++) {
-    const topic = entries[at];
-    if (!topic) continue;
-    board.add("topics", topic);
-    adopted++;
-  }
-  return end < entries.length ? { adopted, next: end } : { adopted };
-}
-
 /** What the handlers that create a topic are bound to. */
 interface BoardCreateState {
   /** The board's collection, which the new topic is added to and handed. */
@@ -711,25 +640,6 @@ interface BoardCreateState {
   /** The namespace, written one key per create. */
   // deno-lint-ignore ban-types
   names: Writable<Default<NamesMap, {}>>;
-}
-
-/** What the handlers that adopt a listed board's topics are bound to. */
-interface BoardAdoptState {
-  /** The board's collection, which each listed topic is added to. */
-  board: TopicBoard;
-
-  /** The topics the board held as a list. */
-  topics: Writable<TopicDemand[] | Default<[]>>;
-}
-
-/** What `adoptTopics` is bound to. */
-interface AdoptTopicsState {
-  /** The board's collection, which each listed topic is added to. */
-  board: TopicBoard;
-
-  /** The topics the board held as a list, each as a reference: a call reads
-   * the list to find its batch, and reading it reads no topic. */
-  topics: ReadonlyCell<ReadonlyCell<TopicDemand>[] | Default<[]>>;
 }
 
 /** Files a topic: the number, the create and the add, in one transaction. */
@@ -781,72 +691,31 @@ const addTopicHandler = handler<
   return { topic: piece, name };
 });
 
-/** Adds every topic the board held as a list to its collection. */
-const adoptTopicsHandler = handler<
-  AdoptTopicsEvent,
-  AdoptTopicsState,
-  AdoptTopicsResult
->(
-  ({ agentName, from = 0, count = ADOPT_BATCH }, { board, topics }) => {
-    if (!topicAuthorFromAgent(agentName)) {
-      rejectMutation("adoptTopics", "agentName must be non-blank");
-    }
-    if (!Number.isInteger(from) || from < 0) {
-      rejectMutation("adoptTopics", "from must be a non-negative integer");
-    }
-    if (!Number.isInteger(count) || count < 1 || count > ADOPT_BATCH) {
-      rejectMutation(
-        "adoptTopics",
-        `count must be an integer from 1 to ${ADOPT_BATCH}`,
-      );
-    }
-    return adoptListed(topics, board, from, count);
-  },
-);
-
-/** Adopts the listed topics, then numbers the ones the namespace lacks. */
+/** Numbers the topics of the collection that the namespace lacks. */
 const backfillNamesHandler = handler<
   BackfillNamesEvent,
-  BoardAdoptState & Pick<BoardCreateState, "names"> & {
+  Pick<BoardCreateState, "names"> & {
     /** The topics the board's collection holds, in filing order. */
     members: Writable<TopicDemand[] | Default<[]>>;
   },
   BackfillNamesResult
 >(
-  ({ agentName }, { board, topics, names, members }) => {
+  ({ agentName }, { names, members }) => {
     if (!topicAuthorFromAgent(agentName)) {
       rejectMutation("backfillNames", "agentName must be non-blank");
     }
-    adoptListed(topics, board);
-    // The listed topics first, which this run has only just added and the
-    // collection does not report yet, then the topics the collection holds,
-    // which a board that never kept a list has nowhere else. A topic in both
-    // is named by the first pass and found named by the second.
-    const listed = recordNames(topics, names);
-    const held = recordNames(members, names);
-    const union = (a: string[], b: string[]) => [...new Set([...a, ...b])];
-    const assigned = union(listed.assigned, held.assigned);
-    return {
-      assigned,
-      // A name the first pass assigned is not one the board found in place.
-      named: union(listed.named, held.named).filter((name) =>
-        !assigned.includes(name)
-      ),
-      pending: union(listed.pending, held.pending),
-    };
+    return recordNames(members, names);
   },
 );
 
 /**
  * The count a write to the board also advances, and who may advance it. A
  * topic holds the board's handle so that it can ask which topics mention it,
- * and anything the board's handle is linked into holds it too; these four
- * are the board's own ways of adding a topic.
+ * and anything the board's handle is linked into holds it too; these two are
+ * the board's own ways of adding a topic.
  */
 type BoardGuard = WritePolicyAnyOf<number, [
   WriteAuthorizedBy<unknown, typeof addTopicHandler>,
-  WriteAuthorizedBy<unknown, typeof adoptTopicsHandler>,
-  WriteAuthorizedBy<unknown, typeof backfillNamesHandler>,
   WriteAuthorizedBy<unknown, typeof submitProfileTopic>,
 ]>;
 
@@ -857,7 +726,7 @@ const showMoreCards = handler<void, { shown: Writable<number> }>(
   },
 );
 
-export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
+export default pattern<TopicsInput, TopicsOutput>(({ names }) => {
   const newTitle = new Writable.perSession("");
   // How many cards this session is looking at. A board is read most recent
   // first, so a session that wants older topics asks for them a page at a
@@ -955,13 +824,7 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
   const hasProfile = profileName.trim().length > 0;
 
   const addTopic = addTopicHandler({ board, mentionable, names });
-  const adopt = adoptTopicsHandler({ board, topics });
-  const backfill = backfillNamesHandler({
-    board,
-    topics,
-    names,
-    members: topicList,
-  });
+  const backfill = backfillNamesHandler({ names, members: topicList });
 
   const submitTopic = submitProfileTopic({
     board,
@@ -1086,7 +949,6 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     index: topicList,
     newTitle,
     addTopic,
-    adoptTopics: adopt,
     backfillNames: backfill,
     submitTopic,
   };

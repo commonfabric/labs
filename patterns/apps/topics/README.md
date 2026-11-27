@@ -116,10 +116,11 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   nothing of its board to hold its number, which is what keeps a topic's reads
   out of its siblings.
 
-  `backfillNames` is the step for a board that held topics before it numbered
-  anything: it numbers every topic the namespace does not hold, in filing order,
-  and asks every topic reporting no number to store the one the namespace holds
-  for it, through that topic's own `recordName`. Asking is the most a board can
+  `backfillNames` numbers every topic the collection holds that the namespace
+  does not, in filing order, and asks every topic reporting no number to store
+  the one the namespace holds for it, through that topic's own `recordName`.
+  Every way of filing a topic numbers it, so the step finds work only where the
+  namespace lacks a topic the collection holds. Asking is the most a board can
   do — a board writes a member's result and never a member's argument — so the
   step reports what it allocated, what it found already stored, and what it
   asked, and running it again completes whichever asking did not land. An empty
@@ -155,8 +156,8 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   and the board publishes the handle as `board` so that a topic can be linked to
   it. Holding the handle does not let a topic, or anything else it is linked
   into, write the board: the collection names a guard that only the board's own
-  ways of adding a topic may write, which are `addTopic`, `adoptTopics`,
-  `backfillNames` and the composer's submit.
+  ways of adding a topic may write, which are `addTopic` and the composer's
+  submit.
 
   What the collection mirrors is state a verb stores, so it follows a topic that
   is not running. That is why a topic publishes `filedBy`, the author as the
@@ -188,31 +189,6 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   and caption of every row the card query returns in one computation, and the
   card keeps only the two conditionals it cannot precompute: the badge and the
   snippet line are present or absent.
-- **A board that held its topics as a list adopts them.** The `topics` input is
-  read by two verbs and by nothing else. `adoptTopics` adds listed topics to the
-  collection, at most `ADOPT_BATCH` (200) a call: it takes the position to start
-  from, `from`, and returns `next`, the position to call it with again, until a
-  call returns none. `backfillNames` adds every listed topic before it numbers
-  them, and numbers the topics the collection holds as well, which is every
-  topic of a board that never kept a list. Until one of them has run, such a
-  board shows no topics.
-
-  The batch bounds one transaction. Each adopted topic costs a read of its
-  mirrored fields and up to seven database statements in the call's transaction,
-  and on a copy of the team's board, adopting all 3,281 topics in one call kept
-  a serving worker busy past the 60 seconds its host waits, so the host ended
-  the worker and ran the call again, without end. `backfillNames` adopts the
-  whole list in its one transaction, so a large board adopts through
-  `adoptTopics` first.
-
-  A topic filed before the board held a collection also has nothing bound to its
-  `board` input, so it shows no backlinks. `scripts/topics-bind-board.ts` links
-  each such topic's `board` to the board's, once the topic runs the pattern that
-  declares it, and refuses a topic whose `board` already reaches another board's
-  collection. The restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks
-  `board` on a topic that declares it and leaves it out on one that predates it,
-  and retires `boardCrossrefs` and `boardCrossrefIndex` on a topic that no
-  longer declares them.
 - **An existing board moves to this pattern by being recreated.** Its space is
   exported from a snapshot with `scripts/topics-export.ts`, a board is deployed
   fresh from `main.tsx`, and `scripts/topics-recreate.ts` files every exported
@@ -223,7 +199,15 @@ lineage: Linear CT-1878, which this pattern exists to absorb).
   run densely from 1, so each topic keeps its number. Each recreated topic is a
   new piece, wired to the new board by its create, so none of the old topics'
   wiring has to be carried across, and the board's collection holds every topic
-  from its create onward. The old board and topics are left as they were.
+  from its create onward. The old board and topics are left as they were. The
+  restore tooling (`scripts/topics-rehearsal-lib.ts`) relinks `board` on a topic
+  that declares it and leaves it out on one that predates it, and retires
+  `boardCrossrefs` and `boardCrossrefIndex` on a topic that no longer declares
+  them.
+
+  The board reads its topics from its collection and from nothing else, so a
+  board updated in place to this pattern shows none of the topics it held as a
+  list.
 
   Moving the topics in place does not work for all of them: a topic that
   `addTopic` linked straight to the old board's computed `crossrefIndex` refuses
@@ -316,12 +300,12 @@ cf piece call --cell <board> addTopic \
 cf cell get --cell <board> names
 # -> { "1": {} }
 # Idempotent. Re-run until `pending` comes back empty, which is the finished
-# state: every listed topic publishes the number the namespace holds for it.
+# state: every topic publishes the number the namespace holds for it.
 cf piece call --cell <board> backfillNames '{"agentName":"Sol"}'
-# -> { "result": { "assigned": [], "named": ["1","2"], "pending": [] } }
+# -> { "result": { "assigned": [], "named": ["1"], "pending": [] } }
 cf cell get --cell <topic> shortName --input
 # -> "1"
-cf cell get --cell <board> topics --input \
+cf cell get --cell <board> topics --step \
   --select title,createdAt,lastActivityAt,commentCount
 cf piece call --cell <topic> addComment \
   '{"body":"point-in-time progress update","agentName":"Sol"}'
@@ -339,8 +323,8 @@ cf piece call --cell <topic> unmention '{"topic":"/of:fid1:other-topic"}'
 # the namespace holds for it is the one that answers.
 cf piece call --cell <topic> recordName '{"name":"1"}'
 # -> { "result": { "name": "1", "wrote": false } }   already stored
-# `wrote: true` comes back only from a topic holding no number yet: one filed
-# before the board numbered anything, which is what `backfillNames` is for.
+# `wrote: true` comes back only from a topic holding no number yet, such as one
+# filed before its board numbered anything.
 cf piece call --cell <topic> removeLink \
   '{"url":"https://github.com/org/repo/pull/123","agentName":"Sol"}'
 ```
@@ -400,16 +384,16 @@ array's survivors no longer say which positions they came from, so `@` and
 `--filter` do not combine: read the index, which the row schema keeps narrow
 enough to read whole, and pick the row you want.
 
-The board input is declared through `TopicDemand`: the card/index fields and
-reference-graph inputs, with no Topic verbs or full thread. Targeted headless
-discovery beyond the index should combine an exact/range `--filter` with a
-concise `--select`, then address one Topic directly for its body, comments,
-links, and verbs:
+The board's `topics` output is declared through `TopicDemand`: the card/index
+fields and what each topic points at, with no Topic verbs or full thread.
+Targeted headless discovery beyond the index should combine an exact/range
+`--filter` with a concise `--select`, then address one Topic directly for its
+body, comments, links, and verbs:
 
 ```bash
 cf cell get --cell <board> index --step \
   --select @,title,lastActivityAt,commentCount
-cf cell get --cell <board> topics --input \
+cf cell get --cell <board> topics --step \
   --filter '.lastActivityAt >= <epoch-milliseconds>' \
   --select title,lastActivityAt,commentCount,createdBy.kind,createdBy.name
 cf cell get --cell <topic> comments --input \
@@ -424,9 +408,8 @@ predicate subset supports paths, JSON literals, comparisons, boolean operators,
 and parentheses; it does not provide substring search, regexes, sorting, or an
 arbitrary jq pipeline. These transforms execute as a session-scoped computed
 pattern expression, so their CFC metadata behavior matches authored
-filter/map/lift expressions. The durable `topics --input` list remains evidence
-when the computed `index --step` read cannot materialize, but only a successful
-index row supplies a Topic's address.
+filter/map/lift expressions. `topics` and `index` are both read out of the
+board's collection; take a Topic's address from an `index` row.
 
 Every agent-authored content mutation carries `agentName`; there is no preceding
 “set current name” call. Fabric's operation history retains the authenticated

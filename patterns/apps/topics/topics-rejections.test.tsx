@@ -2,32 +2,24 @@
  * Rejection-path tests for the Topics mutating verbs (verb contract rule 4,
  * docs/plans/pattern-verb-contract.md: rejection is a value, never a silent
  * no-op). Every action here makes a verb throw, so the runtime errors are
- * required (`expectRuntimeErrors: 42` — exact count, so a rejection quietly
+ * required (`expectRuntimeErrors: 37` — exact count, so a rejection quietly
  * reverting to a silent return fails the suite); each assertion then verifies
  * the write did NOT land. Happy and legacy paths live in topics.test.tsx — including the UI
  * composer wrappers, whose silent guards are correct behavior (an empty draft
  * is a non-event in a composer, not a headless mutation).
  */
-import {
-  action,
-  assert,
-  type Default,
-  pattern,
-  TESTS,
-  Writable,
-} from "commonfabric";
-import Topics, { ADOPT_BATCH, type TopicDemand } from "./main.tsx";
+import { action, assert, pattern, TESTS, Writable } from "commonfabric";
+import Topics from "./main.tsx";
 import Topic, { type TopicComment, type TopicLink } from "./topic.tsx";
 
 export default pattern(() => {
   const board = Topics({});
-  // Its list and namespace are held here so an UNNAMED topic can be filed
-  // straight into the list, past `addTopic`. Without one there is nothing a
+  // Its namespace is held here so that it can be emptied under a topic the
+  // board holds. Without a topic the namespace lacks there is nothing a
   // wrongly-running backfill could name, and the assertion that the namespace
   // stayed empty would hold however the guard behaved.
-  const legacyTopics = new Writable<TopicDemand[] | Default<[]>>([]);
-  const legacyNames = new Writable<Record<string, unknown>>({});
-  const legacyBoard = Topics({ topics: legacyTopics, names: legacyNames });
+  const numberingNames = new Writable<Record<string, unknown>>({});
+  const numberingBoard = Topics({ names: numberingNames });
 
   // One valid signed topic on the board, so `addTopic`'s own rejections have a
   // board to leave unchanged.
@@ -58,47 +50,27 @@ export default pattern(() => {
   const action_add_unsigned_topic = action(() => {
     board.addTopic.send({ title: "Unsigned", agentName: "   " });
   });
-  const action_add_blank_legacy_agent = action(() => {
-    legacyBoard.addTopic.send({ title: "must not land", agentName: " " });
+  const action_add_unsigned_on_the_numbering_board = action(() => {
+    numberingBoard.addTopic.send({ title: "must not land", agentName: " " });
   });
 
-  // One unnumbered topic, filed straight into the list past `addTopic` — the
-  // state a board from before the namespace holds its topics in. Without it
-  // there is nothing a wrongly-running backfill could number, and the
-  // assertion that the namespace stayed empty would hold however the guard
-  // behaved.
-  const action_file_an_unnamed_topic = action(() => {
-    legacyTopics.push(Topic({ title: "Unnamed", createdAt: 1 }));
+  // One topic the board holds and its namespace does not: filed through
+  // `addTopic`, which numbers it, and then the namespace emptied under it,
+  // which is the state `backfillNames` repairs. Without it there is nothing a
+  // wrongly-running backfill could number, and the assertion that the
+  // namespace stayed empty would hold however the guard behaved.
+  const action_file_a_topic = action(() => {
+    numberingBoard.addTopic.send({ title: "Filed", agentName: "Sol" });
+  });
+  const action_empty_the_namespace = action(() => {
+    numberingNames.set({});
   });
 
   // backfillNames: blank agentName. It writes the namespace rather than a
   // topic's content, and it is signed on the same terms — a run nobody signed
   // is a mutation nobody is accountable for.
   const action_backfill_unsigned = action(() => {
-    legacyBoard.backfillNames.send({ agentName: "   " });
-  });
-
-  // adoptTopics: blank agentName, and a batch it does not take. A call adopts
-  // at most `ADOPT_BATCH` topics from a position in the list, so a count
-  // outside 1 to `ADOPT_BATCH` and a position that is not a non-negative
-  // integer are refused rather than read as some other batch.
-  const action_adopt_unsigned = action(() => {
-    legacyBoard.adoptTopics.send({ agentName: "   " });
-  });
-  const action_adopt_no_topics = action(() => {
-    legacyBoard.adoptTopics.send({ agentName: "Sol", count: 0 });
-  });
-  const action_adopt_past_the_batch = action(() => {
-    legacyBoard.adoptTopics.send({
-      agentName: "Sol",
-      count: ADOPT_BATCH + 1,
-    });
-  });
-  const action_adopt_from_before_the_list = action(() => {
-    legacyBoard.adoptTopics.send({ agentName: "Sol", from: -1 });
-  });
-  const action_adopt_from_between_positions = action(() => {
-    legacyBoard.adoptTopics.send({ agentName: "Sol", from: 0.5 });
+    numberingBoard.backfillNames.send({ agentName: "   " });
   });
 
   // One topic that already stores a number, for `recordName`'s permanence
@@ -436,19 +408,20 @@ export default pattern(() => {
     seedTopic.body === ""
   );
 
-  const assert_legacy_board_empty = assert(() => legacyBoard.topicCount === 0);
+  const assert_numbering_board_empty = assert(() =>
+    numberingBoard.topicCount === 0
+  );
 
-  // The refused backfill wrote nothing, which is the half a throw alone does
-  // not prove: the verb rejects before it reaches the collection or the
-  // namespace. The board's list holds one unnumbered topic, so a backfill
-  // that ran would add it to the collection, write `1` into the namespace,
-  // and the table would name it. Removing the verb's guard reds every clause
-  // here: the count moves, the namespace gains the key the run wrote, and the
-  // table follows the namespace.
-  const assert_unnamed_topic_went_unnamed = assert(() =>
-    legacyBoard.topicCount === 0 &&
-    Object.keys(legacyNames.get()).length === 0 &&
-    (legacyBoard.namesTable ?? []).length === 0
+  // The refused backfill wrote no number, which is the half a throw alone does
+  // not prove: the verb rejects before it reaches the namespace. The board
+  // holds one topic its emptied namespace lacks, so a backfill that ran would
+  // write `1` into the namespace and the table would name it. Removing the
+  // verb's guard reds the last two clauses: the namespace gains the key the
+  // run wrote, and the table follows the namespace.
+  const assert_emptied_namespace_stayed_empty = assert(() =>
+    numberingBoard.topicCount === 1 &&
+    Object.keys(numberingNames.get()).length === 0 &&
+    (numberingBoard.namesTable ?? []).length === 0
   );
 
   // Each refused `recordName` left the stored number as it was: the topic that
@@ -463,11 +436,11 @@ export default pattern(() => {
 
   return {
     // Every rejection below MUST surface as a thrown handler error —
-    // forty-two throwing actions, forty-two runtime errors. The exact count
-    // means a
-    // single verb quietly reverting to a silent early-return fails this suite;
-    // the no-write assertions then prove the throw also blocked the write.
-    expectRuntimeErrors: 42,
+    // thirty-seven throwing actions, thirty-seven runtime errors. The exact
+    // count means a single verb quietly reverting to a silent early-return
+    // fails this suite; the no-write assertions then prove the throw also
+    // blocked the write.
+    expectRuntimeErrors: 37,
     [TESTS]: [
       { action: action_seed_topic },
       { assertion: assert_seeded },
@@ -475,21 +448,12 @@ export default pattern(() => {
       { assertion: assert_board_unchanged },
       { action: action_add_unsigned_topic },
       { assertion: assert_board_unchanged },
-      { action: action_add_blank_legacy_agent },
-      { assertion: assert_legacy_board_empty },
-      { action: action_file_an_unnamed_topic },
+      { action: action_add_unsigned_on_the_numbering_board },
+      { assertion: assert_numbering_board_empty },
+      { action: action_file_a_topic },
+      { action: action_empty_the_namespace },
       { action: action_backfill_unsigned },
-      { assertion: assert_unnamed_topic_went_unnamed },
-      { action: action_adopt_unsigned },
-      { assertion: assert_legacy_board_empty },
-      { action: action_adopt_no_topics },
-      { assertion: assert_legacy_board_empty },
-      { action: action_adopt_past_the_batch },
-      { assertion: assert_legacy_board_empty },
-      { action: action_adopt_from_before_the_list },
-      { assertion: assert_legacy_board_empty },
-      { action: action_adopt_from_between_positions },
-      { assertion: assert_legacy_board_empty },
+      { assertion: assert_emptied_namespace_stayed_empty },
       { action: action_record_non_name },
       { action: action_record_second_number },
       { assertion: assert_numbers_unwritten },
