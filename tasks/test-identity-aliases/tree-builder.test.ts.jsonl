@@ -1,0 +1,1 @@
+{"date":"2026-11-26","from":{"k":"unit","s":"fuse","n":"CellBridge.sendToHandler resolves mounted callable paths under pieces and entities"},"to":{"k":"unit","s":"fuse","n":"CellBridge.resolveHandlerTarget resolves mounted callable paths under pieces and entities"}}
