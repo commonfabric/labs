@@ -10,6 +10,7 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
 
 import { indexedCollectionHostFixture } from "./indexed-collection-host-fixture.ts";
@@ -26,19 +27,18 @@ async function runReleaseHelper(
     "./indexed-collection-host-release-helper.ts",
     import.meta.url,
   );
-  // Spawned by name so the launch matches the task's `--allow-run=deno`
-  // grant, which resolves the name through PATH the same way.
-  const output = await new Deno.Command("deno", {
-    args: [
+  const output = await runDenoCommandWithTemporaryLock({
+    root: fromFileUrl(new URL("../../../", import.meta.url)),
+    args: (lock) => [
       "run",
+      "--frozen",
+      `--lock=${lock}`,
       "-A",
       "--v8-flags=--expose-gc",
       fromFileUrl(helper),
       scenario,
     ],
-    stdout: "piped",
-    stderr: "piped",
-  }).output();
+  });
   const stdout = new TextDecoder().decode(output.stdout);
   const stderr = new TextDecoder().decode(output.stderr);
   expect(output.success, `helper failed:\n${stderr}\n${stdout}`).toBe(true);
