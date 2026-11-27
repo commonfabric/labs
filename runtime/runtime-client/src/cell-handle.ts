@@ -348,6 +348,10 @@ export class CellHandle<T = unknown> {
   #callbacks = new Map<
     number,
     {
+      /**
+       * Hands a value to the subscriber, logging what the subscriber or its
+       * cleanup throws rather than throwing it.
+       */
       onValue: (
         value: Readonly<T>,
         cfcLabel: CfcLabelView | undefined,
@@ -929,13 +933,7 @@ export class CellHandle<T = unknown> {
     // worker did not read with this value.
     this.#cfcLabelCurrent = false;
     for (const { onValue } of this.#callbacks.values()) {
-      try {
-        onValue(value as Readonly<T>, this.#cfcLabel, {
-          cfcLabelCurrent: false,
-        });
-      } catch (error) {
-        console.error("[CellHandle] Callback error:", error);
-      }
+      onValue(value as Readonly<T>, this.#cfcLabel, { cfcLabelCurrent: false });
     }
   }
 
