@@ -21,7 +21,7 @@ import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { describe, it } from "@commonfabric/test-support/test";
 
-import type { Cell } from "../src/cell.ts";
+import type { Cell, Stream } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
@@ -49,8 +49,11 @@ const noteSchema = {
         confidentiality: [{ type: CFC_ATOM_TYPE.User, subject: bob.did() }],
       },
     },
+    copied: { type: "number" },
   },
 } as const;
+
+type Result = { size: number; copied?: number; copy: Stream<unknown> };
 
 async function fixture() {
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
@@ -146,20 +149,28 @@ async function fixture() {
       files: [{
         name: "/main.tsx",
         contents: `
-import { computed, pattern } from "commonfabric";
-export default pattern<{ note: string }, { size: number }>(({ note }) => ({
+import { computed, handler, pattern, Stream, Writable } from "commonfabric";
+const copy = handler<unknown, { note: string; copied: Writable<number> }>(
+  (_event, { note, copied }) => { copied.set(note.length); },
+);
+export default pattern<
+  { note: string; copied: Writable<number> },
+  { size: number; copied: number; copy: Stream<unknown> }
+>(({ note, copied }) => ({
   size: computed(() => note.length),
+  copied,
+  copy: copy({ note, copied }),
 }));
 `,
       }],
     }, { space });
-    const argument = first.runtime.getCell<{ note: string }>(
+    const argument = first.runtime.getCell<{ note: string; copied: number }>(
       space,
       "derivation-ceiling-input",
       noteSchema,
     );
     const resultOf = (runtime: Runtime) =>
-      runtime.getCell<{ size: number }>(
+      runtime.getCell<Result>(
         space,
         "derivation-ceiling-result",
         pattern.resultSchema,
@@ -168,7 +179,7 @@ export default pattern<{ note: string }, { size: number }>(({ note }) => ({
     await argument.sync();
     await result.sync();
     const start = first.runtime.edit();
-    argument.withTx(start).set({ note: "for bob only" });
+    argument.withTx(start).set({ note: "for bob only", copied: 0 });
     first.runtime.run(start, pattern, argument, result);
     expect((await start.commit().settled).error).toBeUndefined();
     first.cancel = result.key("size").sink(() => {});
@@ -178,7 +189,7 @@ export default pattern<{ note: string }, { size: number }>(({ note }) => ({
       firstError,
       first: { runtime: first.runtime, result },
       async join(signer: typeof bob): Promise<
-        { runtime: Runtime; result: Cell<{ size: number }> }
+        { runtime: Runtime; result: Cell<Result> }
       > {
         const client = open(signer);
         const joined = resultOf(client.runtime);
@@ -213,6 +224,17 @@ describe("executor-derivation-read-ceiling", () => {
       // that demanded it still cannot read it.
       await f.first.result.sync();
       expect(() => f.first.result.key("size").get()).toThrow(/read ceiling/);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("still reads a handler the bounded session fired under that session's ceiling", async () => {
+    const f = await fixture();
+    try {
+      f.first.result.key("copy").send({});
+      await f.first.runtime.storageManager.synced();
+      expect(String(await f.firstError)).toMatch(/read ceiling/);
     } finally {
       await f.close();
     }

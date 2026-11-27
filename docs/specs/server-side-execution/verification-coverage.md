@@ -10696,8 +10696,12 @@ supply; OW29/OW32/OW34 closed):
     over the client runtime's fields stays true because the carried
     value is those fields. Shared query results retain the complete
     labels of their materialized rows and array shape; each cell read
-    enforces its runtime and carried session ceiling. The cell guard
-    is pinned in `runtime/runner/test/cfc-cell-read-ceiling.test.ts`,
+    enforces its runtime and carried session ceiling. A served
+    derivation's cell reads skip the carried ceiling, because the
+    demanding session only resolves the run's addresses and the result
+    may be shared; a handler's do not. That is pinned end to end in
+    `runtime/runner/test/executor-derivation-read-ceiling.test.ts`. The
+    cell guard is pinned in `runtime/runner/test/cfc-cell-read-ceiling.test.ts`,
     and shared result shape, aggregate and diagnostic protection in
     `runtime/runner/test/sqlite-shared-read-ceiling.test.ts`. One
     residual, fail-OPEN and therefore owed: the stamp reads the LIVE

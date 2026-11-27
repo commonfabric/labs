@@ -503,7 +503,7 @@ describe("cfc-cell-read-ceiling", () => {
     const tx = reader.edit();
     stampWaveRunContext(tx, {
       actionId: "test:cell-read-ceiling",
-      kind: "derivation",
+      kind: "event-handler",
       readCeiling: { maxConfidentiality: [A] },
     });
     try {
@@ -511,6 +511,38 @@ describe("cfc-cell-read-ceiling", () => {
       expect(() => cell.withTx(tx).sample()).toThrow(/read ceiling/);
     } finally {
       tx.abort();
+    }
+  });
+
+  it("reads a served derivation's cells without the demanding session's ceiling", async () => {
+    const link = await seed([B]);
+    const reader = readerFor([A, B]);
+    const cell = reader.getCellFromLink(link);
+    await cell.sync();
+    const tx = reader.edit();
+    stampWaveRunContext(tx, {
+      actionId: "test:cell-read-ceiling",
+      kind: "derivation",
+      readCeiling: { maxConfidentiality: [A] },
+    });
+    try {
+      expect(cell.withTx(tx).get()).toEqual({ secret: "withheld content" });
+    } finally {
+      tx.abort();
+    }
+    // The runtime's own ceiling still binds the derivation.
+    const boundedReader = readerFor([A]);
+    const bounded = boundedReader.getCellFromLink(link);
+    await bounded.sync();
+    const boundedTx = boundedReader.edit();
+    stampWaveRunContext(boundedTx, {
+      actionId: "test:cell-read-ceiling",
+      kind: "derivation",
+    });
+    try {
+      expect(() => bounded.withTx(boundedTx).get()).toThrow(/read ceiling/);
+    } finally {
+      boundedTx.abort();
     }
   });
 

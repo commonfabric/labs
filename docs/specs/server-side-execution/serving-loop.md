@@ -1810,12 +1810,12 @@ action's public write. Therefore, normatively:
   carried session ceiling with the runtime ceiling before returning content. Never
   for a bookkeeping run, which acts as no session; a run acting as a
   session that declared none reads under the serving runtime's option
-  alone. A handler acts as its event's session. A derivation acts as a
-  session only when the instance it runs is session-keyed: a space or
-  user instance is shared by every demander, and the session whose
-  demand scheduled it is resolution scaffolding, so that run carries no
-  session ceiling and each session's own read of the shared result meets
-  its ceiling instead. Verification-coverage.md OW64 is the coverage row.
+  alone. A served derivation's cell reads skip the carried ceiling: the
+  session whose demand scheduled the run only stands in to resolve its
+  addresses, and the result may be shared by every demander. The result
+  carries its inputs' labels, so each session's own read of it meets that
+  session's ceiling. A handler run's cell reads, and a derivation's
+  session-scoped query, still read under the carried ceiling. Verification-coverage.md OW64 is the coverage row.
 - **The run's CFC trust snapshot carries the run's ACTING principal** —
   the event's server-stamped actor, the demanded instance's principal,
   or the delegated carriage's actor — never the serving runtime's
