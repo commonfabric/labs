@@ -103,10 +103,16 @@ A reviewed set lives wherever connectors live. Today that is Loom's repository,
 and later it will be a repository of its own. A fabric starts with the default
 set, and a person can add sets from other GitHub organizations they trust. In
 spec terms, a set's reviewed entries are the descriptors of a registry snapshot,
-and adding a set is accepting that snapshot. Each person accepts sets once, in
-their profile, and the default set comes pre-accepted. Adding another set is a
-potentially dangerous action, and the UI treats it as one. A call is trusted
-when the person whose authority it runs under has accepted the set (question 3).
+and adding a set is accepting the organization that issues its snapshots, as a
+§4.8.3 verifier delegation. Each person does that once, in their profile, and
+every later snapshot from that organization is accepted while it is unexpired
+and unrevoked. The default set comes pre-accepted. Adding another set is a
+potentially dangerous action, and the UI treats it as one; the delegation's
+scope bounds what the added organization can vouch for. A call is trusted when
+the person whose authority it runs under has accepted the set. An entry that
+loosens a confidentiality rule acts only on that person's own data, or under
+an explicit multi-party policy, because only a rule's owner can release it
+(question 3).
 A person's own unreviewed draft stays in their own space, and it is never a set.
 
 ### Unreviewed tools are usable, under worst-case assumptions
@@ -122,15 +128,20 @@ patterns can call it:
   it. This is cfs#11124's "a query is a release", stated as the ordinary sink
   rule.
 - **Its outputs get what source entry assigns, and they are confined to the
-  person who imported the tool.** That person will release them with the
-  gesture-bound reclassification that any owner will use for their own data,
-  once it is built (question 4).
+  person the call runs as:** the credential's owner when the call carries one,
+  otherwise the person acting. Who imported the tool does not matter. That
+  person will release them with the gesture-bound reclassification that any
+  owner will use for their own data, once it is built (question 4).
 - **A call whose outcome is unknown is not retried.** An unreviewed tool cannot
-  be declared `idempotentCommit`, so it gets one attempt (question 6).
+  be declared `idempotentCommit`, so it gets one attempt, recorded before the
+  request is sent. The person sees that it may have happened, and a retry needs
+  a new intent (question 6).
 
 Review then adds trust, not permission. A reviewed `read` is treated as a read:
-it needs no per-call authority, and agents call it freely. A reviewed tool also
-gets its reviewed schema pins.
+it needs no per-call authority, and agents call it freely. A read that sends its
+arguments to a server still releases them there, so the reviewed descriptor
+fixes that destination, and the ordinary sink rule checks what is sent. A
+reviewed tool also gets its reviewed schema pins.
 
 ### Skill prose
 
@@ -185,8 +196,9 @@ adapters into those descriptors.
 correspondence table:**
 
 - `labels.audienceFrom` and `authorFrom`, which declassify. Provisionally, a
-  trusted connector's access claims may set the audience, once a person's DID is
-  bound to the principals the connector mints (question 8);
+  reader set taken from a field a trusted connector returns is an author-written
+  OR-clause, bounded by the owner's own release authority, once a person's DID
+  is bound to the principals the connector mints (question 8);
 - argument roles, `effects`, `commit` and `perIntent`;
 - `origin` and `oauthIssuer`, `egress`, `budget`, `retention`, `actsAs`,
   `effectsBy` and `preview`;
@@ -217,8 +229,9 @@ Each step is the long-term mechanism in a smaller form.
    first:
    - [handler-callable egress](handler-callable-egress.md), because today a
      handler cannot issue a request and await its result. Its "through the
-     commit boundary" route is the runtime outbox of question 1, which carries a
-     click's evidence to the effect and writes the result back to a cell. The
+     commit boundary" route is the runtime outbox of question 1. The release
+     decision and intent check run before the handler commits, the outbox send
+     re-verifies them, and the result is written back to a cell. The
      verb's caller reads the result from that cell, so `call_verb` must be
      notified when the cell settles rather than when the handler returns, and
      that is part of this step;
@@ -233,8 +246,9 @@ Each step is the long-term mechanism in a smaller form.
    reviewed adapters into a snapshot that the fabric accepts. Reviewed reads
    become free for agents.
 4. **`cf import skill`** builds the same wrapper for a skill. Its scripts run in
-   the sandbox, with each channel out of it either mediated like any other sink
-   or switched off (question 7). Skill scripts and stdio MCP servers then reach
+   the sandbox sealed: every channel out of it is switched off, and only its
+   stdout and stderr return, still tainted (question 7).
+   Skill scripts and stdio MCP servers then reach
    patterns.
 
 **Later:**
@@ -261,7 +275,7 @@ has an interim limit that lifts when the gap closes.
 | top/3597: `llmDialog` writes fail open, and `agent()`'s `call_verb` fails closed.                                                                                    | Agents reach wrapper verbs only through cf-harness.                                                                                                                                                                                                                                         |
 | top/3595: tools that take a URL do not check the context label. top/3594: DNS egress.                                                                                | Runs that hold unreviewed prose do not get `web_fetch`.                                                                                                                                                                                                                                     |
 | Sandbox: not every channel out is mediated. Egress is on by default, DNS is exempt (top/3594), sessions persist between calls, and there is a host execution target. | The bridge runs unreviewed scripts with network mode `none`, a fresh session and no fabric mount, never on the host.                                                                                                                                                                        |
-| The gesture-bound reclassification of a person's own `User(A)` data is unbuilt (top/3599).                                                                           | Unreviewed outputs stay with the person who imported the tool and cannot be shared.                                                                                                                                                                                                         |
+| The gesture-bound reclassification of a person's own `User(A)` data is unbuilt (top/3599).                                                                           | Unreviewed outputs stay with the person each call ran as and cannot be shared.                                                                                                                                                                                                              |
 | Nothing binds a person's DID to the `did:mailto:` principals a connector mints.                                                                                      | `audienceFrom` stays Loom host policy.                                                                                                                                                                                                                                                      |
 | A reactive `fetch` is deduplicated by `inputHash`, and authority does not cross the reactive hop (primitives 1.7). The outbox of question 1 is unbuilt.              | Wrapper handlers call tools only from events, never from reactive recompute.                                                                                                                                                                                                                |
 
@@ -279,15 +293,16 @@ has an interim limit that lifts when the gap closes.
 5. **Unreviewed tools.** They are usable under worst-case assumptions. Review
    unlocks trust, not use.
 
-Alex answered the open questions on 2026-11-25. The answers are provisional, and
-this plan builds on them without waiting. They are in the
+Alex answered the open questions on 2026-11-25, and a check against the spec
+revised several answers on 2026-11-26. The answers are provisional, and this
+plan builds on them without waiting. They are in the
 [primitives appendix](spec-surface-alignment.md#appendix-provisional-answers-for-berni-to-confirm),
 and the question numbers in this document refer to it.
 
 ## For Berni
 
-The primitives appendix is the whole package: eight provisional answers, each
-with what it asks of him. Five propose new rules (questions 1 to 4 and 8). Three
-are readings of rules the spec already has and need only a check (questions 5
-and 7, and the first half of question 6). Nothing in this plan waits for his
-answers.
+The package is the primitives appendix together with the questions in
+[reviewed skills](reviewed-skills.md#for-berni). The appendix's eight answers
+are readings of rules the spec already has, so they need only a check; question
+7 also names a gap in §18.2, and question 4 makes one policy choice. Nothing in
+this plan waits for his answers.
