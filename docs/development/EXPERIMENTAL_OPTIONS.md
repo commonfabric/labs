@@ -1171,25 +1171,29 @@ holds the measurements and the conditions for revisiting.
   the document and every writer there is the module the piece's
   `patternIdentity` names. Otherwise, with the flag off, with no recorded
   creator, or with no such clause, the join is stored as derived, and a
-  diagnostic says why. Whatever the flag, a malformed declaration, or one a
-  writer adds to a stored envelope that had none at its path, refuses the
-  write. Also whatever the flag, a lift whose result schema declares a
+  diagnostic says why. Whatever the flag, a malformed declaration refuses
+  the write, and so does one that covers a value written on a document the
+  transaction did not create, unless that document stored the same
+  declaration at that path. Also whatever the flag, a lift whose result schema declares a
   reclassification stores its result as a copy rather than as references into
   its inputs, whose labels a reference keeps.
 - **Current default and planned end state.** Off by default. The rule is a
   semantic gap under the CFC correspondence procedure, and its deciding site
   in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker naming
   [specs pull request 111](https://github.com/commonfabric/specs/pull/111)
-  (SC-57). The flag must stay off in every
+  (SC-58). The flag must stay off in every
   deployment until the store itself admits a `creator` record only when it
   names the commit's authenticated actor: commit preparation alone checks the
   record today, so a modified client could write a piece naming another
   principal as its creator and release that principal's data.
-- **Status on 2026-11-25.** Implemented and off. The substitution is covered
+- **Status on 2026-11-27.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
-  `runtime/runner/test/experimental-options.test.ts`. The end-to-end share in
-  `patterns/dev/test/share-space-declassify/` does not land yet: its README,
-  finding 7, names the two gaps.
+  `runtime/runner/test/experimental-options.test.ts`. With this flag and
+  `pieceCreatorRecord` on, the end-to-end share in
+  `patterns/dev/test/share-space-declassify/` lands and a reader of the share
+  space sees it (README, finding 7, and
+  `patterns/integration/share-space-reclassify-two-browsers.test.ts`). The
+  conditions for turning it on are in that fixture's `PROPOSAL.md`, Risks.
 - **Path to removal.** Once the ruling merges and the store admits the
   record, remove the env mapping, the runtime option and its authority and
   shell-source entries, the default, and the transaction dial; the

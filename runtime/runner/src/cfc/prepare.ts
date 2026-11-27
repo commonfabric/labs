@@ -2592,10 +2592,18 @@ const reclassifiedFlowConfidentiality = (
   // Only the write that creates the document declares a reclassification. A
   // document that already exists keeps the one it stored, at the same path
   // and under the same policy, whether or not it stored an envelope at all.
+  // A declaration covering no value this transaction writes releases nothing
+  // now, as when a link to another piece's result is stored beneath it.
   if (
     declared.length > 0 && !createdInTransaction(tx, { ...target, path: [] })
   ) {
-    for (const declaration of declared) {
+    for (
+      const declaration of declared.filter((declaration) =>
+        context.writtenPaths.some((path) =>
+          declaredPathCovers(declaration.path, path)
+        )
+      )
+    ) {
       const storedHere = storedDeclarations.some((stored) =>
         arraysEqual(stored.path, declaration.path) &&
         commitmentAwareEquals(

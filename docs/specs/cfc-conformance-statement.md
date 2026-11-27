@@ -450,7 +450,7 @@ dials.
   release widened to that clause or the declared policy
   (`reclassifiedFlowConfidentiality` in `runtime/runner/src/cfc/prepare.ts`).
   This implements [specs#111](https://github.com/commonfabric/specs/pull/111)
-  (SC-57), open and unruled, which the pinned §3.1.8 and §8.12.7 do not
+  (SC-58), open and unruled, which the pinned §3.1.8 and §8.12.7 do not
   permit. At the strict default the dial is off and nothing changes; with it
   on this is a nonconforming semantic gap that needs #111's ruling and a
   reconciled pin.

@@ -827,6 +827,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #cfcWriteFloorPinned = false;
   #cfcTriggerReadGatingPinned = false;
   #cfcPolicyEvaluationPinned = false;
+  #cfcPatternReclassificationPinned = false;
   #cfcLabelMetadataProtectionPinned = false;
   #cfcDeclaredMonotonicityPinned = false;
 
@@ -1382,7 +1383,18 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // The dial decides the label a reclassified value is stored with, and is
     // not part of PreparedDigestInput, so a change after prepare invalidates
     // the prepared decision. The Runtime's set at creation comes before
-    // prepare.
+    // prepare. That first set pins it: code reaching the transaction can turn
+    // a release off but never on, so the Runtime's experimental flag decides.
+    if (
+      this.#cfcPatternReclassificationPinned && enabled &&
+      this.#cfcState.patternReclassification !== true
+    ) {
+      throw new Error(
+        "CFC pattern reclassification cannot be enabled: transaction is " +
+          "pinned at disabled",
+      );
+    }
+    this.#cfcPatternReclassificationPinned = true;
     if (
       this.#cfcState.patternReclassification !== enabled &&
       this.#cfcState.prepare.status === "prepared"

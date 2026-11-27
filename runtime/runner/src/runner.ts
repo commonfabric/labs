@@ -14912,6 +14912,17 @@ export class Runner {
       })()
       : undefined;
 
+    // A child the result places takes the producing piece's creator, the
+    // receipt recording none; every start path below, deferred or not, reads
+    // this.
+    {
+      const producer = patternResultCell.getAsNormalizedFullLink();
+      this.#receiptProducers.set(receiptKey, {
+        id: producer.id,
+        space: producer.space,
+      });
+    }
+
     if (deferForNavigate && result === undefined) {
       // navigateTo results are commit-gated (startAfterSuccessfulCommit);
       // the receipt precondition rides the deferred start's own create.
@@ -14949,10 +14960,6 @@ export class Runner {
       })()
       : (() => {
         const producer = patternResultCell.getAsNormalizedFullLink();
-        this.#receiptProducers.set(receiptKey, {
-          id: producer.id,
-          space: producer.space,
-        });
         const run = this.#runWithStartOwnership(
           tx,
           resultPattern,
@@ -15402,7 +15409,7 @@ export class Runner {
       // reclassification gives it. Stored as references into the inputs, its
       // items would still be read under the inputs' labels.
       if (declaresReclassification(resultSchema)) {
-        result = snapshotQueryResult(result);
+        result = snapshotQueryResult(result, { keepInstances: true });
       }
       recordOutputSchemaPolicyInputs(
         tx,

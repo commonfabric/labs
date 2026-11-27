@@ -795,6 +795,17 @@ describe("cfc-reclassify", () => {
       expect(storedConfidentiality(client, derived)).toEqual(before);
     });
 
+    it("keeps the flag the runtime set when code reaching the transaction tries to turn it on", () => {
+      const client = connect(alice, { reclassification: false });
+      const tx = client.edit();
+
+      expect(() => tx.setCfcPatternReclassification(true)).toThrow(
+        "cannot be enabled",
+      );
+      expect(tx.getCfcState().patternReclassification).toBe(false);
+      tx.abort();
+    });
+
     it("refuses a malformed declaration with the flag off", async () => {
       const client = connect(alice, { reclassification: false });
       const source = await storeSecret(client, secretSchema(alice), "fix");

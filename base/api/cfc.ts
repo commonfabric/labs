@@ -1011,7 +1011,8 @@ export type PolicyOf<Rules> = {
  * value derives is kept. Written as the result type of a `lift` or
  * `computed`, whose output is then readable by whoever `Rules` admits. The
  * release takes effect only where the runtime's `cfcPatternReclassification`
- * experimental flag is on, and needs a piece with a recorded creator.
+ * and `pieceCreatorRecord` experimental flags are both on, since the first has
+ * no effect without the second, and needs a piece with a recorded creator.
  */
 export type Reclassified<T, Rules> = Cfc<T, {
   reclassify: readonly [PolicyOf<Rules>];

@@ -1424,6 +1424,7 @@ const externalObservationPosture = (
   state.policyEvaluationMode,
   state.labelMetadataProtectionMode,
   state.declaredMonotonicityMode,
+  state.patternReclassification,
 ];
 
 const moduleDelegationsEqual = (
