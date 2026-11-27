@@ -28,10 +28,16 @@ import {
 } from "../../tools/test-support/vnode-helpers.ts";
 import OmniboxFAB, { latestAssistantText, wishTool } from "./omnibox-fab.tsx";
 
-// The model fails the reply to the message the test sends.
+// The model fails the reply to the message the test sends, and the title the
+// chat asks for. The reply's entry answers only a request whose system prompt
+// carries the extra rule the test passes in.
 export const llmMocks = [
   {
-    when: { lastMessageContains: "hello" },
+    when: { systemContains: "Extra rule.", lastMessageContains: "hello" },
+    error: "The model is unavailable.",
+  },
+  {
+    when: { systemContains: "3-word title" },
     error: "The model is unavailable.",
   },
 ];
