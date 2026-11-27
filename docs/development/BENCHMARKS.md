@@ -1908,7 +1908,11 @@ off the board; the other times releasing one topic's root. Either leaves the
 board's record with walkers and makes it a suspect of the cycle sweep, which
 searches back from it for a root. The search follows one referrer at a time and
 stops at the first root, so it reads one topic's record rather than every
-topic's, and neither timing should grow with the topic count. Each sample makes
+topic's: the sweep visits two records at every size. The timings still rise
+with the topic count (on an Apple M5 Max, the refresh from 54 µs at 100 topics
+to 131 µs at 10,000, the release from 6 µs to 32 µs), from work the refresh
+and release do besides the sweep, but no longer in proportion to it, as they
+did when the sweep visited every topic's record. Each sample makes
 the change, times the refresh or the release, and undoes the change; the commit,
 the undo, fixture construction, and the check that the board stayed delivered
 are outside the timed interval. The records one untimed sweep visits go to
