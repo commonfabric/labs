@@ -100,12 +100,12 @@ export class BrowserController extends EventTarget {
   }
 
   /** Runs the loaded file's test at `index`, numbered as it registered. */
-  async runTest(index: number): Promise<TestResult | null> {
+  async runTest(index: number): Promise<TestResult> {
     if (!this.#page) {
       throw new Error("No page loaded.");
     }
 
-    return (await this.#page.evaluate<{ ok: TestResult | null }, []>(
+    return (await this.#page.evaluate<{ ok: TestResult }, []>(
       `globalThis.__denoWebTest.runAt(${index})`,
     )).ok;
   }
@@ -129,16 +129,14 @@ export class BrowserController extends EventTarget {
    * Helper for `load`, which carries out the commands tests in `page` send
    * through `commands.ts`, one at a time in the order they arrive. The binding
    * holds for every document the page loads, so it is installed once, with
-   * the page.
+   * the page. It is the only binding the page has, so every call of one is a
+   * command.
    */
   async #serveCommands(page: Page) {
     const celestial = page.unsafelyGetCelestialBindings();
     let queue = Promise.resolve();
     celestial.addEventListener("Runtime.bindingCalled", (event) => {
-      const { name, payload, executionContextId } = event.detail;
-      if (name !== DRIVER_BINDING) {
-        return;
-      }
+      const { payload, executionContextId } = event.detail;
       queue = queue.then(() =>
         this.#runCommand(page, payload, executionContextId)
       );
