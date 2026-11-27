@@ -713,6 +713,11 @@ const RECREATED_FIELDS = new Set<string>([
  * kept as it was. The structural links and the inputs only an earlier topic
  * pattern declared are left out; a plain field no list names is copied, and
  * one that holds a link throws.
+ *
+ * `createdBy` is always written. The create stored the run's agent as the
+ * topic's author, so a topic exported with no author of its own gets
+ * `undefined` there, which a reader takes for no author, as it did on the
+ * exported board.
  */
 export function recreatedDocument(
   topic: TopicExportRow,
@@ -732,6 +737,7 @@ export function recreatedDocument(
   for (const field of SCALAR_CONTENT_FIELDS) {
     if (topic.content[field] !== undefined) doc[field] = topic.content[field];
   }
+  doc.createdBy = topic.content.createdBy;
   doc.comments = topic.content.comments;
   doc.links = topic.content.links;
   doc.shortName = name;

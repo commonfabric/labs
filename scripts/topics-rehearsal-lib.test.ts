@@ -652,6 +652,35 @@ describe("topics-rehearsal-lib", () => {
         )
       ).toThrow("of:fid1:old-1 references.0 is not a link");
     });
+
+    it("writes the exported author over the one the create stored", () => {
+      const author = { kind: "person", name: "Ada" };
+      const doc = recreatedDocument(
+        {
+          ...exported({ createdBy: author }),
+          content: {
+            title: "t",
+            body: "b",
+            createdBy: author,
+            comments: [],
+            links: [],
+          },
+        },
+        "1",
+        recreated,
+      );
+      expect(doc.createdBy).toEqual(author);
+    });
+
+    it("clears the author the create stored for a topic exported with none", () => {
+      const doc = recreatedDocument(
+        exported({ createdByName: "someone" }),
+        "1",
+        recreated,
+      );
+      expect(Object.hasOwn(doc, "createdBy")).toBe(true);
+      expect(doc.createdBy).toBeUndefined();
+    });
   });
 
   describe("recreateTopics", () => {
