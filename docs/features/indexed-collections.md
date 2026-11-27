@@ -344,7 +344,15 @@ the rest `"own"`. The presets for runtimes that talk to a deployed toolshed
   registry document marks the space, and for any other space the host reads
   the registry document once, from the store, and keeps the answer. The
   runtime is constructed on the first commit to a space that lists a
-  collection, so a toolshed whose spaces list none builds none.
+  collection, so a toolshed whose spaces list none builds none. It runs no
+  piece, so nothing else in it asks for a release pass
+  ([document release](document-release.md)), and it asks for one itself each
+  time a collection's maintenance has nothing left to re-read
+  (`IndexedCollectionMaintainer.subscribeDrained()`). A drain holds the cells
+  it read a collection's handle and members through until the transactions
+  that project them have ended, so a pass keeps those documents loaded while
+  it needs them, and the pass after those cells have been collected releases
+  them.
 - **In a process with no server,** such as `cf test` or a unit test over
   emulated storage, the one runtime maintains its own collections.
 
@@ -538,10 +546,11 @@ until the first step has run, and then re-runs.
   only record of which cells are members. Nothing re-reads members written
   while no runtime maintained their space, and whose commits the maintaining
   runtime therefore never heard of, short of a change to the declaration.
-- With server execution off, the toolshed's maintenance runtime keeps a
-  session, and the replicas of the members it re-read, for every space that
-  lists a collection and that it has heard a commit to since the process
-  started, for as long as the process runs.
+- With server execution off, the toolshed's maintenance runtime releases a
+  member it re-read only once the cells it read the member through have been
+  collected, so its session watches every member re-read since then. Once it
+  has released everything it read in a space, it closes its session there,
+  and the next commit to that space opens one again.
 - A client that maintains `"none"`, as the presets for runtimes talking to a
   deployed toolshed do, keeps nothing current when the toolshed neither
   serves its space nor runs an `IndexedCollectionHost`.

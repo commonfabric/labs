@@ -389,6 +389,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   openedSpaces?(): MemorySpace[];
 
   /**
+   * Whether the replica of `space` covers the document `id` names under
+   * `scope` (`IStorageProvider.hasLocalDocumentCoverage()`), or `undefined`
+   * when this manager holds no provider for `space`. Unlike `open()`, it opens
+   * nothing and is no use of the space, so a release pass under way can
+   * still release the space.
+   */
+  documentCovered?(
+    space: MemorySpace,
+    id: URI,
+    scope?: CellScope,
+  ): boolean | undefined;
+
+  /**
    * Declares the read ceiling every session this manager opens carries in
    * its signed `session.open` descriptor (`SessionDescriptor.readCeiling`),
    * so a space server serving this runtime's queries bounds them by it. A
