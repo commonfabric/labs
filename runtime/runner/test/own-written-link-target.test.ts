@@ -12,7 +12,11 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 
-import type { Cell as BuilderCell, JSONSchema } from "../src/builder/types.ts";
+import type {
+  Cell as BuilderCell,
+  JSONSchema,
+  Stream,
+} from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { MemorySpace, URI } from "../src/storage/interface.ts";
@@ -312,7 +316,12 @@ describe("own-written link target", () => {
     // the result document.
 
     type Row = { id: string };
-    type Result = { sequence: number; rows: Row[]; mark?: number };
+    type Result = {
+      add: Stream<{ id: string }>;
+      sequence: number;
+      rows: Row[];
+      mark?: number;
+    };
 
     /** Runs the piece at the reader and returns its result under no schema. */
     const runPiece = async (): Promise<Cell<Result>> => {
@@ -397,7 +406,7 @@ describe("own-written link target", () => {
 
     it("reads another client's change of a document a handler of the piece made", async () => {
       const result = await runPiece();
-      result.key("add" as never).send({ id: "ours" } as never);
+      result.key("add").send({ id: "ours" });
       await reader.idle();
       expect((await result.pull())?.rows[0]?.id).toBe("ours");
       await storage.synced();
