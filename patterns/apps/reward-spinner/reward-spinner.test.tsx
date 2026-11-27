@@ -11,6 +11,7 @@
 import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
   clickButton,
+  findNodeByProp,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
 import RewardSpinner, {
@@ -28,6 +29,8 @@ import RewardSpinner, {
 
 const sum = (xs: readonly number[]): number => xs.reduce((a, b) => a + b, 0);
 const emojis = PRIZES.map((p) => p.emoji);
+const showsClass = (root: unknown, className: string): boolean =>
+  findNodeByProp(root, "className", className) !== undefined;
 
 export default pattern(() => {
   const generosity = new Writable(10);
@@ -96,7 +99,9 @@ export default pattern(() => {
 
   // The odds readout follows the generosity buttons, and stops at the ends.
   const action_more_at_max = action(() => clickButton(spinner[UI], "+"));
-  const assert_still_ten = assert(() => spinner.generosity === 10);
+  const assert_still_ten = assert(() =>
+    spinner.generosity === 10 && showsClass(spinner[UI], "payout payout-a")
+  );
   const action_less_twice = action(() => {
     clickButton(spinner[UI], "−");
     spinner.lessGenerous.send();
@@ -106,6 +111,21 @@ export default pattern(() => {
     spinner.odds.map((o) => o.percent).join(",") ===
       prizePercents(8).join(",") &&
     spinner.odds[2].dots === "🔴".repeat(Math.round(prizePercents(8)[2] / 10))
+  );
+  // Below the top, "+" raises generosity a step and replays the odds fade.
+  const action_more = action(() => clickButton(spinner[UI], "+"));
+  const assert_nine = assert(() =>
+    spinner.generosity === 9 &&
+    spinner.odds.map((o) => o.percent).join(",") ===
+      prizePercents(9).join(",") &&
+    showsClass(spinner[UI], "payout payout-b") &&
+    !showsClass(spinner[UI], "payout payout-a")
+  );
+  const action_less_again = action(() => spinner.lessGenerous.send());
+  const assert_eight_again = assert(() =>
+    spinner.generosity === 8 &&
+    showsClass(spinner[UI], "payout payout-a") &&
+    !showsClass(spinner[UI], "payout payout-b")
   );
 
   const action_spin = action(() => spinner.spin.send());
@@ -191,6 +211,10 @@ export default pattern(() => {
       { assertion: assert_still_ten },
       { action: action_less_twice },
       { assertion: assert_eight },
+      { action: action_more },
+      { assertion: assert_nine },
+      { action: action_less_again },
+      { assertion: assert_eight_again },
       { action: action_spin },
       { assertion: assert_spin_recorded },
       { action: action_spin_again_at_once },
