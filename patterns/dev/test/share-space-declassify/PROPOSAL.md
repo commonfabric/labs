@@ -231,11 +231,12 @@ leave room:
   and SC-44 adds a plaintext module-policy subject. The display now also
   nominates a space the label was read from whose digest a committed subject is,
   and point-queries its ACL. That is a case the spec lacks, so it needs a ruling
-  and carries a `SPEC-PENDING` marker. It admits more than the current text, so
-  the display does it only with the dial on. It opens no commitment and tells
-  the display nothing it could not compute. A value stored in one space whose
-  committed subject names another stays sealed: no candidate exists without a
-  reverse index, and releasing it needs the `reference` representation class.
+  and carries a `SPEC-PENDING` marker naming specs#110. It is on by default
+  under its own flag, `cfcCommittedSubjectCandidates`, whose off restores the
+  current text. It opens no commitment and tells the display nothing it could
+  not compute. A value stored in one space whose committed subject names another
+  stays sealed: no candidate exists without a reverse index, and releasing it
+  needs the `reference` representation class.
 - **Whether `RequiresIntegrity` on a lift's input stops the run** is not yet
   shown in a test.
 - **Anyone with WRITE on the piece's space can change who releases.** The

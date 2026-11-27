@@ -495,6 +495,8 @@ export interface ExperimentalOptions {
    * §4.9.3 as specs#49 states it.
    */
   cfcCommittedSubjectCandidates?: boolean | undefined;
+
+  /**
    * Let a written value whose schema declares `ifc.reclassify`
    * (`Reclassified<T, Rules>`) store each clause of its flow join that is
    * the piece creator's alone to release, a `User` clause naming the

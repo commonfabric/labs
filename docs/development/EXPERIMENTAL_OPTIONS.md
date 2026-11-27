@@ -1144,6 +1144,7 @@ holds the measurements and the conditions for revisiting.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority and shell-source entries, the default, and the resolver switch;
   the candidate in `render-ceiling.ts` stays.
+
 ### `cfcPatternReclassification`
 
 - **Toggle via.** `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` environment
