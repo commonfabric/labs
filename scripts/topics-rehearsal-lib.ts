@@ -702,6 +702,7 @@ const RECREATED_FIELDS = new Set<string>([
   "mentioned",
   "references",
   "shortName",
+  "topicStateVersion",
 ]);
 
 /**
@@ -718,6 +719,12 @@ const RECREATED_FIELDS = new Set<string>([
  * topic's author, so a topic exported with no author of its own gets
  * `undefined` there, which a reader takes for no author, as it did on the
  * exported board.
+ *
+ * `topicStateVersion` is always written too, as the version the topic was
+ * exported at, and zero for a topic exported before it had one. The create
+ * stamped the current version, which would mark the topic's state upgrades
+ * done: those rebuild a topic's authors and its activity scalars from its
+ * comments and links, so they run when the recreated topic first runs.
  */
 export function recreatedDocument(
   topic: TopicExportRow,
@@ -741,6 +748,9 @@ export function recreatedDocument(
   doc.comments = topic.content.comments;
   doc.links = topic.content.links;
   doc.shortName = name;
+  doc.topicStateVersion = typeof raw.topicStateVersion === "number"
+    ? raw.topicStateVersion
+    : 0;
   const references = isObjectNotArray(raw.references) ? raw.references : {};
   if (Object.hasOwn(references, "$link")) {
     throw new Error(`${topic.fid} references holds a link at $`);

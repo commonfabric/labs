@@ -681,6 +681,24 @@ describe("topics-rehearsal-lib", () => {
       expect(Object.hasOwn(doc, "createdBy")).toBe(true);
       expect(doc.createdBy).toBeUndefined();
     });
+
+    it("writes the state version a topic was exported at", () => {
+      const doc = recreatedDocument(
+        exported({ topicStateVersion: 1 }),
+        "1",
+        recreated,
+      );
+      expect(doc.topicStateVersion).toBe(1);
+    });
+
+    it("writes state version zero for a topic exported with none", () => {
+      // The create stamped the current version, which would skip the upgrades
+      // that rebuild such a topic's authors and activity scalars from its
+      // records.
+
+      const doc = recreatedDocument(exported({}), "1", recreated);
+      expect(doc.topicStateVersion).toBe(0);
+    });
   });
 
   describe("recreateTopics", () => {
