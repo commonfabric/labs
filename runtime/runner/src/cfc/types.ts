@@ -1041,6 +1041,19 @@ export type CfcFlowLabelsMode = "off" | "observe" | "persist";
 export const DEFAULT_CFC_FLOW_LABELS_MODE: CfcFlowLabelsMode = "off";
 
 /**
+ * Whether a transaction's value writes carry the labels of what it read:
+ * flow labels persist, and enforcement runs the preparation that writes
+ * them. Below that, a derived value does not carry its inputs' labels to its
+ * readers, so nothing downstream can gate on them.
+ */
+export function derivedWritesCarryLabels(dials: {
+  flowLabels: CfcFlowLabelsMode;
+  enforcement: CfcEnforcementMode;
+}): boolean {
+  return dials.flowLabels === "persist" && dials.enforcement !== "disabled";
+}
+
+/**
  * Write-side `requiredIntegrity` floor dial (§8.12.4.1 / SC-18, Epic D3),
  * orthogonal to the enforcement ladder and the flow dial: `off` = no check;
  * `observe` = evaluate the floor and emit diagnostics, never reject;

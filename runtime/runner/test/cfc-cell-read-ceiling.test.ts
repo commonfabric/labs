@@ -503,72 +503,12 @@ describe("cfc-cell-read-ceiling", () => {
     const tx = reader.edit();
     stampWaveRunContext(tx, {
       actionId: "test:cell-read-ceiling",
-      kind: "event-handler",
-      acting: { user: signer.did(), session: "s1" },
-      sessionReadCeiling: { maxConfidentiality: [A] },
+      kind: "derivation",
+      readCeiling: { maxConfidentiality: [A] },
     });
     try {
       expect(() => cell.withTx(tx).get()).toThrow(/read ceiling/);
       expect(() => cell.withTx(tx).sample()).toThrow(/read ceiling/);
-    } finally {
-      tx.abort();
-    }
-  });
-
-  it("reads a served derivation's cells without the demanding session's ceiling", async () => {
-    const link = await seed([B]);
-    const reader = readerFor([A, B]);
-    const cell = reader.getCellFromLink(link);
-    await cell.sync();
-    const tx = reader.edit();
-    stampWaveRunContext(tx, {
-      actionId: "test:cell-read-ceiling",
-      kind: "derivation",
-      sessionReadCeiling: { maxConfidentiality: [A] },
-    });
-    try {
-      expect(cell.withTx(tx).get()).toEqual({ secret: "withheld content" });
-    } finally {
-      tx.abort();
-    }
-    // The runtime's own ceiling still binds the derivation.
-    const boundedReader = readerFor([A]);
-    const bounded = boundedReader.getCellFromLink(link);
-    await bounded.sync();
-    const boundedTx = boundedReader.edit();
-    stampWaveRunContext(boundedTx, {
-      actionId: "test:cell-read-ceiling",
-      kind: "derivation",
-    });
-    try {
-      expect(() => bounded.withTx(boundedTx).get()).toThrow(/read ceiling/);
-    } finally {
-      boundedTx.abort();
-    }
-  });
-
-  it("keeps the demanding session's ceiling on a derivation when the runtime does not persist flow labels", async () => {
-    const link = await seed([B]);
-    // Without persisted flow labels the result would not carry the note's
-    // label to each reader, so the shared-instance exemption does not hold.
-    const reader = new Runtime({
-      apiUrl: new URL("http://toolshed.test"),
-      storageManager: storage,
-      cfcReadMaxConfidentiality: [A, B],
-      cfcEnforcementMode: "enforce-strict",
-      cfcFlowLabels: "observe",
-    });
-    readers.push(reader);
-    const cell = reader.getCellFromLink(link);
-    await cell.sync();
-    const tx = reader.edit();
-    stampWaveRunContext(tx, {
-      actionId: "test:cell-read-ceiling",
-      kind: "derivation",
-      sessionReadCeiling: { maxConfidentiality: [A] },
-    });
-    try {
-      expect(() => cell.withTx(tx).get()).toThrow(/read ceiling/);
     } finally {
       tx.abort();
     }

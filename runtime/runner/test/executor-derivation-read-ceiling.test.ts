@@ -23,6 +23,7 @@ import { describe, it } from "@commonfabric/test-support/test";
 
 import type { Cell, Stream } from "../src/cell.ts";
 import { ExecutorHost } from "../src/executor/host.ts";
+import { actsAsSession } from "../src/executor/wave.ts";
 import { Runtime, type RuntimeOptions } from "../src/runtime.ts";
 import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -53,9 +54,24 @@ const noteSchema = {
   },
 } as const;
 
+/** The run's own read refused by the ceiling, not the seal's refusal. */
+const CEILING_REFUSAL = /^CfcReadCeilingError:/;
+
 type Result = { size: number; copied?: number; copy: Stream<unknown> };
 
-async function fixture(scope: "space" | "session" = "space") {
+type FixtureOptions = {
+  /** Whether the note is shared by the space or held per session. */
+  scope?: "space" | "session";
+  /** The ceiling alice's session declares; by default she sees herself. */
+  aliceSees?: readonly string[];
+  /** The serving runtime's CFC dials, by default the bounded runs' own. */
+  serving?: Partial<RuntimeOptions>;
+};
+
+async function fixture(
+  { scope = "space", aliceSees = [alice.did()], serving = cfc }:
+    FixtureOptions = {},
+) {
   const server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
   const errors: unknown[] = [];
   let reportError!: (error: unknown) => void;
@@ -95,7 +111,7 @@ async function fixture(scope: "space" | "session" = "space") {
           storageManager: manager,
           servingPosture: true,
           experimental: { serverExecution: true },
-          ...cfc,
+          ...serving,
         });
         runtime.scheduler.onError((error) => {
           errors.push(error);
@@ -136,13 +152,13 @@ async function fixture(scope: "space" | "session" = "space") {
       return client;
     };
 
-    // Alice, bounded to herself, sets the piece up and is its only
-    // demander until bob joins.
+    // Alice, bounded, sets the piece up and is its only demander until bob
+    // joins.
     const first = open(alice, {
-      cfcReadMaxConfidentiality: [{
+      cfcReadMaxConfidentiality: aliceSees.map((subject) => ({
         type: CFC_ATOM_TYPE.User,
-        subject: alice.did(),
-      }],
+        subject,
+      })),
     });
     const note = scope === "space"
       ? "Writable<string>"
@@ -201,6 +217,11 @@ export default pattern<
           host!.whenQuiescent().then(() => "quiet"),
         ]);
       },
+      /** Resolves once the host has nothing left to do. */
+      async quiet(): Promise<void> {
+        await first.runtime.storageManager.synced();
+        await host!.whenQuiescent();
+      },
       first: { runtime: first.runtime, result },
       async join(signer: typeof bob): Promise<
         { runtime: Runtime; result: Cell<Result> }
@@ -246,24 +267,82 @@ describe("executor-derivation-read-ceiling", () => {
   it("still reads a handler the bounded session fired under that session's ceiling", async () => {
     const f = await fixture();
     try {
+      // The shared derivation alice demanded settles without a refusal, so
+      // the refusal below is the handler's.
+      await f.quiet();
+      expect(f.errors).toEqual([]);
       f.first.result.key("copy").send({});
-      expect(await f.refusal()).toMatch(/read ceiling/);
+      expect(await f.refusal()).toMatch(CEILING_REFUSAL);
     } finally {
       await f.close();
     }
   });
 
   it("reads a session's own instance under its ceiling, refusing a shared first run that turns out to be the session's", async () => {
-    const f = await fixture("session");
+    const f = await fixture({ scope: "session" });
     try {
       // The node's first run is stamped as a shared instance and reads the
       // bounded session's note; the seal refuses it once it discovers
       // session scope, and the rerun, as the session's instance, is refused
       // by the ceiling.
-      expect(await f.refusal()).toMatch(/read ceiling/);
+      expect(await f.refusal()).toMatch(CEILING_REFUSAL);
       expect(f.stats().sessionCeilingRefusals).toBeGreaterThan(0);
     } finally {
       await f.close();
     }
+  });
+
+  it("gives a session its own instance once the shared first run is refused, when its ceiling admits the note", async () => {
+    const f = await fixture({
+      scope: "session",
+      aliceSees: [alice.did(), bob.did()],
+    });
+    try {
+      const size = await waitForCellValue<number>(
+        f.first.runtime,
+        f.first.result.key("size"),
+        (value) => typeof value === "number",
+      );
+      expect(size).toBe("for bob only".length);
+      await f.quiet();
+      expect(f.stats().sessionCeilingRefusals).toBeGreaterThan(0);
+      expect(f.errors).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reads a shared derivation under the demanding session's ceiling on a runtime whose writes carry no labels", async () => {
+    // Without persisted flow labels the result would not carry the note's
+    // label to its readers, so the shared instance must not read past the
+    // ceiling.
+    const f = await fixture({
+      serving: { cfcEnforcementMode: "enforce-strict", cfcFlowLabels: "off" },
+    });
+    try {
+      expect(await f.refusal()).toMatch(CEILING_REFUSAL);
+    } finally {
+      await f.close();
+    }
+  });
+});
+
+describe("actsAsSession", () => {
+  it("binds a handler with a session actor and a session instance, and nothing shared", () => {
+    const session = "session:did:key:zA:s1" as const;
+    expect(actsAsSession({ kind: "event-handler", acting: { session: "s1" } }))
+      .toBe(true);
+    expect(actsAsSession({ kind: "event-handler", acting: {} })).toBe(false);
+    expect(actsAsSession({ kind: "event-handler" })).toBe(false);
+    expect(actsAsSession({ kind: "derivation", actionScopeKey: session }))
+      .toBe(true);
+    expect(
+      actsAsSession({ kind: "derivation", actionScopeKey: "user:did:key:zA" }),
+    ).toBe(false);
+    expect(actsAsSession({ kind: "derivation", actionScopeKey: "space" }))
+      .toBe(false);
+    expect(actsAsSession({ kind: "derivation" })).toBe(false);
+    expect(actsAsSession({ kind: "bookkeeping", actionScopeKey: session }))
+      .toBe(false);
   });
 });

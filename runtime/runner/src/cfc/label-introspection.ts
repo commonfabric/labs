@@ -23,7 +23,11 @@ import {
 } from "./label-metadata-population.ts";
 import { readStoredCfcMetadata } from "./metadata.ts";
 import { uniqueCfcAtoms } from "./observation.ts";
-import type { CfcMetadata, LabelMapEntry } from "./types.ts";
+import {
+  type CfcMetadata,
+  derivedWritesCarryLabels,
+  type LabelMapEntry,
+} from "./types.ts";
 
 // Inv-12 Stage 2 (SC-25/SC-6; docs/specs/cfc-label-metadata-confidentiality.md
 // §3/§5; spec §4.6.4.1-.2): the bounded first-layer label-introspection
@@ -673,8 +677,10 @@ export const inspectStoredConfLabel = (
     return result;
   }
   const state = tx.getCfcState();
-  const carries = state.flowLabelsMode === "persist" &&
-    state.enforcementMode !== "disabled";
+  const carries = derivedWritesCarryLabels({
+    flowLabels: state.flowLabelsMode,
+    enforcement: state.enforcementMode,
+  });
   if (!carries) {
     tx.noteCfcDiagnostic(
       "label-introspection: protected metadata result withheld " +

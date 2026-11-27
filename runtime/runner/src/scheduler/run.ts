@@ -12,7 +12,7 @@ import type { CfcRefusalDetail } from "../cfc/refusal-detail.ts";
 import { sortAndCompactPaths } from "../reactive-dependencies.ts";
 import type { Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
-import { waveSettlementOf } from "../executor/wave.ts";
+import { isOutgrownStampRefusal, waveSettlementOf } from "../executor/wave.ts";
 import { createDuplicateWorkTransaction } from "../storage/extended-storage-transaction.ts";
 import type {
   ChangeGroup,
@@ -357,8 +357,13 @@ export function watchReactiveActionCommit(state: {
     // reader-dirty is a redundant fast path (the re-dirty/pending/queue calls
     // coalesce). Restore the consumed trigger reads (§8.9.2) so the re-run's
     // transaction still carries their flow labels.
-    if (isConflictRejection(error) || isStorageTransactionInconsistent(error)) {
-      // Scoped recovery pulls and live subscriptions supply the fresh basis.
+    if (
+      isConflictRejection(error) || isStorageTransactionInconsistent(error) ||
+      isOutgrownStampRefusal(error)
+    ) {
+      // Scoped recovery pulls and live subscriptions supply the fresh basis;
+      // for a run stamped at a scope the node has since outgrown, the moved
+      // scope ratchet does.
       // Repeated rejection without convergence warrants a diagnostic without
       // charging the bounded budget used for other failure classes. The count
       // clears on the next successful, permanent, or terminal commit.

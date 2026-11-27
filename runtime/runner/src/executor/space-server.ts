@@ -225,6 +225,7 @@ import { asPatternIdentityRef } from "../meta-seam.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import { getMetaLink } from "../link-utils.ts";
 import {
+  actsAsSession,
   stampWaveRunContext,
   WaveAccumulator,
   type WaveCommitOutcome,
@@ -260,7 +261,10 @@ import { effectCompletionKeyOf } from "./effect-completion.ts";
 import { markRendererTrustedEvent } from "../cfc/ui-contract.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../scheduler/constants.ts";
 import { LT1_LATE_SEAL_REFUSED } from "../scheduler/types.ts";
-import type { PostCommitSideEffect } from "../cfc/types.ts";
+import {
+  derivedWritesCarryLabels,
+  type PostCommitSideEffect,
+} from "../cfc/types.ts";
 import {
   attentionForExpiredDeliveryFailure,
   MAX_EVENT_DELIVERY_FAILURE_BUDGET,
@@ -3219,6 +3223,24 @@ export class SpaceServer implements TransactionSealDestination {
           : {}),
       }
       : undefined;
+    // A run's cell reads are bounded by the session's ceiling when it acts
+    // as that session: a handler carrying a session actor, a derivation run
+    // as the session's own instance. A shared instance resolved against
+    // the session is not bounded by it, since its result carries its
+    // inputs' labels to each reader; a runtime whose writes would not carry
+    // them reads every run under the ceiling instead.
+    const readCeiling = sessionReadCeiling !== undefined &&
+        (actsAsSession({
+          kind: info.kind,
+          acting: info.acting ?? acting,
+          actionScopeKey: info.actionScopeKey,
+        }) ||
+          !derivedWritesCarryLabels({
+            flowLabels: this.#runtime!.cfcFlowLabels,
+            enforcement: this.#runtime!.cfcEnforcementMode,
+          }))
+      ? sessionReadCeiling
+      : undefined;
     // The run's trust snapshot (OW34-family; serving-loop.md §3c): the
     // acting principal the run carries — a handler's server-stamped
     // `firedAt` actor (LT6-inherited pairs included), else a demanded
@@ -3255,13 +3277,14 @@ export class SpaceServer implements TransactionSealDestination {
       // The read ceiling of the session the run's scoped addresses resolve
       // to, read from the memory server's session record — the seam a
       // declared ceiling (the client's signed `session.open` descriptor)
-      // and a server-assigned one both reach the run through. Stamped with
+      // and a server-assigned one both reach the run through — and the
+      // ceiling its cell reads are bounded by, which is that one when the
+      // run acts as the session (serving-loop.md §3c). Both are stamped with
       // the identity, before the run's first read, so the sqlite builtin's
-      // request hash and its flush read one value. Whether it bounds a read
-      // is wave.ts `readCeilingOfRun`'s decision: a shared instance resolved
-      // against this session does not act as it. Never for bookkeeping: the
-      // loop's own writes act as no session.
+      // request hash and its flush read one value. Never for bookkeeping:
+      // the loop's own writes act as no session.
       ...(sessionReadCeiling !== undefined ? { sessionReadCeiling } : {}),
+      ...(readCeiling !== undefined ? { readCeiling } : {}),
       ...(info.actionScopeKey !== undefined
         ? { actionScopeKey: info.actionScopeKey }
         : {}),

@@ -1794,42 +1794,48 @@ action's public write. Therefore, normatively:
 - Handler runs are actions: a server-side handler run gets per-run CFC
   exactly as its client run did. D-v2-1 moves WHERE handlers run, never
   the enforcement unit.
-- **The run carries the READ CEILING of the session it acts as.** The
-  stamp reads the memory server's session record for the run's
-  `scopeKeyIdentity.sessionId` (`Server.sessionReadCeiling`) and
-  attaches it as `WaveRunContext.sessionReadCeiling` — the ceiling the
-  client declared in its signed `session.open` descriptor
-  (protocol.md §1), or one the server assigned to the session. That
-  session is the one the run's scoped addresses resolve to, which is not
-  always the one it acts as, so one function decides when the ceiling
-  binds a read (wave.ts `readCeilingOfRun`), for cell reads and queries
-  alike:
-  - a query whose result is materialized for the session alone reads
-    under it, whatever the run;
-  - a handler acting as a session reads under it;
-  - a derivation reads under it when its instance is that session's. A
-    space or user instance is shared by its demanders, acts as no
-    session (or as the user), and does not read under the ceiling of
-    the session it resolves against: its result carries its inputs'
-    labels, so each reader's own read of it meets that reader's ceiling.
-    A serving runtime that does not persist flow labels gives no such
-    guarantee, and its derivations read under the ceiling.
+- **The run reads under the READ CEILING of the session it acts as.**
+  The ceiling is the one the client declared in its signed
+  `session.open` descriptor (protocol.md §1), or one the server
+  assigned to the session; the memory server records it and
+  `Server.sessionReadCeiling` returns it. The stamp looks it up for the
+  session the run's scoped addresses resolve to (its
+  `scopeKeyIdentity.sessionId`) and carries it as
+  `WaveRunContext.sessionReadCeiling`. That session is not always the
+  one the run acts as: a space or user instance resolves against one of
+  its demanders, but it is shared by all of them and acts as none. So
+  the stamp carries a second field, `WaveRunContext.readCeiling`, the
+  ceiling cell reads are bounded by, set when
+  - the run is a handler acting as a session, or
+  - the run is a derivation whose instance is that session's, or
+  - the serving runtime's writes do not carry labels (flow labels not
+    persisted, or enforcement disabled). A shared result then would not
+    carry its inputs' labels to its readers, so the run reads under the
+    ceiling of the session it resolves against.
 
-  The decision follows the stamped instance, never the order of a run's
-  reads. A shared instance that discovers session scope is refused at the
-  seal, the early-emit guard's shape, and the rerun is stamped as the
-  session's instance and reads under its ceiling (`sessionCeilingRefusals`
-  counts it). The sqlite builtin resolves one effective ceiling per
-  run: the serving runtime's own option met with the carried one,
-  `onExceed` meeting toward `fail` — and reads under it exactly as a
-  client's own run reads under its option (06-cfc.md, "Runtime read
-  ceiling"): the meet joins the request hash and filters rows for a
-  session-scoped result. A shared result materializes under its query
-  contract and carries labels on its array shape and rows. A cell read
-  the ceiling binds meets it with the runtime ceiling before returning
-  content. Never for a bookkeeping run, which acts as no session; a run
+  A shared instance's derivation, on a runtime whose writes carry
+  labels, reads without the ceiling: its result carries its inputs'
+  labels, and each reader's own read of it meets that reader's ceiling.
+  A query whose result is materialized for the session alone reads
+  under `sessionReadCeiling` whatever the run, since only that session
+  sees it. The sqlite builtin meets that ceiling with the serving
+  runtime's own option, `onExceed` meeting toward `fail`, and reads
+  under it exactly as a client's own run reads under its option
+  (06-cfc.md, "Runtime read ceiling"): the meet joins the request hash
+  and filters the rows. A shared result materializes under its query
+  contract and carries labels on its array shape and rows.
+
+  The stamp decides before the run's first read, from the instance it
+  was demanded as. A derivation stamped as a shared instance that
+  discovers session scope as it runs has read without the session's
+  ceiling, so its seal refuses it, the same way the early-emit guard
+  refuses a run that outgrew its stamp. The rerun is stamped as the
+  session's instance and reads under the ceiling. The refusal does not
+  spend the run's retry budget, and `sessionCeilingRefusals` counts it.
+  No ceiling binds a bookkeeping run, which acts as no session; a run
   acting as a session that declared none reads under the serving
-  runtime's option alone. Verification-coverage.md OW64 is the coverage row.
+  runtime's option alone. Verification-coverage.md OW64 is the coverage
+  row.
 - **The run's CFC trust snapshot carries the run's ACTING principal** —
   the event's server-stamped actor, the demanded instance's principal,
   or the delegated carriage's actor — never the serving runtime's

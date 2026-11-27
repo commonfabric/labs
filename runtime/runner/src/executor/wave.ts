@@ -208,16 +208,23 @@ export interface WaveRunContext {
    * resolve no scoped addresses at all). */
   scopeKeyIdentity?: ScopeKeyIdentity;
 
-  /** The read ceiling of the session this run's session-scoped addresses
-   * resolve to (`scopeKeyIdentity.sessionId`), read from the memory
-   * server's session record at the stamp (`Server.sessionReadCeiling`):
-   * declared by the client in its signed `session.open` descriptor, or
-   * assigned by the server. Whether it bounds a given read is
-   * {@link readCeilingOfRun}'s decision, never the reader's: a run acting
-   * as no session, as for a shared instance resolved against one of its
-   * demanders, carries the candidate without being bound by it. Absent
-   * when that session declared none. */
+  /** The read ceiling of the session this run's scoped addresses resolve
+   * to (`scopeKeyIdentity.sessionId`), read from the memory server's session
+   * record at the stamp (`Server.sessionReadCeiling`): declared by the client
+   * in its signed `session.open` descriptor, or assigned by the server. A
+   * query whose result is materialized for that session alone reads under
+   * it whatever the run (06-cfc.md, "Runtime read ceiling"). Absent when
+   * that session declared none. */
   sessionReadCeiling?: SessionReadCeiling;
+
+  /** The read ceiling this run's cell reads are bounded by: the
+   * `sessionReadCeiling` when the run acts as that session
+   * ({@link actsAsSession}), or when this runtime's derived writes would not
+   * carry their inputs' labels. Absent on a shared instance resolved
+   * against one of its demanders: that session does not act through it,
+   * and each reader's own read of its labelled result meets that reader's
+   * ceiling. */
+  readCeiling?: SessionReadCeiling;
 
   /** The capability grant a provisioning run's FOREIGN writes are
    * admitted under (protocol.md §2's server-produced authored row, §2b):
@@ -278,52 +285,36 @@ const actingAtScope = (
 };
 
 /**
- * The session read ceiling that bounds a read this run makes, if any
- * (serving-loop.md §3c: a run carries the read ceiling of the session it
- * acts as). One decision for every reader of the carried ceiling — the
- * cell-read guard and the sqlite builtin — so they cannot drift apart.
- *
- * - A query whose result is materialized for the session alone
- *   (`materializedFor: "session"`) reads under it, whatever the run.
- * - A handler reads under it when it acts as a session.
- * - A derivation reads under it when its instance is that session's. A
- *   space or user instance is shared: the session it resolves against
- *   only stands in for the demanders, so its ceiling must not decide what
- *   every reader of the result gets. That exemption rests on the result
- *   carrying its inputs' labels, so each reader's own read meets its own
- *   ceiling; a runtime that does not persist flow labels reads under the
- *   ceiling instead.
- *
- * Decided from the stamped instance, never from the order of the run's
- * reads. A shared instance that discovers session scope is refused at the
- * seal ({@link sealedOutsideSessionCeiling}) and reruns as the session's.
+ * Whether a served run acts as the session its scoped addresses resolve to,
+ * so that session's read ceiling bounds its reads (serving-loop.md §3c). A
+ * handler does when it carries a session actor. A derivation does when its
+ * stamped instance is that session's: a space or user instance is shared,
+ * and the session it resolves against only stands in for its demanders.
+ * Decided from the stamp, never from the order of the run's reads; a
+ * shared instance that turns out to be the session's is refused at the seal
+ * ({@link sealedOutsideSessionCeiling}).
  */
-export function readCeilingOfRun(
-  context: WaveRunContext | undefined,
-  read: { materializedFor?: CellScope; flowLabelsPersist: boolean },
-): SessionReadCeiling | undefined {
-  const ceiling = context?.sessionReadCeiling;
-  if (ceiling === undefined) return undefined;
-  if (read.materializedFor === "session") return ceiling;
-  switch (context!.kind) {
+export function actsAsSession(run: {
+  kind: WaveRunKind;
+  acting?: { session?: string };
+  actionScopeKey?: ScopeKey;
+}): boolean {
+  switch (run.kind) {
     case "event-handler":
-      return context!.acting?.session !== undefined ? ceiling : undefined;
+      return run.acting?.session !== undefined;
     case "derivation":
-      return scopeOfInstanceKey(context!.actionScopeKey) === "session" ||
-          !read.flowLabelsPersist
-        ? ceiling
-        : undefined;
+      return scopeOfInstanceKey(run.actionScopeKey) === "session";
     case "bookkeeping":
-      return undefined;
+      return false;
   }
 }
 
 /**
- * Whether a derivation stamped as a shared instance, which therefore read
- * without its session's ceiling ({@link readCeilingOfRun}), discovered that
- * it is that session's after all. Its contribution is refused fail-closed:
- * the scheduler has learned the narrower scope by the seal, so the rerun
- * is stamped as the session's instance and reads under the ceiling.
+ * Whether a derivation read without its session's ceiling and then
+ * discovered that it is that session's instance after all. Its contribution
+ * is refused fail-closed: the scheduler has learned the narrower scope by
+ * the seal, so the rerun is stamped as the session's instance and reads
+ * under the ceiling.
  */
 export function sealedOutsideSessionCeiling(
   context: WaveRunContext,
@@ -331,8 +322,21 @@ export function sealedOutsideSessionCeiling(
 ): boolean {
   return context.kind === "derivation" &&
     context.sessionReadCeiling !== undefined &&
-    discovered === "session" &&
-    scopeOfInstanceKey(context.actionScopeKey) !== "session";
+    context.readCeiling === undefined &&
+    discovered === "session";
+}
+
+/** The reason a seal refuses a run stamped at a scope the node has since
+ * outgrown. Rerunning resolves it, as a stale basis does, so the scheduler
+ * re-queues it without charging the action's retry budget
+ * ({@link isOutgrownStampRefusal}). */
+class OutgrownStamp extends Error {}
+
+/** Whether a commit error is a seal's refusal of a run stamped at a scope
+ * the node has since outgrown. */
+export function isOutgrownStampRefusal(error: unknown): boolean {
+  return isObjectOrArray(error) && "reason" in error &&
+    error.reason instanceof OutgrownStamp;
 }
 
 /**
@@ -1770,7 +1774,7 @@ export class WaveAccumulator
             message: "session read ceiling not applied: the run read as a " +
               "shared instance before discovering session scope (the " +
               "retry reads under the session's ceiling)",
-            reason: new Error("session-ceiling-unapplied"),
+            reason: new OutgrownStamp("session-ceiling-unapplied"),
           },
         };
       }

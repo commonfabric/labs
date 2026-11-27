@@ -123,7 +123,6 @@ import { DerivedInternalCellIds } from "./derived-internal-cell-ids.ts";
 import type { SpaceRunBeacon } from "./executor/run-beacon.ts";
 import {
   type DelegatedCarriage,
-  readCeilingOfRun,
   type SupersededOutput,
   waveRunActorOf,
   waveRunContextOf,
@@ -3068,9 +3067,7 @@ export class Runtime {
   #buildCfcInstrumentation(): CfcInstrumentationHooks {
     const hooks: CfcInstrumentationHooks = {
       checkReadCeiling: (readingTx, address, options) => {
-        const carried = readCeilingOfRun(waveRunContextOf(readingTx), {
-          flowLabelsPersist: this.cfcFlowLabels === "persist",
-        });
+        const carried = waveRunContextOf(readingTx)?.readCeiling;
         const ceiling = carried === undefined
           ? this.cfcReadMaxConfidentiality
           : meetCfcObservationCeilings(
