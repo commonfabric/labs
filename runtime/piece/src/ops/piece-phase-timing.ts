@@ -23,12 +23,14 @@ export interface PhaseTrace {
 /**
  * The process-wide trace, read once, since the flag is a property of the
  * process rather than of any one call. Outside Deno, as in a browser worker,
- * there is no environment to read and it is off.
+ * there is no environment to read and it is off. Each line goes to
+ * `console.error` as it stands when the line is written, so a console
+ * redirected after this module loads receives it.
  */
 export const piecePhaseTrace: PhaseTrace = {
   enabled: typeof Deno !== "undefined" &&
     Deno.env.get("CF_CLI_TRACE_TIMINGS") === "1",
-  log: console.error,
+  log: (line) => console.error(line),
 };
 
 /**

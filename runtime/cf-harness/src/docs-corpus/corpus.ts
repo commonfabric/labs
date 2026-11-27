@@ -89,13 +89,18 @@ interface WalkState {
 
 /** Something bytes are read from, a chunk at a time, as `Deno.FsFile` is. */
 export interface ChunkReader {
-  /** Fills a prefix of `into`, returning its length, or `null` at the end. */
+  /**
+   * Fills a prefix of `into`, returning its length, or `null` or `0` at the
+   * end.
+   */
   read(into: Uint8Array): Promise<number | null>;
 }
 
 /**
  * The first `size` bytes `reader` yields, or every byte it yields when it ends
- * sooner, as it does for a file that shrank after its size was taken. Nothing
+ * sooner, as it does for a file that shrank after its size was taken. A read
+ * that fills nothing ends it, so a reader that reports its end as `0` rather
+ * than `null` is not read from forever. Nothing
  * past `size` is read, so a file that grew in the meantime is admitted at the
  * size it was checked at.
  */
@@ -107,7 +112,7 @@ export const readAtMost = async (
   let filled = 0;
   while (filled < size) {
     const read = await reader.read(bytes.subarray(filled));
-    if (read === null) {
+    if (!read) {
       return bytes.subarray(0, filled);
     }
     filled += read;

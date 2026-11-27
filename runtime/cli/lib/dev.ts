@@ -73,12 +73,22 @@ export interface ProcessResult {
 }
 
 /**
- * Compile `options.main` and, with `options.run`, evaluate it, in `runtime`
- * when one is given and in a fresh runtime from {@link createRuntime}
- * otherwise. A fabric import resolves against `options.space` as the
- * runtime's storage holds it, and a fresh runtime's emulated storage starts
- * empty.
+ * Compile `options.main` and, with `options.run`, evaluate it, in a fresh
+ * runtime from {@link createRuntime}, whose emulated storage starts empty and
+ * whose pattern console writes to stderr under `options.patternJson`, so that
+ * stdout holds the JSON alone. A fabric import resolves against
+ * `options.space` as the runtime's storage holds it.
  */
+export function process(options: ProcessOptions): Promise<ProcessResult>;
+/**
+ * As above, in `runtime`, whose storage and console are the caller's. A JSON
+ * run takes no runtime, since its stdout is kept clear of the pattern console
+ * only by the runtime this makes for it.
+ */
+export function process(
+  options: ProcessOptions & { patternJson?: false },
+  runtime: Runtime,
+): Promise<ProcessResult>;
 export async function process(
   options: ProcessOptions,
   runtime?: Runtime,

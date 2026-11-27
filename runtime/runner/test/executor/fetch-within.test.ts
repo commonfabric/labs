@@ -83,4 +83,21 @@ describe("fetchWithin()", () => {
     await expect(answer).rejects.toBe(reason);
     expect(seen.map((signal) => signal.reason)).toEqual([reason]);
   });
+
+  it("leaves the request alone when a caller's signal aborts after the answer", async () => {
+    const seen: AbortSignal[] = [];
+    const fetch = fetchWithin((_input, init) => {
+      seen.push(init!.signal!);
+      return Promise.resolve(new Response("source"));
+    }, 60_000);
+    const caller = new AbortController();
+
+    const response = await fetch("https://patterns.example/main.tsx", {
+      signal: caller.signal,
+    });
+    caller.abort(new Error("the caller gave up late"));
+
+    expect(await response.text()).toBe("source");
+    expect(seen.map((signal) => signal.aborted)).toEqual([false]);
+  });
 });

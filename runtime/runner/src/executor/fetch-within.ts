@@ -5,7 +5,7 @@ import type { RuntimeFetch } from "../runtime.ts";
  * call rejects. The response it returns has its body already read. A peer
  * that stops answering reports nothing, so this deadline is the only end
  * a silent host's request has. A signal the caller passes aborts the
- * request as well. */
+ * request as well, until the call settles. */
 export function fetchWithin(
   fetch: RuntimeFetch,
   deadlineMs: number,
@@ -13,10 +13,9 @@ export function fetchWithin(
   return (input, init) => {
     const abort = new AbortController();
     const outer = init?.signal;
-    if (outer) {
-      if (outer.aborted) abort.abort(outer.reason);
-      else outer.addEventListener("abort", () => abort.abort(outer.reason));
-    }
+    const forward = () => abort.abort(outer?.reason);
+    if (outer?.aborted) forward();
+    else outer?.addEventListener("abort", forward);
     let timer: ReturnType<typeof setTimeout> | undefined;
     const silent = new Promise<never>((_, reject) => {
       timer = setTimeout(() => {
@@ -40,6 +39,9 @@ export function fetchWithin(
         }),
     );
     answered.catch(() => {});
-    return Promise.race([answered, silent]).finally(() => clearTimeout(timer));
+    return Promise.race([answered, silent]).finally(() => {
+      clearTimeout(timer);
+      outer?.removeEventListener("abort", forward);
+    });
   };
 }

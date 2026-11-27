@@ -19,6 +19,16 @@ import {
 const cliPackageDir = join(import.meta.dirname!, "..");
 const repoRoot = join(cliPackageDir, "..", "..");
 
+// `@ts-expect-error` inverts the sense of the line it precedes: the type
+// check fails when that line compiles. A JSON run keeps the pattern console
+// off stdout only in the runtime `process()` makes for it, so a call handing
+// it a runtime shows up here rather than as log lines inside the JSON.
+export const jsonRunInGivenRuntimeIsRejected = (runtime: Runtime) => {
+  const options = { main: "main.ts", run: true, check: false };
+  // @ts-expect-error a JSON run takes no runtime
+  return process({ ...options, patternJson: true }, runtime);
+};
+
 describe("cli check", () => {
   it("rejects main exports that do not serialize as JSON", () => {
     const circular: Record<string, unknown> = {};

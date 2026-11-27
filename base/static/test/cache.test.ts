@@ -149,9 +149,32 @@ test("StaticCache.fromFileSystem refuses a scope that is not Deno", () => {
   expect(() => StaticCache.fromFileSystem({})).toThrow(
     "`StaticCache.fromFileSystem()` is only available in Deno.",
   );
-  expect(() => StaticCache.fromFileSystem({ Deno: {} })).toThrow(
+  expect(() => StaticCache.fromFileSystem({ Deno: undefined })).toThrow(
     "`StaticCache.fromFileSystem()` is only available in Deno.",
   );
+});
+
+test({
+  name:
+    "StaticCache.fromFileSystem reads the bundled assets through the Deno of the scope it is given",
+  ignore: !isDeno(),
+  fn: async () => {
+    const read: string[] = [];
+    const cache = StaticCache.fromFileSystem({
+      Deno: {
+        readFile: (url) => {
+          read.push(url.href);
+          return Promise.resolve(new TextEncoder().encode("scope bytes"));
+        },
+      },
+    });
+
+    expect(await cache.getText(TEST_ASSET)).toBe("scope bytes");
+    expect(read).toEqual([cache.getUrl(TEST_ASSET).href]);
+    expect(await StaticCache.fromFileSystem().getText(TEST_ASSET)).not.toBe(
+      "scope bytes",
+    );
+  },
 });
 
 test({
