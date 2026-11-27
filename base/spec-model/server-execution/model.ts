@@ -11,8 +11,8 @@
  * (protocol §2, events §2, LT6), same-space cascade carriage (LT1),
  * delegated carriage + stamping (protocol §2b), the wave with
  * splits (serving-loop §3), eventWatermark idempotency (events §4),
- * the crash-lossy process-local outbox (serving-loop §5 — FP1's
- * home), navigateTo's session-connection requirement (LT3), the
+ * durable cross-space append rows that survive a crash
+ * (serving-loop §5, FP1), navigateTo's session-connection requirement (LT3), the
  * effect channel enact/ack window (LT8), and scope_key push
  * filtering (protocol §3).
  */
@@ -220,15 +220,6 @@ export interface OutboxEntry {
 export interface ServerState {
   alive: boolean;
 
-  /** the EFFECT half of the outbox stays process-local (serving-loop
-   * §5 as ruled — crash recovery re-misses from memo keys); appends
-   * no longer live here (FP1 ruled: durable rows on SpaceState). */
-  outbox: OutboxEntry[];
-
-  /** audit trail of append entries destroyed by crashes — with FP1
-   * ruled (durable rows) this MUST stay empty on every schedule. */
-  lostAppends: OutboxEntry[];
-
   /** bumped per genuinely-new process (DR1: holder's process part). */
   processGen: number;
 
@@ -383,8 +374,6 @@ export function makeWorld(opts: {
     };
     servers[id] = {
       alive: true,
-      outbox: [],
-      lostAppends: [],
       processGen: 0,
       pendingProbes: [],
       pendingWave: null,
@@ -1028,10 +1017,8 @@ export function apply(w0: World, step: Step): World {
     case "crash": {
       const srv = w.servers[step.space];
       srv.alive = false;
-      // FP1 (RULED): durable append rows SURVIVE — only the
-      // process-local effect half and the in-memory wave die
-      for (const append of srv.outbox) srv.lostAppends.push(append);
-      srv.outbox = [];
+      // FP1 (RULED): durable append rows (sp.outboundAppends)
+      // SURVIVE — only the in-memory wave dies
       srv.pendingWave = null; // in-memory wave dies with the process
       break;
     }
