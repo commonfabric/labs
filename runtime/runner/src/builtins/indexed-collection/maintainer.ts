@@ -186,13 +186,17 @@ export class IndexedCollectionMaintainer {
           // document, which arrives here as a change to a document the
           // replica no longer covers. Nothing wrote it, and re-reading the
           // members read from it would only load it again.
-          const replica = notification.type === "integrate"
-            ? runtime.storageManager.open(notification.space).replica
-            : undefined;
           const ids = new Set<string>();
           for (const change of notification.changes) {
             const { id, scope } = change.address;
-            if (replica?.hasLocalDocumentCoverage?.(id, scope) === false) {
+            if (
+              notification.type === "integrate" &&
+              runtime.storageManager.documentCovered?.(
+                  notification.space,
+                  id,
+                  scope,
+                ) === false
+            ) {
               continue;
             }
             ids.add(id);

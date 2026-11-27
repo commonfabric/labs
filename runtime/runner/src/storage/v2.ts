@@ -2779,6 +2779,18 @@ export class StorageManager implements IStorageManager {
     return [...this.#providers.keys()];
   }
 
+  /** @inheritDoc */
+  documentCovered(
+    space: MemorySpace,
+    id: URI,
+    scope?: CellScope,
+  ): boolean | undefined {
+    return this.#providers.get(space)?.replica.hasLocalDocumentCoverage(
+      id,
+      scope,
+    );
+  }
+
   /**
    * IStorageManager — THE SESSION REMOUNT's trigger (see
    * SpaceReplica.#consumeOwedSessionRemount): an admitted commit touched
