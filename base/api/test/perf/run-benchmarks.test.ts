@@ -52,6 +52,36 @@ describe("run-benchmarks", () => {
     });
   });
 
+  describe("the script", () => {
+    // What `deno task profile-types` runs. Every scenario has to compile for
+    // the run to finish, so this is also what notices an API change that
+    // breaks one of the fixtures.
+
+    it("prints the report of every scenario, in order", async () => {
+      const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--cached-only",
+          "--frozen=true",
+          "-A",
+          "perf/run-benchmarks.ts",
+        ],
+        cwd: new URL("../../", import.meta.url),
+      }).output();
+      const decoder = new TextDecoder();
+      expect({ code, stderr: decoder.decode(stderr) }).toEqual({
+        code: 0,
+        stderr: "",
+      });
+      const output = decoder.decode(stdout);
+      expect(output.match(/^# .*$/gm)).toEqual(
+        CONFIGS.map((config) => `# ${config}`),
+      );
+      expect(output.match(/^Instantiations: +\d+ \| Check time: +\S+s$/gm))
+        .toHaveLength(CONFIGS.length);
+    });
+  });
+
   describe("CONFIGS", () => {
     it("names only scenario projects that exist", async () => {
       for (const config of CONFIGS) {
