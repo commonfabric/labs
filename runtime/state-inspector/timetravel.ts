@@ -51,7 +51,6 @@ export type StoredValueKind =
   | "fabric"
   | "function"
   | "link"
-  | "null"
   | "number"
   | "object"
   | "reference"
@@ -98,8 +97,9 @@ function canonical(v: FabricValue): string {
   return v === undefined ? "undefined" : hashStringOf(v);
 }
 
+// Called only when two different stored values share a display annotation.
+// `null` annotates to itself and nothing else does, so it never arrives here.
 function storedValueKind(value: FabricValue): StoredValueKind {
-  if (value === null) return "null";
   if (decodedLinkOf(value) !== null) return "link";
   if (isStream(value)) return "stream";
   if (parseEntityRef(value) !== null) return "reference";

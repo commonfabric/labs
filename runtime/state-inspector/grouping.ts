@@ -164,12 +164,13 @@ export function analyzeSpaceSignals(
   const scope = opts.scope ?? "space";
   const own = didFromPath(space.path);
 
+  // An aggregate with no GROUP BY yields exactly one row, zeros included.
   const agg = space.db
     .prepare(
       `SELECT (SELECT count(*) FROM "commit") commits,
               (SELECT count(DISTINCT id) FROM revision) entities`,
     )
-    .get<{ commits: number; entities: number }>();
+    .get<{ commits: number; entities: number }>()!;
 
   // Session principals (owners who wrote here)
   const principalCounts = new Map<string, number>();
@@ -226,8 +227,8 @@ export function analyzeSpaceSignals(
     principals,
     principal,
     crossSpaceDids: [...crossSpaceDids],
-    commits: agg?.commits ?? 0,
-    entities: agg?.entities ?? 0,
+    commits: agg.commits,
+    entities: agg.entities,
   };
 }
 
