@@ -91,11 +91,11 @@ interface Timer {
 // every other one stays under a hundred.
 const AUTO_ADVANCE_LIMIT = 2_000;
 
-// How many consecutive turns the auto-advance pump yields to before calling the
-// zero-delay work that keeps re-arming a livelock. Each yield is one turn of
-// the real event loop, the same cost as one round of `settle()`, whose guard
-// this matches; a healthy test's turn chains end within a few dozen.
-const AUTO_ADVANCE_STARVATION_LIMIT = 100_000;
+// How many consecutive turns of zero-delay work `settle()` drains, and the
+// auto-advance pump yields to, before calling the work that keeps re-arming a
+// livelock, unless the preload names another limit. Each is one turn of the
+// real event loop; a healthy test's turn chains end within a few dozen.
+const DEFAULT_TURN_LIMIT = 100_000;
 
 /** Which behavior a package's preload selects. */
 export type FakeClockMode = "auto-advance" | "freeze-all";
@@ -103,16 +103,25 @@ export type FakeClockMode = "auto-advance" | "freeze-all";
 /** Options a package's `clock-preload.ts` passes to {@link installFakeClock}. */
 export interface FakeClockOptions {
   mode: FakeClockMode;
+  /**
+   * How many consecutive turns of zero-delay work the clock runs before it
+   * reports the work as a livelock that never settles. Defaults to 100 000.
+   */
+  turnLimit?: number;
 }
 
-interface ResolvedConfig {
+interface ModeConfig {
   autoAdvance: boolean;
   fakeInterval: boolean;
   fakeTimeSource: boolean;
   settleAfterBody: boolean;
 }
 
-const PRESETS: Record<FakeClockMode, ResolvedConfig> = {
+interface ResolvedConfig extends ModeConfig {
+  turnLimit: number;
+}
+
+const PRESETS: Record<FakeClockMode, ModeConfig> = {
   "auto-advance": {
     autoAdvance: true,
     fakeInterval: true,
@@ -200,10 +209,13 @@ async function freezeAround(
       tm.cb(...tm.args);
     }
   };
+  // The pump follows every kick, so it watches a turn chain for as long as the
+  // chain runs, whether or not a production timer waits behind it.
   const scheduleKick = () => {
     if (kickScheduled) return;
     kickScheduled = true;
     realSetTimeout(kick, 0);
+    scheduleAuto();
   };
 
   const hasPendingZero = () =>
@@ -217,9 +229,9 @@ async function freezeAround(
     // without letting a production timer (a throttle/debounce window) fire —
     // that is what lets a test check a state partway through a window.
     const wasTicking = ticking;
-    if (config.autoAdvance) ticking = true;
+    ticking = true;
     try {
-      for (let guard = 0; guard < 100_000; guard++) {
+      for (let guard = 0; guard < config.turnLimit; guard++) {
         await drainMicrotasks();
         if (!hasPendingZero()) return;
         kick();
@@ -228,10 +240,8 @@ async function freezeAround(
         "settle() did not converge: zero-delay work regenerated",
       );
     } finally {
-      if (config.autoAdvance) {
-        ticking = wasTicking;
-        if (!ticking) scheduleAuto();
-      }
+      ticking = wasTicking;
+      if (!ticking) scheduleAuto();
     }
   };
 
@@ -276,21 +286,23 @@ async function freezeAround(
   // re-queuing itself behind the pending kick, and jumps only when no turn
   // is left. That keeps a production backstop — the storage layer's 30 s
   // conflict read-repair wait, for one — from firing between the turns that
-  // deliver the frame it waits for. A turn chain that never ends starves the
-  // pump rather than hanging the test: past the starvation limit it throws,
-  // naming the condition, as `settle()` does for zero-delay work that
-  // regenerates.
+  // deliver the frame it waits for. With no turn left and no production
+  // timer pending there is nothing to jump to, so the pump stops until the
+  // next kick or production timer queues it. A turn chain that never ends
+  // starves the pump rather than hanging the test, in either mode: past the
+  // turn limit it throws, naming the condition, as `settle()` does for
+  // zero-delay work that regenerates.
   let yields = 0;
   const autoAdvance = () => {
     autoScheduled = false;
     if (ticking) return;
     if (hasPendingZero()) {
-      if (++yields > AUTO_ADVANCE_STARVATION_LIMIT) {
+      if (++yields > config.turnLimit) {
         throw new Error(
-          `clock auto-advance starved: zero-delay work re-armed itself ` +
-            `${AUTO_ADVANCE_STARVATION_LIMIT} turns in a row, so logical ` +
-            "time never moved. A turn that always arms another cannot " +
-            "settle; the loop it feeds needs a condition that changes.",
+          `fake clock starved: zero-delay work re-armed itself ` +
+            `${config.turnLimit} turns in a row, so the event loop never ` +
+            "went idle. A turn that always arms another cannot settle; the " +
+            "loop it feeds needs a condition that changes.",
         );
       }
       scheduleAuto();
@@ -549,6 +561,9 @@ export function useRealClock(): void {
  * task loads through `--preload`.
  */
 export function installFakeClock(options: FakeClockOptions): void {
-  const config = PRESETS[options.mode];
+  const config = {
+    ...PRESETS[options.mode],
+    turnLimit: options.turnLimit ?? DEFAULT_TURN_LIMIT,
+  };
   wrapSuites((run) => realClock ? run() : freezeAround(config, run));
 }

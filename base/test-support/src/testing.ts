@@ -311,18 +311,35 @@ function settleFileHooks(failure: Thrown | undefined): void {
 }
 
 /**
- * Whether the file has unloaded. Nothing reports after that, so an error
- * reaching the file then is written at once, as a failure of the file's
- * group, by listeners added as it unloads, which hear it after the file's
- * own.
+ * Whether the file has unloaded, and no test has started since. Nothing
+ * reports after that, so an error reaching the file then is written at once,
+ * as a failure of the file's group, by listeners added as it unloads, which
+ * hear it after the file's own. A test's `Deno.exit()` unloads the file, and
+ * Deno then goes on with the next test, which hears what reaches the file as
+ * any test does.
  */
 let unloaded = false;
 
-/** Writes `thrown` as the file group's failure, unless the file handled it. */
+/**
+ * Writes `thrown` as the file group's failure, unless the file handled it, or
+ * a test has started since the file unloaded and so will hear of it.
+ */
 function lateArrival(event: Event, thrown: unknown): void {
-  if (event.defaultPrevented) return;
+  if (!unloaded || event.defaultPrevented) return;
   fileGroup.failure ??= { thrown };
   reportFileGroup();
+}
+
+/**
+ * The listeners for what reaches the file once it has unloaded. Each is one
+ * function, so the second unload a test's `Deno.exit()` brings adds neither
+ * again.
+ */
+function lateError(event: ErrorEvent): void {
+  lateArrival(event, event.error ?? event.message);
+}
+function lateRejection(event: PromiseRejectionEvent): void {
+  lateArrival(event, event.reason);
 }
 
 /** Charges each arrival nobody handled to its test, or to the file. */
@@ -585,7 +602,10 @@ let setUp = false;
  * arrives, or else the file's own group. A test or group still running when
  * the file stops, such as one whose promise never settles or one an uncaught
  * error ends, is reported as a failure as the file unloads, and a group around
- * it on its own account.
+ * it on its own account. A test that calls `Deno.exit()` makes the file unload
+ * as well, and Deno fails that test and goes on with the next, so a file can
+ * unload twice; each time reports what still runs then, and the file's own
+ * group as it then stands.
  */
 let arranged = false;
 function arrange(): void {
@@ -638,16 +658,9 @@ function arrange(): void {
     (event) => arrive(event, event.reason),
   );
   globalThis.addEventListener("unload", () => {
-    if (unloaded) return;
     unloaded = true;
-    globalThis.addEventListener(
-      "error",
-      (event) => lateArrival(event, event.error ?? event.message),
-    );
-    globalThis.addEventListener(
-      "unhandledrejection",
-      (event) => lateArrival(event, event.reason),
-    );
+    globalThis.addEventListener("error", lateError);
+    globalThis.addEventListener("unhandledrejection", lateRejection);
     settleArrivals();
     for (const entry of finishing) reportEntry(entry);
     abandon("the test file stopped before this finished");
@@ -700,6 +713,7 @@ function registerSuite(node: Node): void {
         container = test.ranSteps;
       }
       abandon("Deno moved on before this finished");
+      unloaded = false;
       reportSkipped(node);
       await reported(node.name, container, () => wrapped(body)());
     },
