@@ -876,7 +876,7 @@ directory: `r38-argument-read/report-3.md` with `review-r38-2/report.md`,
 | `claude/compiled-pattern-scoped-rows` (build) | `c12d442929` | local past `7eb87d6743`; round 39 (setup) on top |
 | `claude/compiled-pattern-body-reads` | `d8a20351b9` | round 38 after three passes; local |
 | `claude/compiled-pattern-derivation-split` | `a9db79ae27` | the design's round 2 after three passes; local |
-| `claude/compiled-pattern-rounds-38-39-merge` | see `rounds-merge/report.md` | the build head with the two branches above merged; local |
+| `claude/compiled-pattern-rounds-38-39-merge` | `3d0fa913a1` | the build head with the two branches above merged, gates passing; local. The next free note number is 1352 |
 | `claude/own-write-link-stale` | `e7b3789ae4` | pull request #10283 against `main`; five review comments answered |
 
 Before any compiled branch is pushed, its diff is read for material the
@@ -956,6 +956,29 @@ this line until the owner answers.
   that state. For the owner: this, or a result built member by member.
 - The change to when the `wish` action is registered (P612) has no test
   that fails without it and no measured effect.
+
+### The merge
+
+`claude/compiled-pattern-rounds-38-39-merge` is the build head with rounds
+38 and 2 merged, by `git merge`. The author's gates and the coordinator's
+both exit 0 at `3d0fa913a1`. The build branch itself is not moved; it takes
+this branch by a fast-forward once the owner agrees to round 2 landing
+before round 4.
+
+- The merged tree showed a defect of round 38, fixed on the merge branch: a
+  required capture holding `null` was read as absent where its type names
+  `null` (`apps/recommend-a-book` has that shape).
+- The derivation line's notes 1200 to 1211 and 1260 to 1267 are numbered
+  1340 to 1351 and 1269 to 1276 on the merged branch.
+- Not refused by either round's rule, and not held by a test: a transaction
+  under the serving identity, not stamped as a derivation for no key, that
+  creates a scope instance whose schema does not bind readers to the
+  creator. The comparison counts none.
+- One full comparison: 447 scenarios, 283 differing, 152 skipped;
+  `unkeyed-into-scope` 0, `keyed-into-space` 1,893, `error-state` 4, `value`
+  611, `foreign-clause` 213, `crossed-clause` 305. No kind is above every
+  branch alone.
+- #10262 is not on the merged branch; it comes in after it lands on `main`.
 
 ### Waiting on the owner, added
 
