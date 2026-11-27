@@ -3177,8 +3177,19 @@ export class SpaceServer implements TransactionSealDestination {
     const principal = info.scopeKeyIdentity?.principal;
     const attributionFromScope = info.kind === "derivation" &&
       info.acting === undefined && principal !== undefined;
+    // The read ceiling is the one of the session the run ACTS AS
+    // (serving-loop.md §3c), not of whichever session's demand scheduled
+    // it. A handler acts as its event's session. A derivation acts as a
+    // session only when the instance it runs is that session's: a space or
+    // user instance is shared, so one demander's ceiling must not decide
+    // what every reader of it gets — the same split 06-cfc.md makes for a
+    // shared query result. Each session's own reads of a shared result
+    // still meet its ceiling.
     const sessionId = info.scopeKeyIdentity?.sessionId;
-    const readCeiling = info.kind !== "bookkeeping" && sessionId !== undefined
+    const actsAsSession = info.kind === "event-handler" ||
+      (info.kind === "derivation" && info.actionScopeKey !== undefined &&
+        scopeOfScopeKey(info.actionScopeKey) === "session");
+    const readCeiling = actsAsSession && sessionId !== undefined
       ? this.#options.server.sessionReadCeiling(this.#options.space, sessionId)
       : undefined;
     // The S-A carriage (OW31; protocol.md §2b): a bookkeeping run
