@@ -162,6 +162,37 @@ describe("InputReadView", () => {
         }
       });
 
+      it("returns the reads as each record is classified by what its metadata inherits", () => {
+        // A frozen metadata object cannot change, but what it inherits from
+        // `Object.prototype` can, and that classifies its reads too.
+
+        const runtime = newRuntime();
+        const tx = runtime.edit();
+        const [marker] = Reflect.ownKeys(internalVerifierRead);
+        try {
+          tx.readOrThrow({ ...address("inherited"), path: ["value"] });
+          const view = new InputReadView(tx);
+          expect(view.reads().map((read) => read.id)).toEqual([
+            "of:inherited",
+          ]);
+
+          Object.defineProperty(Object.prototype, marker, {
+            value: true,
+            configurable: true,
+          });
+          try {
+            expect(view.reads()).toEqual([]);
+          } finally {
+            Reflect.deleteProperty(Object.prototype, marker);
+          }
+          expect(view.reads().map((read) => read.id)).toEqual([
+            "of:inherited",
+          ]);
+        } finally {
+          tx.abort();
+        }
+      });
+
       it("compares no record with its copy while the transaction lists the same records", () => {
         // A boundary pass asks once for each target it verifies. An ask that
         // compared every record would cost the targets times the reads.
@@ -335,6 +366,39 @@ describe("InputReadView", () => {
           tx.writeOrThrow({ ...labeled, path: ["value", "field"] }, "changed");
           resolver.refresh();
           expect(view.gatedReads(resolver)).not.toBe(gated);
+        } finally {
+          tx.abort();
+        }
+      });
+
+      it("joins a label-metadata observation as a read of its target that consumed the observed clauses", () => {
+        const runtime = newRuntime();
+        const tx = runtime.edit();
+        try {
+          tx.readOrThrow({ ...address("unlabeled"), path: ["value"] });
+          const view = new InputReadView(tx);
+          const resolver = new VerifierMetadataResolver(tx);
+          view.reads();
+          resolver.refresh();
+          expect(view.gatedReads(resolver)).toEqual([]);
+
+          tx.recordCfcLabelMetadataObservation({
+            target: { ...address("observed"), path: ["field"] },
+            observes: "labelMetadata",
+            confidentiality: ["secret"],
+          });
+          const gated = view.gatedReads(resolver);
+          expect(gated.map((read) => [read.id, read.path, read.label])).toEqual(
+            [["of:observed", ["field"], { confidentiality: ["secret"] }]],
+          );
+          // Label metadata carries no evidence of the value it describes.
+          expect(
+            gated[0].locations().map((location) => [
+              location.confidentiality,
+              location.integrity,
+              location.evidence,
+            ]),
+          ).toEqual([[["secret"], [], []]]);
         } finally {
           tx.abort();
         }

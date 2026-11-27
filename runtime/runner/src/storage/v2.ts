@@ -1147,9 +1147,10 @@ const materializedVersionThroughPending = (
 
 /**
  * Drops the cached materializations of `record`'s pending layers from
- * `pendingIndex` on, and releases the whole cache, values included, when it
- * was built over another confirmed version than the record's or holds no
- * layer once the drop is done.
+ * `pendingIndex` on, and releases the whole cache, values included, when
+ * that is every layer. A cache is only ever built over the record's
+ * confirmed version and holds at least one layer: each site that replaces
+ * the confirmed version replaces or releases the cache with it.
  */
 const dropMaterializedSuffix = (
   record: DocumentRecord,
@@ -1157,21 +1158,8 @@ const dropMaterializedSuffix = (
 ): void => {
   if (pendingIndex <= 0) {
     record.materialized = undefined;
-    return;
-  }
-
-  const cache = record.materialized;
-  if (!cache) {
-    return;
-  }
-  if (cache.confirmed !== record.confirmed) {
-    record.materialized = undefined;
-    return;
-  }
-
-  cache.prefixes.length = Math.min(cache.prefixes.length, pendingIndex);
-  if (cache.prefixes.length === 0) {
-    record.materialized = undefined;
+  } else {
+    record.materialized?.prefixes.splice(pendingIndex);
   }
 };
 
@@ -1641,7 +1629,7 @@ const coarsenCommitForWire = (commit: ClientCommit): ClientCommit => {
  * (`compactDependencyGroup()`), in order of scope, document, shallow before
  * recursive, and path.
  */
-const compactCommitReads = <
+export const compactCommitReads = <
   Read extends ConfirmedCommitRead | PendingCommitRead,
 >(
   reads: Read[],
@@ -1895,9 +1883,10 @@ export class StorageManager implements IStorageManager {
    * a replacement replica both see it. */
   readonly #storeReadThroughs = new Map<MemorySpace, StoreReadThrough>();
 
-  /** The crossing loads kicked, by target and selector (see
-   * `#loadCrossings`): one kick per manager, in flight or landed. */
-  readonly #crossingKicks = new Map<string, Set<string>>();
+  /** The crossing loads kicked, by the target's space, the rest of the
+   * target, and selector (see `#loadCrossings`): one kick per manager, in
+   * flight or landed. */
+  readonly #crossingKicks = new Map<MemorySpace, Map<string, Set<string>>>();
 
   /** The crossing loads in flight, by their pending-load key: the address
    * each names (IStorageManager.pendingCrossingLoadAddresses) and how many
@@ -3876,10 +3865,8 @@ export class StorageManager implements IStorageManager {
     ) {
       return false;
     }
+    // A crossing load registers as a pending load too.
     for (const entry of this.#pendingLoads.values()) {
-      if (entry.address.space === space) return false;
-    }
-    for (const entry of this.#pendingCrossingLoads.values()) {
       if (entry.address.space === space) return false;
     }
     return provider.isUnused();
@@ -3898,9 +3885,7 @@ export class StorageManager implements IStorageManager {
     for (const key of this.#docPullKicks) {
       if (key.startsWith(prefix)) this.#docPullKicks.delete(key);
     }
-    for (const key of this.#crossingKicks.keys()) {
-      if (key.startsWith(prefix)) this.#crossingKicks.delete(key);
-    }
+    this.#crossingKicks.delete(space);
   }
 
   /**
@@ -4043,12 +4028,13 @@ export class StorageManager implements IStorageManager {
     addresses: readonly LocalDocAddress[],
   ): void {
     this.#droppedDocuments += addresses.length;
+    const crossingKicks = this.#crossingKicks.get(space);
     for (const address of addresses) {
       this.#docPullKicks.delete(
         this.#documentKey(space, address.id, address.scope, address.scopeKey),
       );
-      this.#crossingKicks.delete(
-        `${space}\0${normalizeCellScope(address.scope)}\0${address.id}`,
+      crossingKicks?.delete(
+        `${normalizeCellScope(address.scope)}\0${address.id}`,
       );
     }
     this.#dataURISyncs.clear();
@@ -4170,10 +4156,12 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
     instance: ScopeKey | undefined,
   ): ScopedReadStanding {
-    if (instance === undefined) return "refused";
-    const actor = identityOfScopeKey(instance)?.principal;
-    if (actor === undefined) return "refused";
-    if (this.#foreignScopedReadGrant === undefined) return "refused";
+    const actor = instance === undefined
+      ? undefined
+      : identityOfScopeKey(instance)?.principal;
+    if (actor === undefined || this.#foreignScopedReadGrant === undefined) {
+      return "refused";
+    }
     const provider = this.#providers.get(space);
     return provider === undefined
       ? "unresolved"
@@ -4565,15 +4553,20 @@ export class StorageManager implements IStorageManager {
       if (scope !== "space" && this.#gatesForeignScopedReadsIn(space)) {
         continue;
       }
-      const target = `${space}\0${scope}\0${id}`;
+      const target = `${scope}\0${id}`;
       const selector = `${JSON.stringify(crossing.path)}\0${
         crossing.schema === undefined ? "" : hashStringOf(crossing.schema)
       }`;
-      let kicked = this.#crossingKicks.get(target);
+      let spaceKicks = this.#crossingKicks.get(space);
+      if (spaceKicks === undefined) {
+        spaceKicks = new Map();
+        this.#crossingKicks.set(space, spaceKicks);
+      }
+      let kicked = spaceKicks.get(target);
       if (kicked?.has(selector)) continue;
       if (kicked === undefined) {
         kicked = new Set();
-        this.#crossingKicks.set(target, kicked);
+        spaceKicks.set(target, kicked);
       }
       kicked.add(selector);
       const address = { space, scope, id };
@@ -4612,9 +4605,7 @@ export class StorageManager implements IStorageManager {
           loadFailure = error;
           this.#logSyncLoadFailure(space, id, error, heldProvider, undefined);
         } finally {
-          if (loadFailure !== undefined) {
-            this.#crossingKicks.get(target)?.delete(selector);
-          }
+          if (loadFailure !== undefined) kicked.delete(selector);
           releaseLoad(loadFailure);
           entry.count--;
           if (entry.count === 0) this.#pendingCrossingLoads.delete(ledgerKey);
@@ -9111,10 +9102,10 @@ export class SpaceReplica
    * is under way, nothing subscribes through it, and its session is neither
    * being opened nor refused. The watch of the space's access list that a
    * gated replica keeps for itself, and the access list it keeps loaded, do
-   * not count.
+   * not count. Only a provider not yet destroyed asks, so the replica it
+   * asks has not closed.
    */
   isUnused(): boolean {
-    if (this.#closed) return false;
     const own = this.#accessListWatch === undefined
       ? undefined
       : docKey(aclDocId(this.#space) as URI, "space");

@@ -2,7 +2,9 @@ import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import {
   type CurrencyBatch,
+  type CurrencyMarked,
   type CurrencyRecord,
+  type CurrencyStored,
   selectCurrencyPiece,
   storeCurrencyRecords,
 } from "@commonfabric/memory/v2/currency-index";
@@ -25,12 +27,17 @@ import {
 } from "../../src/executor/stats.ts";
 import {
   type CurrencyIndexMode,
+  type CurrencyRearm,
   StoreCurrency,
 } from "../../src/executor/store-currency.ts";
 import type { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 
 const SPACE = "did:key:z6Mk-store-currency-test-space" as MemorySpace;
+
+/** What the memory server judges of the roots a loop asks about. */
+type Judgment = Awaited<ReturnType<HostMemoryServer["judgeCurrencyRoots"]>>;
 
 describe("StoreCurrency", () => {
   let engine: Engine;
@@ -137,6 +144,204 @@ describe("StoreCurrency", () => {
     return counts;
   };
 
+  /** What the next request of a `scriptedLoop()` to store records finds. */
+  let stored: CurrencyStored;
+
+  /** What the memory server judges of the roots it is asked about. */
+  let judgment: (roots: readonly string[]) => Judgment;
+
+  /** The roots each judgment asked about. */
+  let judgedRoots: string[][];
+
+  /** What the next advance of the marks finds. */
+  let advanced: CurrencyMarked[];
+
+  /** How many times the marks were advanced. */
+  let advances: number;
+
+  /** The keys each call of `onMarked` re-armed. */
+  let marked: CurrencyRearm[][];
+
+  /** How many times a stored record left a piece owed. */
+  let owedCalls: number;
+
+  /** The pieces that run on the tenure's runtime. */
+  let runningPieces: Set<string>;
+
+  /** The pieces the scheduler reports as changed, once. */
+  let changedPieces: string[];
+
+  /** Whether the scheduler reports a piece as reading an unstarted one. */
+  let readsUnstarted: boolean;
+
+  /** Whether the runner finds a pattern behind each piece. */
+  let patterned: boolean;
+
+  /** What the loops `scriptedLoop()` makes counted. */
+  let loopStats: ServingLoopStats;
+
+  /** A memory server that judges every root servable, on its own piece. */
+  const servableJudgment = (roots: readonly string[]): Judgment => ({
+    servable: roots.map((root) => ({ root, piece: root, origins: [] })),
+    held: [],
+    upstream: [],
+    refused: {},
+    marked: [],
+  });
+
+  /** The read that keeps `of:reader` stale, of an output of `producer`. */
+  const upstreamRead = (reader: string, producer = "of:producer") => ({
+    reader,
+    slice: "space",
+    id: `computed:out-of-${producer}`,
+    scopeKey: "space",
+    piece: producer,
+  });
+
+  /**
+   * A memory server that holds each root as stale only through the read
+   * of `reads` whose reader is the root's own piece.
+   */
+  const heldJudgment =
+    (reads: Array<ReturnType<typeof upstreamRead>>) =>
+    (roots: readonly string[]): Judgment => ({
+      servable: [],
+      held: roots.map((root) => ({
+        root,
+        piece: root,
+        readers: reads.filter(({ reader }) => reader === root).map((
+          { reader },
+        ) => reader),
+      })),
+      upstream: reads,
+      refused: {},
+      marked: [],
+    });
+
+  /**
+   * A loop that keeps the index as `mode` says, over a memory server whose
+   * answers each case sets through `stored`, `judgment` and `advanced`.
+   */
+  const scriptedLoop = (mode: CurrencyIndexMode) =>
+    new StoreCurrency({
+      space: SPACE,
+      server: {
+        storeCurrencyRecords: () => Promise.resolve(stored),
+        judgeCurrencyRoots: (_space, roots) => {
+          judgedRoots.push([...roots]);
+          return Promise.resolve(judgment(roots));
+        },
+        advanceCurrency: () => {
+          advances += 1;
+          return Promise.resolve(advanced);
+        },
+      } as Pick<
+        HostMemoryServer,
+        "storeCurrencyRecords" | "judgeCurrencyRoots" | "advanceCurrency"
+      > as HostMemoryServer,
+      mode,
+      epoch: "epoch-one",
+      serviceIdentity: "did:key:service",
+      stats: loopStats,
+      onOwed: () => {
+        owedCalls += 1;
+      },
+      onMarked: (rearm) => {
+        marked.push(rearm);
+      },
+      runs: (piece) => runningPieces.has(piece),
+    });
+
+  /**
+   * A runtime that runs the pieces of `runningPieces`, and whose scheduler
+   * reports each piece it is asked about with one clean slice.
+   */
+  const cleanRuntime = {
+    scheduler: {
+      hasNodesUnderDemandRoot: (piece: string) => runningPieces.has(piece),
+      takeChangedPieces: () => changedPieces.splice(0),
+      pieceCurrencySnapshot: (_space: string, piece: string) => ({
+        piece,
+        rootScope: "space",
+        under: [],
+        unvouched: [],
+        writes: [],
+        readsUnstarted,
+        slices: [{
+          key: "space",
+          unvouched: [],
+          reads: [],
+          vouches: [],
+          decides: [],
+          superseded: [],
+        }],
+      }),
+    },
+    runner: {
+      pieceCurrencyFacts: () =>
+        patterned ? { owned: [], absentAsDefault: [] } : undefined,
+    },
+    getCellFromLink: () => ({}),
+  } as unknown as Runtime;
+
+  /** Judges each of `ids` under a key of the same name. */
+  const judgeEach = (currency: StoreCurrency, ...ids: string[]) =>
+    currency.judge(
+      cleanRuntime,
+      new Map(ids.map((id) => [id, { id, scope: "space" }])),
+      () => true,
+      true,
+    );
+
+  /** A snapshot with one record of each of `pieces`, at `asOf`. */
+  const snapshotOf = (asOf: number, ...pieces: string[]) => ({
+    asOf,
+    seen: [],
+    records: pieces.map((piece) => ({
+      piece,
+      under: [],
+      vouched: true,
+      writes: [],
+      owned: [],
+      slices: [{ key: "space", vouched: true, reads: [], vouches: [] }],
+    })),
+  });
+
+  /** A mark of a slice of `piece` at `seq`. */
+  const markOf = (
+    piece: string,
+    seq: number,
+    extra: { under?: string[]; upstream?: true } = {},
+  ): CurrencyMarked => ({
+    piece,
+    slice: "space",
+    seq,
+    under: extra.under ?? [],
+    ...(extra.upstream && { upstream: true as const }),
+  });
+
+  beforeEach(() => {
+    stored = {
+      marked: [],
+      falseClean: [],
+      blocked: [],
+      blockedBy: [],
+      behind: [],
+      unread: [],
+    };
+    judgment = servableJudgment;
+    judgedRoots = [];
+    advanced = [];
+    advances = 0;
+    marked = [];
+    owedCalls = 0;
+    runningPieces = new Set();
+    changedPieces = [];
+    readsUnstarted = false;
+    patterned = true;
+    loopStats = emptyServingLoopStats();
+  });
+
   describe("instance members", () => {
     describe("store()", () => {
       it("stores clean a ring of pieces that takes more than one request, and owes none of them another snapshot", async () => {
@@ -174,6 +379,75 @@ describe("StoreCurrency", () => {
         expect([...currency.accessForTestingOnly.owed]).toEqual(
           records.map(({ piece }) => piece),
         );
+      });
+
+      it("warns of the pieces the index held clean that wrote a different value, and counts them", async () => {
+        using logs = captureLogs("store-currency");
+        const currency = scriptedLoop("record");
+        currency.store(snapshotOf(1, "of:a", "of:b"));
+        await currency.stored;
+        expect(logs.textsOf("currency-false-clean")).toEqual([]);
+
+        stored.falseClean = ["of:a", "of:b"];
+        currency.store(snapshotOf(2, "of:a", "of:b"));
+        await currency.stored;
+
+        const lines = logs.textsOf("currency-false-clean");
+        expect(lines).toHaveLength(1);
+        expect(lines[0]).toContain(SPACE);
+        expect(lines[0]).toContain("2 piece(s)");
+        expect(lines[0]).toContain("of:a, of:b");
+        expect(loopStats.currency.falseClean).toBe(2);
+      });
+
+      it("re-arms each key left unloaded whose piece, or a piece beneath it, a stored record finds marked, at the lowest seq", async () => {
+        const currency = scriptedLoop("skip");
+        await judgeEach(currency, "of:a", "of:b");
+        stored.marked = [markOf("of:elsewhere", 2)];
+        currency.store(snapshotOf(1, "of:x"));
+        await currency.stored;
+        expect(marked).toEqual([]);
+
+        stored.marked = [
+          markOf("of:nested", 7, { under: ["of:a"] }),
+          markOf("of:a", 5),
+          markOf("of:nested", 9, { under: ["of:a"] }),
+        ];
+        currency.store(snapshotOf(2, "of:x"));
+        await currency.stored;
+
+        expect(marked).toEqual([[{ key: "of:a", seq: 5 }]]);
+        expect(loopStats.currency.rearmed).toBe(1);
+        expect(currency.servesFromStore).toBe(true);
+      });
+
+      it("owes a snapshot of the pieces that keep a stored one marked, with that one, once until they change", async () => {
+        const currency = scriptedLoop("record");
+        stored.blocked = ["of:reader"];
+        stored.blockedBy = ["of:writer"];
+
+        currency.store(snapshotOf(1, "of:reader"));
+        await currency.stored;
+        expect(owedCalls).toBe(1);
+        expect([...currency.accessForTestingOnly.owed].sort()).toEqual([
+          "of:reader",
+          "of:writer",
+        ]);
+
+        currency.snapshot(cleanRuntime, 2, []);
+        currency.store(snapshotOf(2, "of:reader"));
+        await currency.stored;
+        expect(owedCalls).toBe(1);
+        expect(currency.accessForTestingOnly.owed.size).toBe(0);
+
+        changedPieces = ["of:writer"];
+        currency.snapshot(cleanRuntime, 3, []);
+        currency.store(snapshotOf(3, "of:reader"));
+        await currency.stored;
+        expect(owedCalls).toBe(2);
+        expect([...currency.accessForTestingOnly.owed]).toEqual([
+          "of:writer",
+        ]);
       });
     });
 
@@ -425,6 +699,74 @@ describe("StoreCurrency", () => {
         expect(currency.foreignReads.size).toBe(0);
         expect(currency.takeForeignReadsChanged()).toBe(true);
       });
+
+      it("records a changed piece named by a document id, and none named by anything else", () => {
+        const currency = scriptedLoop("record");
+        changedPieces = ["of:piece", "piece-without-scheme"];
+
+        const snapshot = currency.snapshot(cleanRuntime, 1, []);
+
+        expect(snapshot?.records.map(({ piece }) => piece)).toEqual([
+          "of:piece",
+        ]);
+      });
+
+      it("does not vouch for a piece the runner finds no pattern behind, and counts the reason", () => {
+        const currency = scriptedLoop("record");
+        changedPieces = ["of:piece"];
+        patterned = false;
+        const unpatterned = currency.snapshot(cleanRuntime, 1, []);
+        changedPieces = ["of:other"];
+        patterned = true;
+        const patternedSnapshot = currency.snapshot(cleanRuntime, 1, []);
+
+        expect(unpatterned?.records.map(({ vouched }) => vouched)).toEqual([
+          false,
+        ]);
+        expect(patternedSnapshot?.records.map(({ vouched }) => vouched))
+          .toEqual([true]);
+        expect(loopStats.currency.unvouched).toEqual({ "no-pattern": 1 });
+      });
+
+      it("takes a piece a stored record left behind a commit again only at a settle that covers more", async () => {
+        const currency = scriptedLoop("record");
+        stored.behind = ["of:piece"];
+
+        currency.store(snapshotOf(3, "of:piece"));
+        await currency.stored;
+
+        expect(owedCalls).toBe(1);
+        expect(currency.snapshot(cleanRuntime, 3, [])).toBeUndefined();
+        expect([...currency.accessForTestingOnly.owed]).toEqual(["of:piece"]);
+        expect(
+          currency.snapshot(cleanRuntime, 4, [])?.records.map(({ piece }) =>
+            piece
+          ),
+        ).toEqual(["of:piece"]);
+        expect(currency.accessForTestingOnly.owed.size).toBe(0);
+      });
+
+      it("follows the marks for a running piece that reads the output of an unstarted one only where it starts what is upstream", () => {
+        const starting = scriptedLoop("start-upstream");
+        const skipping = scriptedLoop("skip");
+        readsUnstarted = true;
+
+        changedPieces = ["of:piece"];
+        starting.snapshot(cleanRuntime, 1, []);
+        changedPieces = ["of:piece"];
+        skipping.snapshot(cleanRuntime, 1, []);
+
+        expect([starting.followsMarks, skipping.followsMarks]).toEqual([
+          true,
+          false,
+        ]);
+
+        readsUnstarted = false;
+        changedPieces = ["of:piece"];
+        starting.snapshot(cleanRuntime, 2, []);
+
+        expect(starting.followsMarks).toBe(false);
+      });
     });
 
     describe("judge()", () => {
@@ -620,6 +962,93 @@ describe("StoreCurrency", () => {
 
           expect(currency.servesFromStore).toBe(false);
         });
+      });
+
+      it("loads a root it left unloaded once the root's piece has started some other way, and asks the memory server nothing for it", async () => {
+        const currency = scriptedLoop("skip");
+        expect((await judgeEach(currency, "of:a")).servable).toEqual(["of:a"]);
+
+        runningPieces.add("of:a");
+        const started = await judgeEach(currency, "of:a");
+
+        expect(started.servable).toEqual([]);
+        expect(currency.servesFromStore).toBe(false);
+        expect(judgedRoots).toEqual([["of:a"]]);
+      });
+
+      it("counts the roots the memory server refused by reason, across judgments", async () => {
+        const currency = scriptedLoop("record");
+        judgment = (roots) => ({
+          ...servableJudgment(roots),
+          refused: { marked: 2, "no-record": 1 },
+        });
+
+        await judgeEach(currency, "of:a");
+        judgment = (roots) => ({
+          ...servableJudgment(roots),
+          refused: { marked: 1 },
+        });
+        await judgeEach(currency, "of:a");
+
+        expect(loopStats.currency.refused).toEqual({
+          marked: 3,
+          "no-record": 1,
+        });
+      });
+
+      it("holds a root again once a judgment names a piece upstream of an abandoned reader that was not named before", async () => {
+        const currency = scriptedLoop("start-upstream");
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+        await judgeEach(currency, "of:reader");
+        currency.abandonUpstream("of:reader");
+        expect((await judgeEach(currency, "of:reader")).held).toEqual([]);
+
+        judgment = heldJudgment([
+          upstreamRead("of:reader"),
+          upstreamRead("of:reader", "of:other-producer"),
+        ]);
+
+        expect((await judgeEach(currency, "of:reader")).held).toEqual([
+          "of:reader",
+        ]);
+        expect(currency.staleUpstream).toBe(true);
+      });
+
+      it("asks afresh about an abandoned reader once a judgment asked about it names nothing upstream of it", async () => {
+        const currency = scriptedLoop("start-upstream");
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+        await judgeEach(currency, "of:reader");
+        currency.abandonUpstream("of:reader");
+        judgment = (roots) => ({
+          ...servableJudgment(roots),
+          servable: roots.map((root) => ({
+            root,
+            piece: "of:reader",
+            origins: [],
+          })),
+        });
+        await judgeEach(currency, "of:reader");
+
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+
+        expect((await judgeEach(currency, "of:reader")).held).toEqual([
+          "of:reader",
+        ]);
+      });
+
+      it("owes a snapshot of a piece upstream that runs here when a judgment first names it", async () => {
+        const currency = scriptedLoop("start-upstream");
+        runningPieces.add("of:producer");
+        judgment = heldJudgment([
+          upstreamRead("of:reader"),
+          upstreamRead("of:reader", "of:stopped"),
+        ]);
+
+        await judgeEach(currency, "of:reader");
+
+        expect([...currency.accessForTestingOnly.owed]).toEqual([
+          "of:producer",
+        ]);
       });
     });
 
@@ -1122,6 +1551,138 @@ describe("StoreCurrency", () => {
         await judge();
 
         expect(judgments).toBe(2);
+      });
+    });
+    describe("producerProgress()", () => {
+      it("reports a piece upstream as unrecorded until a record of it is stored, while records are on their way, and while it is owed", async () => {
+        const currency = scriptedLoop("start-upstream");
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+        await judgeEach(currency, "of:reader");
+        expect(currency.producerProgress("of:producer").unrecorded).toBe(
+          true,
+        );
+
+        currency.store(snapshotOf(1, "of:producer"));
+        await currency.stored;
+        expect(currency.producerProgress("of:producer").unrecorded).toBe(
+          false,
+        );
+
+        currency.store(snapshotOf(2, "of:unrelated"));
+        expect(currency.producerProgress("of:producer").unrecorded).toBe(
+          true,
+        );
+        await currency.stored;
+        expect(currency.producerProgress("of:producer").unrecorded).toBe(
+          false,
+        );
+
+        currency.owe(snapshotOf(3, "of:producer"));
+        expect(currency.producerProgress("of:producer").unrecorded).toBe(
+          true,
+        );
+      });
+    });
+
+    describe("abandonUpstream()", () => {
+      it("releases nothing, and counts nothing, for a piece the last judgment named no read of", async () => {
+        const currency = scriptedLoop("start-upstream");
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+        await judgeEach(currency, "of:reader");
+
+        expect(currency.abandonUpstream("of:unknown")).toEqual([]);
+        expect(loopStats.currency.upstreamAbandoned).toBe(0);
+        expect(currency.staleUpstream).toBe(true);
+        expect(currency.abandonUpstream("of:reader")).toEqual(["of:reader"]);
+        expect(loopStats.currency.upstreamAbandoned).toBe(1);
+      });
+
+      it("keeps held a root that only another piece's read holds", async () => {
+        const currency = scriptedLoop("start-upstream");
+        judgment = heldJudgment([
+          upstreamRead("of:reader"),
+          upstreamRead("of:other"),
+        ]);
+        await judgeEach(currency, "of:reader", "of:other");
+
+        expect(currency.abandonUpstream("of:reader")).toEqual(["of:reader"]);
+
+        expect(currency.staleUpstream).toBe(true);
+        expect([...currency.upstreamProducers.keys()]).toEqual(["of:other"]);
+      });
+    });
+
+    describe("abandonAllUpstream()", () => {
+      it("releases a held root no read of which the last judgment named", async () => {
+        const currency = scriptedLoop("start-upstream");
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+        await judgeEach(currency, "of:reader");
+        judgment = servableJudgment;
+        await judgeEach(currency, "of:elsewhere");
+        expect(currency.upstreamReads).toEqual([]);
+        expect(currency.staleUpstream).toBe(true);
+
+        expect(currency.abandonAllUpstream()).toEqual(["of:reader"]);
+
+        expect(currency.staleUpstream).toBe(false);
+      });
+    });
+
+    describe("advance()", () => {
+      it("asks the memory server only while a root is left unloaded and the head has moved, and re-arms the keys it finds marked", async () => {
+        const currency = scriptedLoop("skip");
+        expect(await currency.advance(5)).toEqual([]);
+        expect(advances).toBe(0);
+        await judgeEach(currency, "of:a", "of:b");
+        advanced = [markOf("of:a", 3)];
+
+        expect(await currency.advance(5)).toEqual([{ key: "of:a", seq: 3 }]);
+        expect(await currency.advance(5)).toEqual([]);
+        expect(advances).toBe(1);
+        advanced = [];
+        expect(await currency.advance(6)).toEqual([]);
+        expect(advances).toBe(2);
+        expect(currency.servesFromStore).toBe(true);
+        expect(loopStats.currency.rearmed).toBe(1);
+      });
+
+      it("takes a running piece found marked upstream as one that is stale upstream, where the loop starts what is upstream", async () => {
+        const starting = scriptedLoop("start-upstream");
+        const skipping = scriptedLoop("skip");
+        runningPieces.add("of:running");
+        await judgeEach(starting, "of:a");
+        await judgeEach(skipping, "of:a");
+        advanced = [
+          markOf("of:running", 3, { upstream: true }),
+          markOf("of:stopped", 3, { upstream: true }),
+        ];
+
+        expect(await starting.advance(1)).toEqual([]);
+        expect(await skipping.advance(1)).toEqual([]);
+
+        expect([starting.staleUpstream, skipping.staleUpstream]).toEqual([
+          true,
+          false,
+        ]);
+        await judgeEach(starting, "of:a");
+        expect(starting.staleUpstream).toBe(false);
+      });
+    });
+
+    describe("forget()", () => {
+      it("takes a key out of those left unloaded and those held", async () => {
+        const skipping = scriptedLoop("skip");
+        await judgeEach(skipping, "of:a");
+        const starting = scriptedLoop("start-upstream");
+        judgment = heldJudgment([upstreamRead("of:reader")]);
+        await judgeEach(starting, "of:reader");
+
+        skipping.forget("of:a");
+        starting.forget("of:reader");
+
+        expect(skipping.servesFromStore).toBe(false);
+        expect(starting.servesFromStore).toBe(false);
+        expect(starting.staleUpstream).toBe(false);
       });
     });
   });

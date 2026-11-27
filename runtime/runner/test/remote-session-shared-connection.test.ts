@@ -246,11 +246,14 @@ describe("RemoteSessionFactory connection sharing", () => {
     it("dials one socket for a host that does not advertise `connectionAuth`", async () => {
       const server = startServer({ connectionAuth: false });
       const { factory, dialed } = harnessFor(server, { shared: true });
-      await Promise.all(SPACES.map((space) => factory.create(space)));
+      const opened = await Promise.all(
+        SPACES.map((space) => factory.create(space)),
+      );
       expect(dialed).toHaveLength(1);
       for (const space of SPACES) {
         expect(principalsIn(server, space)).toEqual([user.did()]);
       }
+      expect(opened[0].client.serverFlags?.connectionAuth).toBe(false);
     });
 
     it("opens sessions as two signers on the one socket", async () => {
@@ -297,6 +300,24 @@ describe("RemoteSessionFactory connection sharing", () => {
 
       await factory.create(SPACES[2]);
       expect(dialed).toHaveLength(1);
+    });
+
+    it("reports the shared connection's state to each session on it", async () => {
+      const server = startServer({ connectionAuth: true });
+      const { factory } = harnessFor(server, { shared: true });
+      const closing = await factory.create(SPACES[0]);
+      const staying = await factory.create(SPACES[1]);
+      expect(closing.client.connectionState).toBe("connected");
+      expect(staying.client.connectionState).toBe("connected");
+      expect(staying.client.serverFlags?.connectionAuth).toBe(true);
+
+      // Ending one session leaves the connection up for the other.
+      await closing.client.close();
+      expect(staying.client.connectionState).toBe("connected");
+
+      // Closing the factory closes the connection under every session.
+      await factory.close();
+      expect(staying.client.connectionState).toBe("closed");
     });
 
     it("closes while a dial is still opening, and refuses a create whose signal aborts meanwhile", async () => {

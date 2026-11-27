@@ -1110,9 +1110,8 @@ function readValueAtResolvedLink(
 function entrySelectorSchema(
   readerSchema: JSONSchema | undefined,
   travelingSchema: JSONSchema,
-  storedSchema: JSONSchema | undefined,
+  storedSchema: JSONSchema,
 ): JSONSchema {
-  if (storedSchema === undefined) return travelingSchema;
   const stored = resolveSchema(storedSchema);
   const isUnknown = (schema: JSONSchema | undefined) =>
     isObjectOrArray(schema) && schema.type === "unknown";
@@ -1476,6 +1475,9 @@ export function validateAndTransform(
     // will notify the scheduler for shallow reads as they occur.
     const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
     doc = { address, value: value };
+    // Resolution carries a schema whenever the link it resolves carries one,
+    // and this read's link carries `effectiveSchema`.
+    const valueLinkSchema = resolvedValueLink.schema!;
     const valueSelectedSchema = isObjectOrArray(effectiveSchema)
       ? asCellCompoundSchemaForValue(effectiveSchema, value)
       : undefined;
@@ -1484,7 +1486,7 @@ export function validateAndTransform(
     // below, and a view combines the two its own way.
     selector = {
       path: doc.address.path,
-      schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
+      schema: valueSelectedSchema ?? valueLinkSchema,
     };
     // The schema an eager read validates the value against where the value
     // selects no handle branch of its own.
@@ -1492,7 +1494,7 @@ export function validateAndTransform(
       entrySelectorSchema(
         resolvedSchema,
         link.schema!,
-        resolvedValueLink.schema,
+        valueLinkSchema,
       );
     // A record or an array read for its truthiness alone is truthy whatever it
     // holds, so only the eager read's checks at its root decide, and nothing

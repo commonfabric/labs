@@ -139,46 +139,6 @@ type ProgramClosureGrace = {
  * creations that would have succeeded moments later. */
 const DEFAULT_ROOT_ENSURE_DEADLINE_MS = 30_000;
 
-/** `fetch`, with each request refused once it has gone `deadlineMs`
- * without its whole answer, body included: the request is aborted and the
- * call rejects. The response it returns has its body already read. A peer
- * that stops answering reports nothing, so this deadline is the only end
- * a silent host's request has. */
-function fetchWithin(fetch: RuntimeFetch, deadlineMs: number): RuntimeFetch {
-  return (input, init) => {
-    const abort = new AbortController();
-    const outer = init?.signal;
-    if (outer) {
-      if (outer.aborted) abort.abort(outer.reason);
-      else outer.addEventListener("abort", () => abort.abort(outer.reason));
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const silent = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const error = new Error(
-          `space-root ensure: a pattern-source fetch went ${deadlineMs}ms ` +
-            "without an answer (SpaceServerPolicy.rootEnsureDeadlineMs); " +
-            "the tenure proceeds serving without the root",
-        );
-        abort.abort(error);
-        reject(error);
-      }, deadlineMs);
-    });
-    // The deadline runs until the body is read, not just the headers: a
-    // host can answer the headers and then go silent mid-body.
-    const answered = fetch(input, { ...init, signal: abort.signal }).then(
-      async (response) =>
-        new Response(await response.arrayBuffer(), {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        }),
-    );
-    answered.catch(() => {});
-    return Promise.race([answered, silent]).finally(() => clearTimeout(timer));
-  };
-}
-
 import {
   markRuntimeInjectedEventKeys,
   sanitizeRuntimeInjectedEventKeys,
@@ -194,7 +154,7 @@ import {
 } from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/logger";
 import { minOf } from "@commonfabric/collections/math";
-import type { Runtime, RuntimeFetch, ServerRunInfo } from "../runtime.ts";
+import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
   ForeignScopedReadGrant,
@@ -240,6 +200,7 @@ import { type RunEvent, runEventKey } from "./run-beacon.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
+import { fetchWithin } from "./fetch-within.ts";
 import { watermarkDocLink } from "./watermark.ts";
 import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
@@ -6408,7 +6369,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
       // A reader none of whose pieces upstream can make progress is given
       // up on: its roots are loaded below, as a refused root is.
-      const released = this.#releaseStuckUpstream(runtime);
+      const released = this.#releaseStuckUpstream(runtime, this.#currency);
       if (this.#currency.skips) {
         for (
           const key of [
@@ -7814,17 +7775,20 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * Helper for `#loadDemandedStructure()`, which gives up on what is
    * upstream of each held root and each stale running piece for which no
-   * piece the judgment named can make progress.
+   * piece the judgment of `currency` named can make progress.
    *
    * @returns The demand keys that were held for a reader given up on.
    */
-  #releaseStuckUpstream(runtime: Runtime): Set<string> {
+  #releaseStuckUpstream(
+    runtime: Runtime,
+    currency: StoreCurrency,
+  ): Set<string> {
     const released = new Set<string>();
-    const currency = this.#currency;
-    if (currency === undefined) return released;
     for (const [reader, producers] of currency.upstreamProducers) {
       if (
-        [...producers].some((piece) => this.#producerProgresses(runtime, piece))
+        [...producers].some((piece) =>
+          this.#producerProgresses(runtime, currency, piece)
+        )
       ) continue;
       for (const key of currency.abandonUpstream(reader)) released.add(key);
       logger.info?.("currency-upstream-abandoned", () => [
@@ -7893,8 +7857,12 @@ export class SpaceServer implements TransactionSealDestination {
    * One whose load ended without a start, and one that ran and was
    * recorded with the reader stale still, cannot.
    */
-  #producerProgresses(runtime: Runtime, piece: string): boolean {
-    const { named, unrecorded } = this.#currency!.producerProgress(piece);
+  #producerProgresses(
+    runtime: Runtime,
+    currency: StoreCurrency,
+    piece: string,
+  ): boolean {
+    const { named, unrecorded } = currency.producerProgress(piece);
     if (named) return true;
     if (runtime.scheduler.hasNodesUnderDemandRoot(piece)) {
       return unrecorded && !this.#upstreamRecordBlocked;

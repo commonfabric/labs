@@ -1,6 +1,14 @@
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import { internSchema } from "@commonfabric/data-model-schema";
+import {
+  ARRAY_SUBSCHEMA_KEYS,
+  DEFS_KEYS,
+  RECORD_SUBSCHEMA_KEYS,
+  SINGLE_SUBSCHEMA_KEYS,
+  UNUSED_RECORD_SUBSCHEMA_KEYS,
+  UNUSED_SINGLE_SUBSCHEMA_KEYS,
+} from "@commonfabric/data-model-schema/schema-walk";
 import { describe, it } from "@commonfabric/test-support/test";
 
 import { cfcSchemaEntries } from "../../src/cfc/schema-label-view.ts";
@@ -85,6 +93,75 @@ describe("schema-label-view", () => {
       expect(cfcSchemaEntries(schema).map((entry) => entry.path)).toEqual([
         ["title"],
       ]);
+    });
+
+    describe("subschema keywords", () => {
+      const labeled = { ifc: { confidentiality: ["secret"] } } as const;
+      type Placement = { path: string[]; conditional?: true } | undefined;
+      const placements = (schema: JSONSchema) =>
+        cfcSchemaEntries(schema).map(({ path, conditional }) => ({
+          path,
+          ...(conditional ? { conditional } : {}),
+        }));
+
+      // Each table names every keyword of its group in the default walk, so a
+      // keyword added to a group fails to compile here until it has a rule.
+      const single: Record<
+        (typeof SINGLE_SUBSCHEMA_KEYS)[number],
+        Placement
+      > = {
+        not: undefined,
+        items: { path: ["*"] },
+        additionalProperties: { path: ["*"] },
+      };
+      const array: Record<(typeof ARRAY_SUBSCHEMA_KEYS)[number], Placement> = {
+        allOf: { path: [] },
+        anyOf: { path: [], conditional: true },
+        oneOf: { path: [], conditional: true },
+        prefixItems: { path: ["0"] },
+      };
+      const record: Record<
+        (typeof RECORD_SUBSCHEMA_KEYS)[number],
+        Placement
+      > = {
+        properties: { path: ["field"] },
+      };
+      const expected = (placement: Placement) =>
+        placement === undefined ? [] : [placement];
+
+      it("places a declaration under each keyword of the default walk", () => {
+        for (const keyword of SINGLE_SUBSCHEMA_KEYS) {
+          expect(placements({ [keyword]: labeled })).toEqual(
+            expected(single[keyword]),
+          );
+        }
+        for (const keyword of ARRAY_SUBSCHEMA_KEYS) {
+          expect(placements({ [keyword]: [labeled] })).toEqual(
+            expected(array[keyword]),
+          );
+        }
+        for (const keyword of RECORD_SUBSCHEMA_KEYS) {
+          expect(placements({ [keyword]: { field: labeled } })).toEqual(
+            expected(record[keyword]),
+          );
+        }
+      });
+
+      it("returns no wildcard entry for additional properties beside named ones", () => {
+        expect(placements({
+          properties: { named: { type: "string" } },
+          additionalProperties: labeled,
+        })).toEqual([]);
+      });
+
+      it("returns no entry for a keyword outside the default walk", () => {
+        for (const keyword of UNUSED_SINGLE_SUBSCHEMA_KEYS) {
+          expect(placements({ [keyword]: labeled })).toEqual([]);
+        }
+        for (const keyword of [...UNUSED_RECORD_SUBSCHEMA_KEYS, ...DEFS_KEYS]) {
+          expect(placements({ [keyword]: { field: labeled } })).toEqual([]);
+        }
+      });
     });
   });
 });

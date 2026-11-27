@@ -1109,8 +1109,11 @@ export function resolveLinkTracingDereferences(
         // another registered action declares it). That run may be the one
         // that produces the instance, and withdrawing its commit would then
         // starve the instance it was about to write.
-        tx.tx.unproducedScopedInstance ??=
-          `${link.space}/${link.scope}/${link.id}`;
+        tx.tx.unproducedScopedInstance ??= {
+          space: link.space,
+          id: link.id,
+          scope: link.scope,
+        };
       }
       break;
     }

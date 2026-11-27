@@ -320,7 +320,7 @@ has no profile.
 | Storage    | Home default pattern       | Current space                   | Profile piece                    |
 | Scope      | Cross-space                | Per-space                       | Cross-space, per-user            |
 | Source     | User's favorites list      | Pattern's `mentionable` export  | User's profile element list      |
-| Tag source | Snapshotted when favorited | Computed from schema            | `userTags` first, then `tag`     |
+| Tag source | Snapshotted when favorited | Piece's result schema           | `userTags` first, then `tag`     |
 
 ### Accessing the Favorites List Itself
 

@@ -20,7 +20,9 @@ import {
   PIECE_SOURCE_MOVED,
   preparePieceSourceTransitionBaseline,
   setPatternSource,
+  stampCreatedFromOrigin,
 } from "../src/runner.ts";
+import { getPieceReconciliation } from "../src/piece-reconciliation.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 
@@ -82,6 +84,29 @@ describe("patternSource meta accessors", () => {
       expect(getPatternSource(cell.withTx(tx))).toBeUndefined();
     });
     expect(error).toBeUndefined();
+  });
+
+  it("stamps a piece created from an origin as following it where the caller names the pattern, and the origin alone where it does not", async () => {
+    const origin = "/api/patterns/system/default-app/default-app.tsx";
+    const pattern = { identity: "created-pattern", symbol: "default" };
+    const named = runtime.getCell(signer.did(), "created-from-origin-named");
+    const unnamed = runtime.getCell(
+      signer.did(),
+      "created-from-origin-unnamed",
+    );
+    const tx = runtime.edit();
+    stampCreatedFromOrigin(named, tx, origin, pattern);
+    stampCreatedFromOrigin(unnamed, tx, origin, undefined);
+    expect((await tx.commit().settled).error).toBeUndefined();
+
+    expect(getPatternSource(named)).toBe(origin);
+    expect(getPieceReconciliation(named)).toMatchObject({
+      outcome: "followed",
+      origin,
+      offered: pattern,
+    });
+    expect(getPatternSource(unnamed)).toBe(origin);
+    expect(getPieceReconciliation(unnamed)).toBeUndefined();
   });
 
   it("has no source snapshot without a pattern identity", () => {
@@ -427,6 +452,37 @@ describe("patternSource meta accessors", () => {
         // A start reads the delegations alone, which are well-formed.
         expect(getPieceSourceDelegations(bad, pattern).size, name).toBe(1);
       }
+    });
+
+    it("reads a record at position 0 for a piece whose history is malformed", async () => {
+      const cell = await pieceWith("recorded-record-invalid-history", {
+        identity: pattern,
+        delegations: valid,
+        edges: [],
+      });
+      const recorded = {
+        delegations: new Map([["recorded-module", new Set(["earlier"])]]),
+        edges: new Map(),
+      };
+      expect(getPieceSourceRecord(cell, pattern)).toStrictEqual({
+        ...recorded,
+        position: 1,
+      });
+
+      const seed = runtime.edit();
+      cell.withTx(seed).setMetaRaw(
+        "pieceSourceHistory",
+        "not a history" as never,
+        rawMetaWriteAuthorization,
+      );
+      expect((await seed.commit().settled).error).toBeUndefined();
+      expect(() => getPieceSourceRevisions(cell)).toThrow(
+        "piece source history is invalid",
+      );
+      expect(getPieceSourceRecord(cell, pattern)).toStrictEqual({
+        ...recorded,
+        position: 0,
+      });
     });
 
     it("returns none for a malformed member", async () => {

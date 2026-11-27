@@ -198,7 +198,9 @@ export function keptElementIndices(
     maxEdits,
   );
   if (hunks === undefined) return kept;
-  // The elements outside the runs are kept, in order, in both sequences.
+  // The elements outside the runs are kept, in order, in both sequences. The
+  // last run ends at the end of both, since their last elements differ once
+  // the common suffix is set aside.
   let beforeIndex = 0;
   let afterIndex = 0;
   for (const hunk of hunks) {
@@ -209,11 +211,6 @@ export function keptElementIndices(
     }
     beforeIndex += hunk.remove;
     afterIndex += hunk.add;
-  }
-  while (beforeIndex < beforeBetween) {
-    kept[beforeIndex + prefix] = afterIndex + prefix;
-    beforeIndex += 1;
-    afterIndex += 1;
   }
   return kept;
 }
