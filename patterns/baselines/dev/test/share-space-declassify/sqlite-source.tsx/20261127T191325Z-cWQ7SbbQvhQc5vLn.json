@@ -1,0 +1,110 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "dev/test/share-space-declassify/sqlite-source.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Fix": {
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "custody": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/Fix"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "ownerOnly": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/Fix"
+            },
+            "type": "array"
+          }
+        ]
+      },
+      "policyAtom": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "properties": {
+              "policyRefKind": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        ],
+        "description": "The atom the two policy tables name, for the test to inspect."
+      },
+      "seed": {
+        "asCell": [
+          "stream"
+        ],
+        "description": "Writes `FIXES` into all three tables.",
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      },
+      "sharedOwner": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "items": {
+              "$ref": "#/$defs/Fix"
+            },
+            "type": "array"
+          }
+        ]
+      }
+    },
+    "required": [
+      "policyAtom",
+      "custody",
+      "sharedOwner",
+      "ownerOnly",
+      "seed",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}
