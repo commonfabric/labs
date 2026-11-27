@@ -440,6 +440,45 @@ test("a ten-minute lease is renewed two minutes ahead of each expiry, over sever
   }
 });
 
+test("a lease's renewal that falls due while the connection is down sends nothing, and the next connection authenticates the key", async () => {
+  setModernCellRepConfig(true);
+  const time = new FakeTime(Date.UTC(2026, 9, 1));
+  // The second hello goes unanswered until the test greets it.
+  const { p, log, greet } = routedPeer(() => false, {
+    ungreeted: (hello) => hello === 2,
+  });
+  const client = await connect({ transport: p.transport });
+  try {
+    const session = await client.mount(identity.did(), {}, principal());
+    assertEquals(log.map((e) => e.type), ["auth", "open"]);
+    p.drop();
+    await tickUntil(time, () => p.hellos() === 2, 0, 40);
+    // The lease of 600 s falls due for renewal at 480 s, while the client
+    // still waits for the next connection's handshake.
+    await time.tickAsync(500_000);
+    assertEquals(client.isConnected(), false);
+    assertEquals(log.map((e) => e.type), ["auth", "open"]);
+    greet();
+    await tickUntil(time, () => client.isConnected(), 0, 40);
+    await session.whenRestored();
+    // The session's restore authenticates the key on the new connection,
+    // and the renewal adds nothing to it. The greeting repeats the first
+    // connection's challenge, which the key has signed, so the restore asks
+    // for one of its own.
+    assertEquals(log.map((e) => e.type), [
+      "auth",
+      "open",
+      "challenge",
+      "auth",
+      "open",
+    ]);
+    assertEquals(session.closeError, undefined);
+  } finally {
+    await client.close();
+    time.restore();
+  }
+});
+
 /**
  * A peer that admits the mount's `connection.auth` and refuses the rest for
  * now, answering challenges that last `challengeLife` seconds; it records
@@ -2245,6 +2284,57 @@ test("a mount held after a refusal for now fails when the connection fails for g
   } finally {
     await client.close();
     time.restore();
+  }
+});
+
+test("a mount refused for now as the client closes or fails for good fails without being held", async (t) => {
+  setModernCellRepConfig(true);
+  for (
+    const ending of ["the client closes", "the connection fails for good"]
+  ) {
+    await t.step(ending, async () => {
+      const time = new FakeTime(Date.UTC(2026, 9, 1));
+      // The open's refusal for now is held back, so that it reaches the
+      // mount in the same turn as the ending.
+      const { p, log, release } = routedPeer(() => false, {
+        refusedToo: (type) => type === "session.open",
+        held: (type) => type === "session.open",
+      });
+      const client = await connect({ transport: p.transport });
+      try {
+        const mount = settling(client.mount(identity.did(), {}, principal()));
+        await tickUntil(
+          time,
+          () => log.filter((e) => e.type === "open").length >= 1,
+          0,
+          40,
+        );
+        assertEquals(mount, { settled: false });
+        release();
+        // A frame the client cannot read fails a connection its transport
+        // cannot reset for good.
+        if (ending === "the client closes") void client.close();
+        else p.raw("fvj1:{");
+        // The clock stands still: the mount ends without waiting out the
+        // hold a refusal for now earns, and leaves no timer behind.
+        await tickUntil(time, () => mount.settled, 0, 40);
+        assertEquals(
+          (mount.failure as Error | undefined)?.message,
+          ending === "the client closes"
+            ? "memory client closed"
+            : "Unable to parse memory server message",
+        );
+        assertEquals(
+          client.connectionState,
+          ending === "the client closes" ? "closed" : "failed",
+        );
+        assertEquals(time.next(), false);
+        assertEquals(log.filter((e) => e.type === "open").length, 1);
+      } finally {
+        await client.close();
+        time.restore();
+      }
+    });
   }
 });
 

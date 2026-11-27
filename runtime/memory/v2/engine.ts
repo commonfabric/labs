@@ -3618,14 +3618,9 @@ export const dataVersion = (engine: Engine): number =>
 // where producer and admitter are one trust environment and only the
 // entry's stream `seq` needs stamping.
 
-/** Where one declared appended entry sits inside the commit's operations,
- * plus the `firedAt` admission resolved for it. The stamp step clones the
- * op (the caller's operation objects are shared with replica overlays —
- * wave batches hold the sealed commits' own arrays) and writes `seq` +
- * `firedAt` into the clone only. */
+/** Where one declared appended entry sits inside its operation, plus the
+ * `firedAt` admission resolved for it. */
 type EventAppendStamp = {
-  opIndex: number;
-
   /** Index into the op's `patches` array; absent for a whole-doc `set`. */
   patchIndex?: number;
 
@@ -3634,6 +3629,16 @@ type EventAppendStamp = {
   valueIndex: number;
 
   firedAt: StreamEventFiredAt;
+};
+
+/** One operation's stamp plan: the `set` or `patch` of a stream sidecar doc
+ * and where each of its declared appended entries sits. The stamp step
+ * copies the operation (the caller's operation objects are shared with
+ * replica overlays — wave batches hold the sealed commits' own arrays) and
+ * writes `seq` + `firedAt` into the copy only. */
+export type EventAppendPlan = {
+  operation: SetOperation | PatchOperation;
+  stamps: EventAppendStamp[];
 };
 
 const isStreamEntriesDocId = (id: string): boolean =>
@@ -3827,7 +3832,7 @@ const validateEventAppends = (
      * dedupe read of scoped sidecars. */
     scopeKeyByOpIndex: ReadonlyMap<number, string>;
   },
-): Map<number, EventAppendStamp[]> => {
+): Map<number, EventAppendPlan> => {
   const {
     commit,
     commitClass,
@@ -3838,7 +3843,7 @@ const validateEventAppends = (
     systemEventActor,
   } = args;
   const decls = commit.eventAppends ?? [];
-  const plan = new Map<number, EventAppendStamp[]>();
+  const plan = new Map<number, EventAppendPlan>();
   const flagOn = getServerExecutionConfig();
   if (decls.length > 0 && !flagOn) {
     throw new ProtocolError(
@@ -4007,7 +4012,7 @@ const validateEventAppends = (
       for (const [valueIndex, entry] of entries.entries()) {
         located.push({
           entry: entry as StreamEventEntry,
-          stamp: { opIndex, valueIndex },
+          stamp: { valueIndex },
         });
       }
     } else {
@@ -4037,7 +4042,7 @@ const validateEventAppends = (
         for (const [valueIndex, entry] of appended.values.entries()) {
           located.push({
             entry: entry as StreamEventEntry,
-            stamp: { opIndex, patchIndex, valueIndex },
+            stamp: { patchIndex, valueIndex },
           });
         }
       }
@@ -4302,9 +4307,9 @@ const validateEventAppends = (
         );
       }
 
-      const stamps = plan.get(stamp.opIndex) ?? [];
-      stamps.push({ ...stamp, firedAt });
-      plan.set(stamp.opIndex, stamps);
+      const planned = plan.get(opIndex) ?? { operation, stamps: [] };
+      planned.stamps.push({ ...stamp, firedAt });
+      plan.set(opIndex, planned);
     }
   }
 
@@ -4318,107 +4323,87 @@ const validateEventAppends = (
   return plan;
 };
 
-/** A fresh entry list whose OBJECT entries are shallow-copied — the
- * stamping writes (seq, firedAt) land on the copies; every deeper value
- * (payload included) stays SHARED by reference. */
-const spineCloneEntryList = (entries: readonly unknown[]): unknown[] =>
-  entries.map((entry) =>
-    isObjectNotArray(entry) ? { ...(entry as Record<string, unknown>) } : entry
+/** A copy of the planned operation whose declared appended entries carry
+ * this commit's `seq` and their admitted `firedAt`. The input operation is
+ * shared with replica overlays and is never mutated. The copy is fresh
+ * along the spine the stamping writes: the operation object, the
+ * containers down to `/value/entries`, the entry lists, and each entry
+ * object. Every deeper value, payloads included, is shared with the input
+ * by reference, never `structuredClone`d: the co-hosted wave sink hands
+ * this path the runner's own op objects, whose FabricValue payloads can
+ * carry registry symbols that `structuredClone` cannot copy. Throws when a
+ * stamp names an entry the operation does not hold, since its entry would
+ * otherwise be stored without a `seq`. */
+export const stampEventAppendOperation = (
+  { operation, stamps }: EventAppendPlan,
+  seq: number,
+): SetOperation | PatchOperation => {
+  const positionOf = (valueIndex: number, patchIndex?: number) =>
+    `${patchIndex ?? "set"}/${valueIndex}`;
+  const unclaimed = new Map(
+    stamps.map((stamp) => [
+      positionOf(stamp.valueIndex, stamp.patchIndex),
+      stamp.firedAt,
+    ]),
   );
+  const stampEntries = (
+    entries: readonly unknown[],
+    patchIndex?: number,
+  ): never[] =>
+    entries.map((entry, valueIndex) => {
+      const position = positionOf(valueIndex, patchIndex);
+      const firedAt = unclaimed.get(position);
+      unclaimed.delete(position);
+      return {
+        ...(entry as StreamEventEntry),
+        ...(firedAt === undefined ? {} : { seq, firedAt }),
+      } as never;
+    });
+  const stamped = stampPlannedEntries(operation, stampEntries);
+  if (unclaimed.size > 0) {
+    throw new ProtocolError(
+      "event-append stamp plan does not match the operation shape " +
+        `(engine bug — no entry at ${[...unclaimed.keys()].join(", ")})`,
+    );
+  }
+  return stamped;
+};
 
-/** Clone exactly the SPINE the stamping mutates: the operation object,
- * the containers down to `/value/entries`, and the entry objects
- * themselves. NEVER `structuredClone` (verdict blocker, 2026-08-12):
- * the co-hosted wave sink hands this path the runner's own op objects,
- * whose FabricValue payloads can carry registry symbols —
- * `structuredClone` throws `DataCloneError` on those and demotes
- * fabric classes it can copy. Payload values are never mutated here,
- * so sharing them is sound. */
-const spineCloneSidecarOperation = <
-  Op extends Exclude<Operation, SqliteOperation>,
->(operation: Op): Op => {
+/** A copy of `operation` with each entry list it writes at `/value/entries`
+ * replaced by `stampEntries`'s copy of it. */
+const stampPlannedEntries = (
+  operation: SetOperation | PatchOperation,
+  stampEntries: (entries: readonly unknown[], patchIndex?: number) => never[],
+): SetOperation | PatchOperation => {
   if (operation.op === "set") {
-    const outer = (operation.value ?? undefined) as
-      | Record<string, unknown>
-      | undefined;
-    const inner = (outer?.value ?? undefined) as
-      | Record<string, unknown>
-      | undefined;
-    if (inner === undefined || !Array.isArray(inner.entries)) {
-      return { ...operation };
-    }
+    const value = operation.value.value as StreamEventsDocValue;
     return {
       ...operation,
       value: {
-        ...outer,
-        value: { ...inner, entries: spineCloneEntryList(inner.entries) },
+        ...operation.value,
+        value: { ...value, entries: stampEntries(value.entries ?? []) },
       },
-    } as Op;
+    };
   }
-  if (operation.op === "patch") {
-    return {
-      ...operation,
-      patches: operation.patches.map((patch) => {
-        if (
-          (patch.op === "append" || patch.op === "add-unique") &&
-          patch.path === STREAM_ENTRIES_POINTER
-        ) {
-          return {
-            ...patch,
-            values: spineCloneEntryList(patch.values as unknown[]) as never,
-          };
-        }
-        if (
-          (patch.op === "add" || patch.op === "replace") &&
-          patch.path === STREAM_ENTRIES_POINTER &&
-          Array.isArray((patch as unknown as { value?: unknown }).value)
-        ) {
-          return {
-            ...patch,
-            value: spineCloneEntryList(
-              (patch as unknown as { value: unknown[] }).value,
-            ) as never,
-          };
-        }
-        return patch;
-      }),
-    } as Op;
-  }
-  return { ...operation };
-};
-
-/** Apply one op's stamp plan onto a CLONE (the input operation object is
- * shared with replica overlays and must never be mutated). */
-const stampEventAppendOperation = <
-  Op extends Exclude<Operation, SqliteOperation>,
->(
-  operation: Op,
-  stamps: readonly EventAppendStamp[],
-  seq: number,
-): Op => {
-  const cloned = spineCloneSidecarOperation(operation);
-  for (const stamp of stamps) {
-    let entry: StreamEventEntry | undefined;
-    if (cloned.op === "set") {
-      const value = (cloned.value?.value ?? {}) as StreamEventsDocValue;
-      entry = value.entries?.[stamp.valueIndex];
-    } else if (cloned.op === "patch" && stamp.patchIndex !== undefined) {
-      const patch = cloned.patches[stamp.patchIndex];
-      const appended = appendedEntriesOfPatch(patch);
-      entry = appended?.values[stamp.valueIndex] as
-        | StreamEventEntry
-        | undefined;
-    }
-    if (entry === undefined) {
-      throw new ProtocolError(
-        "event-append stamp plan does not match the operation shape " +
-          "(engine bug — the plan and the clone diverged)",
-      );
-    }
-    entry.seq = seq;
-    entry.firedAt = stamp.firedAt;
-  }
-  return cloned;
+  return {
+    ...operation,
+    patches: operation.patches.map((patch, patchIndex) => {
+      if (
+        (patch.op === "append" || patch.op === "add-unique") &&
+        patch.path === STREAM_ENTRIES_POINTER
+      ) {
+        return { ...patch, values: stampEntries(patch.values, patchIndex) };
+      }
+      if (
+        (patch.op === "add" || patch.op === "replace") &&
+        patch.path === STREAM_ENTRIES_POINTER &&
+        Array.isArray(patch.value)
+      ) {
+        return { ...patch, value: stampEntries(patch.value, patchIndex) };
+      }
+      return patch;
+    }),
+  };
 };
 
 /** An effect-intent-shaped entry (protocol.md §5's `{nonce, kind, args,
@@ -8905,10 +8890,10 @@ const applyCommitTransaction = (
     // shared with replica overlays and stay pristine; `original` (encoded
     // above, pre-stamp) records the as-received payload so replay
     // comparison stays stable.
-    const stamps = eventAppendPlan.get(opIndex);
-    const appendStamped = stamps === undefined
+    const planned = eventAppendPlan.get(opIndex);
+    const appendStamped = planned === undefined
       ? operation
-      : stampEventAppendOperation(operation, stamps, seq);
+      : stampEventAppendOperation(planned, seq);
     // The effects-doc transform (Phase 4, protocol.md §5): a
     // derived-class write of the well-known effects doc gets its intent
     // entries' `issuedIn` sentinels stamped with this commit's seq and
@@ -9959,7 +9944,6 @@ const hasSetOrDelete = (
       through_seq: throughSeq,
     }) as SetDeleteConflictRow;
     if (row.seq !== null) return true;
-    if (from === DEFAULT_BRANCH) return false;
     const lineage = requireLineage(engine, from);
     throughSeq = Math.min(throughSeq, lineage.forkSeq ?? 0);
     from = lineage.parentBranch;

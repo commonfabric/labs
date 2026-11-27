@@ -118,6 +118,7 @@ function directPeer() {
       return Promise.resolve();
     },
     close: () => Promise.resolve(),
+    reset: () => {},
   };
   return {
     transport,
@@ -125,6 +126,7 @@ function directPeer() {
     refuse,
     auths,
     drop: () => onClose(new Error("Connection lost")),
+    garble: () => receive("{"),
     refuseRetries: () => {
       refuseRetries = true;
     },
@@ -513,6 +515,43 @@ describe("Client authentication recovery", () => {
       peer.drop();
       expect(await mount.result).toMatchObject({ name: "ConnectionError" });
       expect(mount.state()).toBe("rejected");
+    } finally {
+      await client.close();
+    }
+  });
+
+  it("sends nothing for a renewal that falls due while the connection is down, and renews on the next connection", async () => {
+    using time = new FakeTime(Date.UTC(2026, 9, 10));
+    using _random = stub(Math, "random", () => 0);
+    const peer = directPeer();
+    const client = await connect({ transport: peer.transport });
+    try {
+      const session = await client.mount(did, {}, signer);
+      // A frame the client cannot parse discards the connection, and the
+      // next one is made after a 25 ms backoff, across the first lease's
+      // renewal at two seconds.
+      await advance(time, 1990);
+      peer.garble();
+      await advance(time, 20);
+      expect(client.connectionState).not.toBe("connected");
+      expect(peer.auths).toHaveLength(1);
+      expect(peer.counts()).toEqual({ hellos: 1, challenges: 0, opens: 1 });
+      await advance(time, 5);
+      // The restore authenticates the key on the new connection.
+      expect(peer.counts().hellos).toBe(2);
+      expect(peer.auths).toHaveLength(2);
+      peer.accept(1);
+      await advance(time, 0);
+      expect(client.connectionState).toBe("connected");
+      expect(session.closeError).toBeUndefined();
+      expect(peer.counts()).toEqual({ hellos: 2, challenges: 0, opens: 2 });
+      // The new lease runs an hour, and its renewal asks for the one
+      // challenge sent, two minutes ahead of its end.
+      await advance(time, 3_479_000);
+      expect(peer.auths).toHaveLength(2);
+      await advance(time, 1000);
+      expect(peer.auths).toHaveLength(3);
+      expect(peer.counts()).toEqual({ hellos: 2, challenges: 1, opens: 2 });
     } finally {
       await client.close();
     }

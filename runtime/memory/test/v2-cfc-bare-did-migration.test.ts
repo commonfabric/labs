@@ -510,6 +510,36 @@ describe("cfc-bare-did-migration", () => {
         expect(valueOf("of:session", "session")).toEqual({ stale: true });
       });
 
+      it("reads a named document as stored, and one deleted or never written as undefined", async () => {
+        commit([
+          set("of:present", { n: 1 }),
+          set("of:gone", { n: 2 }),
+          set("of:reader", { reads: true }),
+        ]);
+        commit([{ op: "delete", id: "of:gone" }]);
+        const seen = new Map<string, unknown>();
+        const reading: DocumentMigration = {
+          name: "reading/1",
+          scopes: ["space"],
+          rewrite: (document, readDocument) => {
+            if ((document.value as { reads?: boolean }).reads !== true) {
+              return undefined;
+            }
+            for (const id of ["of:present", "of:gone", "of:never"]) {
+              seen.set(id, readDocument(id));
+            }
+            return undefined;
+          },
+        };
+
+        await runDocumentMigration(engine, reading);
+
+        expect([...seen.keys()]).toEqual(["of:present", "of:gone", "of:never"]);
+        expect(seen.get("of:present")).toEqual({ value: { n: 1 } });
+        expect(seen.get("of:gone")).toBeUndefined();
+        expect(seen.get("of:never")).toBeUndefined();
+      });
+
       it("commits as the migration's own system session", async () => {
         commit([set("of:space", { stale: true })]);
 
@@ -556,6 +586,44 @@ describe("cfc-bare-did-migration", () => {
         expect(valueOf("of:b")).toEqual({ stale: true, broken: true });
         expect(valueOf("of:c")).toEqual({ stale: false });
         expect(isMigrationDone(engine, freshen.name)).toBe(true);
+      });
+
+      it("passes over an instance another writer deletes after the walk listed it", async () => {
+        commit([
+          set("of:a", { stale: true, broken: true }),
+          set("of:b", { stale: true }),
+        ]);
+        const refusing: DocumentMigration = {
+          ...freshen,
+          rewrite: (document) =>
+            (document.value as { broken?: boolean }).broken === true
+              ? [{ op: "replace", path: "/value/missing/deep", value: 1 }]
+              : freshen.rewrite(document, () => undefined),
+        };
+        // The batch holding both is refused, and `of:b` is deleted through
+        // the fixture's own connection before the walk retries it alone.
+        let deleted = false;
+        const migrating = await open({
+          url: toFileUrl(path),
+          commitObserver: ({ sessionId }) => {
+            if (deleted || sessionId !== migrationSessionId(refusing)) return;
+            deleted = true;
+            commit([{ op: "delete", id: "of:b" }]);
+          },
+        });
+
+        try {
+          const report = await runDocumentMigration(migrating, refusing);
+
+          expect(deleted).toBe(true);
+          expect(report.rewritten).toBe(0);
+          expect(report.skipped.map(({ id }) => id)).toEqual(["of:a"]);
+          expect(isMigrationDone(migrating, refusing.name)).toBe(true);
+        } finally {
+          close(migrating);
+        }
+        expect(read(engine, { id: "of:b" })).toBeNull();
+        expect(valueOf("of:a")).toEqual({ stale: true, broken: true });
       });
 
       it("rejects, rather than skipping, an instance whose rewrite throws on its retry", async () => {
