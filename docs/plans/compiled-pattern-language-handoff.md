@@ -876,7 +876,7 @@ directory: `r38-argument-read/report-3.md` with `review-r38-2/report.md`,
 | `claude/compiled-pattern-scoped-rows` (build) | `c12d442929` | local past `7eb87d6743`; round 39 (setup) on top |
 | `claude/compiled-pattern-body-reads` | `d8a20351b9` | round 38 after three passes; local |
 | `claude/compiled-pattern-derivation-split` | `a9db79ae27` | the design's round 2 after three passes; local |
-| `claude/compiled-pattern-rounds-38-39-merge` | `3d0fa913a1` | the build head with the two branches above merged, gates passing; local. The next free note number is 1352 |
+| `claude/compiled-pattern-rounds-38-39-merge` | `3d0fa913a1` | the build head with the two branches above merged, gates passing; local |
 | `claude/own-write-link-stale` | `e7b3789ae4` | pull request #10283 against `main`; five review comments answered |
 
 Before any compiled branch is pushed, its diff is read for material the
@@ -968,13 +968,17 @@ before round 4.
 - The merged tree showed a defect of round 38, fixed on the merge branch: a
   required capture holding `null` was read as absent where its type names
   `null` (`apps/recommend-a-book` has that shape).
-- The derivation line's notes 1200 to 1211 and 1260 to 1267 are numbered
-  1340 to 1351 and 1269 to 1276 on the merged branch.
+- Note numbers 1200 to 1208 and 1260 to 1267 are each used twice in
+  `SPEC-NOTES.md` on the merged branch, once by the setup line and once by
+  the derivation line. The derivation line's are to be renumbered; a
+  citation of one of them, as in the derivation design, means the
+  derivation line's note.
 - Not refused by either round's rule, and not held by a test: a transaction
   under the serving identity, not stamped as a derivation for no key, that
   creates a scope instance whose schema does not bind readers to the
   creator. The comparison counts none.
-- One full comparison: 447 scenarios, 283 differing, 152 skipped;
+- One full comparison: 447 scenarios, of which 283 differ, 12 have the
+  outcome that no piece started on either path, and 152 are skipped;
   `unkeyed-into-scope` 0, `keyed-into-space` 1,893, `error-state` 4, `value`
   611, `foreign-clause` 213, `crossed-clause` 305. No kind is above every
   branch alone.
