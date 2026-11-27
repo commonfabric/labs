@@ -119,7 +119,7 @@ const delegateTaskDescriptor = (
               uniqueItems: true,
               items: { type: "string" },
               description:
-                "Required for image-review. Supply distinct view_image output IDs from earlier turns in the order described in your goal. Omit patternRefs, returnSchema and skillHandle. The child sees the frames and your text, has no tools, and returns prose in subagent.summary.",
+                "Required for image-review. Supply distinct view_image output IDs from this run, in the order described in your goal. A new root run must open its frames again with view_image. Omit patternRefs, returnSchema and skillHandle. The child sees the frames and your text, has no tools, and returns prose in subagent.summary.",
             },
           }
           : {}),
