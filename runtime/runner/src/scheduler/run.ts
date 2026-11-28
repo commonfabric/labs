@@ -66,6 +66,8 @@ import {
   fanOutInstances,
   fanOutInstancesToRun,
   type FanOutNodeState,
+  fanOutRunAborted,
+  fanOutRunEnded,
   fanOutRunFinished,
   fanOutRunOpened,
   fanOutRunStarted,
@@ -73,13 +75,17 @@ import {
   keyAtRatchet,
   newFanOutNodeState,
   pruneFanOutInstances,
+  restoreFanOutTriggers,
+  takeFanOutTriggers,
 } from "./fan-out.ts";
 import {
   addInvalidCause,
+  invalidCausesSoFar,
   type MarkInvalidOptions,
   restoreInvalidCauses,
   takeInvalidCauses,
 } from "./invalidation.ts";
+import { invalidCauseKey } from "./keys.ts";
 import type { NodeRegistry } from "./node-record.ts";
 import { diagnosticPrefix } from "../storage/diagnostics.ts";
 import { txToReactivityLog } from "./reactivity.ts";
@@ -780,7 +786,8 @@ export async function runSchedulerAction(
     // this run to the transaction so flow-label derivation can taint its
     // writes even when this run's branch never re-reads them. Consumed
     // once per scheduling; a fanned-out instance run carries the causes
-    // that dirtied ITS instance (B7) plus the untargeted ones. If a run
+    // that dirtied ITS instance (B7): those naming an instance on its
+    // chain, and those naming none whose document it read. If a run
     // aborts and is retried (RetryImmediately, commit conflict) the
     // consumed addresses are restored below so the retry inherits them.
     if (causes !== undefined && causes.length > 0) {
@@ -969,10 +976,15 @@ export async function runSchedulerAction(
       if (toRun.length === 0) break;
       const instance = toRun[0];
       const startGen = fanOutRunStarted(fanOut, instance);
-      const causes = invalidCauses === undefined
+      const triggers = takeFanOutTriggers(fanOut, instance.key);
+      // A cause that arrived during an earlier instance's run of this pass
+      // can be what this instance runs for.
+      const scheduledBy = invalidCausesSoFar(record, invalidCauses);
+      const causes = scheduledBy === undefined
         ? undefined
-        : causesForInstance(invalidCauses, instance);
+        : causesForInstance(scheduledBy, instance, triggers);
       const outcome = await runOnce(instance, causes, startGen);
+      fanOutRunEnded(fanOut, instance);
       lastResult = outcome.result;
       ran = true;
       if (outcome.retryImmediately) deferred.add(instance.key);
@@ -1003,14 +1015,23 @@ export async function runSchedulerAction(
   });
 }
 
-/** B7: the causes a fanned-out instance run carries as its CFC trigger
- * reads — those that dirtied ITS instance (a keyed cause resolving on the
- * instance identity's own chain) plus every untargeted one. */
+/**
+ * B7: the causes a fanned-out instance run carries as its CFC trigger reads
+ * (§8.9.2). A cause that names an instance is carried by the runs on that
+ * instance's chain: the instance identity's own user and session keys. A
+ * cause that names no instance is carried only where `triggers` holds its
+ * key (`invalidCauseKey()`): those are the causes that arrived for a
+ * document the instance's recorded run read (`takeFanOutTriggers()`). The
+ * node is subscribed to the union of its instances' reads, so another cause
+ * naming no instance is for a document some other viewer's run read, and
+ * did not schedule this instance's run.
+ */
 export function causesForInstance(
   causes: readonly IMemorySpaceAddress[],
   instance: FanOutInstance,
+  triggers: ReadonlySet<string> | undefined,
 ): IMemorySpaceAddress[] {
-  const chain = new Set<string>(["space"]);
+  const chain = new Set<string>();
   try {
     chain.add(resolveScopeKey("user", instance.identity));
     chain.add(resolveScopeKey("session", instance.identity));
@@ -1018,7 +1039,9 @@ export function causesForInstance(
     // whatever resolved is the chain
   }
   return causes.filter((cause) =>
-    cause.scopeKey === undefined || chain.has(cause.scopeKey)
+    cause.scopeKey === undefined || cause.scopeKey === "space"
+      ? triggers?.has(invalidCauseKey(cause)) === true
+      : chain.has(cause.scopeKey)
   );
 }
 
@@ -1044,6 +1067,7 @@ function parkUnavailableRun(state: SchedulerActionRunState, args: {
   tx: IExtendedStorageTransaction;
   registrationIsCurrent: () => boolean;
   resolve: (value: unknown) => void;
+  fanOutRun?: FanOutRunArgs;
 }): boolean {
   if (usesLocalReads(args.tx) && !args.registrationIsCurrent()) {
     if (args.tx.status().status === "ready") {
@@ -1068,6 +1092,26 @@ function parkUnavailableRun(state: SchedulerActionRunState, args: {
       return true;
     }
     state.pending.delete(args.action);
+    // A run of a fanned-out instance does not get here. Only a serving
+    // runtime fans a node out (`Runtime.installSealDestination()` refuses a
+    // demander resolver anywhere else), and a serving runtime restricts no
+    // run to local reads: `Scheduler.prepareViewAction()` does so for a
+    // client that replicates by view, which a serving runtime is not, and
+    // for the view nodes such a client starts (`Runner.startViewPiece()`,
+    // which rejects on a serving runtime). The wake below is the node's
+    // and the next pass cancels it, so an instance parked here would wait
+    // with nothing to run it; it is reported rather than left to.
+    if (args.fanOutRun !== undefined) {
+      fanOutRunAborted(args.fanOutRun.state, args.fanOutRun.instance, log);
+      state.handleError(
+        new Error(
+          "A run of one viewer's instance parked on a local read, which a " +
+            "serving runtime does not restrict runs to; nothing runs the " +
+            "instance again until what it read changes",
+        ),
+        args.action,
+      );
+    }
     state.parkLocalRead?.(args.action, log);
     state.nodes.setStatus(args.action, "unavailable");
     // Subscribe first, then recheck: delivery may have arrived during an await
@@ -1192,6 +1236,15 @@ function rescheduleActionForImmediateRetry(
     readonly fanOutRun?: FanOutRunArgs;
   },
 ): void {
+  // What the aborted run of a fanned-out instance read is what a change has
+  // to reach to run the instance again once its retries are spent.
+  if (args.fanOutRun !== undefined) {
+    fanOutRunAborted(
+      args.fanOutRun.state,
+      args.fanOutRun.instance,
+      txToReactivityLog(args.tx),
+    );
+  }
   if (args.tx.status().status === "ready") args.tx.abort(args.error);
   // A fanned-out instance's aborted run is DEFERRED for the rest of the
   // calling pass — in both branches below (independent review F1): its
@@ -1215,8 +1268,14 @@ function rescheduleActionForImmediateRetry(
     }
     // A fanned-out instance's aborted run re-runs THAT instance (B7):
     // its key is dirtied, its siblings stay current — on the QUEUED
-    // pass, never this one (deferred above).
+    // pass, never this one (deferred above). The causes naming no instance
+    // go back to it alone.
     if (args.fanOutRun !== undefined) {
+      restoreFanOutTriggers(
+        args.fanOutRun.state,
+        args.fanOutRun.instance.key,
+        args.invalidCauses ?? [],
+      );
       dirtyFanOutKey(args.fanOutRun.state, args.fanOutRun.instance.key);
       state.markInvalid(args.action, { fanOutInstances: "keep" });
     } else {
@@ -1227,9 +1286,13 @@ function rescheduleActionForImmediateRetry(
   } else {
     // WATCH(scheduler-v2): exhausted retries can leave a piece registered
     // against rolled-back data (accepted zombie — spec §15 decision 9).
-    // A fanned-out instance's exhausted key stays non-clean and unqueued:
-    // it runs again on the node's next real invalidation, with a fresh
-    // budget — the same "until its input data changes" shape as OFF's.
+    // A fanned-out instance's exhausted key stays non-clean, unqueued and
+    // owed no run: it runs again, with a fresh budget, on a change to a
+    // document its latest finished run or this given-up run read (the node
+    // stays subscribed to both), on an invalidation that names no cause or
+    // names it, or when a viewer asks for it or arrives — the same "until
+    // its input data changes" shape as OFF's. A change to a document only a
+    // sibling instance read does not start it.
     state.retries.delete(args.action);
     abandonAction({
       action: args.action,
@@ -1375,7 +1438,14 @@ function finalizeReactiveActionCommit(
     tx: args.tx,
   }, () => {
     const log = txToReactivityLog(args.tx);
-    if (validateLocalReadBasisForCommit(args.tx) !== undefined) return log;
+    if (validateLocalReadBasisForCommit(args.tx) !== undefined) {
+      // The run hands nothing over. What it read is what a change has to
+      // reach to run its instance again.
+      if (args.fanOutRun !== undefined) {
+        fanOutRunAborted(args.fanOutRun.state, args.fanOutRun.instance, log);
+      }
+      return log;
+    }
     warnOnWriteSurfaceViolations(state, args, log);
     echoRun = state.captureRemoteEcho(args.tx, log, args.invalidCauses);
     hasPostCommitEffects = args.tx.hasPendingPostCommitEffects();
@@ -1428,6 +1498,17 @@ function finalizeReactiveActionCommit(
     args.error,
   );
   const fanOutRun = args.fanOutRun;
+  // A retry of a fanned-out instance's run takes again the causes naming no
+  // instance that this run took, and its siblings take none of them.
+  const restoreInstanceTriggers = () => {
+    if (fanOutRun === undefined) return;
+    restoreFanOutTriggers(
+      fanOutRun.state,
+      keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+        fanOutRun.instance.key,
+      args.invalidCauses ?? [],
+    );
+  };
   const commitState: Parameters<typeof watchReactiveActionCommit>[0] = {
     isLiveAction: () => state.isLiveAction(args.action),
     hasCommittedResult: () => owner?.hasCommittedResult === true,
@@ -1497,6 +1578,7 @@ function finalizeReactiveActionCommit(
         args.invalidCauses.length > 0
       ) {
         restoreInvalidCauses(state.nodes, args.action, args.invalidCauses);
+        restoreInstanceTriggers();
       }
     },
     handleUnavailable: () => parkUnavailableRun(state, args),
@@ -1628,6 +1710,7 @@ function finalizeReactiveActionCommit(
     for (const cause of args.invalidCauses ?? []) {
       addInvalidCause(node, cause);
     }
+    restoreInstanceTriggers();
     commitState.markInvalid(args.action, { retry: true });
     state.pending.add(args.action);
     state.queueExecution();

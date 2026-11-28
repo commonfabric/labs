@@ -133,7 +133,13 @@ import {
   type SettlingTracker,
   summarizeNonSettlingWindow,
 } from "./execution.ts";
-import { dirtyFanOutKey, fanOutInstances, keyAtRatchet } from "./fan-out.ts";
+import {
+  dirtyFanOutKey,
+  fanOutInstances,
+  fanOutOwesRun,
+  keyAtRatchet,
+  oweFanOutRuns,
+} from "./fan-out.ts";
 import { SchedulerGates } from "./gates.ts";
 import {
   buildSchedulerGraphSnapshot,
@@ -1404,10 +1410,14 @@ export class Scheduler {
    * that did not exist when it last ran — so the SpaceServer calls this
    * when its demand registry gains a (principal, session) pair for a
    * root. Every NARROWED node whose demand roots intersect `rootIds` is
-   * marked invalid and queued, with its per-instance record KEPT: only
-   * the arriving principal's instances are not clean, so only those run
-   * (B7 — the siblings stay current). A node that ran with demanders and
-   * did not narrow needs nothing (its one output is shared). A node that
+   * marked invalid and queued, with its per-instance record KEPT: the
+   * siblings that are current stay current (B7), so the arriving
+   * principal's instances run, and with them any sibling whose run was
+   * given up, its retries spent, which the arrival owes a run as well,
+   * since which instance the arriving pair asks for is not known here. A
+   * node that ran with demanders and did not narrow needs nothing (its one
+   * output is shared), unless its one instance was given up, which the
+   * arrival runs again. A node that
    * ran with NO demander reachable — the wave-level fallback, before the
    * first demand reached its roots — has no fan-out record and no known
    * scope, so it re-arms too: its next run is the probe that learns
@@ -1424,7 +1434,19 @@ export class Scheduler {
     for (const record of this.#nodes.nodesUnderDemandRoots(rootIds)) {
       if (record.fanOut === undefined) {
         if (record.status === "never-ran") continue;
-      } else if (!record.fanOut.narrowed) continue;
+      } else {
+        // A viewer arrived at a root the node is under. Which of its
+        // instances the viewer asks for is not known here, so every
+        // instance that is not current is owed a run, one whose run was
+        // given up among them.
+        oweFanOutRuns(record.fanOut);
+        // A node that has not narrowed is one instance for all its viewers,
+        // and the arrival asks for a run of it only where that instance was
+        // given up.
+        if (!record.fanOut.narrowed && !fanOutOwesRun(record.fanOut, "space")) {
+          continue;
+        }
+      }
       this.#markActionInvalid(record.action, undefined, {
         fanOutInstances: "keep",
       });
@@ -1554,6 +1576,7 @@ export class Scheduler {
       // Current for the actor: her instance ran at the ratchet and no
       // cause dirtied it — nothing to materialize.
       if (record.fanOut.clean.has(actorKey)) continue;
+      oweFanOutRuns(record.fanOut, [actorKey]);
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed.push(writer);
@@ -1825,6 +1848,7 @@ export class Scheduler {
       const pairKey = keyAtRatchet(fanOut, demander);
       if (pairKey === undefined) continue;
       if (fanOut.clean.has(pairKey)) continue;
+      oweFanOutRuns(fanOut, [pairKey]);
       this.#markActionInvalid(writer, undefined, { fanOutInstances: "keep" });
       this.#pending.add(writer);
       rearmed += 1;
@@ -2401,8 +2425,9 @@ export class Scheduler {
    * live, a materializer, or pending, which is what has the scheduler queue
    * it. On a node that is not fanned out it must also be invalid or never
    * have run. On a fanned-out node, whose dirtiness is per instance, the
-   * instance must instead not be current (`fanOut.clean`), and be one its
-   * current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
+   * instance must instead be one a pass runs (`fanOutOwesRun()`: not current,
+   * and never run or owed a run, which an instance whose run was given up is
+   * not), and be one its current demanders produce (`fanOutInstances()`, as `runSchedulerAction()`
    * asks): the run supply runs no other, so a principal nothing demands this
    * node for gets no run of it.
    */
@@ -2413,7 +2438,7 @@ export class Scheduler {
     if (!queued) return false;
     const fanOut = this.#nodes.get(action)?.fanOut;
     if (fanOut === undefined) return this.#isInvalidAction(action);
-    if (fanOut.clean.has(instance)) return false;
+    if (!fanOutOwesRun(fanOut, instance)) return false;
     const observation = (action as Partial<TelemetryAnnotations>)
       .schedulerObservationIdentity;
     const roots = observation?.demandRootIds ??
@@ -4220,17 +4245,19 @@ export class Scheduler {
     action: Action,
     cause?: IMemorySpaceAddress,
     options?: MarkInvalidOptions,
-  ): void {
+  ): boolean {
     const record = this.#nodes.get(action);
-    if (!record) return;
-    markInvalidRecord(this.#nodes, action, cause, options);
+    if (!record) return false;
+    // A cause that concerns no instance of a fanned-out node leaves the node
+    // as it was: its gates are not re-armed, and nothing is queued for it.
+    if (!markInvalidRecord(this.#nodes, action, cause, options)) return false;
     // A scheduler-owed retry (`options.retry`: a refused run re-queued after
     // its catch-up, or an empty rejection without an accepted result or live
     // demander) is not an input change — it runs past the node's
     // freshness gates, and any armed readiness is released (§8.3).
     if (options?.retry) {
       this.#gates.releaseForRetry(action);
-      return;
+      return true;
     }
     // Trailing computation debounce re-arms when no retry is owed
     // (§8.1: debounceReadyAt resets while gated). Arming here — in the one
@@ -4243,6 +4270,7 @@ export class Scheduler {
         this.#createDebouncedComputationContext(),
       );
     }
+    return true;
   }
 
   #clearInvalidAction(action: Action): void {
@@ -4259,7 +4287,7 @@ export class Scheduler {
     cause?: IMemorySpaceAddress,
     options?: Pick<MarkInvalidOptions, "retry" | "fanOutInstances">,
   ): void {
-    this.#markActionInvalid(action, cause, options);
+    if (!this.#markActionInvalid(action, cause, options)) return;
 
     if (
       this.#nodes.effects.has(action) &&

@@ -151,7 +151,7 @@ describe("piece-currency", () => {
         fanOutRunFinished(node.fanOut, run, {
           discovered: "user",
           startGen: 0,
-          log: undefined,
+          log: node.fanOut.instances.get(by)?.log ?? logOf([]),
           transaction,
         });
         fanOutSlotChanged(node.fanOut, at, "computed:out", transaction);

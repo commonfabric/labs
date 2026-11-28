@@ -719,7 +719,8 @@ read. Under (d′) liveness must come from demand DIRECTLY:
   resolves P at whatever depth W holds for p), the event actor's
   transient demand — all act on demanders and instances, none on the
   walk. Per-instance keyed causes still dirty only that demander's
-  instances (`dirtyFanOutForCause`); a space cause dirties all.
+  instances (`dirtyFanOutForCause`); a space cause dirties the
+  instances that read its document.
 - **Anonymous sessions and the service session** as today: keys, no
   demanders; excluded, respectively.
 
@@ -1280,7 +1281,7 @@ counted (§7).
 ```
 
 Optionally append to B7 (serving-loop.md §3b): *"(A STRUCTURAL change
-in a space doc dirties every instance of the walk over it — one
+in a space doc dirties every instance of the walk that read it — one
 re-traversal per demanding instance; a value-only change dirties none.
 The walk over unnarrowed structure has ONE instance by §1.)"*
 

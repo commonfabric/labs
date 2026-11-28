@@ -1324,9 +1324,18 @@ What remains live here:
   trigger-read set: the addresses whose changes made this node invalid.
   Consumed into the run's transaction at start (`addCfcTriggerReads`),
   restored on retry (commit rejection / RetryImmediately) because the retry
-  still exists because of them. On a fanned-out node the restore dirties no
+  still exists because of them. A fanned-out node holds one such set for
+  all its instances, and is subscribed to the union of their reads, so each
+  instance's run takes its part of the set: the causes naming an instance on
+  its own chain, and the causes naming no instance that arrived for a
+  document a run of the instance is recorded to have read. Its pass runs
+  one instance after another, and a run takes its part of the causes
+  recorded since the pass began as well. A change to a document only another
+  instance's run read starts no run of this instance and is no trigger
+  read of it; one no instance read does not invalidate the node. On a fanned-out node the restore dirties no
   instance: the causes dirtied the instances they cover when they arrived,
-  the retry dirties only the retried instance, and its siblings stay current.
+  the retry dirties only the retried instance, and its siblings stay current
+  and take none of the restored causes that name no instance.
   Self-suppressed changes (P5) never enter `invalidCauses` — a change that
   did not cause scheduling must not taint it.
 - **`attemptedWrites`** remain CFC prepare/digest evidence only — never

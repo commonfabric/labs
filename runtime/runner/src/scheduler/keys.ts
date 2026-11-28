@@ -1,3 +1,4 @@
+import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import {
   resolveScopeKey,
   type ScopeKeyIdentity,
@@ -62,4 +63,20 @@ export function entityNameKey(
   return `${address.space}/${
     normalizeCellScope(address.scope)
   }/${address.id}` as SpaceScopeAndURI;
+}
+
+/**
+ * The key a pending invalid cause is recorded under. Scope participates (an
+ * omitted scope normalizes to `space`, matching storage). The three address
+ * fields precede the path segments, keeping empty and split paths distinct.
+ */
+export function invalidCauseKey(
+  address: Pick<IMemorySpaceAddress, "space" | "id" | "scope" | "path">,
+): string {
+  return stringTupleKey([
+    address.space,
+    address.scope ?? "space",
+    address.id,
+    ...address.path,
+  ]);
 }

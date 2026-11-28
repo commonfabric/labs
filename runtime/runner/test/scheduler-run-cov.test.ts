@@ -3,6 +3,7 @@ import { expect } from "@std/expect";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { describe, it } from "@commonfabric/test-support/test";
 
+import { invalidCauseKey } from "../src/scheduler/keys.ts";
 import { causesForInstance } from "../src/scheduler/run.ts";
 import type { Action } from "../src/scheduler/types.ts";
 import { restrictToLocalReads } from "../src/storage/local-read-policy.ts";
@@ -35,26 +36,41 @@ function cause(id: string, scopeKey?: ScopeKey): IMemorySpaceAddress {
   };
 }
 
+const untargeted = cause("untargeted");
+const spaceKeyed = cause("space", "space");
 const causes = [
-  cause("untargeted"),
-  cause("space", "space"),
+  untargeted,
+  spaceKeyed,
   cause("user-p", userP),
   cause("user-q", userQ),
   cause("session-p1", sessionP1),
   cause("session-p2", sessionP2),
 ];
 
-/** The ids of the causes an instance run carries. */
-function carried(identity: Parameters<typeof resolveScopeKey>[1]): string[] {
-  return causesForInstance(causes, { identity, key: "space" }).map((
-    address,
-  ) => address.id);
+/**
+ * The ids of the causes an instance run carries, where the instance read the
+ * documents of the causes `read` that name no instance.
+ */
+function carried(
+  identity: Parameters<typeof resolveScopeKey>[1],
+  read: readonly IMemorySpaceAddress[] = [],
+): string[] {
+  return causesForInstance(
+    causes,
+    { identity, key: "space" },
+    new Set(read.map(invalidCauseKey)),
+  ).map((address) => address.id);
 }
 
 describe("scheduler run", () => {
   describe("causesForInstance()", () => {
-    it("returns the untargeted causes and those keyed to the instance identity's space, user and session", () => {
-      expect(carried({ principal: "did:key:p", sessionId: "s1" })).toEqual([
+    it("returns the causes keyed to the instance identity's user and session, and those naming no instance whose documents the instance read", () => {
+      expect(
+        carried({ principal: "did:key:p", sessionId: "s1" }, [
+          untargeted,
+          spaceKeyed,
+        ]),
+      ).toEqual([
         "of:untargeted",
         "of:space",
         "of:user-p",
@@ -62,16 +78,40 @@ describe("scheduler run", () => {
       ]);
     });
 
-    it("returns the causes keyed to the principal's user instance and none of its sessions for an identity with no session", () => {
-      expect(carried({ principal: "did:key:p" })).toEqual([
-        "of:untargeted",
-        "of:space",
+    it("returns none of the causes naming no instance for an instance that read none of their documents", () => {
+      expect(carried({ principal: "did:key:p", sessionId: "s1" })).toEqual([
         "of:user-p",
+        "of:session-p1",
+      ]);
+      expect(
+        causesForInstance(causes, {
+          identity: { principal: "did:key:p", sessionId: "s1" },
+          key: "space",
+        }, undefined).map((address) => address.id),
+      ).toEqual(["of:user-p", "of:session-p1"]);
+    });
+
+    it("returns only the cause naming no instance whose document the instance read", () => {
+      expect(carried({ principal: "did:key:q" }, [spaceKeyed])).toEqual([
+        "of:space",
+        "of:user-q",
       ]);
     });
 
-    it("returns only the untargeted and space-keyed causes for an identity with no principal", () => {
-      expect(carried({})).toEqual(["of:untargeted", "of:space"]);
+    it("returns the causes keyed to the principal's user instance and none of its sessions for an identity with no session", () => {
+      expect(carried({ principal: "did:key:p" }, [untargeted, spaceKeyed]))
+        .toEqual([
+          "of:untargeted",
+          "of:space",
+          "of:user-p",
+        ]);
+    });
+
+    it("returns only the causes naming no instance for an identity with no principal", () => {
+      expect(carried({}, [untargeted, spaceKeyed])).toEqual([
+        "of:untargeted",
+        "of:space",
+      ]);
     });
   });
 

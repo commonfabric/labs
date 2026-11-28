@@ -48,6 +48,7 @@ import type {
   IExtendedStorageTransaction,
   TransactionSealDestination,
 } from "../src/storage/interface.ts";
+import { restrictToLocalReads } from "../src/storage/local-read-policy.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 
@@ -192,6 +193,23 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       { actionScopeKey: "space", principal: alice.principal },
       { actionScopeKey: bobKey, principal: bob.principal },
     ]);
+  });
+
+  it("throws for a demander resolver installed on a runtime that is not serving", async () => {
+    const client = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      experimental: { serverExecution: true },
+    });
+    try {
+      expect(() =>
+        client.installSealDestination(passThroughDestination(), {
+          runDemanderResolver: () => [],
+        })
+      ).toThrow("serving");
+    } finally {
+      await client.dispose();
+    }
   });
 
   it("keeps the single wave-identity run for an action with no demanders", async () => {
@@ -1057,6 +1075,584 @@ describe("stage P2-F per-(action × instance) run supply", () => {
       cancel();
       cancels.forEach((cancelReadiness) => cancelReadiness());
     }
+  });
+
+  describe("a space document only some instances read", () => {
+    // One node whose run reads its viewer's user document and then the space
+    // documents `readsOf` names for that viewer. A change to a space
+    // document arrives naming no instance.
+
+    const rootId = "of:p2f-partial-read-root";
+    const spaceDocOf = (name: string) =>
+      runtime.getCellFromLink<number>({
+        space,
+        id: `of:p2f-partial-read-${name}` as never,
+        scope: "space",
+        path: [],
+      });
+
+    /** A run: who it ran as, and the documents of its trigger reads. */
+    type Run = { as: string; triggers: string[] };
+
+    const register = (
+      demanders: () => Array<typeof alice>,
+      readsOf: (principal: string) => readonly string[],
+      // Resolves when a run as `principal` may go on to its reads.
+      mayRead: (principal: string) => Promise<void> | undefined = () =>
+        undefined,
+      options: {
+        /** Called once a run as `principal` has made its reads. */
+        afterReads?: (principal: string) => void;
+
+        /** Whether a run reads documents of the scope `space` alone, so
+         * that the node stays one instance for all its viewers. */
+        spaceOnly?: boolean;
+
+        /** Which documents a run may read as held locally, where it is
+         * restricted to those. */
+        localOnly?: (address: { id: string }) => boolean;
+      } = {},
+    ) => {
+      runtime.installSealDestination(passThroughDestination(), {
+        runStamper: recordingStamper,
+        runDemanderResolver: (pieceRootIds) =>
+          pieceRootIds.includes(rootId) ? demanders() : [],
+      });
+      const userDoc = runtime.getCellFromLink<{ v?: number }>({
+        space,
+        id: "of:p2f-partial-read-user-doc" as never,
+        scope: "user",
+        path: [],
+      });
+      const runs: Run[] = [];
+      const action = Object.assign(
+        async (tx: IExtendedStorageTransaction) => {
+          const principal = waveRunContextOf(tx)?.scopeKeyIdentity?.principal;
+          if (principal === undefined) return;
+          runs.push({
+            as: principal,
+            triggers: tx.getCfcState().triggerReads.map((read) => read.id),
+          });
+          if (options.localOnly !== undefined) {
+            const permits = options.localOnly;
+            restrictToLocalReads(tx.tx, () => permits as never);
+          }
+          if (options.spaceOnly !== true) userDoc.withTx(tx).get();
+          const waited = mayRead(principal);
+          if (waited !== undefined) await waited;
+          for (const name of readsOf(principal)) {
+            spaceDocOf(name).withTx(tx).get();
+          }
+          options.afterReads?.(principal);
+        },
+        {
+          schedulerObservationIdentity: {
+            pieceId: `space:${rootId}`,
+            pieceRootId: rootId,
+          },
+        },
+      );
+      const cancel = runtime.scheduler.register(action, undefined, {
+        isEffect: true,
+      });
+      /** The runs since the last call. */
+      const taken = () => runs.splice(0);
+      return { action, cancel, taken };
+    };
+
+    const ownDocument = (principal: string) =>
+      principal === alice.principal ? ["of-alice"] : ["of-bob"];
+    const idOf = (name: string) => `of:p2f-partial-read-${name}`;
+
+    it("re-runs only the instance that read the document, and hands the change to that run alone", async () => {
+      const { cancel, taken } = register(() => [alice, bob], ownDocument);
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        taken();
+
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-alice").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(taken()).toEqual([
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("hands a change both instances' documents share to both, and each instance's own document to it alone", async () => {
+      const { cancel, taken } = register(
+        () => [alice, bob],
+        (principal) => [...ownDocument(principal), "shared"],
+      );
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        taken();
+
+        await runtime.editWithRetry((tx) => {
+          spaceDocOf("of-bob").withTx(tx).set(1);
+          spaceDocOf("shared").withTx(tx).set(1);
+        });
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(taken()).toEqual([
+          { as: alice.principal, triggers: [idOf("shared")] },
+          {
+            as: bob.principal,
+            triggers: [idOf("of-bob"), idOf("shared")],
+          },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("re-runs an instance for a document it began to read on its latest run", async () => {
+      let bobReadsAlices = false;
+      const { action, cancel, taken } = register(
+        () => [alice, bob],
+        (principal) =>
+          principal === bob.principal && bobReadsAlices
+            ? ["of-bob", "of-alice"]
+            : ownDocument(principal),
+      );
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        bobReadsAlices = true;
+        runtime.scheduler.invalidateAction(action, { instances: [bob] });
+        await runtime.scheduler.idleWithPendingCommits();
+        expect(taken().map((run) => run.as)).toEqual([
+          alice.principal,
+          bob.principal,
+          bob.principal,
+        ]);
+
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-alice").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(taken()).toEqual([
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+          { as: bob.principal, triggers: [idOf("of-alice")] },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("leaves current an instance that stopped reading the document on its latest run", async () => {
+      let bobReadsAlices = true;
+      const { action, cancel, taken } = register(
+        () => [alice, bob],
+        (principal) =>
+          principal === bob.principal && bobReadsAlices
+            ? ["of-bob", "of-alice"]
+            : ownDocument(principal),
+      );
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        bobReadsAlices = false;
+        runtime.scheduler.invalidateAction(action, { instances: [bob] });
+        await runtime.scheduler.idleWithPendingCommits();
+        taken();
+
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-alice").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(taken()).toEqual([
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("runs a viewer who arrives with the change as a first run, with no trigger read of a document it never read", async () => {
+      let demanders = [alice];
+      const { cancel, taken } = register(() => demanders, ownDocument);
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        taken();
+
+        demanders = [alice, bob];
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-alice").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(taken()).toEqual([
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+          { as: bob.principal, triggers: [] },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("re-runs the one remaining instance for a document the departed one also read, and for no document only the departed one read", async () => {
+      let demanders = [alice, bob];
+      const { cancel, taken } = register(
+        () => demanders,
+        (principal) => [...ownDocument(principal), "shared"],
+      );
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        taken();
+
+        demanders = [bob];
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-alice").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+        expect(taken()).toEqual([]);
+
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("shared").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+        expect(taken()).toEqual([
+          { as: bob.principal, triggers: [idOf("shared")] },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    describe("changed while a run of another instance is under way", () => {
+      /**
+       * Registers the node, holds Bob's next run before its reads, changes
+       * Alice's document, and lets the run go on. Returns the runs from the
+       * held run on.
+       */
+      const changedDuringBobsRun = async (bobReadsAlicesNext: boolean) => {
+        let bobReadsAlices = false;
+        let held: PromiseWithResolvers<void> | undefined;
+        const reached = Promise.withResolvers<void>();
+        const { action, cancel, taken } = register(
+          () => [alice, bob],
+          (principal) =>
+            principal === bob.principal && bobReadsAlices
+              ? ["of-bob", "of-alice"]
+              : ownDocument(principal),
+          (principal) => {
+            if (principal !== bob.principal || held === undefined) return;
+            const waited = held.promise;
+            held = undefined;
+            reached.resolve();
+            return waited;
+          },
+        );
+        try {
+          await runtime.scheduler.idleWithPendingCommits();
+          taken();
+
+          bobReadsAlices = bobReadsAlicesNext;
+          const release = held = Promise.withResolvers<void>();
+          runtime.scheduler.invalidateAction(action, { instances: [bob] });
+          await reached.promise;
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-alice").withTx(tx).set(1)
+          );
+          release.resolve();
+          await runtime.scheduler.idleWithPendingCommits();
+          return taken();
+        } finally {
+          cancel();
+        }
+      };
+
+      it("re-runs the instance under way where its run read the document for the first time, and hands the change to both re-runs", async () => {
+        expect(await changedDuringBobsRun(true)).toEqual([
+          { as: bob.principal, triggers: [] },
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+          { as: bob.principal, triggers: [idOf("of-alice")] },
+        ]);
+      });
+
+      it("leaves the instance under way current where its run did not read the document, and hands the change to the other's re-run", async () => {
+        expect(await changedDuringBobsRun(false)).toEqual([
+          { as: bob.principal, triggers: [] },
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+        ]);
+      });
+    });
+
+    describe("with an instance whose retries ran out", () => {
+      /**
+       * Registers the node and has Bob's runs for a change of his document
+       * throw `RetryImmediately` until none is retried. Returns the node's
+       * handles once Bob's runs no longer throw.
+       */
+      const withBobOutOfRetries = async (
+        demanders: () => Array<typeof alice> = () => [alice, bob],
+      ) => {
+        let bobThrows = false;
+        const registered = register(demanders, (principal) => {
+          if (principal === bob.principal && bobThrows) {
+            throw new RetryImmediately("not yet");
+          }
+          return ownDocument(principal);
+        });
+        await runtime.scheduler.idleWithPendingCommits();
+        bobThrows = true;
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-bob").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+        expect(registered.taken().filter((run) => run.as === bob.principal))
+          .toHaveLength(1 + MAX_RETRIES_FOR_REACTIVE);
+        bobThrows = false;
+        return registered;
+      };
+
+      it("does not run it for a change of a document only another instance read", async () => {
+        const { cancel, taken } = await withBobOutOfRetries();
+        try {
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-alice").withTx(tx).set(1)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+
+          expect(taken()).toEqual([
+            { as: alice.principal, triggers: [idOf("of-alice")] },
+          ]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs it for a change of a document its latest finished run read, and hands it the change", async () => {
+        const { cancel, taken } = await withBobOutOfRetries();
+        try {
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-bob").withTx(tx).set(2)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+
+          expect(taken()).toEqual([
+            { as: bob.principal, triggers: [idOf("of-bob")] },
+          ]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs it for an invalidation that names no cause", async () => {
+        const { action, cancel, taken } = await withBobOutOfRetries();
+        try {
+          runtime.scheduler.invalidateAction(action);
+          await runtime.scheduler.idleWithPendingCommits();
+
+          expect(taken()).toEqual([
+            { as: alice.principal, triggers: [] },
+            { as: bob.principal, triggers: [] },
+          ]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs it for an invalidation that names its instance", async () => {
+        const { action, cancel, taken } = await withBobOutOfRetries();
+        try {
+          runtime.scheduler.invalidateAction(action, { instances: [bob] });
+          await runtime.scheduler.idleWithPendingCommits();
+
+          expect(taken()).toEqual([{ as: bob.principal, triggers: [] }]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs it for a change of a document that only its given-up runs read, where no run of it ever finished", async () => {
+        let bobThrows = true;
+        const { cancel, taken } = register(
+          () => [alice, bob],
+          ownDocument,
+          undefined,
+          {
+            afterReads: (principal) => {
+              if (principal === bob.principal && bobThrows) {
+                throw new RetryImmediately("not yet");
+              }
+            },
+          },
+        );
+        try {
+          await runtime.scheduler.idleWithPendingCommits();
+          taken();
+          bobThrows = false;
+
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-alice").withTx(tx).set(1)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+          expect(taken()).toEqual([
+            { as: alice.principal, triggers: [idOf("of-alice")] },
+          ]);
+
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-bob").withTx(tx).set(1)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+          expect(taken()).toEqual([
+            { as: bob.principal, triggers: [idOf("of-bob")] },
+          ]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs it for a change of a document its given-up run read and its latest finished run did not", async () => {
+        let bobThrows = false;
+        let bobReadsExtra = false;
+        const { cancel, taken } = register(
+          () => [alice, bob],
+          (principal) =>
+            principal === bob.principal && bobReadsExtra
+              ? ["of-bob", "extra"]
+              : ownDocument(principal),
+          undefined,
+          {
+            afterReads: (principal) => {
+              if (principal === bob.principal && bobThrows) {
+                throw new RetryImmediately("not yet");
+              }
+            },
+          },
+        );
+        try {
+          await runtime.scheduler.idleWithPendingCommits();
+          bobThrows = true;
+          bobReadsExtra = true;
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-bob").withTx(tx).set(1)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+          taken();
+          bobThrows = false;
+
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("extra").withTx(tx).set(1)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+
+          expect(taken()).toEqual([
+            { as: bob.principal, triggers: [idOf("extra")] },
+          ]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs the one instance of a node that has not narrowed, given up on its first run, once a viewer arrives", async () => {
+        let throws = true;
+        let demanders = [alice];
+        const { cancel, taken } = register(
+          () => demanders,
+          () => ["shared"],
+          undefined,
+          {
+            spaceOnly: true,
+            afterReads: () => {
+              if (throws) throw new RetryImmediately("not yet");
+            },
+          },
+        );
+        try {
+          await runtime.scheduler.idleWithPendingCommits();
+          expect(taken()).toHaveLength(MAX_RETRIES_FOR_REACTIVE);
+          throws = false;
+
+          demanders = [alice, bob];
+          runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
+          await runtime.scheduler.idleWithPendingCommits();
+
+          expect(taken()).toEqual([{ as: alice.principal, triggers: [] }]);
+        } finally {
+          cancel();
+        }
+      });
+
+      it("runs it as a first run once its viewer has left and come back", async () => {
+        let demanders = [alice, bob];
+        const { cancel, taken } = await withBobOutOfRetries(() => demanders);
+        try {
+          demanders = [alice];
+          await runtime.editWithRetry((tx) =>
+            spaceDocOf("of-alice").withTx(tx).set(1)
+          );
+          await runtime.scheduler.idleWithPendingCommits();
+          expect(taken()).toEqual([
+            { as: alice.principal, triggers: [idOf("of-alice")] },
+          ]);
+
+          demanders = [alice, bob];
+          runtime.scheduler.invalidateActionsForDemandRoots([rootId]);
+          await runtime.scheduler.idleWithPendingCommits();
+          expect(taken()).toEqual([{ as: bob.principal, triggers: [] }]);
+        } finally {
+          cancel();
+        }
+      });
+    });
+
+    it("reports a run of an instance that an unavailable local read parked, which no arrangement of a serving runtime produces", async () => {
+      const errors: Error[] = [];
+      runtime.scheduler.onError((error) => errors.push(error));
+      const { cancel } = register(
+        () => [alice, bob],
+        ownDocument,
+        undefined,
+        { localOnly: (address) => !address.id.includes("of-bob") },
+      );
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(errors.map((error) => error.message)).toEqual([
+          expect.stringContaining("parked on a local read"),
+        ]);
+      } finally {
+        cancel();
+      }
+    });
+
+    it("gives a run retried after `RetryImmediately` the trigger read its failed attempt took, and its sibling none", async () => {
+      let aliceThrows = 0;
+      const { cancel, taken } = register(
+        () => [alice, bob],
+        (principal) => {
+          if (principal === alice.principal && aliceThrows > 0) {
+            aliceThrows -= 1;
+            throw new RetryImmediately("not yet");
+          }
+          return ownDocument(principal);
+        },
+      );
+      try {
+        await runtime.scheduler.idleWithPendingCommits();
+        taken();
+
+        aliceThrows = 1;
+        await runtime.editWithRetry((tx) =>
+          spaceDocOf("of-alice").withTx(tx).set(1)
+        );
+        await runtime.scheduler.idleWithPendingCommits();
+
+        expect(taken()).toEqual([
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+          { as: alice.principal, triggers: [idOf("of-alice")] },
+        ]);
+      } finally {
+        cancel();
+      }
+    });
   });
 });
 

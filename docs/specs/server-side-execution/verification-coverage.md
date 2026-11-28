@@ -10738,6 +10738,23 @@ supply; OW29/OW32/OW34 closed):
   `runtime/runner/test/scheduler/supersededOutputsOwed.test.ts` (the
   verdict, and the wait for the commit that decides it).
 
+- **A change that names no instance reaches the instances that read
+  its document (serving-loop.md §3b, B7).** impl-gate: pinned in
+  `runtime/runner/test/scheduler-fan-out.test.ts` ("a cause that names
+  no instance": which instances it dirties, by the reads of each one's
+  latest run, an instance whose run is under way, one that never ran,
+  one whose retries were spent, one that left,
+  one the ratchet re-keyed, and which runs take it as a trigger read,
+  a retry included), `runtime/runner/test/scheduler-run-cov.test.ts`
+  (`causesForInstance()`),
+  `runtime/runner/test/executor-run-supply.test.ts` ("a space document
+  only some instances read", through the settle loop: the runs and the
+  trigger reads each run carries) and
+  `runtime/runner/test/executor-two-principal-profile-clauses.test.ts`
+  (two principals under a serving loop, each with a profile under
+  their own `User` clause: neither principal's instance stores a
+  clause or a value of the other).
+
 ## 4. Standing rule
 
 A ruling batch that adds a BINDING sentence adds its coverage row

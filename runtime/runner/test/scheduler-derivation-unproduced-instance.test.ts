@@ -9,6 +9,7 @@ import {
 } from "../src/link-utils.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { Runtime } from "../src/runtime.ts";
+import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   resolveScopeKey,
@@ -211,13 +212,21 @@ async function fixture(
      */
     async runFannedOutWriter(
       demanders: () => ScopeKeyIdentity[],
-      options: { invalidate?: boolean; rooted?: boolean } = {},
+      options: {
+        /** Whether the run after the first throws `RetryImmediately` until
+         * the scheduler retries it no more. */
+        givenUp?: boolean;
+        invalidate?: boolean;
+        rooted?: boolean;
+      } = {},
     ) {
       stub(runtime, "serverRunDemandersFor", () => demanders());
       const user = state.getAsNormalizedFullLink();
       const slot = { ...user, scope: "space" as const };
+      let throws = false;
       const writer = (tx: IExtendedStorageTransaction) => {
         upstream.withTx(tx).get();
+        if (throws) throw new RetryImmediately("not yet");
         tx.writeValueOrThrow(
           slot,
           createSigilLinkFromParsedLink(user, {
@@ -240,6 +249,7 @@ async function fixture(
       runtime.scheduler.subscribe(writer, writes);
       await runtime.scheduler.run(writer);
       await runtime.idle();
+      throws = options.givenUp === true;
       if (options.rooted === false) {
         runtime.scheduler.subscribe(writer, writes, {
           observationIdentity: { pieceId: "fanned-out-unrooted" },
@@ -247,6 +257,10 @@ async function fixture(
       }
       if (options.invalidate !== false) {
         runtime.scheduler.invalidateAction(writer);
+      }
+      if (throws) {
+        runtime.scheduler.subscribe(writer, writes, { isEffect: true });
+        await runtime.scheduler.idleWithPendingCommits();
       }
       // A reader of `state` reads the space slot's redirect on its way to
       // the user instance.
@@ -585,6 +599,22 @@ describe("scheduler-derivation-unproduced-instance", () => {
       await f.runFannedOutWriter(() => [
         { principal: other.did(), sessionId: "other-session" },
       ]);
+
+      expect(f.stateComing()).toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as not coming from a fanned-out writer whose run for it was given up", async () => {
+    // The instance is not current, and no pass will run it until something
+    // it read changes, so an event waiting for it would wait for nothing.
+
+    const f = await fixture("coming-fanned-out-given-up", true);
+    try {
+      await f.runFannedOutWriter(() => [f.runtime.scopeKeyIdentity], {
+        givenUp: true,
+      });
 
       expect(f.stateComing()).toBeUndefined();
     } finally {

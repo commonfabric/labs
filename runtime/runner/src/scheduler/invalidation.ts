@@ -1,5 +1,4 @@
 import type { MemorySpace } from "@commonfabric/memory/interface";
-import { stringTupleKey } from "@commonfabric/collections/string-tuple-key";
 import { ANY_INSTANCE } from "@commonfabric/memory/v2/currency-keys";
 
 import type {
@@ -15,11 +14,12 @@ import { summarizeTriggerTraceValue } from "./diagnostics.ts";
 import {
   dirtyFanOutAll,
   dirtyFanOutForCause,
+  fanOutCauseConcerns,
   type FanOutNodeState,
   fanOutRunApplied,
   fanOutSlotChanged,
 } from "./fan-out.ts";
-import { entityNameKey } from "./keys.ts";
+import { entityNameKey, invalidCauseKey } from "./keys.ts";
 import type { MaterializerIndexState } from "./materializers.ts";
 import type { NodeRegistry, SchedulerNode } from "./node-record.ts";
 import type { TriggerIndexState } from "./trigger-index.ts";
@@ -262,9 +262,16 @@ export function processStorageNotification(
         // (addInvalidCause dedups by address): an interleaved unshaped wake may
         // run the action and consume its recorded causes before the deferred
         // release, and the deferred rerun must still carry the "this change
-        // triggered me" flow label.
+        // triggered me" flow label. A cause that concerns no instance of a
+        // fanned-out node is not recorded, here or at release.
         const record = state.nodes.get(action);
-        if (record) addInvalidCause(record, cause);
+        if (
+          record &&
+          (record.fanOut === undefined ||
+            fanOutCauseConcerns(record.fanOut, cause))
+        ) {
+          addInvalidCause(record, cause);
+        }
         state.holdShapedNotification(
           shapeGroupKey,
           `${actionId}|${spaceAndURI}`,
@@ -316,8 +323,9 @@ export interface MarkInvalidOptions {
    * How a fanned-out node's per-instance dirtiness responds to the
    * invalidation (B7). `all`, the default, dirties the instances the
    * invalidation covers: with a cause, those `dirtyFanOutForCause()` picks
-   * for it, which for a cause naming no instance is every one; with no
-   * cause, every instance, the conservative meaning of "this node must run".
+   * for it, which for a cause naming no instance are the ones that read its
+   * document; with no cause, every instance, the conservative meaning of
+   * "this node must run".
    * `keep` leaves the instance record alone, with a cause or without one: the
    * caller already dirtied exactly the instances that must re-run (a retried
    * instance's own key; an arriving demander, whose instances have never run
@@ -357,47 +365,41 @@ export interface MarkInvalidOptions {
  *
  * On a fanned-out node (stage B) the cause also decides WHICH instances
  * re-run (B7, precise per-instance dirtiness): a keyed cause dirties the
- * instances whose reads covered that instance; an unkeyed one, or no
- * cause at all, dirties every instance. A caller that says `keep` dirties
- * none, with a cause or without one.
+ * instances whose reads covered that instance; an unkeyed one dirties the
+ * instances whose latest run read its document, and only their next runs
+ * take it as a trigger read; no cause at all dirties every instance. A
+ * caller that says `keep` dirties none, with a cause or without one.
+ *
+ * Returns whether the node was invalidated. A cause for a document that no
+ * instance of a fanned-out node is recorded to have read, arriving while no
+ * run of the node is under way, concerns no instance: it is not recorded,
+ * and the node is left as it was, so that it starts no run and moves the
+ * time of none.
  */
 export function markInvalid(
   nodes: NodeRegistry,
   action: Action,
   cause?: IMemorySpaceAddress,
   options: MarkInvalidOptions = {},
-): void {
+): boolean {
   const record = nodes.get(action);
-  if (!record) return;
+  if (!record) return false;
+  if (record.fanOut !== undefined && options.fanOutInstances !== "keep") {
+    if (cause === undefined) {
+      dirtyFanOutAll(record.fanOut);
+    } else if (!dirtyFanOutForCause(record.fanOut, cause)) {
+      return false;
+    }
+  }
   if (cause !== undefined) {
     addInvalidCause(record, cause);
-  }
-  if (record.fanOut !== undefined && options.fanOutInstances !== "keep") {
-    if (cause !== undefined) {
-      dirtyFanOutForCause(record.fanOut, cause);
-    } else {
-      dirtyFanOutAll(record.fanOut);
-    }
   }
   // Status transition goes through the registry so the invalid-node index
   // stays in lockstep; never-ran nodes keep their status (already indexed).
   if (record.status === "clean" || record.status === "unavailable") {
     nodes.setStatus(action, "invalid");
   }
-}
-
-/**
- * The key a pending invalid cause is recorded under. Scope participates (an
- * omitted scope normalizes to `space`, matching storage). The three address
- * fields precede the path segments, keeping empty and split paths distinct.
- */
-function invalidCauseKey(address: IMemorySpaceAddress): string {
-  return stringTupleKey([
-    address.space,
-    address.scope ?? "space",
-    address.id,
-    ...address.path,
-  ]);
+  return true;
 }
 
 /**
@@ -425,6 +427,26 @@ export function takeInvalidCauses(
   const causes = [...record.invalidCauses.values()];
   record.invalidCauses.clear();
   return causes;
+}
+
+/**
+ * The causes a run that starts now was scheduled by: `taken`, which the pass
+ * it runs in took when it began, and those recorded since, which stay
+ * recorded for the pass they queued. A fanned-out node's pass runs one
+ * instance after another, and a cause that arrives during one instance's run
+ * can be what makes a later one in the same pass run.
+ */
+export function invalidCausesSoFar(
+  record: SchedulerNode | undefined,
+  taken: readonly IMemorySpaceAddress[] | undefined,
+): readonly IMemorySpaceAddress[] | undefined {
+  if (record === undefined || record.invalidCauses.size === 0) return taken;
+  if (taken === undefined) return [...record.invalidCauses.values()];
+  const causes = new Map(taken.map((cause) => [invalidCauseKey(cause), cause]));
+  for (const [key, cause] of record.invalidCauses) {
+    if (!causes.has(key)) causes.set(key, cause);
+  }
+  return [...causes.values()];
 }
 
 /**

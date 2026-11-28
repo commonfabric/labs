@@ -1355,15 +1355,48 @@ executing:
   inspection decides instance sets (D11). Discovery RE-ARM: a run
   that moves the ratchet has its new siblings run in the same pass,
   before the wave settles. Arrival RE-ARM: a new demanding pair on a
-  root re-arms every NARROWED node beneath it for that pair only.
+  root re-arms every NARROWED node beneath it for that pair, and
+  for any instance of the node whose run was given up (below); a
+  node that has not narrowed is re-armed only where its one
+  instance was given up.
   Precise per-instance dirtiness (B7): the node is singular (C11b) but
   its record keeps, per instance, the last committed reactivity log
   and a clean bit — a change dirties exactly the instances whose reads
   covered it (a keyed notification address names the instance; a
-  space doc dirties all), the node's ONE subscription is the union of
-  the instance logs (a pass that skips clean instances keeps their
-  reads registered), and an N-user space costs O(affected instances)
-  per change, not O(N) per node — the load-bearing property that keeps
+  change that names none, a space doc's, dirties the instances whose
+  recorded run read that document; for an instance whose run is under
+  way when it arrives, that is decided when the run finishes and its
+  reads are recorded), the
+  node's ONE subscription is the union of the instance logs (a pass
+  that skips clean instances keeps their reads registered), and an
+  N-user space costs O(affected instances) runs per change, not O(N)
+  runs per node; deciding which instances a change that names none
+  affects is one set lookup per instance of the node. The decision is
+  by document: an instance that read any path of the changed document
+  is affected. A change that affects no instance, and arrives while no
+  run of the node is under way, leaves the node as it was: it queues
+  no pass and re-arms no gate. An instance that is not current is run
+  by a pass only where it is owed a run: it never ran, a change
+  affected it, an invalidation that names no cause or a retry asked
+  for it, a viewer asked for it, or a viewer arrived at a root the
+  node is under, which owes every instance of the node that is not
+  current a run. An instance whose retries were spent is owed none
+  until one of those happens: the node stays subscribed to what its
+  given-up run read, as to what its latest finished run read, a
+  change to either affects it, and a change to a document only
+  another instance read does not start it. A run of one instance takes, as its
+  trigger reads (CFC §8.9.2), the changes that name an instance on its
+  own chain and the changes that name none and affected it, those that
+  arrived since the pass began included; so a document only one
+  viewer's run read — that viewer's profile, in a space of their own —
+  joins no label to another viewer's instance. An instance that has
+  never run takes no change that names no instance: demand runs it,
+  and its own reads label it. The node's freshness gates are the
+  node's and not an instance's, so a change that affects one instance
+  re-arms the debounce a pass for another instance waits behind, and
+  joins nothing to that instance's run: a residual, stated in the
+  conformance statement, which the specification has not ruled on.
+  Running O(affected instances) is the load-bearing property that keeps
   waves draining under sustained multi-user input (an exhausted wave
   holds W; a pinned W stalls the client's coverage-of-basis
   retirement).
