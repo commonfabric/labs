@@ -27,7 +27,10 @@ import {
   verifyPrivateScratchParent,
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
-import { sealedSkillScriptRunscConfig } from "../src/skills/sealed-script-sandbox.ts";
+import {
+  sandboxPathsInsideWorkspace,
+  sealedSkillScriptRunscConfig,
+} from "../src/skills/sealed-script-sandbox.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
 import { writesDespiteMode } from "./support/runsc-privilege.ts";
 import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
@@ -558,7 +561,9 @@ test("RunscSandboxRuntime runs a sealed skill-script config with no network and 
       { kind: "fabric-fuse", hostPath: "/mnt/fabric" },
     ],
   });
-  const sealed = sealedSkillScriptRunscConfig(run, "call-1");
+  const sealed = sealedSkillScriptRunscConfig(run, "call-1", [
+    "/workspace/.cf-harness-artifacts",
+  ]);
   assertEquals(sealed.scratchDir, `${run.scratchDir}-sealed-call-1`);
   const runtime = new RunscSandboxRuntime(sealed, runner);
   assertEquals(runtime.describe().cfc?.networkMode, "none");
@@ -589,6 +594,30 @@ test("RunscSandboxRuntime runs a sealed skill-script config with no network and 
   assert(binds["/workspace"].options.includes("ro"));
   assert(binds["/notes"].options.includes("ro"));
   assertEquals(binds["/fabric"], undefined);
+  const masks = spec.mounts.filter((m) =>
+    m.destination.startsWith("/workspace/")
+  );
+  assertEquals(masks.map((m) => [m.destination, m.source]), [[
+    "/workspace/.cf-harness-artifacts",
+    "tmpfs",
+  ]]);
+  assert(masks[0].options.includes("ro"));
+  // Listed after the workspace bind, so it covers what the bind shows there.
+  assert(
+    spec.mounts.indexOf(masks[0]) >
+      spec.mounts.findIndex((m) => m.destination === "/workspace"),
+  );
+});
+
+test("sandboxPathsInsideWorkspace maps a path inside the workspace and drops one outside", () => {
+  assertEquals(
+    sandboxPathsInsideWorkspace("/host/ws", "/workspace", [
+      "/host/ws/.cf-harness-artifacts",
+      "/host/artifacts",
+      "/host/ws-other",
+    ]),
+    ["/workspace/.cf-harness-artifacts"],
+  );
 });
 
 test("RunscSandboxRuntime omits the CFC flags and reports no result without a policy", async () => {

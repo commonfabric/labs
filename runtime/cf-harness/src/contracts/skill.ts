@@ -145,6 +145,8 @@ export interface HarnessSkillScriptExecutionError {
  */
 export interface HarnessSealedSkillScriptRun {
   networkMode: "none";
+
+  /** On the execution record only: the model-facing output leaves it out. */
   image?: string;
 }
 

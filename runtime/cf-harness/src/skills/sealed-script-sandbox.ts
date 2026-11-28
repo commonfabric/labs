@@ -11,6 +11,8 @@
  * has none or is treated as able to cause anything.
  */
 
+import { isAbsolute, join, relative } from "@std/path";
+
 import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
 
 /**
@@ -21,6 +23,9 @@ import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
  *   other interface, and leaves pasta and its forwarded ports out;
  * - no fabric mount, and every other mount, the workspace included, bound
  *   read-only;
+ * - each of `maskedPaths` covered, so the run's artifact root, which no
+ *   model-facing tool may read, is not read through a script either (see
+ *   {@link sandboxPathsInsideWorkspace});
  * - a scratch directory of the call's own beside the run's, in the parent
  *   the run's runtime verifies is private, so the runtime built from it, and
  *   closed after the one call, shares no state with the run's.
@@ -31,9 +36,26 @@ import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
  * the mounts. What it writes lands in the container's `/tmp` or in the
  * in-memory overlay over its root filesystem, and both go with the container.
  */
+/**
+ * Where each of `hostPaths` that lies inside the workspace appears in the
+ * sandbox. Both sides should be canonical, or a link on one makes the path
+ * look outside.
+ */
+export const sandboxPathsInsideWorkspace = (
+  workspaceHostPath: string,
+  workspaceMountPath: string,
+  hostPaths: readonly string[],
+): string[] =>
+  hostPaths.flatMap((hostPath) => {
+    const inside = relative(workspaceHostPath, hostPath);
+    if (inside.startsWith("..") || isAbsolute(inside)) return [];
+    return [join(workspaceMountPath, inside)];
+  });
+
 export const sealedSkillScriptRunscConfig = (
   config: RunscSandboxConfig,
   callId: string,
+  maskedPaths: readonly string[] = [],
 ): RunscSandboxConfig => {
   const {
     networkHelper: _networkHelper,
@@ -46,6 +68,7 @@ export const sealedSkillScriptRunscConfig = (
     ...rest,
     networkMode: "none",
     workspaceReadOnly: true,
+    ...(maskedPaths.length > 0 ? { maskedPaths: [...maskedPaths] } : {}),
     additionalMounts: config.additionalMounts
       .filter((mount) => mount.kind === "host-bind")
       .map((mount) => ({ ...mount, readOnly: true })),

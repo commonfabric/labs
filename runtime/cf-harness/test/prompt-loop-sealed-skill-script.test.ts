@@ -33,13 +33,20 @@ const quoteBinding = (subject: string): PromptSlotBinding => ({
   role: "quote",
 });
 
+/** One `runsc run`: its arguments, and from its spec, command and mounts. */
+interface RecordedStart {
+  args: string[];
+  argv: string[];
+  mounts: Array<{ destination: string; type: string }>;
+}
+
 /**
  * Stands in for the host's process runner and runs nothing. For each `runsc
- * run` it keeps the global arguments and the command the container was to
- * run, read from the bundle's spec while the bundle still exists.
+ * run` it keeps the arguments, and the command and mounts the container was
+ * to have, read from the bundle's spec while the bundle still exists.
  */
 class RecordingRunner implements ProcessRunner {
-  readonly starts: Array<{ args: string[]; argv: string[] }> = [];
+  readonly starts: RecordedStart[] = [];
 
   async run(request: ProcessRunRequest): Promise<ProcessRunResult> {
     const args = request.args ?? [];
@@ -47,14 +54,21 @@ class RecordingRunner implements ProcessRunner {
     if (request.command === "/bin/sh" && bundleAt !== -1) {
       const spec = JSON.parse(
         await Deno.readTextFile(`${args[bundleAt + 1]}/config.json`),
-      ) as { process: { args: string[] } };
-      this.starts.push({ args: [...args], argv: spec.process.args });
+      ) as {
+        process: { args: string[] };
+        mounts: Array<{ destination: string; type: string }>;
+      };
+      this.starts.push({
+        args: [...args],
+        argv: spec.process.args,
+        mounts: spec.mounts,
+      });
     }
     return { stdout: "", stderr: "", exitCode: 0 };
   }
 
   /** The containers started to run the skill script, not the run's probes. */
-  scriptStarts(): Array<{ args: string[]; argv: string[] }> {
+  scriptStarts(): RecordedStart[] {
     return this.starts.filter((start) => start.argv[0] === "bash");
   }
 }
@@ -217,10 +231,12 @@ const scriptCallOutcome = async (
 
 const runscEngineOptions = (
   runner: ProcessRunner,
-  cfcEnforcementMode: "enforce-explicit" | "enforce-strict",
+  cfcEnforcementMode: "observe" | "enforce-explicit" | "enforce-strict",
 ) =>
 (workspace: string): ConstructorParameters<typeof CfHarnessEngine>[0] => ({
   workspaceHostPath: workspace,
+  // Where the CLI puts it by default: inside the workspace.
+  artifactRoot: join(workspace, ".cf-harness-artifacts"),
   sandboxRuntimeKind: "runsc",
   sandboxRunscBinary: "/opt/runsc",
   sandboxRootfs: "/images/kitchensink",
@@ -248,14 +264,31 @@ describe("prompt-loop-sealed-skill-script", () => {
       );
 
       expect(result.status).toBe("executed");
-      expect(result.sealed).toEqual({
-        networkMode: "none",
-        image: "/images/kitchensink",
-      });
+      // The image's host path is the record's alone.
+      expect(result.sealed).toEqual({ networkMode: "none" });
       const [start] = runner.scriptStarts();
       expect(start).toBeDefined();
       expect(start.args).toContain("--network=none");
       expect(start.args).not.toContain("--network=sandbox");
+    });
+
+    it("hides the run's artifact root from a sealed script", async () => {
+      // No model-facing tool may read the artifact root, and the workspace
+      // a sealed script reads holds it.
+
+      const runner = new RecordingRunner();
+      await scriptCallOutcome(
+        "run-sealed-artifacts",
+        quoteBinding("sealed-artifacts"),
+        runscEngineOptions(runner, "enforce-explicit"),
+      );
+      const [start] = runner.scriptStarts();
+      expect(start.mounts).toContainEqual(
+        expect.objectContaining({
+          destination: "/workspace/.cf-harness-artifacts",
+          type: "tmpfs",
+        }),
+      );
     });
 
     it("refuses a quoted call's script under enforce-strict, starting no container", async () => {
@@ -284,18 +317,42 @@ describe("prompt-loop-sealed-skill-script", () => {
       expect(runner.scriptStarts()).toEqual([]);
     });
 
-    it("runs a direct command's script on the run's own network", async () => {
+    it("runs a direct command's script on the run's own network, with no cwd named", async () => {
       const runner = new RecordingRunner();
       const result = await scriptCallOutcome(
         "run-sealed-direct",
         directPromptSlotBindingFor("sealed-direct"),
         runscEngineOptions(runner, "enforce-explicit"),
-        { cwd: "/workspace" },
       );
       const [start] = runner.scriptStarts();
       expect(start).toBeDefined();
       expect(start.args).toContain("--network=sandbox");
       expect(result.sealed).toBeUndefined();
+    });
+
+    it("runs a quoted call's script on the run's own network in observe mode, which admits it", async () => {
+      const runner = new RecordingRunner();
+      const result = await scriptCallOutcome(
+        "run-sealed-observe",
+        quoteBinding("sealed-observe"),
+        runscEngineOptions(runner, "observe"),
+      );
+      const [start] = runner.scriptStarts();
+      expect(start).toBeDefined();
+      expect(start.args).toContain("--network=sandbox");
+      expect(result.sealed).toBeUndefined();
+    });
+
+    it("refuses a quoted call whose cwd is null, as one that names a cwd", async () => {
+      const runner = new RecordingRunner();
+      const result = await scriptCallOutcome(
+        "run-sealed-null-cwd",
+        quoteBinding("sealed-null-cwd"),
+        runscEngineOptions(runner, "enforce-explicit"),
+        { cwd: null },
+      );
+      expect(result.reason).toBe("not-authorized");
+      expect(runner.scriptStarts()).toEqual([]);
     });
   });
 

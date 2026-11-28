@@ -231,6 +231,7 @@ import {
 import type { HarnessTaskClassification } from "./task-classification.ts";
 import {
   assertRunscCfcPolicyForMode,
+  canonicalHostPath,
   resolveRunscSandboxConfig,
   type RunscNetworkMode,
   type RunscSandboxConfig,
@@ -258,7 +259,10 @@ import {
   ACQUIRED_SKILL_MOUNT_PATH,
   AcquiredSkillDirectoryReadableError,
 } from "./skills/acquired-skill-mount.ts";
-import { sealedSkillScriptRunscConfig } from "./skills/sealed-script-sandbox.ts";
+import {
+  sandboxPathsInsideWorkspace,
+  sealedSkillScriptRunscConfig,
+} from "./skills/sealed-script-sandbox.ts";
 import type { BashToolInput, BashToolOutput } from "./tools/bash.ts";
 import type {
   AcquireSkillToolInput,
@@ -720,6 +724,18 @@ type HostSandboxMount = {
   readOnly?: boolean;
 };
 
+/**
+ * `path` with its links resolved, so that two paths to one directory compare
+ * equal, or `path` as given when it cannot be resolved.
+ */
+const canonicalOrGiven = (path: string): string => {
+  try {
+    return canonicalHostPath("artifact root", path);
+  } catch {
+    return path;
+  }
+};
+
 export class CfHarnessEngine {
   readonly config: ResolvedHarnessConfig;
   readonly sandbox: SandboxRuntime;
@@ -1069,7 +1085,17 @@ export class CfHarnessEngine {
     this.#sealedSandboxRuntime = options.sealedSandboxRuntime ??
       (runscConfig === undefined ? undefined : () =>
         new RunscSandboxRuntime(
-          sealedSkillScriptRunscConfig(runscConfig, crypto.randomUUID()),
+          sealedSkillScriptRunscConfig(
+            runscConfig,
+            crypto.randomUUID(),
+            this.artifactStore?.artifactRoot === undefined
+              ? []
+              : sandboxPathsInsideWorkspace(
+                canonicalOrGiven(runscConfig.workspaceHostPath),
+                runscConfig.workspaceMountPath,
+                [canonicalOrGiven(this.artifactStore.artifactRoot)],
+              ),
+          ),
           options.processRunner,
         ));
     this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
@@ -2646,10 +2672,14 @@ export class CfHarnessEngine {
     toolId: BuiltinToolId,
     input: Record<string, unknown>,
     signal?: AbortSignal,
+    sideEffectsAuthorized?: boolean,
   ) {
     const tool = getBuiltinTool(toolId);
     if (tool === undefined) throw new Error(`unknown builtin tool: ${toolId}`);
-    return await tool.effectClassOf?.(input, this.#createToolContext(signal)) ??
+    return await tool.effectClassOf?.(
+      input,
+      this.#createToolContext(signal, sideEffectsAuthorized),
+    ) ??
       tool.descriptor.effectClass;
   }
 

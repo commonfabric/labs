@@ -1159,7 +1159,16 @@ const buildExecutionRecord = (
 const sealedRunOf = (
   runtime: SandboxRuntime,
 ): { run: HarnessSealedSkillScriptRun } | { error: string } => {
-  const cfc = runtime.describe().cfc;
+  const description = runtime.describe();
+  if (description.kind !== "runsc-cfc") {
+    return {
+      error:
+        `a sealed skill-script run needs a runsc runtime, and its runtime is ${
+          JSON.stringify(description.kind)
+        }`,
+    };
+  }
+  const cfc = description.cfc;
   if (cfc?.networkMode !== "none") {
     return {
       error:
@@ -1191,19 +1200,28 @@ const sealedRunOf = (
  * Whether a call runs sealed: in the sandbox, on a runtime built for that one
  * call with every channel out off, from the workspace it holds read-only.
  *
+ * Sealing is for the call the run's authority does not admit as a side
+ * effect. A call it does admit, under a direct command or in a run that does
+ * not enforce, runs as it always has, with the run's network and a writable
+ * workspace. A call it does not admit runs sealed where it can: a host script,
+ * a run that cannot build a sealed runtime, and a call that names its own
+ * `cwd` stay side effects, and are refused. The last because a directory named
+ * in the call is one the script expects to work in, and a sealed run can write
+ * nothing that outlives its container.
+ *
  * The call's effect class is this predicate, never a declaration: `read` when
- * it holds and `side-effect` otherwise. A host script, a run that cannot build
- * a sealed runtime, and a call that names its own `cwd` all stay side effects,
- * the last because a directory named in the call is one the script expects
- * to work in, and a sealed run can write nothing that outlives its container.
+ * it holds and `side-effect` otherwise.
  */
 export const runsSealedSkillScript = (
   context: Pick<
     HarnessToolContext,
-    "sealedSandboxRuntime" | "skillScriptExecutionTarget"
+    | "sealedSandboxRuntime"
+    | "sideEffectsAuthorized"
+    | "skillScriptExecutionTarget"
   >,
   input: { cwd?: unknown },
 ): boolean =>
+  context.sideEffectsAuthorized !== true &&
   context.sealedSandboxRuntime !== undefined &&
   context.skillScriptExecutionTarget === "sandbox" &&
   input.cwd === undefined;
@@ -1675,17 +1693,20 @@ export const runSkillScriptTool: HarnessToolDefinition<
           ? redactCdpEndpoint(result.stderr, hostAgentBrowserCdpOrigin)
           : result.stderr,
         exitCode: result.exitCode,
-        ...(sealed !== undefined ? { sealed: sealed.run } : {}),
+        // The model reads that the run was sealed, and not the host path of
+        // the image, which only the record keeps.
+        ...(sealed !== undefined ? { sealed: { networkMode: "none" } } : {}),
         ...(cfcResult !== undefined ? { cfcResult } : {}),
       };
-      await context.recordSkillScriptExecution(
-        buildExecutionRecord({
+      await context.recordSkillScriptExecution({
+        ...buildExecutionRecord({
           output,
           runId: context.runId,
           executedAt,
           resourcePath: resource.resourcePath,
         }),
-      );
+        ...(sealed !== undefined ? { sealed: sealed.run } : {}),
+      });
       return output;
     } finally {
       await sealedRuntime?.close?.();

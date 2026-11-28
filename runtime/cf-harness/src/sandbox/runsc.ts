@@ -348,6 +348,12 @@ export interface RunscSandboxConfig {
   /** Whether the workspace is bound read-only; writable unless set. */
   workspaceReadOnly?: boolean;
 
+  /**
+   * Sandbox paths each covered by an empty read-only tmpfs, mounted over the
+   * binds so that what a bind would show there is hidden.
+   */
+  maskedPaths?: readonly string[];
+
   shellPath: string;
   networkMode: RunscNetworkMode;
   additionalMounts: readonly SandboxAdditionalMount[];
@@ -1526,6 +1532,12 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         type: "bind",
         source: m.hostPath,
         options: ["rbind", m.readOnly ? "ro" : "rw"],
+      })),
+      ...(this.config.maskedPaths ?? []).map((path) => ({
+        destination: path,
+        type: "tmpfs",
+        source: "tmpfs",
+        options: ["ro", "nosuid", "nodev", "noexec", "mode=000", "size=4k"],
       })),
       ...(this.#pasta() !== undefined
         ? [{
