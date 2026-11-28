@@ -17,10 +17,11 @@ import {
 } from "../../src/cfc/observation-classes.ts";
 import { isPrefix } from "../../src/cfc/path-prefix-index.ts";
 import { deriveFlowJoin } from "../../src/cfc/prepare.ts";
-import type {
-  IFCLabel,
-  LabelEntryOrigin,
-  LabelMapEntry,
+import {
+  type IFCLabel,
+  type LabelEntryOrigin,
+  type LabelMapEntry,
+  runtimeWritePolicyAuthorization,
 } from "../../src/cfc/types.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
@@ -352,5 +353,76 @@ describe("deriveFlowJoin()", () => {
       await runtime.dispose();
       await storageManager.close();
     }
+  });
+
+  describe("sources()", () => {
+    const address = (id: string, path: string[]) => ({
+      space: signer.did(),
+      id: `of:${id}` as const,
+      scope: "space" as const,
+      path,
+    });
+
+    /** Runs `fn` against a transaction of a new runtime. */
+    async function withTransaction(
+      fn: (tx: ReturnType<Runtime["edit"]>) => void,
+    ) {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://example.com"),
+        storageManager,
+      });
+      try {
+        const tx = runtime.edit();
+        try {
+          fn(tx);
+        } finally {
+          tx.abort();
+        }
+      } finally {
+        await runtime.dispose();
+        await storageManager.close();
+      }
+    }
+
+    it("names a label-metadata observation's target for each clause it observed", async () => {
+      await withTransaction((tx) => {
+        const target = address("introspected", ["field"]);
+        tx.recordCfcLabelMetadataObservation({
+          target,
+          observes: "labelMetadata",
+          confidentiality: ["secret", "private"],
+        });
+        const join = deriveFlowJoin(tx, { collectSources: true });
+        expect(join.confidentiality).toEqual(["secret", "private"]);
+        expect(join.sources!()).toEqual([
+          { atom: "secret", read: target, labelPath: ["field"] },
+          { atom: "private", read: target, labelPath: ["field"] },
+        ]);
+      });
+    });
+
+    it("names, for external content, the reads its receipt names for a clause of its flow and no others", async () => {
+      await withTransaction((tx) => {
+        const carried = address("carried", ["title"]);
+        const consumedOnly = address("consumed-only", []);
+        tx.recordCfcExternalContentObservation({
+          source: address("external", []),
+          flow: { confidentiality: ["secret"], integrity: [] },
+          consumed: { confidentiality: ["secret", "other"], integrity: [] },
+          locations: [],
+          labeledSpaces: [signer.did()],
+          sources: [
+            { atom: "secret", read: carried, labelPath: ["title"] },
+            { atom: "other", read: consumedOnly, labelPath: [] },
+          ],
+        }, runtimeWritePolicyAuthorization);
+        const join = deriveFlowJoin(tx, { collectSources: true });
+        expect(join.confidentiality).toEqual(["secret"]);
+        expect(join.sources!()).toEqual([
+          { atom: "secret", read: carried, labelPath: ["title"] },
+        ]);
+      });
+    });
   });
 });

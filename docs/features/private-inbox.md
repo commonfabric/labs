@@ -861,7 +861,9 @@ It subscribes to Home's `privateInbox` and `retainedPrivateInboxes`, and to
 the `offers` of every inbox they name, so an inbox Home comes to hold or
 retain, and an offer arriving in any of them, is taken up as it lands, with no
 restart. It reads the pointers through `inboxPieceLinkSchema`, as the ensure
-does.
+does. It reads each inbox's `offers` as stored, every row whatever it holds,
+so a row that is not a record, which any principal can write there, is passed
+over and hides none of the offers around it.
 
 An offer whose `from` and `id` already key a receipt in the catalog is
 skipped, unless it names a `toProfile` and Home's `sharedSpaces.profiles` says

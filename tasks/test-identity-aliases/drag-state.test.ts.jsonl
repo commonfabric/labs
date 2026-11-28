@@ -1,0 +1,1 @@
+{"date":"2026-11-26","from":{"k":"unit","s":"ui","n":"drag-state — core > endDrag removes preview from parent if attached"},"to":{"k":"unit","s":"ui","n":"drag-state — core > endDrag detaches the preview from its parent and leaves the parent's other children"}}

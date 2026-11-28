@@ -32,6 +32,7 @@ import {
   type ResultLine,
 } from "@commonfabric/test-support/records";
 import { test } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import type { RunRecording } from "./test-records.ts";
 
 // Write a minimal workspace under `dir`: a root deno.jsonc listing the
@@ -1077,6 +1078,32 @@ test("runRootTestTask refuses arguments, rather than running the whole suite", a
     "The root `test` task takes no arguments",
   );
   expect(calls).toEqual([]);
+});
+
+test("the script run as a program exits with the status runRootTestTask returns", async () => {
+  // The root `test` task runs this file directly. Given an argument it
+  // refuses before touching the workspace, so this exercises the entry point
+  // without starting a run.
+  const root = path.fromFileUrl(new URL("..", import.meta.url));
+  const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+    root,
+    args: (lockPath) => [
+      "run",
+      "--config",
+      path.join(root, "deno.jsonc"),
+      "--lock",
+      lockPath,
+      "--allow-read",
+      "--allow-env",
+      path.join(root, "tasks/workspace-tests.ts"),
+      "--filter",
+      "x",
+    ],
+  });
+  const errors = new TextDecoder().decode(stderr);
+  expect(code, errors).toBe(2);
+  expect(errors).toContain("The root `test` task takes no arguments");
+  expect(new TextDecoder().decode(stdout)).toBe("");
 });
 
 test("runRootTestTask returns 0 for a passing run and 1 for a failing one", async () => {

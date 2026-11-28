@@ -813,6 +813,56 @@ describe("@commonfabric/test-support/test", () => {
     ).toBe("Deno moved on before this finished");
   });
 
+  it("records each test of a file once, though a test's Deno.exit() unloads it twice", async () => {
+    const file = `${FIXTURES}/exit.fixture.ts`;
+    const ran = await run(file);
+    expect(ran.code).not.toBe(0);
+    expect(outcomes(ran.records)).toEqual({
+      "exits": "fail",
+      "passes": "pass",
+    });
+    expect(ran.hooks.map((record) => [record.test.n, record.outcome])).toEqual(
+      [[file, "pass"]],
+    );
+  });
+
+  it("fails the test that left an error after a test's Deno.exit(), and not the file", async () => {
+    const file = `${FIXTURES}/exit.fixture.ts`;
+    const ran = await run(file, { env: { FIXTURE_CASE: "rejects" } });
+    expect(ran.code).not.toBe(0);
+    expect(outcomes(ran.records)).toEqual({
+      "exits": "fail",
+      "rejects without awaiting": "fail",
+    });
+    expect(
+      ran.failures.get(
+        ran.records.find((record) =>
+          record.test.n === "rejects without awaiting"
+        )!,
+      ),
+    ).toContain("nobody awaited this");
+    expect(ran.hooks.map((record) => [record.test.n, record.outcome])).toEqual(
+      [[file, "pass"]],
+    );
+  });
+
+  it("hands a browser page's Deno.test each test as given, and refuses suites there", async () => {
+    const ran = await run(`${FIXTURES}/browser.fixture.ts`);
+    expect(ran.code).toBe(0);
+    const refusal = "runs only under deno test; in a browser, use test() alone";
+    expect(ran.logged).toEqual([
+      `refused: describe() ${refusal}`,
+      `refused: it() ${refusal}`,
+      `refused: beforeAll() ${refusal}`,
+      "registered runs as given",
+      "registered is ignored (ignored)",
+      "ran runs as given",
+    ]);
+    // A page has no run records, so nothing of its tests is recorded.
+    expect(ran.records).toEqual([]);
+    expect(ran.registered.size).toBe(0);
+  });
+
   it("names the file of a test run through a symbolic link to the repository", async () => {
     const dir = await Deno.makeTempDir({ prefix: "registration-link-" });
     temporary.push(dir);

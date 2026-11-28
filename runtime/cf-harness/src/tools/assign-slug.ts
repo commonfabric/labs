@@ -168,7 +168,6 @@ const SLUG_CODE_STATES: Readonly<
   missing: "free",
   malformed: "free",
   "not-piece": "free",
-  "missing-piece-id": "free",
   "inside-piece": "in-use",
   "missing-member": "in-use",
 };
@@ -334,10 +333,10 @@ export const assignSlugTool: HarnessToolDefinition<
       );
     }
     // The same discriminators the slug resolver applies to what a slug
-    // redirects to: a document with no pattern identity, or no piece id, is
-    // not a piece, and naming it would put a dead entry in the piece list.
+    // redirects to: a document with no pattern identity is not a piece, and
+    // naming it would put a dead entry in the piece list.
     const targetId = pieceId(cell);
-    if (getPatternIdentityRef(cell) === undefined || targetId === undefined) {
+    if (getPatternIdentityRef(cell) === undefined) {
       return errorOutput(
         "assign_slug token does not refer to a piece; only a piece can be named",
       );

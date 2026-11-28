@@ -2,7 +2,7 @@ import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { isDeepFrozen } from "@commonfabric/data-model";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
-  forEachSubschema,
+  forEachDefaultSubschema,
   isSubschema,
 } from "@commonfabric/data-model-schema/schema-walk";
 import { ContextualFlowControl } from "../cfc.ts";
@@ -177,43 +177,39 @@ const collectCfcSchemaEntries = (
       nextActive,
       childConditional,
     );
-  forEachSubschema(resolved, (child, keyword, key, index) => {
+  // Every case returns, so the callback fails to compile once the default
+  // walk visits a keyword with no case here, whose `ifc` declarations would
+  // otherwise go unrecorded.
+  forEachDefaultSubschema(resolved, (child, keyword, key, index): false => {
     switch (keyword) {
       case "properties":
         walk(child, [...path, key!]);
-        break;
+        return false;
       case "anyOf":
       case "oneOf":
         walk(child, path, true);
-        break;
+        return false;
       case "allOf":
         walk(child, path);
-        break;
+        return false;
       case "items":
         // The wildcard covers tuple positions and the rest schema when
         // `.prefixItems` is present.
         walk(child, [...path, "*"]);
-        break;
+        return false;
       case "prefixItems":
         walk(child, [...path, String(index!)]);
-        break;
+        return false;
       case "additionalProperties":
         // A wildcard cannot express "all properties except the named ones".
         // It is exact only when the schema declares no named properties.
         if (recordOnly) {
           walk(child, [...path, "*"]);
         }
-        break;
+        return false;
       case "not":
         // A negated schema does not describe declarations on real data.
-        break;
-      default:
-        // The cases above are the walk's default keyword set. A keyword added
-        // to that set needs a case of its own, or its `ifc` declarations
-        // would go unrecorded.
-        throw new Error(
-          `No CFC label rule for the subschema keyword ${keyword}`,
-        );
+        return false;
     }
   });
   return entries;

@@ -1,5 +1,5 @@
 import { action, assert, pattern, TESTS } from "commonfabric";
-import Scrabble, { type Letter } from "./scrabble.tsx";
+import Scrabble, { type Letter } from "./main.tsx";
 
 const tile = (char: string, id: string): Letter => ({
   char,

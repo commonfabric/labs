@@ -103,9 +103,9 @@ benefited (see the contract doc's "Lessons" section).
 
 Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
 `apps/annotation-manager/main.tsx`, `examples/aside/main.tsx`,
-`apps/bookmarks/main.tsx`, `system/chatbot/chatbot.tsx`,
+`apps/bookmarks/main.tsx`, `system/chatbot/main.tsx`,
 `apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
-`apps/deep-research/main.tsx`, `showcase/dice/dice.tsx` (+
+`apps/deep-research/main.tsx`, `showcase/dice/main.tsx` (+
 `showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
 `examples/group-chat-room/group-chat-room.tsx`, `examples/image/main.tsx`,
 `apps/image-analysis/main.tsx`, `examples/link-preview/main.tsx`,
@@ -291,65 +291,63 @@ addPiece.send({ piece: ann });
 **Topics — a multi-user tracker over #topic pieces** (durable units of shared
 attention; CT-1878): title, living body document, flat chronological comment
 thread, typed links out. Deliberately minimal — no statuses, labels, or
-assignees. The board holds its topics in an
-[indexed collection](../docs/features/indexed-collections.md) rather than a
-list: `addTopic` adds the topic it creates, the runtime mirrors each topic's
-title, body, number, activity and author into a SQLite table, and every listing
-is a query over it — the cards, the count, the mention universe, and the
-`topics` and `index` outputs, whose rows are the topics themselves as
-references. `addTopic` returns the piece it created, so a caller addresses a new
-topic straight from the create. The board owns a member namespace through
+assignees. The board publishes a bounded discovery index — the topics
+themselves, declared through a narrow row schema of summary scalars, so a row's
+address IS its topic's and a survey and the follow-up read name one document.
+`addTopic` returns the piece it created, so a caller addresses a new topic
+straight from the create. The board owns a member namespace through
 `product/collection-naming/naming.ts`: `addTopic` allocates the next decimal
 number and passes it into the topic it creates, in the same transaction as the
-add; each topic stores that number and publishes it as `shortName`, reading
-nothing of its board to report it; and `backfillNames` numbers any topic of the
-collection the namespace lacks. Topics reference each other by CELL: the
-collection mirrors what each topic points at into two relation tables, and each
-topic asks them which topics mention it. Demonstrates: an indexed collection as
-a board's only membership, queries that return members as references, a join
-over a relation table by the asking piece's own reference, profile-native
+append; each topic stores that number and publishes it as `shortName`, reading
+nothing of its board to report it; and `backfillNames` numbers what the board
+held before it numbered anything, asking each such topic to store its number
+through the topic's own `recordName`. Every surface that shows a number reads
+the one a topic publishes — the header badge, the card, the survey row, and the
+mention universe row a `#42` query matches. Topics reference each other by CELL:
+the board derives the whole graph once by scanning what each topic points at
+with `equals`, and each topic reads its own inbound edges out of that pivot.
+Demonstrates: reading-list-style piece-in-list composition, profile-native
 browser authorship on a shared piece, mergeable comment appends, session-scoped
-drafts, `multiUserTest` coverage.
+drafts, bounding a whole-list derivation with a narrow declared `lift`
+parameter, passing topics through a sort so an activity-ordered list keeps the
+identity its elements already have, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
-profile, mergeable, index, discovery, indexed collection, SQLite, query,
-references, backlinks, cell identity, mentions, member names, shortName,
-namespace, backfill
+profile, mergeable, index, discovery, bounded read, row identity, references,
+backlinks, cell identity, equals, mentions, member names, shortName, namespace,
+backfill
 
 ### Input Schema
 
 ```ts
 interface TopicsInput {
+  topics?: Writable<TopicDemand[] | Default<[]>>;
   // The member namespace: each decimal name to the topic it names, held as an
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the two wirings addTopic gives a child —
-// mentionable (the @-mention universe for the body editor) and board (the
-// board's collection, which a topic asks for the topics that mention it) —
-// plus shortName, the number the create allocated, which the topic stores and
-// reports.
+// TopicInput additionally takes the three wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor), boardCrossrefs
+// (the reference pivot), and boardCrossrefIndex (that pivot's positions by
+// topic number, which lets a topic read its own row alone) — plus shortName,
+// the number the create allocated, which the topic stores and reports.
 ```
 
 ### Output Schema
 
 ```ts
 interface TopicsOutput {
-  // The topics as references, in filing order, read out of the collection
   topics: TopicDemand[];
-  // The board's topics as an indexed collection: the table `topics`, and the
-  // relation tables `topics_mentioned` and `topics_mentions`
-  board: TopicBoard;
-  // { [NAME], title, shortName, piece } per topic, read out of the collection
+  // { [NAME], title, shortName, piece } per topic — one document of copies
   mentionable: MentionableRow[];
   topicCount: number;
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy, name? } per topic — the reference graph, read out
-  // of the collection; a row carries its topic's number when it has one
+  // { topic, mentionedBy, name? } per topic — the reference graph, derived
+  // once here; a row carries its topic's number when the topic has one
   crossrefs: TopicCrossrefNamedRow[];
-  // { byName } — those rows grouped by topic number
+  // { source, byName } — the pivot's positions grouped by topic number
   crossrefIndex: TopicCrossrefIndex;
   // The namespace, the reverse lookup a caller reads a topic's number out of
   // by identity, and the policy the numbers are held to
@@ -358,9 +356,8 @@ interface TopicsOutput {
   naming: NamingDeclaration;
   // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Numbers every topic of the collection the namespace lacks and asks each
-  // unnumbered topic to store its number; returns
-  // { assigned, named, pending }; idempotent
+  // Numbers every member the namespace lacks and asks each unnumbered topic to
+  // store its number; returns { assigned, named, pending }; idempotent
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
   submitTopic: Stream<void>;
 }
@@ -368,14 +365,14 @@ interface TopicsOutput {
 
 ## `apps/topics/topic.tsx`
 
-A single #topic piece, a member of its board's indexed collection, which it asks
-for the topics that mention it. Body edits go through an explicit Edit→Save
-toggle (one whole-value `set` per save keeps the concurrent-edit window small);
-comments and links are mergeable appends. Stores the number its board calls it
-by as its own input and publishes it as `shortName`, rendering it as a badge
-beside the title. A topic nobody has numbered stores none and publishes none.
-`recordName` is how a number reaches a topic the board did not pass one to at
-create. Use from `apps/topics/main.tsx` via `navigateTo()`, or standalone.
+A single #topic piece: the durable object the tracker's list holds. Body edits
+go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
+the concurrent-edit window small); comments and links are mergeable appends.
+Stores the number its board calls it by as its own input and publishes it as
+`shortName`, rendering it as a badge beside the title. A topic nobody has
+numbered stores none and publishes none. `recordName` is how a number reaches a
+topic the board did not pass one to at create. Use from `apps/topics/main.tsx`
+via `navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge
@@ -1880,7 +1877,7 @@ type Output = {
 };
 ```
 
-## `system/chatbot/chatbot.tsx`
+## `system/chatbot/main.tsx`
 
 Full-featured AI chat assistant with tool support, model selection, and
 mentionables. Deploy this to have a conversational AI interface.
@@ -1961,7 +1958,7 @@ interface LobbyOutput {
 }
 ```
 
-## `product/lobby/main.tsx`
+## `product/lobby/lobby.tsx`
 
 Simple multiplayer presence lobby. Each viewer joins by contributing their live
 Fabric profile cell from `wish({ query: "#profile" })`; every participant is
@@ -2198,7 +2195,7 @@ type Output = {
 };
 ```
 
-## `showcase/inductor/lofi/lofi-inductor.tsx`
+## `showcase/inductor/lofi/main.tsx`
 
 A hi-fi model labels each item for a yes-or-no goal while a lo-fi regex rule set
 shadows it. Disagreements become graded examples; an LLM proposes a new rule
@@ -2266,7 +2263,7 @@ interface LofiInductorOutput {
 }
 ```
 
-## `showcase/inductor/pool/inductor-pool.tsx`
+## `showcase/inductor/pool/main.tsx`
 
 Lo-fi rule sets for one goal, contributed under per-goal pseudonyms and
 confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its

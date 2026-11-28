@@ -90,8 +90,11 @@ if (scenario === "step") {
   });
 } else if (scenario === "killed") {
   beforeAll(() => {});
-  test("kills its own process", () => {
+  test("kills its own process", async () => {
     Deno.kill(Deno.pid, "SIGKILL");
+    // The signal arrives asynchronously; the test never settles, so the
+    // process ends before it can record the test.
+    await new Promise<never>(() => {});
   });
 } else if (scenario === "late-handled") {
   test("one", () => {});

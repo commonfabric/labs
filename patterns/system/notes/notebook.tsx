@@ -69,6 +69,7 @@ export interface NotebookOutput extends NotebookPiece {
   isNotebook: boolean;
   isHidden: boolean;
   backlinks: MentionablePiece[];
+  parentNotebook: NotebookPiece | null;
   // LLM-callable streams for omnibot integration
   createNote: Stream<{ title: string; content: string }>;
   createNotes: Stream<{ notesData: Array<{ title: string; content: string }> }>;
@@ -480,13 +481,10 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
       notes,
       isNotebook,
       isHidden,
-      parentNotebook: _parentNotebook,
+      parentNotebook,
       [SELF]: self,
     },
   ) => {
-    // Ensure parentNotebook is always a Writable (input is optional)
-    const parentNotebook = _parentNotebook ??
-      new Writable(null as NotebookPiece | null);
     // Type-based discovery for notebooks and "All Notes" piece
     const notebookWish = wish<NotebookPiece>({
       query: "#notebook",
@@ -1378,6 +1376,7 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
       noteCount,
       summary,
       backlinks,
+      parentNotebook,
       // Make notes discoverable via [[ autocomplete system-wide
       mentionable: notes,
       // LLM-callable streams for omnibot integration

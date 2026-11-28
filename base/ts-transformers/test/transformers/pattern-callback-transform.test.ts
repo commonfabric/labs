@@ -12,7 +12,9 @@ import {
 } from "../transformed-ast.ts";
 import { describe, it } from "@commonfabric/test-support/test";
 
-async function transform(body: string): Promise<ts.SourceFile> {
+async function transformWithDiagnostics(
+  body: string,
+): Promise<{ root: ts.SourceFile; diagnostics: TransformationDiagnostic[] }> {
   const diagnostics: TransformationDiagnostic[] = [];
   const output = await transformSource(
     `/// <cts-enable />
@@ -20,8 +22,27 @@ import { pattern, UI } from "commonfabric";
 ${body}`,
     { types: COMMONFABRIC_TYPES, pipelineDiagnostics: diagnostics },
   );
+  return { root: parseModule(output), diagnostics };
+}
+
+async function transform(body: string): Promise<ts.SourceFile> {
+  const { root, diagnostics } = await transformWithDiagnostics(body);
   expect(diagnostics).toEqual([]);
-  return parseModule(output);
+  return root;
+}
+
+/** The callback handed to the module's single `pattern(...)` call. */
+function patternCallback(root: ts.SourceFile): ts.ArrowFunction {
+  const [call] = collect(
+    root,
+    (node): node is ts.CallExpression =>
+      ts.isCallExpression(node) && node.expression.getText(root) === "pattern",
+  );
+  const callback = call?.arguments[0];
+  if (!callback || !ts.isArrowFunction(callback)) {
+    throw new Error("Expected an arrow callback passed to pattern()");
+  }
+  return callback;
 }
 
 /** Each `const name = initializer` directly in `body`, as text. */
@@ -76,6 +97,40 @@ export default pattern<S>(({ items }) => {
           `name = __cf_pattern_input.key("element", "name")`,
           "plain = __cf_pattern_input.params.plain",
         ]);
+    });
+
+    it("keeps an identifier input parameter and reads its fields by key", async () => {
+      const root = await transform(`
+interface S { count: number; label: string }
+export default pattern<S>((input) => {
+  return { count: input.count, label: input.label };
+});`);
+
+      const callback = patternCallback(root);
+      expect(callback.parameters.map((param) => param.name.getText(root)))
+        .toEqual(["input"]);
+      expect(callback.body.getText(root)).toContain(
+        `{ count: input.key("count"), label: input.key("label") }`,
+      );
+    });
+
+    it("reports rest destructuring and leaves the callback unrewritten", async () => {
+      const { root, diagnostics } = await transformWithDiagnostics(`
+interface S { count: number; label: string }
+export default pattern<S>(({ count, ...rest }) => {
+  return { count, rest };
+});`);
+
+      expect(diagnostics.map(({ type, message }) => ({ type, message })))
+        .toEqual([{
+          type: "pattern-context:computation",
+          message:
+            "Rest destructuring is not lowerable in pattern context; avoid ...rest in pattern parameters.",
+        }]);
+      const callback = patternCallback(root);
+      expect(callback.parameters.map((param) => param.name.getText(root)))
+        .toEqual(["{ count, ...rest }"]);
+      expect(callback.body.getText(root)).not.toContain("__cf_pattern_input");
     });
 
     it("carries a static destructuring default into the input schema", async () => {

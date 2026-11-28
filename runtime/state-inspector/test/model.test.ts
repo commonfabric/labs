@@ -3,7 +3,11 @@ import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { describe, it } from "@commonfabric/test-support/test";
 
-import { type DocumentReader, modelFromDocument } from "../model.ts";
+import {
+  type DocumentReader,
+  modelFromDocument,
+  streamDeclarationOf,
+} from "../model.ts";
 import type { EntityDocument } from "../reconstruct.ts";
 
 const link = (id: string, schema?: FabricValue) => ({
@@ -73,6 +77,71 @@ describe("model", () => {
         },
       );
       expect(undeclared.kind).toBe("owned-cell");
+    });
+  });
+
+  describe("streamDeclarationOf()", () => {
+    const STREAM = { asCell: ["stream"], type: "object" };
+    const readerOver =
+      (docs: Record<string, EntityDocument>): DocumentReader => (id) =>
+        docs[id];
+    const declare = (...links: FabricValue[]) =>
+      readerOver({
+        "of:owner": { value: {}, internal: links.map((link) => ({ link })) },
+        "cid:held": { value: STREAM },
+      });
+    const stream: EntityDocument = { result: link("of:owner") };
+
+    it("reads an inline declaration from the owner's manifest", () => {
+      expect(
+        streamDeclarationOf("of:s", stream, declare(link("of:s", STREAM))),
+      ).toEqual({
+        schema: STREAM,
+        root: STREAM,
+        via: "own",
+        owner: "of:owner",
+      });
+    });
+
+    it("follows an external reference into the schema document", () => {
+      expect(
+        streamDeclarationOf(
+          "of:s",
+          stream,
+          declare(link("of:s", { $ref: "cid:held" })),
+        ),
+      ).toEqual({
+        schema: STREAM,
+        root: STREAM,
+        via: "document",
+        ref: "cid:held",
+        owner: "of:owner",
+      });
+    });
+
+    it("skips an entry whose reference does not resolve and reads the next", () => {
+      const reader = declare(
+        link("of:s", { $ref: "cid:missing" }),
+        link("of:s", STREAM),
+      );
+      expect(streamDeclarationOf("of:s", stream, reader)?.via).toBe("own");
+      expect(
+        streamDeclarationOf(
+          "of:s",
+          stream,
+          declare(link("of:s", { $ref: "cid:missing" })),
+        ),
+      ).toBeUndefined();
+    });
+
+    it("declares nothing for a schema that is not a stream, or another id", () => {
+      const cell = { asCell: ["cell"], type: "object" };
+      expect(
+        streamDeclarationOf("of:s", stream, declare(link("of:s", cell))),
+      ).toBeUndefined();
+      expect(
+        streamDeclarationOf("of:s", stream, declare(link("of:other", STREAM))),
+      ).toBeUndefined();
     });
   });
 });

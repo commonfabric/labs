@@ -12,7 +12,6 @@ import {
   getTypeAtLocationWithFallback,
   hasReactiveCollectionProvenance,
   isCellLikeType,
-  isReactiveValueExpression,
 } from "../ast/mod.ts";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import {
@@ -838,11 +837,7 @@ function shouldRetargetReactiveReference(
     context.checker,
     context.state.typeRegistry,
   );
-  if (type) {
-    return isCellByType(target, type, context);
-  }
-
-  return isReactiveValueExpression(target, context.checker);
+  return isCellByType(target, type, context);
 }
 
 function shouldPreserveStructuralCallArgumentReferences(

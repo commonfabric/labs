@@ -1,0 +1,1 @@
+{"date":"2026-11-26","from":{"k":"unit","s":"js-compiler","n":"Checker > check() routes messages through the diagnostic message transformer"},"to":{"k":"unit","s":"js-compiler","n":"Checker > typeCheck routes messages through the diagnostic message transformer"}}

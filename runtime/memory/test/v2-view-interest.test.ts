@@ -1527,6 +1527,33 @@ describe("view interests", () => {
     expect(ids).toEqual(["of:render"]);
   });
 
+  it("walks a graph a replacement adds on another branch while keeping the view's", async () => {
+    const engine = await server.engineForSpace(space);
+    createBranch(engine, "feature");
+    await set([], [view()]);
+    const [session] = server.accessForTestingOnly.sessionsForSpace(space);
+    const viewGraphs = new Map(session.graphs);
+    expect(viewGraphs.size).toBeGreaterThan(0);
+    using evaluations = spy(server, "evaluateWatchSet");
+
+    const replaced = await set([{
+      id: "feature-owner",
+      kind: "graph",
+      query: { ...query("of:ordinary"), branch: "feature" },
+    }], [view()]);
+
+    expect(evaluations.calls).toHaveLength(0);
+    expect(replaced.upserts.map(({ id, branch }) => ({ id, branch })))
+      .toEqual([
+        { id: "of:render", branch: "" },
+        { id: "of:ordinary", branch: "feature" },
+      ]);
+    expect(replaced.removes).toEqual([]);
+    expect([...session.graphs.keys()].toSorted()).toEqual(
+      [...viewGraphs.keys(), "view-demand:feature"].toSorted(),
+    );
+  });
+
   it("removes an ordinary watch from a view session without walking the rendered demand", async () => {
     await set([watch("of:ordinary")], [view()]);
     using evaluations = spy(server, "evaluateWatchSet");

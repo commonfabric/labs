@@ -55,6 +55,7 @@ const RECORDED_NOTICES = [
   "observer.sessionOpened",
   "observer.demandChanged",
   "observer.viewsChanged",
+  "observer.currencyChanged",
   "observer.sessionChanged",
   "observer.spaceAclChanged",
   "loopback.frame",

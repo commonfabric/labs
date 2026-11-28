@@ -259,10 +259,13 @@ run that reads it.
 
 So the pump yields. When a zero-delay turn is armed, or a kick is queued to
 run one, it re-queues itself behind the kick and looks again, and it jumps
-only when no turn is left. A turn chain that never ends starves the pump
-rather than hanging the test: past `AUTO_ADVANCE_STARVATION_LIMIT` consecutive
-yields it throws, naming the condition, as `settle()` does for zero-delay work
-that regenerates. `runtime/runner/test/clock-preload-auto-advance.test.ts`
+only when no turn is left. Every kick queues the pump, so it watches a turn
+chain whether or not a production timer waits behind it, in either clock
+mode. A turn chain that never ends starves the pump rather than hanging the
+test: past the clock's turn limit (`turnLimit`, by default 100 000) of
+consecutive yields it throws, naming the condition, as `settle()` does for
+zero-delay work that regenerates past the same limit.
+`runtime/runner/test/clock-preload-auto-advance.test.ts`
 pins the ordering, and the SES-lockdown classification pin waits on the
 `src/` sleep it arms rather than on one turn, because one turn no longer
 carries a jump.

@@ -32,10 +32,21 @@
  * A `bash` block holds commands alone; a `console` block holds a transcript,
  * and its output lines fall out because they carry no `cf` token.
  *
- * Usage: deno run --allow-read ./tasks/check-verb-session-sync.ts
+ * Usage: deno run --allow-read ./tasks/check-verb-session-sync.ts [doc [demo]]
+ *
+ * With no arguments, every pairing in `DOC_DEMOS` is checked. `doc` and `demo`
+ * name one pairing instead, as `main()` takes them, each read from the working
+ * directory. Anything more on the command line prints the usage and exits 2.
  */
 
-import { dirname, fromFileUrl, join } from "@std/path";
+import {
+  dirname,
+  fromFileUrl,
+  join,
+  relative,
+  resolve,
+  SEPARATOR,
+} from "@std/path";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 export const DEMO_PATH = "runtime/cli/integration/verb-session-demo.sh";
@@ -502,4 +513,15 @@ export async function main(deps: {
   return 0;
 }
 
-if (import.meta.main) Deno.exit(await main());
+if (import.meta.main) {
+  if (Deno.args.length > 2 || Deno.args.some((arg) => arg.startsWith("-"))) {
+    console.error("usage: check-verb-session-sync.ts [doc [demo]]");
+    Deno.exit(2);
+  }
+  // Named from the repository root with `/` between segments, as `DOC_DEMOS`
+  // names its documents.
+  const [mdPath, shPath] = Deno.args.map((arg) =>
+    relative(REPO_ROOT, resolve(arg)).replaceAll(SEPARATOR, "/")
+  );
+  Deno.exit(await main({ mdPath, shPath }));
+}

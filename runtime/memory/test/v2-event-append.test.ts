@@ -34,6 +34,7 @@
 //   un-consequenced only, sidecar docs only.
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
+import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import { maxOf } from "@commonfabric/collections/math";
@@ -46,6 +47,7 @@ import {
   ProtocolError,
   read,
   selectPendingStreamEventDocs,
+  stampEventAppendOperation,
 } from "../v2/engine.ts";
 import { executionLeaseHolder } from "../v2/execution-lease.ts";
 import {
@@ -1822,4 +1824,129 @@ test("selectPendingStreamEventDocs: the undelivered-events discovery input (serv
     resetServerExecutionConfig();
     await Deno.remove(path).catch(() => {});
   }
+});
+
+test("event-append stamping writes into a copy, never into the caller's operation", async (t) => {
+  const { engine, path } = await createEngine();
+  setServerExecutionConfig(true);
+  try {
+    const holder = withLiveLease(engine);
+    let firstSeq = 0;
+
+    await t.step("an authored tail append", () => {
+      const commit = appendCommit(1, [entryOf("evt-1")]);
+      const sent = structuredClone(commit.operations);
+      const applied = applyCommit(engine, {
+        sessionId: SESSION,
+        space: SPACE,
+        principal: ALICE,
+        commit,
+      });
+      firstSeq = applied.seq;
+      assertEquals(commit.operations, sent);
+      assertEquals(sidecarValue(engine).entries, [{
+        ...entryOf("evt-1"),
+        seq: applied.seq,
+        firedAt: { user: ALICE, session: SESSION },
+      }]);
+    });
+
+    await t.step(
+      "a derived whole-doc set stamps only its declared new entry",
+      () => {
+        const value: StreamEventsDocValue = {
+          entries: [
+            ...sidecarValue(engine).entries!,
+            entryOf("evt-2", { firedAt: { user: ALICE, session: SESSION } }),
+          ],
+        };
+        const sent = structuredClone(value);
+        const applied = waveSetSidecar(engine, holder, 1, value, {
+          declare: [{ eventId: "evt-2" }],
+        });
+        assertEquals(value, sent);
+        assert(applied.seq !== firstSeq);
+        assertEquals(
+          sidecarValue(engine).entries!.map((entry) => [
+            entry.eventId,
+            entry.seq,
+          ]),
+          [["evt-1", firstSeq], ["evt-2", applied.seq]],
+        );
+      },
+    );
+
+    await t.step(
+      "a derived patch stamps the array it writes at /value/entries and passes its other patches through",
+      () => {
+        const stream = { id: "of:poll-result", path: ["comments"] };
+        const sidecar = streamEntriesDocId(stream);
+        const operations: ClientCommit["operations"] = [{
+          op: "patch",
+          id: sidecar,
+          patches: [
+            { op: "add", path: "/value", value: {} },
+            {
+              op: "add",
+              path: "/value/entries",
+              value: [
+                entryOf("evt-3", {
+                  stream,
+                  firedAt: { user: ALICE, session: SESSION },
+                }),
+              ] as never,
+            },
+          ],
+        }];
+        const sent = structuredClone(operations);
+        const applied = applyWaveCommit(engine, {
+          sessionId: holder,
+          space: SPACE,
+          commitClass: "derived",
+          holder,
+          commit: {
+            localSeq: 2,
+            reads: { confirmed: [], pending: [] },
+            operations,
+            eventAppends: [{ id: sidecar, eventId: "evt-3" }],
+          },
+          waveBasis: { basisSeq: headSeqOf(engine), rebasedHeads: [] },
+        });
+        assertEquals(operations, sent);
+        const stored = read(engine, { id: sidecar })
+          ?.value as StreamEventsDocValue;
+        assertEquals(stored.entries, [{
+          ...entryOf("evt-3", { stream }),
+          seq: applied.seq,
+          firedAt: { user: ALICE, session: SESSION },
+        }]);
+      },
+    );
+  } finally {
+    resetServerExecutionConfig();
+    await Deno.remove(path).catch(() => {});
+  }
+});
+
+test("event-append stamping refuses a plan naming an entry its operation does not hold", () => {
+  const operation = {
+    op: "set",
+    id: SIDECAR,
+    value: { value: { entries: [entryOf("evt-1")] } },
+  } as const;
+  const firedAt = { user: ALICE, session: SESSION };
+  const stamped = stampEventAppendOperation({
+    operation,
+    stamps: [{ valueIndex: 0, firedAt }],
+  }, 7);
+  expect(stamped).toEqual({
+    ...operation,
+    value: { value: { entries: [{ ...entryOf("evt-1"), seq: 7, firedAt }] } },
+  });
+  expect(() =>
+    stampEventAppendOperation({
+      operation,
+      stamps: [{ valueIndex: 0, firedAt }, { valueIndex: 1, firedAt }],
+    }, 7)
+  ).toThrow("no entry at set/1");
 });

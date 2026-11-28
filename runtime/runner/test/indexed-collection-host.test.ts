@@ -10,9 +10,18 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
+import { Identity } from "@commonfabric/identity";
+import type { EntityDocument } from "@commonfabric/memory/v2";
+import type { AdmittedCommitNotice } from "@commonfabric/memory/v2/server";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
 
+import {
+  IndexedCollectionHost,
+  type IndexedCollectionHostServer,
+} from "../src/builtins/indexed-collection/host.ts";
+import { listIndexedCollection } from "../src/builtins/indexed-collection/registry.ts";
+import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { indexedCollectionHostFixture } from "./indexed-collection-host-fixture.ts";
 
 /**
@@ -129,6 +138,41 @@ describe("indexed-collection-host", () => {
     }
   });
 
+  it("re-reads a member written while a registry read was in flight, when a commit lists a collection before the read returns", async () => {
+    // The restarted host has to read the registry to learn of the board's
+    // collection, and the commit listing another collection arrives first,
+    // so only the ids that read held bring the renamed member to the host.
+    const f = await indexedCollectionHostFixture();
+    try {
+      const { result, titles } = await f.run();
+      result.key("add").send({ title: "first" });
+      await titles(["first"]);
+      await f.restartHost();
+      const release = f.holdNextRegistryRead();
+      result.key("rename").send({ from: "first", to: "renamed" });
+      await f.runtime.idle();
+      await f.runtime.storageManager.synced();
+      expect(f.host.accessForTestingOnly.reads.size).toBe(1);
+      expect(f.host.runtime).toBeUndefined();
+      const db = await f.declare({ columns: { title: "text" } });
+      await f.commit((tx) =>
+        listIndexedCollection(
+          f.runtime,
+          tx,
+          f.runtime.getCell(f.space, "collection", undefined, tx),
+          db.id,
+        )
+      );
+      expect(f.host.runtime).toBeDefined();
+      release();
+
+      await titles(["renamed"]);
+      expect(f.errors).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("fills the rows of a collection listed after the host read the space's registry", async () => {
     // The first board's collection has the host read the registry, which
     // lists only that one; a later commit lists the second board's.
@@ -217,5 +261,115 @@ describe("indexed-collection-host", () => {
     } finally {
       await f.close();
     }
+  });
+});
+
+const service = await Identity.fromPassphrase(
+  "indexed collection host scripted server",
+);
+const alice = await Identity.fromPassphrase(
+  "indexed collection host scripted alice",
+);
+
+/**
+ * A memory server whose admitted commits a case announces, and whose
+ * registry reads wait until the case answers them.
+ */
+function scriptedServer() {
+  let watcher: ((notice: AdmittedCommitNotice) => void) | undefined;
+  const reads: PromiseWithResolvers<EntityDocument | null>[] = [];
+  const server: IndexedCollectionHostServer = {
+    watchAdmittedCommits: (watch) => {
+      watcher = watch;
+      return () => {
+        watcher = undefined;
+      };
+    },
+    readDocument: () => {
+      const read = Promise.withResolvers<EntityDocument | null>();
+      reads.push(read);
+      return read.promise;
+    },
+  };
+  let seq = 0;
+  /** Announces a commit to `space` that writes the documents `ids`. */
+  function admit(space: string, ids: string[]) {
+    watcher?.({
+      space,
+      seq: ++seq,
+      class: "authored",
+      sessionId: "scripted",
+      writes: ids.map((id) => ({ id, scopeKey: "space" })),
+    });
+  }
+  let runtimesBuilt = 0;
+  const host = new IndexedCollectionHost({
+    server,
+    runtimeOptions: () => {
+      runtimesBuilt++;
+      return {
+        apiUrl: new URL(import.meta.url),
+        storageManager: EmulatedStorageManager.emulate({ as: service }),
+        experimental: { serverExecution: false },
+      };
+    },
+  });
+  return {
+    host,
+    reads,
+    admit,
+    get runtimesBuilt() {
+      return runtimesBuilt;
+    },
+  };
+}
+
+describe("indexed-collection-host with a scripted server", () => {
+  const space = alice.did();
+  const listing: EntityDocument = {
+    value: { collection: "link" },
+  };
+
+  it("reads no registry for a commit that writes no document", async () => {
+    const s = scriptedServer();
+    try {
+      s.admit(space, []);
+      expect(s.reads).toHaveLength(0);
+
+      s.admit(space, ["of:member"]);
+      expect(s.reads).toHaveLength(1);
+      s.reads[0].resolve(null);
+    } finally {
+      await s.host.close();
+    }
+    expect(s.runtimesBuilt).toBe(0);
+  });
+
+  it("builds a runtime once the registry it read lists a collection", async () => {
+    const s = scriptedServer();
+    try {
+      s.admit(space, ["of:member"]);
+      s.reads[0].resolve(listing);
+      await Promise.all(s.host.accessForTestingOnly.reads);
+
+      expect(s.runtimesBuilt).toBe(1);
+      expect(s.host.runtime).toBeDefined();
+    } finally {
+      await s.host.close();
+    }
+    expect(s.host.runtime).toBeUndefined();
+  });
+
+  it("builds no runtime for a registry read that returns after close() began", async () => {
+    const s = scriptedServer();
+    s.admit(space, ["of:member"]);
+    const closed = s.host.close();
+    s.reads[0].resolve(listing);
+    await closed;
+
+    expect(s.runtimesBuilt).toBe(0);
+    expect(s.host.runtime).toBeUndefined();
+    // A host closed once closes again without complaint.
+    await s.host.close();
   });
 });

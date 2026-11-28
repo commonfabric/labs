@@ -1,11 +1,15 @@
 import { expect } from "@std/expect";
 import ts from "typescript";
-import type { SchemaHint } from "../src/interface.ts";
+import type {
+  SchemaGenerationDiagnostic,
+  SchemaHint,
+} from "../src/interface.ts";
 import { SchemaGenerator } from "../src/schema-generator.ts";
 import {
   createTestProgram,
   createTestProgramFromFiles,
   getTypeFromCode,
+  getTypeFromFiles,
 } from "./utils.ts";
 import { describe, it } from "@commonfabric/test-support/test";
 
@@ -5069,6 +5073,123 @@ interface Holder<T extends Map<string, number>> {
       expect(() => generator.generateSchema(type, checker)).toThrow(
         /^Map cannot be used in pattern inputs\/outputs/,
       );
+    });
+  });
+
+  describe("recursive definitions", () => {
+    /** The schema of `SchemaRoot` in a module holding `declarations`. */
+    async function rootSchema(declarations: string) {
+      const { type, checker, typeNode } = await getTypeFromFiles(
+        {
+          "/main.ts": `${declarations}
+export interface Node { label: string; next?: Node }`,
+        },
+        "/main.ts",
+        "SchemaRoot",
+      );
+      return new SchemaGenerator().generateSchema(type, checker, typeNode);
+    }
+
+    const node = {
+      type: "object",
+      properties: {
+        label: { type: "string" },
+        next: { $ref: "#/$defs/Node" },
+      },
+      required: ["label"],
+    };
+
+    it("defines a recursive type reached first through a module's own alias spelled like a cell wrapper", async () => {
+      // The alias is no wrapper, so the type it names is hoisted under its
+      // own name, as it is where it is named directly, and every reference to
+      // it resolves.
+      expect(
+        await rootSchema(`export type Cell = Node;
+export interface SchemaRoot { head: Cell; other: Node }`),
+      ).toEqual({
+        type: "object",
+        properties: {
+          head: { $ref: "#/$defs/Node" },
+          other: { $ref: "#/$defs/Node" },
+        },
+        required: ["head", "other"],
+        $defs: { Node: node },
+      });
+    });
+
+    it("keeps the cell at a reference through the cell wrapper itself", async () => {
+      expect(
+        await rootSchema(
+          "export interface SchemaRoot { head: Cell<Node>; other: Node }",
+        ),
+      ).toEqual({
+        type: "object",
+        properties: {
+          head: { $ref: "#/$defs/Node", asCell: ["cell"] },
+          other: { $ref: "#/$defs/Node" },
+        },
+        required: ["head", "other"],
+        $defs: { Node: node },
+      });
+    });
+  });
+
+  describe("roots that accept any value", () => {
+    /**
+     * The schema of a generic union alias read at the root with the key set
+     * `key`, and the types of the diagnostics it reports.
+     */
+    async function boxSchema(key: string) {
+      const { type, checker, typeNode } = await getTypeFromCode(
+        `interface A { x: string; next?: A }
+type Box<T, K extends string> = A | Record<K, T>;
+type Root = Box<number, ${key}>;`,
+        "Root",
+      );
+      const diagnostics: SchemaGenerationDiagnostic[] = [];
+      const schema = new SchemaGenerator().generateSchema(
+        type,
+        checker,
+        typeNode,
+        { onDiagnostic: (diagnostic) => diagnostics.push(diagnostic) },
+      );
+      return { schema, diagnostics: diagnostics.map(({ type }) => type) };
+    }
+
+    it("is `true` for a union with a member its bindings leave unread, though another member is defined", async () => {
+      // `Record` over a template literal key set is no record the node-based
+      // analyzer can build, so that member accepts any value, and so does the
+      // union. `A`, read before it, defines nothing the root refers to.
+      expect(await boxSchema("`k${string}`")).toEqual({
+        schema: true,
+        diagnostics: ["schema-type:unread"],
+      });
+    });
+
+    it("refers to the definitions of a union whose members are all read", async () => {
+      expect(await boxSchema('"k"')).toEqual({
+        schema: {
+          anyOf: [
+            { $ref: "#/$defs/A" },
+            {
+              type: "object",
+              properties: { k: { type: "number" } },
+              required: ["k"],
+            },
+          ],
+          $defs: {
+            A: {
+              type: "object",
+              properties: {
+                x: { type: "string" },
+                next: { $ref: "#/$defs/A" },
+              },
+              required: ["x"],
+            },
+          },
+        },
+        diagnostics: [],
+      });
     });
   });
 });

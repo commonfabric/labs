@@ -357,6 +357,29 @@ export const withRuntimeModuleCorrection = (diagnostic: string): string => {
   ].join("\n\n");
 };
 
+/**
+ * What `run_pattern` answers for a failed pattern-index deploy step: a compile
+ * failure is a `compile-error` and any earlier step an `error`, each with the
+ * deploy's own message, which names ids and quotes no source. The text the
+ * deploy withheld from that message is carried as `rawCauseMessage`, for the
+ * artifact only. Any other failure is rethrown, which ends the run.
+ */
+export const indexedDeployFailure = (
+  error: unknown,
+): Pick<
+  RunPatternToolErrorOutput,
+  "status" | "message" | "rawCauseMessage"
+> => {
+  if (!(error instanceof IndexedPatternError)) throw error;
+  return {
+    status: error.stage === "compile" ? "compile-error" : "error",
+    message: error.message,
+    ...(error.rawCauseMessage !== undefined
+      ? { rawCauseMessage: error.rawCauseMessage }
+      : {}),
+  };
+};
+
 export const runPatternToolDescriptor: HarnessToolDescriptor = {
   toolId: "run_pattern",
   title: "Run Pattern",
@@ -1135,16 +1158,8 @@ export const runPatternTool: HarnessToolDefinition<
           getClient: named.getClient,
         }));
       } catch (error) {
-        if (!(error instanceof IndexedPatternError)) throw error;
-        return {
-          ...errorOutput(
-            error.stage === "compile" ? "compile-error" : "error",
-            error.message,
-          ),
-          ...(error.rawCauseMessage !== undefined
-            ? { rawCauseMessage: error.rawCauseMessage }
-            : {}),
-        };
+        const { status, message, ...withheld } = indexedDeployFailure(error);
+        return { ...errorOutput(status, message), ...withheld };
       }
     } else {
       program = {
@@ -1165,13 +1180,8 @@ export const runPatternTool: HarnessToolDefinition<
           getClient: getPatternIndexClient,
         });
       } catch (error) {
-        if (!(error instanceof IndexedPatternError)) throw error;
-        return {
-          ...errorOutput("error", error.message),
-          ...(error.rawCauseMessage !== undefined
-            ? { rawCauseMessage: error.rawCauseMessage }
-            : {}),
-        };
+        const { status, message, ...withheld } = indexedDeployFailure(error);
+        return { ...errorOutput(status, message), ...withheld };
       }
       try {
         pattern = await compileAndSavePattern(pieces.runtime, program, {

@@ -6,9 +6,13 @@ import {
   NAME,
   pattern,
   TESTS,
+  UI,
   Writable,
 } from "commonfabric";
+import { hasText } from "../../tools/test-support/vnode-helpers.ts";
 import ProfileHome, {
+  elementCaption,
+  faceOf,
   identityProfileUrl,
   identityProvider,
   isFreshIdentity,
@@ -186,6 +190,13 @@ export default pattern(() => {
       detail: { bytes: new FabricBytes(new Uint8Array(PICKED_PICTURE)) },
     });
   });
+  // A blob reference that names no blob, by a space's DID and an id there, is
+  // refused, and the picture is left as it was.
+  const action_send_unnamed_blob = action(() => {
+    profile.setPicture.send({
+      pictureBlob: { space: "z6MkPictureSpace", id: "fid1:picture" },
+    });
+  });
   // An event without a picture leaves the picture alone.
   const action_send_no_picture = action(() => {
     profile.setPicture.send({ picture: new FabricBytes(new Uint8Array()) });
@@ -323,6 +334,39 @@ export default pattern(() => {
   const assert_avatar_cleared = assert(() =>
     bytesAre(profile.picture, []) && profile.avatar === ""
   );
+  // The face the edit form shows is the picture, as a blob or as bytes, or
+  // else the avatar text, or else nothing.
+  const face = faceOf({ profile });
+  const assert_face_is_the_avatar = assert(() =>
+    face.avatar === "AL" && face.picture === undefined &&
+    face.pictureBlob === undefined
+  );
+  const assert_face_is_the_picture = assert(() =>
+    bytesAre(face.picture, PICTURE) && face.avatar === undefined &&
+    face.pictureBlob === undefined
+  );
+  const assert_face_is_the_blob = assert(() =>
+    face.pictureBlob?.space === PICTURE_BLOB.space &&
+    face.pictureBlob?.id === PICTURE_BLOB.id && face.picture === undefined &&
+    face.avatar === undefined
+  );
+  const assert_face_is_empty = assert(() =>
+    face.avatar === undefined && face.picture === undefined &&
+    face.pictureBlob === undefined
+  );
+  // A pinned element is labeled by its title, or by its tag when it has none.
+  const titled = elementCaption({
+    title: "Talks",
+    tag: "#talks",
+    userTags: ["work", "public"],
+  });
+  const untitled = elementCaption({ tag: "#talks", userTags: [] });
+  const assert_caption_reads_the_title_and_tags = assert(() =>
+    titled.label === "Talks" && titled.tags === "#work #public"
+  );
+  const assert_caption_without_title_reads_the_tag = assert(() =>
+    untitled.label === "#talks" && untitled.tags === ""
+  );
   // CT-1828: an empty send must not clear a previously-set avatar.
   const assert_avatar_unchanged_after_empty = assert(() =>
     profile.avatar === "AL"
@@ -393,7 +437,17 @@ export default pattern(() => {
     });
   });
 
+  // The bio is stored trimmed, and the presentation shows it.
+  const action_set_bio = action(() => {
+    profile.setBio.send({ bio: "  Wrote the first program.  " });
+  });
+  const assert_bio_set = assert(() =>
+    profile.bio === "Wrote the first program." &&
+    hasText(profile[UI], "Wrote the first program.")
+  );
+
   const assert_initial_state = assert(() =>
+    profile[NAME] === "Ada Lovelace" &&
     profile.initialNameApplied === "Ada Lovelace" &&
     profile.externalLinks.length === 0 &&
     profile.verifiedIdentities.length === 0 &&
@@ -401,6 +455,7 @@ export default pattern(() => {
   );
 
   const assert_name_set = assert(() =>
+    profile[NAME] === "Grace Hopper" &&
     profile.initialNameApplied === "Grace Hopper"
   );
 
@@ -446,6 +501,8 @@ export default pattern(() => {
       { assertion: assert_profile_url_encodes_the_login },
       { assertion: assert_row_links_the_profile },
       { assertion: assert_email_row_carries_no_link },
+      { assertion: assert_caption_reads_the_title_and_tags },
+      { assertion: assert_caption_without_title_reads_the_tag },
       { assertion: assert_section_shown_for_a_fresh_login },
       { assertion: assert_section_hidden_without_a_shown_identity },
       { assertion: assert_inbox_absent_at_birth },
@@ -453,6 +510,9 @@ export default pattern(() => {
       // CT-1748: a freshly-visited profile starts in the read-only
       // presentation, not the edit form.
       { assertion: assert_not_editing },
+      { assertion: assert(() => !hasText(profile[UI], "Wrote the first")) },
+      { action: action_set_bio },
+      { assertion: assert_bio_set },
       { action: action_set_name },
       { assertion: assert_name_set },
       // CT-1828: empty and whitespace-only sends must not erase the name.
@@ -471,15 +531,21 @@ export default pattern(() => {
       { action: action_remove_external_profile_link },
       { assertion: assert_external_profile_link_removed },
       // CT-1748: the avatar the badge binds resolves.
+      { assertion: assert_face_is_empty },
       { action: action_set_avatar },
       { assertion: assert_avatar_set },
+      { assertion: assert_face_is_the_avatar },
       // CT-1828: an empty send must not erase the avatar either.
       { action: action_clear_avatar },
       { assertion: assert_avatar_unchanged_after_empty },
       { assertion: assert_no_picture },
       { action: action_set_picture },
       { assertion: assert_picture_set },
+      { assertion: assert_face_is_the_picture },
       { action: action_set_picture_blob },
+      { assertion: assert_picture_blob_set },
+      { assertion: assert_face_is_the_blob },
+      { action: action_send_unnamed_blob },
       { assertion: assert_picture_blob_set },
       { action: action_set_picture },
       { assertion: assert_picture_set },
@@ -493,8 +559,10 @@ export default pattern(() => {
       { assertion: assert_picture_blob_set },
       { action: action_clear_picture },
       { assertion: assert_picture_cleared },
+      { assertion: assert_face_is_the_avatar },
       { action: action_clear_avatar_text },
       { assertion: assert_avatar_cleared },
+      { assertion: assert_face_is_empty },
       // Add/remove exercise the full owner-protected element write stack:
       // the same-transaction card instantiation linked into the
       // writeAuthorizedBy-protected list (prepare's setup-schema / child-doc
@@ -545,7 +613,9 @@ export default pattern(() => {
       { action: action_remove_with_empty_event },
       { assertion: assert_removed_element },
     ],
-    // The refused control-character name.
-    expectRuntimeErrors: 1,
+    expectRuntimeErrors: [
+      "cannot contain control characters",
+      "A picture's blob is named by its space's DID and its id there.",
+    ],
   };
 });

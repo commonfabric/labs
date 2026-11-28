@@ -1501,14 +1501,14 @@ function startBenchmarkRefresh(
 // Whether the drill-down's last refresh already covers the runs this list names.
 // The refresh records which runs it sampled, and only a successful run in a new
 // time bucket changes that set, so an unchanged set means there is no artifact to
-// fetch and no reason to redo the work.
+// fetch and no reason to redo the work. With no refresh recorded, the runs read
+// as undefined, which matches no list.
 function benchmarkRefreshCovers(runs: Run[], now: number): boolean {
-  const refresh = benchmarkStore.refresh;
-  if (!refresh) return false;
   const chosen = sampleBenchmarkRuns(runs, now - SPARK_DAYS * 86_400_000).map((
     run,
   ) => ({ runId: run.id, runAttempt: run.run_attempt ?? 1 }));
-  return JSON.stringify(refresh.runs) === JSON.stringify(chosen);
+  return JSON.stringify(benchmarkStore.refresh?.runs) ===
+    JSON.stringify(chosen);
 }
 
 function benchmarkSnapshotIsFresh(now = Date.now()): boolean {

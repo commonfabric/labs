@@ -28,8 +28,9 @@
  * order the board lists its cards in is held by the plan's compatibility
  * requirements, which preserve visible ordering; `clickCardOpenLink` addresses
  * a card by its title so that this journey does not come to rest on that
- * ordering, not because the ordering is free to move. This journey counts no
- * reads at all.
+ * ordering, not because the ordering is free to move. What a view demands is
+ * held by the headless read-budget tests, `topics-read-budget-*.test.ts`, and
+ * this journey counts no reads at all.
  *
  * A candidate may not change, and this fails if it does: the board lists each
  * topic the fixture seeded; the Open link on a card addresses the topic that

@@ -229,6 +229,38 @@ describe("sqlLanguage", () => {
     ]);
   });
 
+  it("colors a body inside another language's body as part of that string", () => {
+    const source = [
+      "do language plpython3u $outer$",
+      "create function g() returns int language plv8 as $inner$ x $inner$;",
+      "create function h() returns int as $sql$ select 1 $sql$;",
+      "$outer$;",
+      "do $outer$ begin",
+      "create function k() returns int language plv8 as $inner$ y $inner$;",
+      "end $outer$;",
+      "create table t (a int);",
+    ].join("\n");
+    const lines = sqlLanguage.highlightLines(source);
+    const classesOfLine = (line: number) =>
+      lines[line].spans.map(({ text, cls }) => [text, cls]);
+
+    expect(classesOfLine(0).at(-1)).toEqual(["$outer$", "string"]);
+    for (const line of [1, 2]) {
+      expect(classesOfLine(line)).toEqual([
+        [source.split("\n")[line], "string"],
+      ]);
+    }
+    expect(classesOfLine(3)).toEqual([
+      ["$outer$", "string"],
+      [";", "punctuation"],
+    ]);
+    expect(classesOf(lines, "$inner$ y $inner$")).toEqual(["string"]);
+    expect(classesOf(lines, "$outer$")).toEqual(["string", "punctuation"]);
+    expect(classesOf(lines, "begin")).toEqual(["keyword"]);
+    expect(verbatim(lines)).toBe(source);
+    expect(outline(source).map(([label]) => label)).toEqual(["table t", "a"]);
+  });
+
   it("marks declarations only up to the end of their body", () => {
     const source = [
       "do $$ declare x int; $$;",
@@ -897,6 +929,23 @@ describe("sqlLanguage", () => {
     expect(outline(source).map(([label]) => label)).toEqual([
       "alter table t",
       "key",
+    ]);
+  });
+
+  it("names the table an `alter table if exists` statement alters", () => {
+    const source = [
+      "alter table if exists t add column a int;",
+      "alter table if exists only public.u add b text;",
+      "alter table only v add c int;",
+    ].join("\n");
+
+    expect(outline(source).map(([label]) => label)).toEqual([
+      "alter table t",
+      "a",
+      "alter table u",
+      "b",
+      "alter table v",
+      "c",
     ]);
   });
 

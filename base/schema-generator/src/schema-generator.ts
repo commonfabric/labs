@@ -3121,7 +3121,11 @@ export class SchemaGenerator {
     ) {
       return undefined;
     }
-    const key = getNamedTypeKey(type, context.typeNode);
+    const key = getNamedTypeKey(
+      type,
+      context.typeChecker,
+      context.typeNode,
+    );
     const alias = type.aliasSymbol;
     return key && context.boundTypeParameters && alias &&
         !alias.declarations?.some((declaration) =>
@@ -3666,13 +3670,11 @@ export class SchemaGenerator {
       return {};
     }
     if (tracksCycle && context.definitionStack.has(stackKey)) {
-      if (namedKey) {
-        context.emittedRefs.add(namedKey);
-        return { "$ref": `#/$defs/${namedKey}` };
-      }
-      // Read for its labels alone, a value's recursion adds none to its top,
-      // and naming it would name the type for every schema this generator
-      // writes afterwards.
+      // A reading with a name of its own, met inside itself, is found above as
+      // that name in progress. One without is referred to by the synthetic
+      // name it is stored under once it ends. Read for its labels alone, a
+      // value's recursion adds none to its top, and naming it would name the
+      // type for every schema this generator writes afterwards.
       if (context.labelsOnly) return {};
       const syntheticKey = this.#definitionKey(
         this.#ensureSyntheticName(type, context),
@@ -4126,14 +4128,15 @@ export class SchemaGenerator {
     fragment: MutableJSONSchema,
     allDefs: Record<string, MutableJSONSchema>,
   ): Record<string, MutableJSONSchema> {
-    const needed = new Set<string>();
+    const needed = new Map<string, MutableJSONSchema>();
     const visited = new Set<string>();
 
     const enqueueFromRef = (ref: string) => {
       const prefix = "#/$defs/";
       if (ref.startsWith(prefix)) {
         const name = ref.slice(prefix.length);
-        if (name) needed.add(name);
+        const definition = allDefs[name];
+        if (definition !== undefined) needed.set(name, definition);
       }
     };
 
@@ -4147,27 +4150,22 @@ export class SchemaGenerator {
     // Find initial set of needed names from the fragment
     scan(fragment);
 
-    // Compute transitive closure by following refs inside included definitions
-    const stack: string[] = Array.from(needed);
-    while (stack.length > 0) {
-      const name = stack.pop()!;
-      visited.add(name);
-      const def = allDefs[name];
-      if (!def) continue;
-      // Scan definition body for further refs
-      scan(def);
-      for (const n of Array.from(needed)) {
-        if (!visited.has(n)) {
-          // Only push newly discovered names
-          if (!stack.includes(n)) stack.push(n);
-        }
-      }
-    }
-
-    // Build the subset map
+    // Compute transitive closure by following refs inside included
+    // definitions, collecting each definition as it is reached
     const subset: Record<string, MutableJSONSchema> = {};
-    for (const name of visited) {
-      if (allDefs[name]) subset[name] = allDefs[name];
+    const stack = Array.from(needed);
+    while (stack.length > 0) {
+      const [name, definition] = stack.pop()!;
+      visited.add(name);
+      subset[name] = definition;
+      // Scan definition body for further refs
+      scan(definition);
+      for (const entry of needed) {
+        // Only push newly discovered names
+        if (
+          !visited.has(entry[0]) && !stack.some(([n]) => n === entry[0])
+        ) stack.push(entry);
+      }
     }
     return subset;
   }
@@ -4555,18 +4553,22 @@ export class SchemaGenerator {
 
       const typed = typeRegistry?.get(typeNode) ??
         checker.getTypeFromTypeNode(typeNode);
-      const resolved = (typed.flags & ts.TypeFlags.Any) === 0
-        ? typed
-        : this.#resolveTypeReferenceFromScope(
-          typeNode,
-          checker,
-          context,
-        );
+      const fromScope = (typed.flags & ts.TypeFlags.Any) === 0
+        ? undefined
+        : this.#resolveTypeReferenceFromScope(typeNode, checker, context);
       // A name declared as `any` reads as `any` does, accepting any value,
       // unless its declaration writes a wrapper the checker erases around it.
-      if (resolved === checker.getAnyType()) {
-        return this.#readAliasOfAny(typeNode, checker, context) ?? true;
+      if (fromScope?.declared === checker.getAnyType()) {
+        return this.#readAliasOfAny(
+          typeNode,
+          fromScope.symbol,
+          checker,
+          context,
+        ) ?? true;
       }
+      const resolved = (typed.flags & ts.TypeFlags.Any) === 0
+        ? typed
+        : fromScope?.declared;
       if (resolved) {
         const { boundTypeParameters: _, ...unbound } = context;
         const library = this.#namesLibraryAlias(typeNode, context);
@@ -4693,8 +4695,9 @@ export class SchemaGenerator {
 
   /**
    * The schema of what the alias `reference` names declares, read under the
-   * reference's arguments, where the checker reads that alias as `any` and
-   * its declaration writes a wrapper the checker erases around `any`
+   * reference's arguments, where `symbol` is what its name denotes
+   * (`#resolveTypeReferenceFromScope()`), the checker reads that alias as
+   * `any`, and its declaration writes a wrapper the checker erases around `any`
    * (`writesWrapperErasedByAny()`): `Confidential<any, C>`, `PerUser<any>`,
    * or a union holding one is `any` to the checker, and only the written
    * declaration holds its labels, scope, or default. `undefined` for any other
@@ -4712,16 +4715,11 @@ export class SchemaGenerator {
    */
   #readAliasOfAny(
     reference: ts.TypeReferenceNode,
+    symbol: ts.Symbol,
     checker: ts.TypeChecker,
     context: GenerationContext,
   ): MutableJSONSchema | undefined {
-    if (!ts.isIdentifier(reference.typeName)) return undefined;
-    const declaration = this.#resolveTypeName(
-      reference,
-      reference.typeName,
-      checker,
-      context,
-    )?.declarations?.find(ts.isTypeAliasDeclaration);
+    const declaration = symbol.declarations?.find(ts.isTypeAliasDeclaration);
     if (
       !declaration ||
       isDefaultLibrarySourceFile(declaration.getSourceFile(), context) ||
@@ -5602,16 +5600,16 @@ export class SchemaGenerator {
   /**
    * The declared type a reference's name denotes as seen from the reference's
    * scope, which holds what the module declares, exported or not, and what it
-   * imports. Returns `undefined` for a qualified name, for a name that
-   * resolves to nothing the checker can type, and for a generic declared
-   * outside the default library, unless `CommonFabricFormatter` lowers the
-   * reference from its own arguments.
+   * imports, with the symbol that declares it. Returns `undefined` for a
+   * qualified name, for a name that resolves to nothing the checker can type,
+   * and for a generic declared outside the default library, unless
+   * `CommonFabricFormatter` lowers the reference from its own arguments.
    */
   #resolveTypeReferenceFromScope(
     typeNode: ts.TypeReferenceNode,
     checker: ts.TypeChecker,
     context: GenerationContext,
-  ): ts.Type | undefined {
+  ): { declared: ts.Type; symbol: ts.Symbol } | undefined {
     if (!ts.isIdentifier(typeNode.typeName)) {
       return undefined;
     }
@@ -5657,7 +5655,7 @@ export class SchemaGenerator {
     if ((declared.flags & ts.TypeFlags.Conditional) !== 0) return undefined;
     return !(declared.flags & ts.TypeFlags.Any) ||
         declared === checker.getAnyType()
-      ? declared
+      ? { declared, symbol }
       : undefined;
   }
 

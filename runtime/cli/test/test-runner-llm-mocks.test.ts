@@ -47,6 +47,35 @@ describe(
       expect(results[0].error).toContain('llmMocks[0] has unknown key "txt".');
     });
 
+    it("names a request no entry answered in the error of a run that fails", async () => {
+      const { failed, results } = await run("unanswered-then-invalid.test.tsx");
+
+      expect(failed).toBe(1);
+      const error = results[0].error ?? "";
+      expect(error).toContain("must have an 'action'");
+      expect(error).toContain(
+        "No llmMocks entry answers a text request with 1 message(s)",
+      );
+      expect(results[0].results.some((r) => r.name === "llmMocks")).toBe(
+        false,
+      );
+    });
+
+    it("names a request no entry answered in the error of a multi-user run that fails", async () => {
+      const { failed, results } = await run("multi-user-deadlock.test.tsx");
+
+      expect(failed).toBe(1);
+      const error = results[0].error ?? "";
+      expect(error).toContain(
+        'Deadlock: every remaining participant is parked (alice awaits "never-announced")',
+      );
+      expect(error).toContain("No llmMocks entry answers a text request");
+      expect(error).toContain('last message: "hello"');
+      expect(results[0].results.some((r) => r.name === "llmMocks")).toBe(
+        false,
+      );
+    });
+
     it("answers a multi-user test's participants from one list", async () => {
       const { passed, failed } = await run("multi-user.test.tsx");
 

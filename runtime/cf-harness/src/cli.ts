@@ -490,8 +490,9 @@ export interface RunCfHarnessCliDependencies
   sandboxHomeDir?: string;
 
   /**
-   * Platform whose default sandbox runtime applies to a run that names none;
-   * the one this process runs on when absent.
+   * Platform whose default sandbox runtime applies to a run that names none,
+   * and whose program opens a URL in a browser; the one this process runs on
+   * when absent.
    */
   platform?: SandboxPlatform;
 
@@ -553,7 +554,17 @@ export interface RunCfHarnessCliDependencies
     credentialOwner: HarnessCredentialOwnerRef;
     loom: boolean;
   }) => HarnessModelClient | Promise<HarnessModelClient>;
-  openUrl?: (url: string) => void | Promise<void>;
+  /**
+   * Runs the program that opens a URL in a browser;
+   * {@link runCfHarnessOpenUrlCommand} when absent.
+   */
+  runOpenUrlCommand?: (command: CfHarnessCommand) => void | Promise<void>;
+
+  /**
+   * The skills tree of the checkout the harness runs out of, read when no
+   * `--skills-root` is given; the tree above this module when absent.
+   */
+  checkoutSkillsRoot?: () => string | undefined;
   registerSignalHandler?: (
     signals: readonly CfHarnessCliSignal[],
     handler: CfHarnessCliSignalHandler,
@@ -1445,22 +1456,17 @@ const parseStructuredResultConfig = async (
     (schemaFile !== undefined
       ? await options.readTextFile(schemaFile)
       : undefined);
-  // Continuation resolves the recorded schema before constructing an engine.
-  if (rawSchema === undefined && typeof args["continue-run"] === "string") {
-    return {
-      path: structuredResultPath,
-      sandboxPath: structuredResultPathResolution!.sandboxPath,
-    };
-  }
-  if (rawSchema === undefined) {
-    throw new Error(
-      "--structured-result-path requires --structured-result-schema or --structured-result-schema-file",
-    );
-  }
   const parsed = parseStructuredResultSchema(rawSchema, {
     label: "--structured-result-schema",
   });
   if (parsed === undefined) {
+    // Continuation resolves the recorded schema before constructing an engine.
+    if (typeof args["continue-run"] === "string") {
+      return {
+        path: structuredResultPath,
+        sandboxPath: structuredResultPathResolution!.sandboxPath,
+      };
+    }
     throw new Error(
       "--structured-result-path requires --structured-result-schema or --structured-result-schema-file",
     );
@@ -1622,6 +1628,7 @@ export const parseCfHarnessCliArgs = async (
     | "sandboxSelectionFlags"
     | "providerSettingsStore"
     | "reportProgress"
+    | "checkoutSkillsRoot"
   > = {},
 ): Promise<CfHarnessCliConfig | { help: true }> => {
   const normalizedArgv = argv[0] === "--" ? argv.slice(1) : argv;
@@ -1695,7 +1702,10 @@ export const parseCfHarnessCliArgs = async (
   // is not what an operator who passed no flag asked for. The default is the
   // checkout the harness runs out of, as the documentation corpus resolves its
   // own.
-  const skillsRootRecord = resolveHarnessSkillsRoot(configuredSkillsRoot);
+  const skillsRootRecord = resolveHarnessSkillsRoot(
+    configuredSkillsRoot,
+    deps.checkoutSkillsRoot,
+  );
   const skillsRoot = skillsRootRecord?.hostPath;
   // Naming no root is not the same as wanting none: the default comes from the
   // checkout the harness runs out of, applied where every surface resolves its
@@ -3302,19 +3312,31 @@ export const cfHarnessCliInformationalControl = (
   return undefined;
 };
 
+/** A program, and its arguments. */
+export interface CfHarnessCommand {
+  command: string;
+  args: string[];
+}
+
 /** The program, and its arguments, that opens `url` on `os`. */
-export const cfHarnessOpenUrlCommand = (
+const cfHarnessOpenUrlCommand = (
   os: typeof Deno.build.os,
   url: string,
-): { command: string; args: string[] } =>
+): CfHarnessCommand =>
   os === "darwin"
     ? { command: "open", args: [url] }
     : os === "windows"
     ? { command: "cmd", args: ["/c", "start", "", url] }
     : { command: "xdg-open", args: [url] };
 
-const defaultOpenUrl = async (url: string): Promise<void> => {
-  const command = cfHarnessOpenUrlCommand(Deno.build.os, url);
+/**
+ * Runs `command`, a program that opens a URL, with no input or output and
+ * waits for it to end. A program that cannot be started is ignored, as is one
+ * that exits unsuccessfully.
+ */
+export const runCfHarnessOpenUrlCommand = async (
+  command: CfHarnessCommand,
+): Promise<void> => {
   try {
     await new Deno.Command(command.command, {
       args: command.args,
@@ -3653,7 +3675,9 @@ const runCfHarnessAuthCommand = async (
           } else {
             io.stdout(`Open this URL to connect openai-codex:\n${url}\n`);
           }
-          await (deps.openUrl ?? defaultOpenUrl)(url);
+          await (deps.runOpenUrlCommand ?? runCfHarnessOpenUrlCommand)(
+            cfHarnessOpenUrlCommand(deps.platform ?? Deno.build.os, url),
+          );
         },
       });
     }

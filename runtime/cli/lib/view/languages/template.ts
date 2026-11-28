@@ -402,17 +402,16 @@ function reveal(
   /**
    * `value`, which the host read inside the entry `node`, with each start of
    * a mark that a host cut short with `…`, as a host that shortens labels can,
-   * replaced by its region's source. A cut text is a mark's start when it
-   * ends the value's first stretch, before any other `…`, and that stretch is
-   * what the host read from the start of the entry, or of its name, up to a
-   * region whose mark the cut text starts.
+   * replaced by its region's source. A cut text is a mark's start when the
+   * value before it is what the host read from the start of the entry, or of
+   * its name, up to a region whose mark the cut text starts, so that a `…`
+   * before it is one the source holds there, not one the host put in.
    */
   const spellCuts = (value: string, node: StructureNode): string =>
     value.replace(
       numbers ? CUT_NUMBER_MARK : CUT_NAME_MARK,
       (cut: string, offset: number) => {
         const before = value.slice(0, offset);
-        if (before.includes("…")) return cut;
         const regionAt = (anchor: number | undefined) => {
           if (
             anchor === undefined || !hidden.startsWith(before + cut, anchor)

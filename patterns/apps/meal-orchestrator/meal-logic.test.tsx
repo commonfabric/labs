@@ -86,6 +86,7 @@ export default pattern(() => {
         ovenGroup("crust", undefined, 375, 15, { nightsBeforeServing: 1 }),
         ovenGroup("glaze", undefined, 350, 10),
         ovenGroup("warm", 30, 300, 0, { duration: 20 }),
+        ovenGroup("toast", 15, 350, 0),
         { id: "chill", name: "Chill", minutesBeforeServing: 60, steps: [] },
       ],
     }]);
@@ -94,7 +95,8 @@ export default pattern(() => {
       // The group's own duration stands in for an unset oven time.
       events[1].end === 10 &&
       offTimeline.map((o) => o.reason).join("|") ===
-        "the night before|not scheduled (set its minutes before serving)";
+        "the night before|not scheduled (set its minutes before serving)|" +
+          "its oven time is not set";
   });
 
   const assert_load_rules = assert(() =>
@@ -190,6 +192,35 @@ export default pattern(() => {
       md.includes(
         "- Not on the timeline: Bread (dough) is not scheduled (set its minutes before serving)",
       );
+  });
+
+  // The export lists oven steps earliest first whatever order the plan holds
+  // them in, names the step with no oven free, and keeps its conflict.
+  const assert_markdown_oven_order_and_conflicts = assert(() => {
+    const ovenPlan = planOvens([rolls, turkey, pie], [OVEN]);
+    const md = mealMarkdown({
+      name: "Dinner",
+      date: "2026-11-26",
+      time: "17:00",
+      guestCount: 2,
+      recipes: [],
+      preparedFoods: [],
+      guests: [
+        { guestName: "", requirements: ["vegan"] },
+        { guestName: "Sam", requirements: [] },
+      ],
+      ovenPlan: { ...ovenPlan, events: [...ovenPlan.events].reverse() },
+      notes: "",
+    });
+    const plan = md.slice(md.indexOf("## Oven plan")).split("\n");
+    return md.includes("## Dietary needs\n- Guest 1: vegan\n") &&
+      !md.includes("Sam") &&
+      plan.slice(1).join("\n") === [
+          "- 12:00 PM (5h before): Turkey (roast) at 325°F for 240 min, oven 1",
+          "- 3:00 PM (2h before): Pie (bake) at 425°F for 50 min, no oven free",
+          "- 4:40 PM (20m before): Rolls (bake) at 350°F for 15 min, oven 1",
+          "- Conflict: Pie: Oven 1 has Turkey at 325°F.",
+        ].join("\n");
   });
 
   const assert_touching_is_not_overlap = assert(() => {
@@ -405,6 +436,7 @@ export default pattern(() => {
     [TESTS]: [
       { assertion: assert_events_and_off_timeline },
       { assertion: assert_markdown_keeps_oven_problems },
+      { assertion: assert_markdown_oven_order_and_conflicts },
       { assertion: assert_load_rules },
       { assertion: assert_one_oven_conflict },
       { assertion: assert_second_oven_resolves },

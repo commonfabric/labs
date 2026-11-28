@@ -25,6 +25,8 @@ import {
 import {
   clickButton,
   clickInRow,
+  findElement,
+  fireEvent,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
 import AssumptionSurfacer, {
@@ -108,6 +110,15 @@ const sinceFollowUp = (messages: readonly BuiltInLLMMessage[]): string =>
 
 const update = (...lines: string[]): string =>
   `${UPDATE_TAG} ${lines.join(" ")}`;
+
+/** Sends `text` from the prompt input under `root`, as pressing Send does. */
+const typeInPrompt = (root: unknown, text: string): void =>
+  fireEvent(
+    findElement(root, "cf-prompt-input"),
+    "oncf-send",
+    { detail: { text } },
+    "the prompt input",
+  );
 
 export default pattern(() => {
   const messages = new Writable<BuiltInLLMMessage[]>([
@@ -439,6 +450,44 @@ export default pattern(() => {
 
   // The reply to that update-only message records an assumption: it rests on
   // the user's own second message, not on the update.
+  // Typing in the prompt sends the user's words, carrying any waiting update
+  // with them; a blank prompt sends nothing. "None of these" rejects the card
+  // it sits on and tells the assistant.
+  const typed = AssumptionSurfacer({
+    messages: new Writable<BuiltInLLMMessage[]>([
+      user("How do I sort?"),
+      toolCall([language, level]),
+    ]),
+    verdicts: new Writable({
+      a1: { status: "corrected" as const, chosenIndex: 2 },
+    }),
+  });
+  const action_type_blank = action(() => typeInPrompt(typed[UI], "   "));
+  const assert_blank_sends_nothing = assert(() =>
+    typed.messages.length === 2 && typed.unsent.length === 1
+  );
+  const action_type_words = action(() =>
+    typeInPrompt(typed[UI], "And in reverse?")
+  );
+  const assert_words_carry_update = assert(() => {
+    const sent = typed.messages.filter((m) => m.role === "user").at(-1);
+    return userText(sent!) === "And in reverse?" &&
+      messageText(sent).includes(
+        update("Regarding language: TypeScript rather than Python."),
+      ) &&
+      typed.unsent.length === 0;
+  });
+  const action_none_of_these = action(() =>
+    clickInRow(typed[UI], "Skill level", "None of these")
+  );
+  const assert_none_rejects_its_card = assert(() =>
+    typed.assumptions[1]?.status === "rejected" &&
+    typed.assumptions[0]?.status === "corrected" &&
+    lastText(typed.messages).startsWith(
+      update("Regarding skill level: none of Beginner,"),
+    )
+  );
+
   const action_record_after_update = action(() =>
     messages.push(toolCall([{
       label: "Browser",
@@ -504,6 +553,15 @@ export default pattern(() => {
       { action: action_tell_now },
       { settle: true },
       { assertion: assert_told_now },
+      { action: action_type_blank },
+      { settle: true },
+      { assertion: assert_blank_sends_nothing },
+      { action: action_type_words },
+      { settle: true },
+      { assertion: assert_words_carry_update },
+      { action: action_none_of_these },
+      { settle: true },
+      { assertion: assert_none_rejects_its_card },
     ],
     surfacer,
   };

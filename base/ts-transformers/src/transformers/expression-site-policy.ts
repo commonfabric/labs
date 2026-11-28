@@ -415,17 +415,15 @@ function isEligiblePatternOwnedWrapperCallbackSite(
   expression: ts.Expression,
   context: TransformationContext,
 ): boolean {
+  // Only the nearest enclosing callback's boundary can refuse a pattern-owned
+  // wrapper; a site outside every callback has no boundary to refuse it.
   const callbackContext = context.getEnclosingCallbackContext(expression);
-  if (!callbackContext) {
-    return true;
-  }
-
-  const boundarySemantics = getCallbackBoundarySemantics(
-    callbackContext.callback,
-    context.checker,
-    context,
-  );
-  return boundarySemantics.supportsPatternOwnedWrapperCallbackSite;
+  return !callbackContext ||
+    getCallbackBoundarySemantics(
+      callbackContext.callback,
+      context.checker,
+      context,
+    ).supportsPatternOwnedWrapperCallbackSite;
 }
 
 function hasEnclosingComputeLikeCallback(

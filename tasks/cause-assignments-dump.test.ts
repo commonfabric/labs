@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
   buildAssignment,
@@ -264,6 +265,42 @@ describe("cause-assignments-dump", () => {
         ]),
       ).rejects.toThrow("usage: cause-assignments-dump.ts --root <dir>");
       expect([...Deno.readDirSync(scratch)]).toEqual([]);
+    });
+
+    it("runs as a program, dumping the files its command line names", async () => {
+      const out = join(scratch, "dump.json");
+
+      const { code, stderr } = await runDenoCommandWithTemporaryLock({
+        root: ROOT,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(ROOT, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "-A",
+          join(ROOT, "tasks/cause-assignments-dump.ts"),
+          "--root",
+          ROOT,
+          "--out",
+          out,
+          "patterns/system/social-space/short-did.ts",
+          "patterns/examples/no-such-pattern.tsx",
+        ],
+        env: { LOG_LEVEL: "error" },
+      });
+
+      expect(code, new TextDecoder().decode(stderr)).toBe(0);
+      const dumped: DumpOutput = JSON.parse(await Deno.readTextFile(out));
+      expect(dumped.assignments).toEqual([]);
+      expect(dumped.unassigned).toEqual([{
+        pattern: "system/social-space/short-did.ts",
+        source: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }]);
+      expect(dumped.errors).toEqual([{
+        pattern: "examples/no-such-pattern.tsx",
+        error: expect.any(String),
+      }]);
     });
   });
 });

@@ -128,6 +128,7 @@ function createParamSummary(
     name: "input",
     capability: "opaque",
     readPaths: [],
+    fullShapePaths: [],
     writePaths: [],
     opaquePaths: [],
     passthrough: false,

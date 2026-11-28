@@ -1041,6 +1041,19 @@ export type CfcFlowLabelsMode = "off" | "observe" | "persist";
 export const DEFAULT_CFC_FLOW_LABELS_MODE: CfcFlowLabelsMode = "off";
 
 /**
+ * Whether a transaction's value writes carry the labels of what it read:
+ * flow labels persist, and enforcement runs the preparation that writes
+ * them. Below that, a derived value does not carry its inputs' labels to its
+ * readers, so nothing downstream can gate on them.
+ */
+export function derivedWritesCarryLabels(dials: {
+  flowLabels: CfcFlowLabelsMode;
+  enforcement: CfcEnforcementMode;
+}): boolean {
+  return dials.flowLabels === "persist" && dials.enforcement !== "disabled";
+}
+
+/**
  * Write-side `requiredIntegrity` floor dial (§8.12.4.1 / SC-18, Epic D3),
  * orthogonal to the enforcement ladder and the flow dial: `off` = no check;
  * `observe` = evaluate the floor and emit diagnostics, never reject;
@@ -1097,6 +1110,17 @@ export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
 export type CfcContentAddressedLabels = boolean;
 
 export const DEFAULT_CFC_CONTENT_ADDRESSED_LABELS: CfcContentAddressedLabels =
+  false;
+
+/**
+ * Whether commit preparation stores a reclassified value's creator-releasable
+ * `User` clauses as that clause or the declared policy (the
+ * `cfcPatternReclassification` experimental flag, which a `Runtime` turns on
+ * only beside `pieceCreatorRecord`). Off stores the flow join as derived.
+ */
+export type CfcPatternReclassification = boolean;
+
+export const DEFAULT_CFC_PATTERN_RECLASSIFICATION: CfcPatternReclassification =
   false;
 
 /**
@@ -1184,6 +1208,7 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
+  patternReclassification: CfcPatternReclassification;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),

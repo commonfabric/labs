@@ -79,14 +79,6 @@ export const confidentialityOnlyIfcLabel = (
   return { confidentiality: cloneJsonValue(label.confidentiality) };
 };
 
-const labelValueKey = (value: unknown): string => {
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return String(value);
-  }
-};
-
 export const mergeConfidentialityOnlyLabels = (
   labels: readonly (IFCLabel | undefined)[],
 ): IFCLabel | undefined => {
@@ -97,7 +89,7 @@ export const mergeConfidentialityOnlyLabels = (
       ? undefined
       : confidentialityOnlyIfcLabel(label);
     for (const value of confidentialityOnly?.confidentiality ?? []) {
-      const key = labelValueKey(value);
+      const key = JSON.stringify(value);
       if (seen.has(key)) {
         continue;
       }

@@ -5,6 +5,7 @@ import {
   type ActionRun,
   mergeActionCosts,
   SLOW_ACTION_LOG_MS,
+  SLOW_ACTIONS_REMEMBERED,
 } from "../../src/executor/action-costs.ts";
 import type { ServingActionCost } from "../../src/executor/stats.ts";
 import { RuntimeTelemetry } from "../../src/telemetry.ts";
@@ -161,6 +162,19 @@ describe("action-costs", () => {
             ),
           ).toHaveLength(1);
         });
+
+        it("logs a slow action again once more actions than it remembers have been logged since, and not before", () => {
+          using logs = captureLogs("action-costs");
+          const table = new ActionCostTable({ tracked: 1 });
+          for (let i = 0; i <= SLOW_ACTIONS_REMEMBERED; i++) {
+            table.record("did:space", run(`a${i}`, SLOW_ACTION_LOG_MS));
+          }
+          table.record("did:space", run("a1", SLOW_ACTION_LOG_MS));
+          table.record("did:space", run("a0", SLOW_ACTION_LOG_MS));
+          const lines = logs.textsOf("slow-action");
+          expect(lines).toHaveLength(SLOW_ACTIONS_REMEMBERED + 2);
+          expect(lines.at(-1)).toContain("`a0`");
+        });
       });
 
       describe("costs()", () => {
@@ -216,6 +230,15 @@ describe("action-costs", () => {
           table.observe("did:space", telemetry);
           telemetry.submit(run("sum", 5));
           expect(table.costs().entries[0].runs).toBe(1);
+        });
+
+        it("ignores a `telemetry` event that carries no marker", () => {
+          const telemetry = new RuntimeTelemetry();
+          const table = new ActionCostTable();
+          table.observe("did:space", telemetry);
+          telemetry.dispatchEvent(new Event("telemetry"));
+          telemetry.submit(run("sum", 5));
+          expect(table.costs().entries).toEqual([cost("did:space", "sum", 5)]);
         });
       });
     });

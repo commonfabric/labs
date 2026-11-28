@@ -38,6 +38,7 @@ import type {
 } from "../src/contracts/research.ts";
 import type { HarnessSkillActivations } from "../src/contracts/skill.ts";
 import {
+  BROWSER_SUBAGENT_PROFILE_CONFIG,
   type HarnessSubagentRunRef,
   PATTERN_AUTHOR_SUBAGENT_SKILL_NAMES,
 } from "../src/contracts/subagent.ts";
@@ -72,6 +73,7 @@ import type {
 } from "../src/model/client.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import {
+  buildSubagentSystemPrompt,
   CfHarnessPromptLoop,
   promptLoopModelTurnsFromError,
 } from "../src/prompt-loop.ts";
@@ -6644,6 +6646,27 @@ test("CfHarnessPromptLoop gives the browser tool only to the authorized browser 
   ]);
   assertEquals(output.subagent.manifest.skillScriptExecutionTarget, "host");
   assertEquals(result.finalAssistantText, "Browser-profile parent completed.");
+});
+
+test("buildSubagentSystemPrompt tells a child about host skill script execution only when its scripts run on the host", () => {
+  const scriptsLine =
+    "Exact allowlisted skill scripts: agent-browser:scripts/form-automation.sh, agent-browser:scripts/capture-workflow.sh";
+  const hostLine =
+    "This profile runs allowlisted skill scripts through host execution.";
+
+  const hostPrompt = buildSubagentSystemPrompt(
+    "/workspace",
+    BROWSER_SUBAGENT_PROFILE_CONFIG,
+  );
+  assertStringIncludes(hostPrompt, scriptsLine);
+  assertStringIncludes(hostPrompt, hostLine);
+
+  const sandboxPrompt = buildSubagentSystemPrompt("/workspace", {
+    ...BROWSER_SUBAGENT_PROFILE_CONFIG,
+    skillScriptExecutionTarget: "sandbox",
+  });
+  assertStringIncludes(sandboxPrompt, scriptsLine);
+  assertEquals(sandboxPrompt.includes(hostLine), false);
 });
 
 test("CfHarnessPromptLoop activates browser subagent skills and host skill scripts", async () => {

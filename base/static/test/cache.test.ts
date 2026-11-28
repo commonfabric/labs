@@ -5,7 +5,8 @@ import { expect } from "@std/expect";
 
 import { StaticCache } from "../cache.ts";
 import { generateETag } from "../etag.ts";
-import { TEST_ASSET } from "../utils.ts";
+import { TEST_ASSET, TEST_ASSET_CONTENT } from "../utils.ts";
+import { isDeno } from "@commonfabric/platform/env";
 import { test } from "@commonfabric/test-support/test";
 
 const BASE = "https://assets.example/static";
@@ -142,4 +143,49 @@ test("StaticCache throws for an asset the package does not ship, fetching nothin
   );
 
   expect(requested).toEqual([]);
+});
+
+test("StaticCache.fromFileSystem refuses a scope that is not Deno", () => {
+  expect(() => StaticCache.fromFileSystem({})).toThrow(
+    "`StaticCache.fromFileSystem()` is only available in Deno.",
+  );
+  expect(() => StaticCache.fromFileSystem({ Deno: undefined })).toThrow(
+    "`StaticCache.fromFileSystem()` is only available in Deno.",
+  );
+});
+
+test({
+  name:
+    "StaticCache.fromFileSystem reads the bundled assets through the Deno of the scope it is given",
+  ignore: !isDeno(),
+  fn: async () => {
+    const read: string[] = [];
+    const cache = StaticCache.fromFileSystem({
+      Deno: {
+        readFile: (url) => {
+          read.push(url.href);
+          return Promise.resolve(new TextEncoder().encode("scope bytes"));
+        },
+      },
+    });
+
+    expect(await cache.getText(TEST_ASSET)).toBe("scope bytes");
+    expect(read).toEqual([cache.getUrl(TEST_ASSET).href]);
+    expect(await StaticCache.fromFileSystem().getText(TEST_ASSET)).not.toBe(
+      "scope bytes",
+    );
+  },
+});
+
+test({
+  name: "StaticCache.fromFileSystem reads the bundled assets under Deno",
+  ignore: !isDeno(),
+  fn: async () => {
+    const cache = StaticCache.fromFileSystem();
+    const url = cache.getUrl(TEST_ASSET);
+
+    expect(url.protocol).toBe("file:");
+    expect(url.pathname.endsWith(`/assets/${TEST_ASSET}`)).toBe(true);
+    expect(await cache.getText(TEST_ASSET)).toContain(TEST_ASSET_CONTENT);
+  },
 });

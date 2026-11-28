@@ -14,6 +14,7 @@ import {
   describe,
   it,
 } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import {
   isServedRefusal,
   RoutedPlane,
@@ -401,6 +402,53 @@ describe("RoutedPlane", () => {
   });
 
   describe("session termination", () => {
+    /**
+     * A plane whose routes cannot reset a failed connection, so a session
+     * ends once its connection's reconnect fails, and whose connections take
+     * until `closing` resolves to close, so a session the plane closes stays
+     * open on its client until then.
+     */
+    const failingRoutePlane = () => {
+      const transports: ServerTransport[] = [];
+      const closing = Promise.withResolvers<void>();
+      const plane = new RoutedPlane({
+        createTransport: () => {
+          const transport = new ServerTransport(server);
+          transports.push(transport);
+          return {
+            send: (payload) => transport.send(payload),
+            setReceiver: (receiver) => transport.setReceiver(receiver),
+            setCloseReceiver: (receiver) =>
+              transport.setCloseReceiver(receiver),
+            close: () => closing.promise.then(() => transport.close()),
+          };
+        },
+        sessionOpenAuth: testPrincipalSessionOpenAuthFactory(serviceSigner),
+      });
+      planes.push(plane);
+      return { plane, transports, closing };
+    };
+
+    it("replaces a session that ends, carrying its watches to the next", async () => {
+      const { plane, transports, closing } = failingRoutePlane();
+      try {
+        const scope = plane.scope();
+        await scope.watchDocument(space, doc, () => {});
+        const refused = transports[0].whenRefused();
+        transports[0].hostDown();
+        await refused;
+        await clock.settle();
+
+        expect(transports).toHaveLength(2);
+        expect(plane.accessForTestingOnly.sessionSpaces).toEqual([space]);
+        expect(await plane.accessForTestingOnly.watchedDocuments(space))
+          .toEqual([doc]);
+        scope.dispose();
+      } finally {
+        closing.resolve();
+      }
+    });
+
     it("opens no replacement for a session the owner revokes after its last scope released it", async () => {
       const plane = newPlane();
       const scope = plane.scope();
@@ -420,6 +468,27 @@ describe("RoutedPlane", () => {
       expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
       await plane.close();
       expect(dials).toHaveLength(1);
+    });
+
+    it("opens no replacement for a session that ends after its last scope released it", async () => {
+      const { plane, transports, closing } = failingRoutePlane();
+      try {
+        const scope = plane.scope();
+        await scope.watchDocument(space, doc, () => {});
+        const refused = transports[0].whenRefused();
+        transports[0].hostDown();
+        await refused;
+        // The release starts the connection's close, which waits for
+        // `closing`, so the reconnect's failure ends the session after the
+        // plane let it go.
+        scope.dispose();
+        await clock.settle();
+
+        expect(transports).toHaveLength(1);
+        expect(plane.accessForTestingOnly.sessionSpaces).toEqual([]);
+      } finally {
+        closing.resolve();
+      }
     });
   });
 });

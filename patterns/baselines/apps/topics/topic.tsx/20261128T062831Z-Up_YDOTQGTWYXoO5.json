@@ -1,22 +1,6 @@
 {
   "argumentSchema": {
     "$defs": {
-      "SqliteDatabase": {
-        "additionalProperties": true,
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "rev": {
-            "type": "number"
-          },
-          "tables": {
-            "additionalProperties": true,
-            "type": "object"
-          }
-        },
-        "type": "object"
-      },
       "StoredTopicComment": {
         "properties": {
           "author": {
@@ -90,6 +74,57 @@
         "required": [
           "kind",
           "name"
+        ],
+        "type": "object"
+      },
+      "TopicCrossrefIndex": {
+        "properties": {
+          "byName": {
+            "additionalProperties": {
+              "items": {
+                "$ref": "#/$defs/TopicCrossrefRow"
+              },
+              "type": "array"
+            },
+            "description": "The pivot's positions, by the number their rows carry. A position past\nthe pivot's current end holds nothing, so a reader compares an element as\na cell before it reads one.",
+            "properties": {},
+            "type": "object"
+          },
+          "source": {
+            "asCell": [
+              "comparable"
+            ],
+            "description": "The pivot the positions belong to. A cell for the reason\n`TopicCrossrefRow.topic` is: it is written as a reference and only ever\ncompared.",
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "byName"
+        ],
+        "type": "object"
+      },
+      "TopicCrossrefRow": {
+        "properties": {
+          "mentionedBy": {
+            "items": {
+              "asCell": [
+                "comparable"
+              ],
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "topic": {
+            "asCell": [
+              "comparable"
+            ],
+            "description": "The topic this row is about. A cell because it is written as a reference\nand only ever compared — `equals` takes the raw link. Anything wider\nretrieves the piece instead of pointing at it: declared `object`, this\nfield reads back as the whole expanded topic, `$UI` tree included.",
+            "type": "unknown"
+          }
+        },
+        "required": [
+          "topic",
+          "mentionedBy"
         ],
         "type": "object"
       },
@@ -175,12 +210,26 @@
       }
     },
     "properties": {
-      "board": {
-        "$ref": "#/$defs/SqliteDatabase",
+      "boardCrossrefIndex": {
+        "$ref": "#/$defs/TopicCrossrefIndex",
         "asCell": [
-          "sqlite"
+          "readonly"
         ],
-        "description": "The board's collection of topics. A topic asks it which topics mention\nthis one, and reads nothing else of it; see `MENTIONED_BY_SQL`. Absent, a\ntopic simply shows no inbound references."
+        "default": {
+          "byName": {}
+        },
+        "description": "The board's index of that pivot by topic number, which lets a topic find\nits row without reading the others; see `backlinksOf`. Only a shortcut:\nthe lookup uses it when it is an index of the very pivot `boardCrossrefs`\nnames and holds this topic's row, and reads the pivot otherwise, so an\nabsent, stale, or mismatched index costs reads and never changes the\nanswer."
+      },
+      "boardCrossrefs": {
+        "asCell": [
+          "readonly"
+        ],
+        "default": [],
+        "description": "The board's mention pivot, one row per topic. A topic reads its own row\nout of it and nothing else; see `backlinksOf`. Absent, a topic simply shows\nno inbound references.\n\nReadable, not writable: the pivot is the board's derivation, and a topic\nhas no business writing into it. Declaring the narrower cell says so where\na reader can see it, rather than leaving it to convention.",
+        "items": {
+          "$ref": "#/$defs/TopicCrossrefRow"
+        },
+        "type": "array"
       },
       "body": {
         "asCell": [
@@ -819,7 +868,7 @@
         ]
       },
       "commentDraft": {
-        "description": "Session-local composer/edit state. These controls belong to a direct Topic\ninstance, not the shared TopicPiece projection a reference resolves to.",
+        "description": "Session-local composer/edit state. These controls belong to a direct Topic\ninstance, not the shared TopicPiece projection used by the tracker's list.",
         "type": "string"
       },
       "comments": {
@@ -855,7 +904,7 @@
         "description": "Revise a comment's body in place, naming it by reference. Stamps\n`editedAt` and leaves `author` and `sentAt` as they were. Outside the\nprojection for the reason `removeComment` states."
       },
       "editingBody": {
-        "description": "Whether the body editor is open.\n\nA bare session-scoped value rather than a cell-wrapped one, and that\nspelling costs a capability worth knowing about before reaching for it: a\nverb cannot take a whole Topic as captured state while any required\nproperty is published this way. The piece does not materialize through the\nverb's state schema, so the argument arrives undefined and the runtime\ndeclines to run the verb at all — \"stream action argument is undefined\n(potential schema mismatch)\", logged rather than thrown, with the write\nsilently absent.\n\nNothing needs that today. A board names a member by writing the piece into\nits namespace, and every path that does so builds the piece inside the\nverb (`addTopic`, the browser composer) or resolves it out of the board's\ncollection (`backfillNames`); none of them takes a Topic as an argument, so\nnone reads one through a state schema. Cell-wrapping these two would buy\nthe capability at the cost of a `scope changed` break on every deployed\nTopic, so it waits for a verb that needs it.",
+        "description": "Whether the body editor is open.\n\nA bare session-scoped value rather than a cell-wrapped one, and that\nspelling costs a capability worth knowing about before reaching for it: a\nverb cannot take a whole Topic as captured state while any required\nproperty is published this way. The piece does not materialize through the\nverb's state schema, so the argument arrives undefined and the runtime\ndeclines to run the verb at all — \"stream action argument is undefined\n(potential schema mismatch)\", logged rather than thrown, with the write\nsilently absent.\n\nNothing needs that today. A board names a member by writing the piece into\nits namespace, and every path that does so builds the piece inside the\nverb (`addTopic`, the browser composer) or resolves it out of the board's\nown list (`backfillNames`); none of them takes a Topic as an argument, so\nnone reads one through a state schema. Cell-wrapping these two would buy\nthe capability at the cost of a `scope changed` break on every deployed\nTopic, so it waits for a verb that needs it.",
         "scope": "session",
         "type": "boolean"
       },
@@ -863,17 +912,6 @@
         "description": "Whether the rename editor is open. Bare for the reason `editingBody`\nstates, and the constraint is per property: cell-wrapping one and not the\nother buys nothing.",
         "scope": "session",
         "type": "boolean"
-      },
-      "filedBy": {
-        "anyOf": [
-          {
-            "type": "undefined"
-          },
-          {
-            "$ref": "#/$defs/TopicAuthor"
-          }
-        ],
-        "description": "Who filed the topic, as the create stored it. `createdBy` is this with\na topic that stores no author read as the inert default; this is the\nstored value itself, which the board's collection mirrors, and is absent\non such a topic."
       },
       "lastActivityAt": {
         "default": 0,
@@ -915,7 +953,7 @@
       },
       "mentions": {
         "default": [],
-        "description": "Every piece this topic's prose, links and `mentioned` point at, as\nreferences.\n\nThe board's collection mirrors this into its `topics_mentions` table, one\nrow per reference, indexed on the piece referred to, which is what each\ntopic's `MENTIONED_BY_SQL` looks itself up in. Declared `unknown[]`\nbecause these are references, and mirroring them never reads what is\nbehind them.\n\nThe default stands alone: a declared default and `| undefined` collide,\nand the default is what a topic deployed before this path existed\nmaterializes against.",
+        "description": "Every piece this topic's prose and links point at, as references.\n\nThe board's pivot is declared over this and nothing else, so what one topic\ncosts a full-board scan is exactly this list of identities. Declared\n`unknown[]` because these are references, and comparing them never reads\nwhat is behind them.\n\nThe cell annotation that makes them comparable belongs to the READER, not\nhere: the pivot declares its own view of this list as\n`TopicMentionSource.mentions: ComparableCell<unknown>[]`, and that is what\nmakes its graph settle rather than depend on load order. A published\n`unknown[]` is what each reader annotates for itself.\n\nThe default stands alone: a declared default and `| undefined` collide,\nand the default is what a topic deployed before this path existed\nmaterializes against.",
         "items": {
           "type": "unknown"
         },
@@ -930,7 +968,7 @@
       },
       "referencedBy": {
         "default": [],
-        "description": "The topics that mention this one, asked of the board's collection by\n`MENTIONED_BY_SQL`: each once, never this topic itself, in filing order,\nup to two hundred.\n\nDeclared through `TopicSummary` rather than `TopicPiece`, and that is\nload-bearing rather than stingy: a topic whose backlinks were topics would\nbe a type that contains itself, and resolving one from a list would walk\nthe graph. The summary carries no reference of its own, so it terminates.\nA reader that wants more follows the link, which resolves whole.",
+        "description": "The topics that mention this one, read out of the board's pivot.\n\nDeclared through `TopicSummary` rather than `TopicPiece`, and that is\nload-bearing rather than stingy: a topic whose backlinks were topics would\nbe a type that contains itself, and resolving one from a list would walk\nthe graph. The summary carries no reference of its own, so it terminates.\nA reader that wants more follows the link, which resolves whole.",
         "items": {
           "$ref": "#/$defs/TopicSummary"
         },

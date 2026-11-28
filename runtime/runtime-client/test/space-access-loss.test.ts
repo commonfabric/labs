@@ -651,6 +651,68 @@ describe("space access loss notification", () => {
       }
     });
 
+    it("reports a deleted space's mark that fails to send, unless the processor has been disposed", async () => {
+      const identity = await Identity.fromPassphrase(
+        "processor deleted space mark failure",
+      );
+      const storage = StorageManager.emulate({ as: identity });
+      const runtime = new Runtime({
+        apiUrl: new URL("https://fabric.example"),
+        storageManager: storage,
+      });
+      let loss: ((space: MemorySpace, error: Error) => void) | undefined;
+      const subscribe = stub(
+        storage,
+        "subscribeSpaceAccessLoss",
+        (observer) => {
+          loss = observer;
+          return () => {};
+        },
+      );
+      const marks: PromiseWithResolvers<"sent">[] = [];
+      const mark = stub(PiecesController.prototype, "markDeletedSpace", () => {
+        const marking = Promise.withResolvers<"sent">();
+        marks.push(marking);
+        return marking.promise;
+      });
+      const post = stub(ownerClient, "post", () => true);
+      const warn = stub(console, "warn", () => {});
+      const processor = buildProcessor({
+        runtime,
+        identity,
+        space: identity.did(),
+      });
+      try {
+        const reported = "did:key:z6Mk-processor-mark-reported" as MemorySpace;
+        const unreported =
+          "did:key:z6Mk-processor-mark-unreported" as MemorySpace;
+        loss!(reported, deletedRefusal());
+        const failure = new Error("Home unreachable");
+        marks[0].reject(failure);
+        await processor.handleIdle();
+        expect(warn.calls.map(({ args }) => args)).toEqual([[
+          `[RuntimeProcessor] Marking the deleted space ${reported} in Home:`,
+          failure,
+        ]]);
+
+        loss!(unreported, deletedRefusal());
+        const disposing = processor.dispose();
+        marks[1].reject(new Error("runtime disposed"));
+        await disposing;
+        // The processor's handler was attached to the mark before this one,
+        // so it has run once this one has.
+        await marks[1].promise.catch(() => {});
+        expect(warn.calls).toHaveLength(1);
+      } finally {
+        await processor.dispose();
+        warn.restore();
+        mark.restore();
+        subscribe.restore();
+        post.restore();
+        await storage.close();
+      }
+    });
+
     it("answers `idle` only once a deleted space's mark is sent", async () => {
       // Draining the task queue (all microtasks, then one macrotask) runs
       // every continuation a handler that skipped the mark would take to

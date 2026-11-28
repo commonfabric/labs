@@ -37,7 +37,6 @@ import {
   isTopmostMemberAccess,
 } from "./opaque-roots.ts";
 import {
-  findPendingComputeWrapCandidate,
   resolveComputeWrapCandidate,
 } from "./expression-rewrite/emitters/compute-wrap-invariants.ts";
 import {
@@ -499,18 +498,11 @@ function rewriteTrackedOpaquePatternBody(
       return undefined;
     }
 
-    const pendingWrap = findPendingComputeWrapCandidate(
-      initializer,
-      analyze,
-      context,
-    );
-    if (!pendingWrap) {
-      return undefined;
-    }
-
-    if (context.getReactiveContext(pendingWrap).kind !== "compute") {
+    // An initializer with a relevant data flow contains a reactive operand, so
+    // the binary itself is the node that needs the compute wrapper.
+    if (context.getReactiveContext(initializer).kind !== "compute") {
       const decision = resolveComputeWrapCandidate(
-        pendingWrap,
+        initializer,
         initializer,
         "pattern callback initializer",
         context,
@@ -676,8 +668,6 @@ function rewriteTrackedOpaquePatternBody(
             rootIdentifier,
             cloneKeyExpression(binding.directKeyExpression, context.factory),
           );
-        } else if (binding.path.length === 0) {
-          loweredInitializer = rootIdentifier;
         } else {
           loweredInitializer = createPathRead(
             rootIdentifier,

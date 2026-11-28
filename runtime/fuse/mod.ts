@@ -218,6 +218,27 @@ export interface MainHost {
 
   /** Ends the process with `code`. */
   exit(code: number): never;
+
+  /**
+   * Where the daemon announces its supervisor states to the process that
+   * started it.
+   */
+  stdout: { write(bytes: Uint8Array): Promise<number> };
+
+  /**
+   * Calls `beat` every `ms` milliseconds until `clearInterval` is given the id
+   * this returns.
+   */
+  setInterval(beat: () => unknown, ms: number): number;
+
+  /** Stops the calls a `setInterval` started; does nothing for `undefined`. */
+  clearInterval(id: number | undefined): void;
+
+  /** Calls `handler` each time the process receives `signal`. */
+  addSignalListener(signal: Deno.Signal, handler: () => void): void;
+
+  /** Stops the calls an `addSignalListener` started. */
+  removeSignalListener(signal: Deno.Signal, handler: () => void): void;
 }
 
 const PROCESS_HOST: MainHost = {
@@ -225,7 +246,40 @@ const PROCESS_HOST: MainHost = {
   createBridge: (tree, execCli, options) =>
     new CellBridge(tree, execCli, options),
   exit: (code) => Deno.exit(code),
+  stdout: Deno.stdout,
+  setInterval,
+  clearInterval,
+  addSignalListener: Deno.addSignalListener,
+  removeSignalListener: Deno.removeSignalListener,
 };
+
+/**
+ * Writes each line logged through `console.log`, `console.error` and
+ * `console.warn` to `log` until the returned value is disposed, and passes it
+ * on to the console as well when `echo` is set. A line `log` cannot take is
+ * dropped from it.
+ */
+export function teeConsoleToLog(
+  log: { writeSync(data: Uint8Array): number },
+  echo: boolean,
+): Disposable {
+  const restore = new DisposableStack();
+  for (const name of ["log", "error", "warn"] as const) {
+    const original = console[name];
+    restore.defer(() => {
+      console[name] = original;
+    });
+    console[name] = (...args: unknown[]) => {
+      try {
+        log.writeSync(encoder.encode(args.map(String).join(" ") + "\n"));
+      } catch {
+        // Ignore write errors (disk full, etc.)
+      }
+      if (echo) original.call(console, ...args);
+    };
+  }
+  return restore;
+}
 
 /**
  * Logs errors that escape the daemon instead of letting them end it, until
@@ -319,38 +373,7 @@ export async function main(
     const logFile = cleanup.use(
       await Deno.open(logFilePath, { create: true, append: true }),
     );
-    const enc = new TextEncoder();
-    const writeLog = (msg: string) => {
-      try {
-        logFile.writeSync(enc.encode(msg + "\n"));
-      } catch {
-        // Ignore write errors (disk full, etc.)
-      }
-    };
-    const isTTY = Deno.stderr.isTerminal();
-    const origLog = console.log;
-    const origError = console.error;
-    const origWarn = console.warn;
-    cleanup.defer(() => {
-      console.log = origLog;
-      console.error = origError;
-      console.warn = origWarn;
-    });
-    console.log = (...a: unknown[]) => {
-      const msg = a.map(String).join(" ");
-      writeLog(msg);
-      if (isTTY) origLog.call(console, ...a);
-    };
-    console.error = (...a: unknown[]) => {
-      const msg = a.map(String).join(" ");
-      writeLog(msg);
-      if (isTTY) origError.call(console, ...a);
-    };
-    console.warn = (...a: unknown[]) => {
-      const msg = a.map(String).join(" ");
-      writeLog(msg);
-      if (isTTY) origWarn.call(console, ...a);
-    };
+    cleanup.use(teeConsoleToLog(logFile, Deno.stderr.isTerminal()));
   }
 
   const mountpoint = args._[0] as string;
@@ -396,7 +419,7 @@ export async function main(
     const bytes = new TextEncoder().encode(line);
     try {
       for (let written = 0; written < bytes.length;) {
-        written += await Deno.stdout.write(bytes.subarray(written));
+        written += await host.stdout.write(bytes.subarray(written));
       }
     } catch {
       // No reader: the mount continues unobserved.
@@ -655,11 +678,11 @@ export async function main(
     fuse.unmount(handle, mountpointBuf);
   }
 
-  Deno.addSignalListener("SIGINT", unmount);
-  Deno.addSignalListener("SIGTERM", unmount);
+  host.addSignalListener("SIGINT", unmount);
+  host.addSignalListener("SIGTERM", unmount);
   cleanup.defer(() => {
-    Deno.removeSignalListener("SIGINT", unmount);
-    Deno.removeSignalListener("SIGTERM", unmount);
+    host.removeSignalListener("SIGINT", unmount);
+    host.removeSignalListener("SIGTERM", unmount);
   });
 
   // Run FUSE event loop (nonblocking: true → returns Promise)
@@ -681,9 +704,9 @@ export async function main(
     });
   }
   const supervisorHeartbeat = supervisorStatusPath
-    ? setInterval(() => {
+    ? host.setInterval(() => {
       if (unmounting) return;
-      writeSupervisorStatus("mounted").catch(() => undefined);
+      return writeSupervisorStatus("mounted").catch(() => undefined);
     }, 1_000)
     : undefined;
 
@@ -692,7 +715,7 @@ export async function main(
 
   const result = await sessionLoop;
   console.log(`FUSE loop exited (code ${result})`);
-  if (supervisorHeartbeat !== undefined) clearInterval(supervisorHeartbeat);
+  host.clearInterval(supervisorHeartbeat);
   await writeSupervisorStatus("exited", { exitCode: result }).catch(() => {
     // Best effort during shutdown.
   });
@@ -710,9 +733,14 @@ export async function main(
   console.log("Cleaned up.");
 }
 
-if (import.meta.main) {
-  // For the life of the process, including whatever settles after `main()`
-  // returns.
+/**
+ * Runs the daemon as this process: {@link main}, with the errors that escape
+ * it logged for the life of the process, including whatever settles after
+ * `main()` returns.
+ */
+async function runProcess(): Promise<void> {
   logEscapedErrors();
   await main();
 }
+
+if (import.meta.main) await runProcess();

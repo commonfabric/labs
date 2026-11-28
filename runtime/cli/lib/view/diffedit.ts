@@ -2185,6 +2185,8 @@ function statefulEdits(
         text,
         completeFiles.fileText,
         completeFiles.hunks,
+        statefulHunks,
+        model,
       ),
       statefulHunks,
       model,
@@ -2734,22 +2736,29 @@ function hunkNewSide(
   };
 }
 
-/** Map editable diff rows to the exact endings of their workspace rows. */
+/**
+ * Map editable diff rows to the exact endings of their workspace rows, for the
+ * hunks `changedHunks` holds when it is given and for every hunk otherwise.
+ * `model` is `text` parsed.
+ */
 function diffLineEndingProvenance(
   text: string,
   fileText: ReadonlyMap<string, string>,
   hunks: readonly MutableHunk[],
+  changedHunks?: ReadonlySet<number>,
+  model: DiffModel | null = parseDiff(text),
 ): Array<LineEndingProvenance | undefined> {
   const rawLines = text.split("\n");
   const provenance = rawLines.map(() => undefined) as Array<
     LineEndingProvenance | undefined
   >;
-  const model = parseDiff(text);
   let hunkIndex = 0;
   for (const file of model?.files ?? []) {
     for (const hunk of file.hunks) {
-      const info = hunks[hunkIndex++];
-      if (!info?.absPath) continue;
+      const index = hunkIndex++;
+      const info = hunks[index];
+      const include = changedHunks === undefined || changedHunks.has(index);
+      if (!include || !info?.absPath) continue;
       const base = fileText.get(info.absPath);
       if (base === undefined) continue;
       const fileLines = fileContentLines(base);

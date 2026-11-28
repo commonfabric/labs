@@ -193,4 +193,55 @@ describe("classifyCallbackBoundary()", () => {
       });
     });
   });
+
+  describe("a callback passed to `render()`", () => {
+    function renderCallback(source: string): {
+      callback: ts.ArrowFunction;
+      checker: ts.TypeChecker;
+    } {
+      const { sourceFile, checker } = createProgramWithFiles({
+        "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+        "/test.tsx": source,
+      });
+      let callback: ts.ArrowFunction | undefined;
+      const visit = (node: ts.Node): void => {
+        if (!callback && ts.isArrowFunction(node)) callback = node;
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      if (!callback) throw new Error("Expected a callback");
+      return { callback, checker };
+    }
+
+    it("returns a pattern-owned `render-builder` boundary when `render` comes from commonfabric", () => {
+      const { callback, checker } = renderCallback(`
+        import { render } from "commonfabric";
+        const view = render(() => 1);
+      `);
+      expect(classifyCallbackBoundary(callback, checker)).toEqual({
+        kind: "supported",
+        boundaryKind: "render-builder",
+        bodyContext: {
+          strategy: "explicit",
+          kind: "pattern",
+          owner: "render",
+        },
+      });
+    });
+
+    it("returns an unsupported container for a local function named `render`", () => {
+      const { callback, checker } = renderCallback(`
+        function render(build: () => number): number {
+          return build();
+        }
+        const view = render(() => 1);
+      `);
+      expect(classifyCallbackBoundary(callback, checker)).toEqual({
+        kind: "unsupported",
+        boundaryKind: "unsupported-container",
+        boundaryDiagnostic: "function-creation",
+        bodyContext: { strategy: "inherit-parent" },
+      });
+    });
+  });
 });

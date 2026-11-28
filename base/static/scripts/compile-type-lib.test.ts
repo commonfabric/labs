@@ -1,7 +1,8 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { stub } from "@std/testing/mock";
 
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { compileMain, runCompileTypeLib, USAGE } from "./compile-type-lib.ts";
 import { test } from "@commonfabric/test-support/test";
 
@@ -98,4 +99,51 @@ test("runCompileTypeLib prints its usage and fails without both paths", async ()
     [USAGE],
     [USAGE],
   ]);
+});
+
+/** Runs the script as a program, as its shebang does. */
+async function runScript(args: string[]) {
+  const { code, stdout } = await runDenoCommandWithTemporaryLock({
+    root: fromFileUrl(new URL("../../../", import.meta.url)),
+    args: (lock) => [
+      "run",
+      "--cached-only",
+      "--frozen=true",
+      `--lock=${lock}`,
+      "--allow-read",
+      "--allow-write",
+      fromFileUrl(new URL("compile-type-lib.ts", import.meta.url)),
+      ...args,
+    ],
+  });
+  return { code, stdout: new TextDecoder().decode(stdout) };
+}
+
+test("compile-type-lib.ts run as a program prints its usage and exits 1 without both paths", async () => {
+  const { code, stdout } = await runScript([]);
+
+  assertEquals(code, 1);
+  assertEquals(stdout, `${USAGE}\n`);
+});
+
+test("compile-type-lib.ts run as a program writes the compiled library and exits 0", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      join(dir, "es2023.d.ts"),
+      "declare var Keep: number;\r\n",
+    );
+    const outFile = join(dir, "out.d.ts");
+
+    const { code, stdout } = await runScript([dir, outFile]);
+
+    assertEquals(code, 0);
+    assertEquals(stdout, "");
+    assertStringIncludes(
+      await Deno.readTextFile(outFile),
+      "declare var Keep: number;",
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });

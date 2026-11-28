@@ -158,6 +158,47 @@ describe("Runner node plans", () => {
     expect(nested.child.nodes.length).toBe(1);
   });
 
+  it("names a list builtin's pattern `op` by its reference, and leaves an `op` that is no pattern as it is", async () => {
+    const compiled = await runtime.patternManager.compilePattern(PROGRAM, {
+      space,
+    });
+    const resultCell = runtime.getCell(space, "node plan list op");
+    await runtime.runSynced(resultCell, compiled, {
+      seed: 1,
+      items: [{ n: 1 }],
+      count: 0,
+    });
+    const map = compiled.nodes.find((node) =>
+      isObjectOrArray(node.inputs) && "op" in node.inputs
+    );
+    expect(map).toBeDefined();
+    const opOf = (node: Node) => {
+      const tx = runtime.edit();
+      try {
+        const plan = runtime.runner.accessForTestingOnly.nodePlan(
+          tx,
+          node,
+          resultCell as Cell<any>,
+          compiled,
+        );
+        expect(plan.kind).toBe("raw");
+        return (plan.inputs as { op: unknown }).op;
+      } finally {
+        tx.abort("node plans: read-only");
+      }
+    };
+
+    expect(opOf(map!)).toMatchObject({
+      $patternRef: { identity: expect.any(String) },
+    });
+    expect(
+      opOf({
+        ...map!,
+        inputs: { ...(map!.inputs as object), op: "not a pattern" },
+      }),
+    ).toBe("not a pattern");
+  });
+
   describe("of a node planned before", () => {
     // The runner keeps what binding a node produces and resolves what the
     // bound outputs redirect to on every plan. Each case plans the lift of a

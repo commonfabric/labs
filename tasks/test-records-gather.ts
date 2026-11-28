@@ -305,19 +305,21 @@ export function parseGatherArgs(
 }
 
 /**
- * Gathers what a command line names, with `spoolDir` the enclosing run's
- * spool if there is one, and returns the exit status: 2 for a malformed
+ * Gathers what a command line names, reading the enclosing run's spool and
+ * the job's facts from `env`, and returns the exit status: 2 for a malformed
  * command line, and 0 otherwise, since telemetry never fails the job.
  */
 export async function runGatherCommand(
   args: readonly string[],
-  spoolDir: string | undefined,
+  env: Environment = Deno.env.get,
 ): Promise<number> {
   const options = parseGatherArgs(args);
   if (options === undefined) {
     console.error(USAGE);
     return 2;
   }
+  options.env = env;
+  const spoolDir = recordsDir(env);
   if (spoolDir !== undefined) options.spoolDir = spoolDir;
   try {
     await gather(options);
@@ -327,6 +329,4 @@ export async function runGatherCommand(
   return 0;
 }
 
-if (import.meta.main) {
-  Deno.exit(await runGatherCommand(Deno.args, recordsDir()));
-}
+if (import.meta.main) Deno.exit(await runGatherCommand(Deno.args));

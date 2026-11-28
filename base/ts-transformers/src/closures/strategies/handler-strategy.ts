@@ -52,11 +52,7 @@ export function transformHandlerJsxAttribute(
   const { factory } = context;
 
   const eventTypeNode = createHandlerEventSchema(callback, context);
-  const stateTypeNode = createHandlerStateSchema(
-    captureTree,
-    callback.parameters[1] as ts.ParameterDeclaration | undefined,
-    context,
-  );
+  const stateTypeNode = createHandlerStateSchema(captureTree, context);
 
   const finalCall = buildCapturedHandlerClosureCall(
     expression,

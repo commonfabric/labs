@@ -1547,6 +1547,11 @@ The rewriter uses normalized data-flow dependencies and ordered emitters:
 7. prefix unary
 8. container expression
 
+The prefix unary emitter lifts `!`, `-`, `+`, and `~` applied to a reactive
+operand. It leaves `++` and `--` in place: they assign to their operand, and a
+lift reruns its callback whenever an input changes, which would repeat the
+assignment.
+
 The container emitter owns a literal that holds other expressions, and a
 transparent wrapper around one: it rewrites the children and leaves the
 container unwrapped. It reads the transparent wrapper set (parentheses, `as`,
@@ -1808,10 +1813,13 @@ Transforms `action(...)` to handler factory invocation:
   emitted `handler`, which is where the declared result would otherwise be
   lost: the rewritten call carries schemas rather than the authored type
   arguments. SchemaInjection lowers that slot (§10.3).
-- callback extraction supports arrow callbacks only, and reaches the arrow
-  through the transparent wrapper set (parentheses, `as`, `<T>x`, `satisfies`, `!`, and partially emitted nodes). The whole set comes off: a spelling left on hides the callback
-  from this strategy, and `action(...)` then survives into the emitted module,
-  where the runtime throws because `action` exists only to be lowered here
+- callback extraction supports a single arrow callback only, and reaches the
+  arrow through the transparent wrapper set (parentheses, `as`, `<T>x`, `satisfies`, `!`, and partially emitted nodes). The whole set comes off: a spelling left on hides the callback
+  from this strategy. Any other argument list — a named function reference, a
+  function expression, no argument, or extra arguments — is reported as
+  **Error** `action:unsupported-callback`, because `action(...)` would
+  otherwise survive into the emitted module, where the runtime throws since
+  `action` exists only to be lowered here
 
 ### 9.4 Array-method strategy
 
@@ -3571,11 +3579,10 @@ export default pattern((state) => ({
 Inside object-literal properties (only there), a *reference* to an existing
 reactive value is re-caused at its result location: after visiting, a bare
 identifier whose type is a cell in every arm a value can take (`isCellByType`,
-as for the variable-position fallback in §13.2) — or, absent type information,
-is a reactive value expression (`isReactiveValueExpression`) — gets
-`.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
-identifier whose type has a plain-value arm beside a cell arm is re-rooted
-only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+as for the variable-position fallback in §13.2) gets `.for(<path>, true)`
+appended (`shouldRetargetReactiveReference`). An identifier whose type has a
+plain-value arm beside a cell arm is re-rooted only when it is a reactive
+node by provenance (`isReactiveNodeByProvenance`):
 a parameter of a reactive scope — the callback of a pattern builder call or
 of a reactive array method, through any parentheses or other transparent
 wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,
@@ -4972,7 +4979,8 @@ null when it does not apply. Current built-in behavior:
    result types can degrade schema precision (type arguments may be
    intentionally omitted).
 2. Action and JSX inline handler callback extraction currently unwraps arrow
-   functions only.
+   functions only; an `action` given anything else is reported as
+   `action:unsupported-callback`.
 3. Non-static destructuring defaults, rest destructuring, and unsupported
    computed destructuring keys in pattern callbacks remain non-lowerable and
    produce pattern-context diagnostics.

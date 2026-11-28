@@ -135,6 +135,9 @@ export class TestHarness {
       // Attempt to support BDD-style and Deno.test
       // objects with config, though not complete
       const object = name;
+      // A test its options ignore is not registered, so it neither runs nor
+      // takes an index.
+      if (object.ignore === true) return;
       name = object.name;
       fn = object.fn;
     }
@@ -144,11 +147,12 @@ export class TestHarness {
   }
 
   // The driver chooses which test runs next, and in what order; a file's
-  // tests are numbered here in the order they registered.
+  // tests are numbered here in the order they registered. Asking for an index
+  // no test registered at throws.
   async runAt(index) {
     const test = this.tests[index];
     if (!test) {
-      return null;
+      throw new Error(`No test is registered at index ${index}.`);
     }
     return await test.run();
   }

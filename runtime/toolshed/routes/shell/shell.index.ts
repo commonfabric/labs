@@ -41,6 +41,17 @@ export function shellDeploymentPage(
   };
 }
 
+/** The shell bundle a compiled toolshed serves, and what its page carries. */
+export interface CompiledShell {
+  /** The directory holding the bundle. */
+  staticRoot: string;
+  environment: Pick<typeof env, "ENV" | "MEMORY_PUBLIC_URL">;
+  commitSha: string | null | undefined;
+  deps?: ShellStaticDeps;
+  /** The posture `/api/meta` publishes; a seam for tests. */
+  posture?: () => Record<string, boolean> | null;
+}
+
 /**
  * The router a compiled toolshed serves its shell with: the immutable build
  * namespace, and the page built once, carrying what the shell takes from the
@@ -52,12 +63,13 @@ export function shellDeploymentPage(
  * refuses startup.
  */
 export async function compiledShellRouter(
-  staticRoot: string,
-  environment: Pick<typeof env, "ENV" | "MEMORY_PUBLIC_URL">,
-  commitSha: string | null | undefined,
-  deps?: ShellStaticDeps,
-  /** The posture `/api/meta` publishes; a seam for tests. */
-  posture: () => Record<string, boolean> | null = experimentalPosture,
+  {
+    staticRoot,
+    environment,
+    commitSha,
+    deps,
+    posture = experimentalPosture,
+  }: CompiledShell,
 ) {
   return createShellStaticRouter(staticRoot, {
     immutableBuildId: shellBuildId(commitSha, environment.ENV),
@@ -86,21 +98,21 @@ export function compiledShellRoot(environment: Pick<typeof env, "ENV">) {
 }
 
 /**
- * The router serving the shell's pages: the bundle `compiledRouter` builds in
- * a compiled toolshed; otherwise the shell's dev server at `shellUrl`, reached
- * through `fetch`, when one is named; and otherwise a 404 saying how to bring
- * the shell up.
+ * The router serving the shell's pages: in a compiled toolshed, the bundle at
+ * `bundle.staticRoot`, served by {@link compiledShellRouter}; otherwise the
+ * shell's dev server at `shellUrl`, reached through `fetch`, when one is
+ * named; and otherwise a 404 saying how to bring the shell up.
  */
 export async function shellFrontendRouter(
-  { compiled, shellUrl, compiledRouter, fetch = globalThis.fetch }: {
+  { compiled, shellUrl, bundle, fetch = globalThis.fetch }: {
     compiled: boolean;
     shellUrl: string | undefined;
-    compiledRouter: () => ReturnType<typeof compiledShellRouter>;
+    bundle: CompiledShell;
     fetch?: typeof globalThis.fetch;
   },
 ) {
   if (compiled) {
-    return await compiledRouter();
+    return await compiledShellRouter(bundle);
   }
   const router = createRouter();
   if (!shellUrl) {
@@ -176,8 +188,11 @@ router.route(
   await shellFrontendRouter({
     compiled,
     shellUrl: Deno.env.get("SHELL_URL"),
-    compiledRouter: () =>
-      compiledShellRouter(compiledShellRoot(env), env, buildInfo.commitSha),
+    bundle: {
+      staticRoot: compiledShellRoot(env),
+      environment: env,
+      commitSha: buildInfo.commitSha,
+    },
   }),
 );
 

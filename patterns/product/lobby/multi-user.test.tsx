@@ -14,7 +14,7 @@ import {
   type LobbyRosterValue,
   TRUSTED_LOBBY_ACTION,
   TRUSTED_LOBBY_SURFACE,
-} from "./main.tsx";
+} from "./lobby.tsx";
 
 const trustedLobbyGesture = {
   surface: TRUSTED_LOBBY_SURFACE,

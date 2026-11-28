@@ -230,7 +230,11 @@ describe("SpaceServer", () => {
           if (withdraw?.()) {
             // What the runner and link resolution record for such a run.
             tx.dispatchedHandlerNotRun = { reason: "argument did not resolve" };
-            tx.tx.unproducedScopedInstance = `${space}/user/${awaitedId}`;
+            tx.tx.unproducedScopedInstance = {
+              space,
+              id: awaitedId,
+              scope: "user",
+            };
             return;
           }
           const cell = log.withTx(tx);
@@ -458,6 +462,34 @@ describe("SpaceServer", () => {
       expect(fixture.called).toEqual(["W", "W"]);
       expect(fixture.entries()[0].consequenced).toBe(true);
       expect(fixture.storedLog()).toEqual(["W"]);
+    });
+
+    it("cancels its watch of the awaited document when the tenure parks", async () => {
+      let cancelled = 0;
+      const fixture = await serve({
+        prepare: (runtime) => {
+          stub(
+            runtime.scheduler,
+            "comingOwedScopedInstance",
+            () => awaitedKey,
+          );
+          stub(
+            runtime.scheduler,
+            "watchProducedDocument",
+            () => () => cancelled++,
+          );
+        },
+        withdraw: () => true,
+      });
+      await admit("waiting", { name: "W" });
+      await fixture.activate();
+      expect(fixture.stats.events.handlerNotRunWaits).toBe(1);
+      expect(cancelled).toBe(0);
+
+      await settle(fixture.serving.park("test-park"));
+
+      expect(cancelled).toBe(1);
+      expect(fixture.called).toEqual(["W"]);
     });
 
     it("drops the event through the deferral budget when no writer that owes the document will run", async () => {

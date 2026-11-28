@@ -51,6 +51,9 @@ describe("fake-clock", () => {
       "cleared immediate ran false",
       "negative tick refused: tick(ms) requires ms >= 0",
       "reset timer fired false",
+      "settle refused: settle() did not converge: zero-delay work regenerated",
+      "zero-delay chain ran 50 turns",
+      "timer with no caller fired by itself true",
       "timer armed under the stack hook fired true",
     ]);
   });
@@ -74,6 +77,11 @@ describe("fake-clock", () => {
       "cleared immediate ran false",
       "negative tick refused: tick(ms) requires ms >= 0",
       "reset timer fired false",
+      "settle refused: settle() did not converge: zero-delay work regenerated",
+      "zero-delay chain ran 50 turns",
+      // Even a timer the clock cannot place waits for a tick.
+      "timer with no caller waits true",
+      "timer with no caller fired on tick true",
       "timer armed under the stack hook fired true",
     ]);
   });
@@ -86,6 +94,19 @@ describe("fake-clock", () => {
       /most of them armed at .*rearm\.js.*\(2000 of them\)/,
     );
   });
+
+  for (const mode of ["auto-advance", "freeze-all"]) {
+    it(`fails a test that awaits forever behind zero-delay work that re-arms forever, under ${mode}`, async () => {
+      const { code, output } = await run("fake-clock-starved.fixture.ts", {
+        FAKE_CLOCK_MODE: mode,
+      });
+      expect(code).not.toBe(0);
+      expect(output).toContain(
+        "fake clock starved: zero-delay work re-armed itself 100 turns in " +
+          "a row",
+      );
+    });
+  }
 
   it("keeps a file that asks for the real clock off the fake one", async () => {
     const { code, logged } = await run("real-clock.fixture.ts");

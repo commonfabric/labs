@@ -8,6 +8,9 @@
  * deno run --allow-read --allow-write --allow-run tasks/generate-katex-assets.ts
  * ```
  *
+ * It writes into this checkout, or into the checkout whose root is given as
+ * its one argument.
+ *
  * KaTeX's stylesheet is split in two, because a shadow root ignores
  * `@font-face` rules. The rules that lay out math go to a module the editor
  * adopts into its shadow root. The fonts go to the shell, served beside its
@@ -60,15 +63,21 @@ export interface KatexDestination {
   readonly fontsStylesheet: URL;
 }
 
-/** The places in this repository that the editor and the shell read. */
-const REPOSITORY: KatexDestination = {
-  stylesModule: new URL(
-    "runtime/ui/src/v2/components/cf-code-editor/features/katex-styles.ts",
-    ROOT,
-  ),
-  fontsDirectory: new URL("runtime/shell/public/fonts/katex/", ROOT),
-  fontsStylesheet: new URL("runtime/shell/public/styles/katex-fonts.css", ROOT),
-};
+/** The places that the editor and the shell read, in the checkout at `root`. */
+export function repositoryDestination(root: string): KatexDestination {
+  const base = path.toFileUrl(`${path.resolve(root)}/`);
+  return {
+    stylesModule: new URL(
+      "runtime/ui/src/v2/components/cf-code-editor/features/katex-styles.ts",
+      base,
+    ),
+    fontsDirectory: new URL("runtime/shell/public/fonts/katex/", base),
+    fontsStylesheet: new URL(
+      "runtime/shell/public/styles/katex-fonts.css",
+      base,
+    ),
+  };
+}
 
 /** The KaTeX release the editor imports: its version and its stylesheet. */
 export interface KatexRelease {
@@ -214,4 +223,10 @@ export async function generateKatexAssets(
     `${assets.fonts.length} font faces and their fonts.`;
 }
 
-if (import.meta.main) console.log(await generateKatexAssets(REPOSITORY));
+if (import.meta.main) {
+  console.log(
+    await generateKatexAssets(
+      repositoryDestination(Deno.args[0] ?? path.fromFileUrl(ROOT)),
+    ),
+  );
+}

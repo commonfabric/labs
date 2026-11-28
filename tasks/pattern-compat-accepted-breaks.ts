@@ -430,27 +430,30 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/topics-mentionable-index-break.md",
   },
   {
-    // A THIRD entry for this pattern, for the reason the second gives: no
-    // baseline here appears in either entry above.
+    // Another entry for this pattern, since no baseline here appears in any
+    // entry above.
     //
-    // The board's `adoptTopics` verb goes. An existing board moves to the
-    // collection by being recreated on a fresh board rather than by adopting
-    // its list in place, so nothing fills the list the verb read. Only the
-    // baselines recorded while the collection board was in review carry it.
+    // The collection board (#10025) merged and was reverted the same day,
+    // before any board had been migrated to it: the rollout is to start with
+    // a test migration of the real board. The baselines it recorded stay, as
+    // every baseline does, and the list-based board lacks the two outputs
+    // only the collection board published.
     pattern: "apps/topics/main.tsx",
     baselines: [
       "20261121T012444Z-Q-VeHQzYK_RuIsiV",
       "20261124T004805Z-dOfO6DiHwzroh4ML",
       "20261124T022719Z-cuWchNVcu3UjvKbz",
+      "20261127T211045Z-SHh6SYdUFFjNXDlq",
+      "20261127T214607Z-Kt6a6Ck-dT6ognZ2",
     ],
-    paths: ["result.adoptTopics"],
+    paths: ["result.adoptTopics", "result.board"],
     reason:
-      "The board's `adoptTopics` verb, which added the topics of its legacy " +
-      "`topics` list to its collection a batch at a time, is removed with " +
-      "that list: an existing board moves by export and recreate on a fresh " +
-      "board (scripts/topics-recreate.ts), which files every topic through " +
-      "`addTopic`.",
-    record: "docs/history/topics-adopt-topics-removal-break.md",
+      "The board that holds its topics in an indexed collection (#10025) was " +
+      "reverted to the list-based board the day it merged, to be rolled out " +
+      "after a test migration of the team's board. Its `board` handle and " +
+      "the `adoptTopics` verb it carried while in review exist only on the " +
+      "collection board.",
+    record: "docs/history/topics-indexed-collection-rollback.md",
   },
   {
     // One entry per (pattern, BASELINE) pair, and that is a requirement
@@ -486,6 +489,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260819T172917Z-K_8fL8hZtM4xYV7V",
     ],
     paths: [
+      "argument.boardCrossrefs",
       "result.crossrefs",
       "result.addLink.kind",
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.
@@ -865,7 +869,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // Two entries, one per pattern, for one ruling: `LLMMessageSchema` stopped
     // admitting the `system` role, and that schema reaches the argument
     // contract of every pattern whose `messages` it types.
-    pattern: "system/chatbot/chatbot.tsx",
+    pattern: "system/chatbot/main.tsx",
     baselines: [
       "20260729T022742Z-Wx_o-CaAUThcJygl",
       "20260818T183826Z-ibsxlvix5LQH7bfY",

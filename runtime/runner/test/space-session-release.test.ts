@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { stub } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
@@ -362,6 +362,38 @@ describe("space-session-release", () => {
     expect(
       await writer.getCell(space, "counter", counterSchema).pull(),
     ).toEqual({ n: 3 });
+  });
+
+  it("kicks a link-target load again once the target's space is released", async () => {
+    // A load named for another principal's instance lands nothing here, as
+    // server execution is off, so no document is dropped that would forget
+    // the kick; only the space's release does.
+
+    const { space } = await spaceWith(1);
+    const link = writer.getCell(
+      space,
+      "absent",
+      counterSchema,
+      undefined,
+      "user",
+    ).getAsNormalizedFullLink();
+    const identity = { principal: stranger.did() };
+    const syncCell = spy(readerStorage, "syncCell");
+    try {
+      reader.ensureLinkedDocLoaded(link, undefined, identity);
+      await readerStorage.synced();
+      reader.ensureLinkedDocLoaded(link, undefined, identity);
+      expect(syncCell.calls.length).toBe(1);
+      await releaseTwice();
+      expect(isOpen(space)).toBe(false);
+
+      reader.ensureLinkedDocLoaded(link, undefined, identity);
+
+      expect(syncCell.calls.length).toBe(2);
+      expect(isOpen(space)).toBe(true);
+    } finally {
+      syncCell.restore();
+    }
   });
 
   describe("a space in use", () => {

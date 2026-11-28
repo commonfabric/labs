@@ -12,7 +12,6 @@ import { FUNCTION_HARDENING_HELPER_NAME } from "@commonfabric/pattern-contract/s
 import ts from "typescript";
 
 import {
-  classifyArrayMethodCall,
   declaredVerbResultTypeNode,
   detectCallKind,
   detectNewExpressionKind,
@@ -149,13 +148,7 @@ function shouldDropFallbackTypeForSchema(
   if (!node || !type) return false;
   if (containsAnyOrUnknownTypeNode(node)) return false;
 
-  let rebuilt: ts.TypeNode | undefined;
-  try {
-    rebuilt = checker.typeToTypeNode(type, sourceFile, TYPE_NODE_FLAGS);
-  } catch (_e: unknown) {
-    // typeToTypeNode can throw on deeply recursive or circular types.
-    rebuilt = undefined;
-  }
+  const rebuilt = checker.typeToTypeNode(type, sourceFile, TYPE_NODE_FLAGS);
   if (!rebuilt) return false;
   return containsAnyOrUnknownTypeNode(rebuilt);
 }
@@ -324,7 +317,7 @@ function contractReading(
     [
       ...summary.readPaths,
       ...summary.writePaths,
-      ...summary.fullShapePaths ?? [],
+      ...summary.fullShapePaths,
     ],
     reading,
     context,
@@ -556,19 +549,13 @@ function collectFunctionSchemaTypeNodes(
   ) {
     // The node was wrapped/shrunk synthetically; recover a concrete Type when
     // possible so schema generation does not degrade to unknown/true.
-    let recovered: ts.Type | undefined;
-    try {
-      recovered = getTypeFromTypeNodeWithFallback(
-        argumentNode,
-        checker,
-        typeRegistry,
-      );
-    } catch (_e: unknown) {
-      // Synthetic wrapped/shrunk nodes may not be resolvable by the checker.
-      recovered = undefined;
-    }
+    const recovered = getTypeFromTypeNodeWithFallback(
+      argumentNode,
+      checker,
+      typeRegistry,
+    );
 
-    if (recovered && !isAnyOrUnknownType(recovered)) {
+    if (!isAnyOrUnknownType(recovered)) {
       argumentType = recovered;
     } else if (
       originalArgumentType && !isAnyOrUnknownType(originalArgumentType) &&
@@ -1477,20 +1464,14 @@ function normalizeSchemaInjectionTypeNode(
     return typeNode;
   }
 
-  try {
-    const type = getTypeFromTypeNodeWithFallback(
-      typeNode,
-      checker,
-      typeRegistry,
-    );
-    if (isUnresolvedSchemaType(type)) {
-      return createUnknownSchemaTypeNode(factory);
-    }
-  } catch (_e: unknown) {
-    // Some synthetic nodes may not round-trip through the checker cleanly.
-  }
-
-  return typeNode;
+  const type = getTypeFromTypeNodeWithFallback(
+    typeNode,
+    checker,
+    typeRegistry,
+  );
+  return isUnresolvedSchemaType(type)
+    ? createUnknownSchemaTypeNode(factory)
+    : typeNode;
 }
 
 function typeNodeContainsWrapperSemantics(typeNode: ts.TypeNode): boolean {
@@ -1641,19 +1622,15 @@ function calleeExposesAsScope(
   checker: ts.TypeChecker,
 ): boolean {
   const target = unwrapExpression(expression);
-  try {
-    const type = checker.getTypeAtLocation(target);
-    if (checker.getSignaturesOfType(type, ts.SignatureKind.Call).length === 0) {
-      return false;
-    }
-    const asScope = type.getProperty("asScope");
-    if (!asScope) return false;
-    const asScopeType = checker.getTypeOfSymbolAtLocation(asScope, target);
-    return checker.getSignaturesOfType(asScopeType, ts.SignatureKind.Call)
-      .length > 0;
-  } catch {
+  const type = checker.getTypeAtLocation(target);
+  if (checker.getSignaturesOfType(type, ts.SignatureKind.Call).length === 0) {
     return false;
   }
+  const asScope = type.getProperty("asScope");
+  if (!asScope) return false;
+  const asScopeType = checker.getTypeOfSymbolAtLocation(asScope, target);
+  return checker.getSignaturesOfType(asScopeType, ts.SignatureKind.Call)
+    .length > 0;
 }
 
 function maybeApplyFactoryContextualScope(
@@ -1790,35 +1767,28 @@ function applyIdentityArrayItemSchemaHints(
 ): void {
   if (identityPaths.length === 0) return;
 
-  const grouped = new Map<string, boolean>();
+  const grouped = new Set<string>();
   for (const path of identityPaths) {
     const [head, second] = path;
     if (
       path.length === 2 && head && second !== undefined && /^\d+$/.test(second)
     ) {
-      grouped.set(head, true);
+      grouped.add(head);
     }
   }
-  if (grouped.size === 0) return;
+  if (grouped.size === 0 || !ts.isTypeLiteralNode(typeNode)) return;
 
-  const visitObject = (node: ts.TypeNode): void => {
-    if (ts.isTypeLiteralNode(node)) {
-      for (const member of node.members) {
-        if (!ts.isPropertySignature(member) || !member.name || !member.type) {
-          continue;
-        }
-        const name = ts.isIdentifier(member.name) ||
-            ts.isStringLiteral(member.name)
-          ? member.name.text
-          : undefined;
-        if (name && grouped.has(name)) {
-          context.recordSchemaHint(member.type, { items: false });
-        }
-      }
+  // The node is a shrink's output, whose members are all typed property
+  // signatures.
+  for (const member of typeNode.members) {
+    if (
+      ts.isPropertySignature(member) && member.type &&
+      (ts.isIdentifier(member.name) || ts.isStringLiteral(member.name)) &&
+      grouped.has(member.name.text)
+    ) {
+      context.recordSchemaHint(member.type, { items: false });
     }
-  };
-
-  visitObject(typeNode);
+  }
 }
 
 function createRegisteredSchemaCallFromResolvedType(
@@ -2022,8 +1992,6 @@ function resolveDualSchemaBuilderTypes(
         factory,
         context,
       ));
-    } else {
-      argumentTypeValue = options.fallbackArgumentType;
     }
   }
 
@@ -3721,20 +3689,6 @@ function hasNoNameToPrint(type: ts.Type): boolean {
     type.getSymbol()?.escapedName === ts.InternalSymbolName.Class;
 }
 
-function isMapWithPatternCallbackPatternCall(node: ts.CallExpression): boolean {
-  const parent = node.parent;
-  if (!parent || !ts.isCallExpression(parent)) {
-    return false;
-  }
-  if (parent.arguments[0] !== node) {
-    return false;
-  }
-  const arrayMethodInfo = classifyArrayMethodCall(parent);
-  return !!arrayMethodInfo &&
-    arrayMethodInfo.lowered &&
-    arrayMethodInfo.family === "map";
-}
-
 /**
  * Handler for pattern schema injection.
  * Argument order is function-first: [function, inputSchema, resultSchema]
@@ -3765,8 +3719,7 @@ function handlePatternSchemaInjection(
   // A pattern lowered from an array method's callback takes captures and an
   // element as its argument: views of documents that exist already. Its
   // result is a document like any pattern's.
-  const lowersArrayCallback = context.isArrayMethodCallback(builderFunction) ||
-    isMapWithPatternCallbackPatternCall(node);
+  const lowersArrayCallback = context.isArrayMethodCallback(builderFunction);
   const argumentCapabilityMode: CapabilitySummaryApplicationMode =
     lowersArrayCallback ? "full" : "defaults_only";
 
@@ -4167,9 +4120,7 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
       // children (to reach callback bodies). This replaces the per-builder
       // arg-count guards (`args.length >= 5`, etc.) and the implicit
       // "drop the type args so re-detection fails" tricks. Producers call
-      // `context.markSchemaInjected(...)`. The lift `isToSchemaCall` branch
-      // additionally skips synthetic capability-wrapper re-entries inline
-      // (see CT-1621) for nodes whose mark did not survive reconstruction.
+      // `context.markSchemaInjected(...)`.
       if (
         (ts.isCallExpression(node) || ts.isNewExpression(node)) &&
         context.isSchemaInjected(node)
@@ -4643,34 +4594,10 @@ export class SchemaInjectionTransformer extends HelpersOnlyTransformer {
           const argumentType = firstArgument.typeArguments?.[0];
           const liftCallback = resolveFunctionLikeExpression(node.arguments[2]);
           if (argumentType && liftCallback) {
-            // CT-1621: when the toSchema argument is a SYNTHETIC capability
-            // wrapper TypeNode (pos < 0, e.g. `__cfHelpers.ComparableCell<…>`),
-            // it is our OWN already-shrunk output that re-entered this branch —
-            // the input schema is already correct and the callback's capability
-            // summary was already applied upstream. Re-running the recover +
-            // re-shrink here is redundant (it reproduces the same wrapper) and
-            // was the SOLE consumer of narrowedWrapperTypeRegistry: the
-            // synthetic wrapper resolves to `any`, so the re-shrink needed the
-            // pre-shrink type fed back. Skip it — keep the already-injected
-            // input, mark the node, and only descend into the callback body.
-            // Authored `lift(toSchema<T>(), fn)` has a real-source T (pos >= 0)
-            // that the checker resolves, so it falls through to the normal path.
-            //
-            // This is layered with the top-of-visit `nodeLinks.schemaInjected`
-            // guard (see SchemaInjectionTransformer.transform) as defense-in-
-            // depth: that guard catches re-entries on nodes whose mark survived
-            // reconstruction; this one catches the structural re-entry case
-            // (synthetic Cell-family / Stream wrapper as toSchema arg) for
-            // nodes whose mark did not.
-            if (
-              isSyntheticNode(argumentType) && isCellLikeTypeNode(argumentType)
-            ) {
-              context.markSchemaInjected(node);
-              return ts.visitEachChild(node, visit, transformation);
-            }
             // Authored `lift(toSchema<T>(), fn)`: T is a real-source TypeNode
-            // the checker resolves (the synthetic-wrapper re-entry case is
-            // handled by the skip above).
+            // the checker resolves. No other stage writes a schema-first lift,
+            // and the one this branch builds is marked before only its
+            // children are visited.
             const argumentTypeValue = getTypeFromTypeNodeWithFallback(
               argumentType,
               checker,

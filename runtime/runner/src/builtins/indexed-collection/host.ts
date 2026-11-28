@@ -80,7 +80,6 @@ export class IndexedCollectionHost {
 
   /** Stops watching, and disposes the runtime with its storage. */
   async close(): Promise<void> {
-    if (this.#closed) return;
     this.#closed = true;
     this.#unwatch();
     await Promise.all(this.#reads);
@@ -94,7 +93,7 @@ export class IndexedCollectionHost {
    * space the commit landed in lists a collection.
    */
   #admitted(notice: AdmittedCommitNotice): void {
-    if (this.#closed || notice.writes.length === 0) return;
+    if (notice.writes.length === 0) return;
     const ids = notice.writes.map((write) => write.id);
     const known = this.#spaces.get(notice.space);
     const held = Array.isArray(known)

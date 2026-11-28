@@ -28,11 +28,11 @@ import {
  * Names that should be treated as Cell-like wrapper types.
  * "Writable" is an alias for "Cell" that better expresses semantic meaning.
  *
- * NB: this keys off raw type-node NAMES (hence `Writable` is listed and
- * `OpaqueCell` is split into `OPAQUE_WRAPPER_NAMES`). It is intentionally
- * distinct from `common-fabric-formatter.ts`'s `CELL_CAPABILITY_KIND_MAP`,
- * which keys off RESOLVED `CellWrapperKind` values (where `Writable` has already
- * normalized to `Cell` and `OpaqueCell` belongs with the rest).
+ * NB: this keys off raw type NAMES (hence `Writable` is listed and
+ * `OpaqueCell` is not). It is intentionally distinct from
+ * `common-fabric-formatter.ts`'s `CELL_CAPABILITY_KIND_MAP`, which keys off
+ * RESOLVED `CellWrapperKind` values (where `Writable` has already normalized
+ * to `Cell` and `OpaqueCell` belongs with the rest).
  */
 const CELL_LIKE_WRAPPER_NAMES = spellingsWhere({
   Cell: true,
@@ -40,7 +40,7 @@ const CELL_LIKE_WRAPPER_NAMES = spellingsWhere({
   ReadonlyCell: true,
   WriteonlyCell: true,
   ComparableCell: true,
-  OpaqueCell: false, // split into OPAQUE_WRAPPER_NAMES (see NB above)
+  OpaqueCell: false,
   Stream: false, // handled separately at each call site
   SqliteDb: false, // handled separately at each call site
   Reactive: false,
@@ -48,19 +48,6 @@ const CELL_LIKE_WRAPPER_NAMES = spellingsWhere({
   ScopedCellTypeConstructor: false,
 });
 
-const OPAQUE_WRAPPER_NAMES = spellingsWhere({
-  OpaqueCell: true,
-  Cell: false,
-  Writable: false,
-  ReadonlyCell: false,
-  WriteonlyCell: false,
-  ComparableCell: false,
-  Stream: false,
-  SqliteDb: false,
-  Reactive: false,
-  CellTypeConstructor: false,
-  ScopedCellTypeConstructor: false,
-});
 type NodeWrapperKind = "Default" | CellWrapperKind;
 
 function getEntityNameText(name: ts.EntityName): string {
@@ -333,23 +320,23 @@ function rejectNonSerializableCollection(type: ts.Type): void {
 /**
  * Return a public/stable named key for a type if and only if it has a useful
  * symbol name. Filters out anonymous ("__type") and wrapper/container names
- * that we do not want to promote into top-level definitions.
+ * that we do not want to promote into top-level definitions. A `typeNode`
+ * that names a wrapper (`wrapperKindOfReference()`) leaves the type unnamed,
+ * though the type is the wrapper's payload. A reference to a type of the
+ * module's own that shares a wrapper's name names no wrapper there, but the
+ * filters on the type's own name below still leave a type named `Default`,
+ * `Stream`, `SqliteDb` or a cell wrapper's name unnamed, whatever declares it.
  */
 export function getNamedTypeKey(
   type: ts.Type,
+  checker: ts.TypeChecker,
   typeNode?: ts.TypeNode,
 ): string | undefined {
-  // Check if the TypeNode indicates this is a wrapper type (Default/Cell/Stream/Reactive)
-  // Even if the type symbol says it's the inner type, if it's wrapped we shouldn't hoist it
-  if (typeNode && ts.isTypeReferenceNode(typeNode)) {
-    const nodeTypeName = getEntityNameText(typeNode.typeName);
-    if (
-      nodeTypeName === "Default" || CELL_LIKE_WRAPPER_NAMES.has(nodeTypeName) ||
-      nodeTypeName === "Stream" || nodeTypeName === "SqliteDb" ||
-      OPAQUE_WRAPPER_NAMES.has(nodeTypeName)
-    ) {
-      return undefined;
-    }
+  if (
+    typeNode && ts.isTypeReferenceNode(typeNode) &&
+    wrapperKindOfReference(typeNode, checker)
+  ) {
+    return undefined;
   }
 
   // Check if this is a Default/Cell/Stream/Reactive wrapper type via alias

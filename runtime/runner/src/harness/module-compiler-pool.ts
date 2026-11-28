@@ -45,11 +45,6 @@ export class ModuleCompilerPool implements ModuleCompiler {
     this.#held = this.#workers.map(() => 0);
   }
 
-  /** How many compile workers the pool holds. */
-  get size(): number {
-    return this.#workers.length;
-  }
-
   async compile(
     request: ModuleCompileRequest,
   ): Promise<Map<string, CompiledTypeScriptModule>> {

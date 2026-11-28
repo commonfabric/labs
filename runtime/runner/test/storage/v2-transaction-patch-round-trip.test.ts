@@ -681,6 +681,32 @@ describe("v2-transaction", () => {
       expect(await storedValue("in-place")).toStrictEqual({ list: changed });
     });
 
+    it("sends a `replace` at each index of more than 64 elements changed in place", async () => {
+      // A script that changes elements without moving any carries each of
+      // them, as many as the per-index diff replaces, so the change travels
+      // index by index however many elements it changes.
+      const writer = connect();
+      const list = items(100);
+      await commit(writer, "many-in-place", (cell) => cell.set({ list }));
+
+      const edited = Array.from({ length: 80 }, (_, offset) => offset + 10);
+      const changed = list.map((item, index) =>
+        edited.includes(index) ? `${item}-edited` : item
+      );
+      const sent = await commit(
+        writer,
+        "many-in-place",
+        (cell) => cell.key("list").set(changed),
+      );
+
+      expect(sent).toEqual(
+        edited.map((index) => `replace /value/list/${index}`),
+      );
+      expect(await storedValue("many-in-place")).toStrictEqual({
+        list: changed,
+      });
+    });
+
     it("sends a `replace` at each index an element moving a few places to the head shifts", async () => {
       const writer = connect();
       const list = items(10);

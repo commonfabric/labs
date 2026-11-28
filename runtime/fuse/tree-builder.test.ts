@@ -1,5 +1,5 @@
 // tree-builder.test.ts — Unit tests for JSON-to-tree conversion and symlink parsing
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { isPatternToolValue } from "@commonfabric/piece/verb-listing";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
@@ -1200,7 +1200,7 @@ test("callable scripts begin with a cf exec shebang and shell fallback", () => {
   }
 });
 
-test("CellBridge.sendToHandler resolves mounted callable paths under pieces and entities", async () => {
+test("CellBridge.resolveHandlerTarget resolves mounted callable paths under pieces and entities", async () => {
   const tree = new FsTree();
   const bridge = new CellBridge(tree);
   const calls: Array<{
@@ -1295,8 +1295,11 @@ test("CellBridge.sendToHandler resolves mounted callable paths under pieces and 
     srcErrorLogInos: new Map(),
   });
 
-  await bridge.sendToHandler(piecesHandlerIno, { count: 1 });
-  await bridge.sendToHandler(entitiesHandlerIno, { count: 2 });
+  const piecesTarget = bridge.resolveHandlerTarget(piecesHandlerIno);
+  const entitiesTarget = bridge.resolveHandlerTarget(entitiesHandlerIno);
+  assert(piecesTarget !== null && entitiesTarget !== null);
+  await bridge.sendToHandlerTarget(piecesTarget, { count: 1 });
+  await bridge.sendToHandlerTarget(entitiesTarget, { count: 2 });
 
   assertEquals(calls, [
     {
@@ -1741,6 +1744,29 @@ test("parseSymlinkTarget - unresolvable target returns null", () => {
   );
 
   assertEquals(result, null);
+});
+
+test("parseSymlinkTarget - ignores empty and `.` segments", () => {
+  const { bridge, resultIno } = buildTestTree();
+
+  assertEquals(
+    bridge.parseSymlinkTarget(resultIno, "./../..//../entities/./abc/"),
+    { id: "abc" },
+  );
+});
+
+test("parseSymlinkTarget - a parent no longer in the tree returns null", () => {
+  const { tree, bridge, resultIno } = buildTestTree();
+  const target = "../../../entities/abc";
+  const pieceIno = tree.parents.get(resultIno)!;
+  const removedIno = tree.addDir(pieceIno, "removed");
+  assertEquals(bridge.parseSymlinkTarget(removedIno, target), {
+    id: "abc",
+  });
+
+  tree.removeChild(pieceIno, "removed");
+
+  assertEquals(bridge.parseSymlinkTarget(removedIno, target), null);
 });
 
 test("parseSymlinkTarget - unknown cross-space uses name as fallback", () => {

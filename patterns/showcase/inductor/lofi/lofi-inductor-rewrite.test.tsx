@@ -19,7 +19,7 @@ import {
   rewriteMock,
   TRAINING_ITEMS,
 } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor from "./lofi-inductor.tsx";
+import LofiInductor from "./main.tsx";
 
 const BETTER = "Is this email a bill?";
 const WORSE = "Is this email a bill? (worse)";
