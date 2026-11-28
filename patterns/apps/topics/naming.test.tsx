@@ -21,13 +21,12 @@
  * compiling while a change to the board's other demands is in flight.
  *
  * A named topic's header and its published name are read off a topic this file
- * composes and lists, which the numbering step then names: `recordNames`, the
- * call the board's `backfillNames` makes over the board's collection. A board
- * cannot be handed such a topic, because its collection takes a topic only
- * from the board's own ways of filing one, each of which creates the topic
- * inside the verb. A verb that captured the body-held topic could not name it
- * either: a verb receives a captured topic through its own state schema,
- * which does not materialize one (`TopicOutput`'s `editingBody` says why).
+ * composes and lists in a board's input, which the board's `backfillNames`
+ * then names. A verb that captured the
+ * body-held topic could not name it: a verb receives a captured topic through
+ * its own state schema, which does not materialize one (`TopicOutput`'s
+ * `editingBody` says why). `backfillNames` reaches the topic through the
+ * board's list instead.
  *
  * The mixed-vintage case — a topic deployed before `shortName` existed, read
  * beside one that has it — is NOT here, and deliberately. A fixture of that
@@ -52,7 +51,6 @@ import {
   assert,
   Default,
   equals,
-  indexedCollections,
   NAME,
   pattern,
   TESTS,
@@ -62,7 +60,6 @@ import {
 import {
   nameOf,
   type NamesMap,
-  namesTable,
   recordNames,
   type RecordNamesResult,
 } from "../../product/collection-naming/naming.ts";
@@ -72,8 +69,15 @@ import {
   hasText,
   innermostNode,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Topics, { submitProfileTopic, type TopicDemand } from "./main.tsx";
-import Topic, { TOPIC_STATE_VERSION, type TopicMirrored } from "./topic.tsx";
+import Topics, {
+  submitProfileTopic,
+  type TopicCrossrefRow,
+  type TopicDemand,
+} from "./main.tsx";
+import Topic, {
+  TOPIC_STATE_VERSION,
+  type TopicCrossrefIndex,
+} from "./topic.tsx";
 
 /**
  * The number badge under `node`, if one is rendered. A topic's number rides in
@@ -232,46 +236,41 @@ export default pattern(() => {
   );
 
   // A numbered topic publishes the number it stores, in its own header as well
-  // as through a board. The topic is listed here and numbered by the step,
-  // which asks it to store what the namespace holds for it; the publication
-  // is how this file reads that it did. The namespace and the table naming
-  // the topic are what that publication is checked against.
+  // as through the board. The topic is listed in the board's input and
+  // numbered by the board's step, which asks it to store what the namespace
+  // holds for it; the publication is how this file reads that it did. The
+  // namespace and the table naming the topic are what that publication is
+  // checked against.
   const heldNames = new Writable<NamesMap>({});
-  const heldTable = namesTable({ names: heldNames });
-  const heldTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const heldNumber = new Writable<string | undefined>(undefined);
   const held = Topic({ title: "Held topic", shortName: heldNumber });
-  const action_list_the_held_topic = action(() => {
-    heldTopics.push(held);
-  });
+  const heldBoard = Topics({ topics: [held], names: heldNames });
   const action_name_the_held_topic = action(() => {
-    recordNames(heldTopics, heldNames);
+    heldBoard.backfillNames.send({ agentName: "Sol" });
   });
   const assert_named_topic_publishes_its_number = assert(() =>
-    Object.keys((heldNames.get() ?? {}) as NamesMap).join(",") === "1" &&
-    heldTable?.[0]?.name === "1" &&
-    nameOf(heldTopics.key(0), heldTable ?? []) === "1" &&
+    Object.keys((heldBoard.names ?? {}) as NamesMap).join(",") === "1" &&
+    heldBoard.namesTable?.[0]?.name === "1" &&
+    equals(
+      heldBoard.namesTable?.[0]?.member as object,
+      heldBoard.topics?.[0] as object,
+    ) &&
     held.shortName === "1" &&
     hasExactText(numberBadge(held[UI]), "1") &&
     hasText(held[UI], "Held topic")
   );
 
-  // The numbering step, over topics filed before their board numbered
-  // anything. The topics are listed here, which is how a board from before
-  // the namespace held its members and, here, how each one's number cell
-  // stays readable: nothing wires a board table onto them, because a topic
-  // has no input for one. The step is the library call the board's
-  // `backfillNames` makes, so its report is observable: the VERB's own result
-  // is not, because `send()` hands a pattern test nothing. The board here
-  // shares the namespace, so that its creates allocate after the names the
-  // step wrote; it holds none of the listed topics.
+  // The numbering step, on a board that held topics before it numbered
+  // anything. The topics are listed in the board's input, which is how a board
+  // from before the namespace holds its members and, here, how each one's
+  // number cell stays readable: nothing wires a board table onto them, because
+  // a topic has no input for one.
   const olderOne = new Writable<string | undefined>(undefined);
   const olderTwo = new Writable<string | undefined>(undefined);
   const olderThree = new Writable<string | undefined>(undefined);
   const olderTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const olderNames = new Writable<NamesMap>({});
-  const olderTable = namesTable({ names: olderNames });
-  const older = Topics({ names: olderNames });
+  const older = Topics({ topics: olderTopics, names: olderNames });
 
   const action_file_two_unnamed = action(() => {
     olderTopics.push(
@@ -281,30 +280,46 @@ export default pattern(() => {
       Topic({ title: "Older two", createdAt: 2, shortName: olderTwo }),
     );
   });
-  // Before the step runs, neither topic stores a number and the table names
-  // neither.
-  const assert_unnamed_topics_carry_no_name = assert(() =>
-    (olderTopics.get() ?? [])[0]?.shortName === undefined &&
-    (olderTopics.get() ?? [])[1]?.shortName === undefined &&
-    (olderTable ?? []).length === 0
+  // An unnamed member's row reads the default, so the board reads whole before
+  // anything names it, and its universe row is one no `#42` query matches.
+  // Here the table names nothing either, which is the state a backfill ends.
+  const assert_unnamed_rows_carry_no_name = assert(() =>
+    older.topicCount === 2 &&
+    (older.index ?? []).length === 2 &&
+    older.index?.[0]?.shortName === undefined &&
+    older.index?.[1]?.shortName === undefined &&
+    (older.namesTable ?? []).length === 0 &&
+    older.mentionable?.[0]?.shortName === "" &&
+    numberBadge(older[UI]) === undefined
   );
+  // The library call the verb makes, so its report is observable here: the
+  // VERB's own result is not, because `send()` hands a pattern test nothing.
   const runs = new Writable<RecordNamesResult[]>([]);
   const action_backfill = action(() => {
     runs.push(recordNames(olderTopics, olderNames));
   });
-  // The step names both topics in the table, in filing order.
+  // The backfill names both topics in the table, and both the survey rows and
+  // the universe rows carry what each topic now publishes.
   const assert_backfilled_in_filing_order = assert(() =>
-    Object.keys((olderNames.get() ?? {}) as NamesMap).join(",") === "1,2" &&
-    nameOf(olderTopics.key(0), olderTable ?? []) === "1" &&
-    nameOf(olderTopics.key(1), olderTable ?? []) === "2"
+    Object.keys((older.names ?? {}) as NamesMap).join(",") === "1,2" &&
+    nameOf(olderTopics.key(0), older.namesTable ?? []) === "1" &&
+    nameOf(olderTopics.key(1), older.namesTable ?? []) === "2" &&
+    older.index?.[0]?.shortName === "1" &&
+    older.index?.[1]?.shortName === "2" &&
+    older.mentionable?.[0]?.shortName === "1" &&
+    older.mentionable?.[1]?.shortName === "2" &&
+    equals(
+      ((older.names ?? {}) as NamesMap)["1"] as object,
+      older.topics?.[0] as object,
+    )
   );
-  // And each asked topic stored what it was asked for, read through
-  // `TopicDemand`, the board's demand over its topics — which is the
-  // projection `recordNames` itself reads a member's name from, and so the
-  // read that decides which list the run below reports each topic under.
+  // And each asked topic stored what it was asked for, read through the
+  // board's demand over its topics — which is the projection `recordNames`
+  // itself reads a member's name from, and so the read that decides which list
+  // the run below reports each topic under.
   const assert_asked_topics_stored_their_numbers = assert(() =>
-    (olderTopics.get() ?? [])[0]?.shortName === "1" &&
-    (olderTopics.get() ?? [])[1]?.shortName === "2"
+    older.topics?.[0]?.shortName === "1" &&
+    older.topics?.[1]?.shortName === "2"
   );
   // What the first run reports, and what it cannot. `assigned` settles the
   // namespace exactly. Neither topic stored a number when the run read it, so
@@ -331,101 +346,55 @@ export default pattern(() => {
     );
   });
   const action_backfill_again = action(() => {
-    recordNames(olderTopics, olderNames);
+    older.backfillNames.send({ agentName: "Sol" });
   });
   const assert_backfill_skips_the_named = assert(() =>
-    older.topicCount === 1 &&
-    Object.keys((olderNames.get() ?? {}) as NamesMap).join(",") === "1,2,3,4" &&
-    older.index?.[0]?.title === "Newer one" &&
-    older.index?.[0]?.shortName === "3" &&
-    (olderTopics.get() ?? [])[2]?.shortName === "4" &&
-    // A create adds to the board and not to the list, so the list's third
-    // entry is the topic filed after the create.
-    nameOf(olderNames.key("3"), olderTable ?? []) === "3" &&
-    nameOf(olderTopics.key(2), olderTable ?? []) === "4"
+    older.topicCount === 4 &&
+    Object.keys((older.names ?? {}) as NamesMap).join(",") === "1,2,3,4" &&
+    older.index?.[2]?.title === "Newer one" &&
+    older.index?.[2]?.shortName === "3" &&
+    older.index?.[3]?.title === "Older three" &&
+    older.index?.[3]?.shortName === "4" &&
+    nameOf(olderTopics.key(2), older.namesTable ?? []) === "3" &&
+    nameOf(olderTopics.key(3), older.namesTable ?? []) === "4"
   );
-  // A later run over a list every topic of which publishes its number: it
-  // allocates nothing, asks nothing, and reports all three under `named` with
-  // `pending` empty. The topic the board created holds `3` and is not on the
-  // list, so the run does not report it. An empty `pending` is the report
-  // that says the list is finished, and it is the one the step can only make
-  // by reading what a topic publishes.
+  // A later run over a board every topic of which publishes its number: it
+  // allocates nothing, asks nothing, and reports all four under `named` with
+  // `pending` empty. An empty `pending` is the report that says the board is
+  // finished, and it is the one the step can only make by reading what a topic
+  // publishes.
   const action_backfill_a_third_time = action(() => {
     runs.push(recordNames(olderTopics, olderNames));
   });
   const assert_later_run_reports_them_named = assert(() =>
     runs.get().length === 2 &&
     runs.get()[1]?.assigned?.length === 0 &&
-    runs.get()[1]?.named?.join(",") === "1,2,4" &&
+    runs.get()[1]?.named?.join(",") === "1,2,3,4" &&
     runs.get()[1]?.pending?.length === 0
   );
   // And it stored nothing new: every topic publishes the number it held before
-  // the run, the listed ones in the filing order the list holds them in.
+  // the run, in the filing order the list holds them in.
   const assert_later_run_stores_nothing_new = assert(() =>
-    (olderTopics.get() ?? [])[0]?.shortName === "1" &&
-    (olderTopics.get() ?? [])[1]?.shortName === "2" &&
-    (olderTopics.get() ?? [])[2]?.shortName === "4" &&
-    older.topics?.[0]?.shortName === "3"
+    older.topics?.[0]?.shortName === "1" &&
+    older.topics?.[1]?.shortName === "2" &&
+    older.topics?.[2]?.shortName === "3" &&
+    older.topics?.[3]?.shortName === "4"
   );
   const assert_third_backfill_leaves_the_map = assert(() =>
-    Object.keys((olderNames.get() ?? {}) as NamesMap).join(",") === "1,2,3,4" &&
-    (olderTable ?? []).length === 4 &&
+    Object.keys((older.names ?? {}) as NamesMap).join(",") === "1,2,3,4" &&
+    (older.namesTable ?? []).length === 4 &&
     equals(
-      ((olderNames.get() ?? {}) as NamesMap)["3"] as object,
-      older.topics?.[0] as object,
+      ((older.names ?? {}) as NamesMap)["3"] as object,
+      older.topics?.[2] as object,
     )
-  );
-
-  // The board's own step, over its collection. Every way of filing a topic
-  // numbers it, so what the step finds to do is a namespace that lacks a topic
-  // the collection holds; here the namespace is emptied under two filed
-  // topics. The step names them again in filing order, each by the number it
-  // already stores, so it asks neither for anything: a topic asked for a
-  // number other than its own refuses it, and that refusal would be a runtime
-  // error this file does not expect.
-  const repairNames = new Writable<NamesMap>({});
-  const repair = Topics({ names: repairNames });
-  const action_file_two_on_the_repair_board = action(() => {
-    repair.addTopic.send({ title: "Repair one", agentName: "Sol" });
-    repair.addTopic.send({ title: "Repair two", agentName: "Sol" });
-  });
-  const action_empty_the_repair_namespace = action(() => {
-    repairNames.set({});
-  });
-  // The read of the board's topics is also what the step waits for: it
-  // refuses to run before the query listing them has returned, which
-  // without a reader can still be pending when the step runs.
-  const assert_repair_namespace_is_empty = assert(() =>
-    repair.topicCount === 2 &&
-    (repair.topics ?? []).length === 2 &&
-    Object.keys(repairNames.get() ?? {}).length === 0 &&
-    (repair.namesTable ?? []).length === 0
-  );
-  const action_repair_the_namespace = action(() => {
-    repair.backfillNames.send({ agentName: "Sol" });
-  });
-  const assert_repair_names_the_collection_in_filing_order = assert(() =>
-    Object.keys(repairNames.get() ?? {}).join(",") === "1,2" &&
-    equals(
-      (repairNames.get() ?? {})["1"] as object,
-      repair.topics?.[0] as object,
-    ) &&
-    equals(
-      (repairNames.get() ?? {})["2"] as object,
-      repair.topics?.[1] as object,
-    ) &&
-    repair.namesTable?.[1]?.name === "2" &&
-    repair.index?.[0]?.title === "Repair one" &&
-    repair.index?.[0]?.shortName === "1" &&
-    repair.index?.[1]?.shortName === "2"
   );
 
   //
   // What a topic stores
   //
-  // Everything above reads a topic's number through a board or a names table.
-  // These reach a topic that has none: the store is its own, and it publishes
-  // what it holds whether or not anything is listing it.
+  // Everything above reads a topic's number through a board. These reach a
+  // topic that has none: the store is its own, and it publishes what it holds
+  // whether or not anything is listing it.
   //
 
   // A topic composed with a number and NO board at all: no names table, no
@@ -464,16 +433,17 @@ export default pattern(() => {
   // file's five expected runtime errors, and dropping the pass-through at the
   // create makes the call succeed and the count fall to four.
   const madeNames = new Writable<NamesMap>({});
-  const made = Topics({ names: madeNames });
+  const madeTopics = new Writable<TopicDemand[] | Default<[]>>([]);
+  const made = Topics({ topics: madeTopics, names: madeNames });
   const action_make_one = action(() => {
     made.addTopic.send({ title: "Made topic", agentName: "Sol" });
   });
   const action_record_a_second_number = action(() => {
-    madeNames.key("1").resolveAsCell().key("recordName").send({ name: "9" });
+    madeTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
   });
   const assert_create_allocated_into_the_namespace = assert(() =>
     Object.keys((madeNames.get() ?? {}) as NamesMap).join(",") === "1" &&
-    nameOf(madeNames.key("1"), made.namesTable ?? []) === "1" &&
+    nameOf(madeTopics.key(0), made.namesTable ?? []) === "1" &&
     made.index?.[0]?.shortName === "1"
   );
 
@@ -485,20 +455,18 @@ export default pattern(() => {
   // is that topic's input; its refusal of a second number stands beside that
   // read the way the headless create's does.
   const composerNames = new Writable<NamesMap>({});
-  const composerMentionable = new Writable<TopicDemand[] | Default<[]>>([]);
-  const composerBoard = indexedCollections<{ topics: TopicMirrored }>({
-    topics: {
-      columns: { shortName: "text" },
-      relations: ["mentioned", "mentions"],
-    },
-  });
-  const composerFiled = composerBoard.query<{ shortName: string }>(
-    "SELECT shortName FROM topics",
-  );
+  const composerTopics = new Writable<TopicDemand[] | Default<[]>>([]);
+  const composerCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>([]);
+  const composerCrossrefIndex = new Writable<
+    // deno-lint-ignore ban-types
+    Default<TopicCrossrefIndex, { byName: {} }>
+  >({ byName: {} });
   const composerDraft = new Writable("Composed topic");
   const composerSubmit = submitProfileTopic({
-    board: composerBoard,
-    mentionable: composerMentionable,
+    topics: composerTopics,
+    mentionable: composerTopics,
+    boardCrossrefs: composerCrossrefs,
+    boardCrossrefIndex: composerCrossrefIndex,
     names: composerNames,
     newTitle: composerDraft,
     profileName: "Ada",
@@ -508,13 +476,15 @@ export default pattern(() => {
   });
   const assert_composer_allocated_into_the_namespace = assert(() =>
     Object.keys(composerNames.get() ?? {}).join(",") === "1" &&
-    (composerFiled.result ?? []).length === 1 &&
-    composerFiled.result?.[0]?.shortName === "1"
+    (composerTopics.get() ?? []).length === 1 &&
+    (composerTopics.get() ?? [])[0]?.shortName === "1" &&
+    equals(
+      (composerNames.get() ?? {})["1"] as object,
+      composerTopics.key(0),
+    )
   );
   const action_offer_the_composed_topic_another = action(() => {
-    composerNames.key("1").resolveAsCell().key("recordName").send({
-      name: "9",
-    });
+    composerTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
   });
 
   // A write that could not land on one run and lands on the next, which is the
@@ -527,7 +497,7 @@ export default pattern(() => {
   const blockedVersion = new Writable<number | Default<0>>(99);
   const blockedTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const blockedNames = new Writable<NamesMap>({});
-  const blockedTable = namesTable({ names: blockedNames });
+  const blocked = Topics({ topics: blockedTopics, names: blockedNames });
   const blockedRuns = new Writable<RecordNamesResult[]>([]);
   const action_file_a_blocked_topic = action(() => {
     blockedTopics.push(
@@ -545,8 +515,8 @@ export default pattern(() => {
   const assert_blocked_write_did_not_land = assert(() =>
     blockedRuns.get().length === 1 &&
     blockedRuns.get()[0]?.assigned?.join(",") === "1" &&
-    blockedTable?.[0]?.name === "1" &&
-    (blockedTopics.get() ?? [])[0]?.shortName === undefined
+    blocked.namesTable?.[0]?.name === "1" &&
+    blocked.index?.[0]?.shortName === undefined
   );
   const action_unblock = action(() => {
     blockedVersion.set(TOPIC_STATE_VERSION);
@@ -554,7 +524,7 @@ export default pattern(() => {
   const assert_rerun_completes_the_write = assert(() =>
     blockedRuns.get().length === 2 &&
     blockedRuns.get()[1]?.assigned?.length === 0 &&
-    (blockedTopics.get() ?? [])[0]?.shortName === "1"
+    blocked.index?.[0]?.shortName === "1"
   );
 
   // A topic the namespace holds only under a key the grammar does not admit —
@@ -565,7 +535,10 @@ export default pattern(() => {
   const foreignNumber = new Writable<string | undefined>(undefined);
   const foreignNames = new Writable<NamesMap>({});
   const foreignTopics = new Writable<TopicDemand[] | Default<[]>>([]);
-  const foreignTable = namesTable({ names: foreignNames });
+  const foreignBoard = Topics({
+    topics: foreignTopics,
+    names: foreignNames,
+  });
   const action_hold_under_a_foreign_key = action(() => {
     const topic = Topic({
       title: "Foreign-keyed",
@@ -577,7 +550,7 @@ export default pattern(() => {
   });
   const assert_foreign_key_is_no_name = assert(() =>
     Object.keys(foreignNames.get() ?? {}).join(",") === "007" &&
-    (foreignTable ?? []).length === 0
+    (foreignBoard.namesTable ?? []).length === 0
   );
   const action_record_foreign = action(() => {
     recordNames(foreignTopics, foreignNames);
@@ -585,9 +558,9 @@ export default pattern(() => {
   const assert_foreign_keyed_topic_is_numbered = assert(() =>
     Object.keys((foreignNames.get() ?? {}) as NamesMap).toSorted().join(",") ===
       "007,1" &&
-    (foreignTable ?? []).length === 1 &&
-    foreignTable?.[0]?.name === "1" &&
-    (foreignTopics.get() ?? [])[0]?.shortName === "1"
+    (foreignBoard.namesTable ?? []).length === 1 &&
+    foreignBoard.namesTable?.[0]?.name === "1" &&
+    foreignBoard.index?.[0]?.shortName === "1"
   );
 
   // A topic filed before this change existed at all: composed with no
@@ -605,18 +578,25 @@ export default pattern(() => {
   // makes the call succeed and the count fall.
   const preInputNames = new Writable<NamesMap>({});
   const preInputTopics = new Writable<TopicDemand[] | Default<[]>>([]);
-  const preInputTable = namesTable({ names: preInputNames });
+  const preInput = Topics({
+    topics: preInputTopics,
+    names: preInputNames,
+  });
   const action_file_a_pre_input_topic = action(() => {
     preInputTopics.push(Topic({ title: "Pre-input", createdAt: 1 }));
   });
   const action_number_the_pre_input_topic = action(() => {
-    recordNames(preInputTopics, preInputNames);
+    preInput.backfillNames.send({ agentName: "Sol" });
   });
   const assert_pre_input_topic_is_numbered = assert(() =>
     Object.keys(preInputNames.get() ?? {}).join(",") === "1" &&
-    (preInputTable ?? []).length === 1 &&
-    nameOf(preInputTopics.key(0), preInputTable ?? []) === "1" &&
-    (preInputTopics.get() ?? [])[0]?.shortName === "1"
+    (preInput.namesTable ?? []).length === 1 &&
+    preInput.namesTable?.[0]?.name === "1" &&
+    preInput.index?.[0]?.shortName === "1" &&
+    equals(
+      preInput.namesTable?.[0]?.member as object,
+      preInput.topics?.[0] as object,
+    )
   );
   const action_offer_the_pre_input_topic_another = action(() => {
     preInputTopics.key(0).resolveAsCell().key("recordName").send({ name: "9" });
@@ -642,9 +622,9 @@ export default pattern(() => {
     TOPIC_STATE_VERSION,
   );
   //
-  // No board here: this case drives `recordNames` over the list and the
-  // namespace directly, as the cases above do. The board's own step is the
-  // `repair` board above.
+  // No board here, deliberately: this case drives `recordNames` over the list
+  // and the namespace directly, and a board would neither be read nor reach
+  // the walk. The board-shaped path is the `older` board above.
   const settledNames = new Writable<NamesMap>({});
   const settledTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const action_file_a_settled_topic = action(() => {
@@ -689,7 +669,10 @@ export default pattern(() => {
   const mislabeledNumber = new Writable<string | undefined>("9");
   const mislabeledTopics = new Writable<TopicDemand[] | Default<[]>>([]);
   const mislabeledNames = new Writable<NamesMap>({});
-  const mislabeledTable = namesTable({ names: mislabeledNames });
+  const mislabeled = Topics({
+    topics: mislabeledTopics,
+    names: mislabeledNames,
+  });
   const action_file_a_mislabeled_topic = action(() => {
     mislabeledTopics.push(
       Topic({ title: "Mislabeled", createdAt: 1, shortName: mislabeledNumber }),
@@ -700,8 +683,8 @@ export default pattern(() => {
   });
   const assert_mislabeled_keeps_its_own = assert(() =>
     Object.keys(mislabeledNames.get() ?? {}).join(",") === "1" &&
-    mislabeledTable?.[0]?.name === "1" &&
-    (mislabeledTopics.get() ?? [])[0]?.shortName === "9"
+    mislabeled.namesTable?.[0]?.name === "1" &&
+    mislabeled.index?.[0]?.shortName === "9"
   );
 
   return {
@@ -727,11 +710,10 @@ export default pattern(() => {
       { assertion: assert_reads_expand_no_topic },
       { assertion: assert_solo_topic_has_no_name },
       { assertion: assert_solo_topic_renders_no_badge },
-      { action: action_list_the_held_topic },
       { action: action_name_the_held_topic },
       { assertion: assert_named_topic_publishes_its_number },
       { action: action_file_two_unnamed },
-      { assertion: assert_unnamed_topics_carry_no_name },
+      { assertion: assert_unnamed_rows_carry_no_name },
       { action: action_backfill },
       { assertion: assert_backfilled_in_filing_order },
       { assertion: assert_asked_topics_stored_their_numbers },
@@ -744,11 +726,6 @@ export default pattern(() => {
       { assertion: assert_third_backfill_leaves_the_map },
       { assertion: assert_later_run_reports_them_named },
       { assertion: assert_later_run_stores_nothing_new },
-      { action: action_file_two_on_the_repair_board },
-      { action: action_empty_the_repair_namespace },
-      { assertion: assert_repair_namespace_is_empty },
-      { action: action_repair_the_namespace },
-      { assertion: assert_repair_names_the_collection_in_filing_order },
       { assertion: assert_lone_topic_publishes_its_number },
       { action: action_record_on_a_lone_topic },
       { assertion: assert_record_wrote_the_store },

@@ -12,11 +12,9 @@
 import {
   action,
   assert,
-  type Cell,
   Default,
   equals,
   FabricBytes,
-  indexedCollections,
   NAME,
   pattern,
   Stream,
@@ -29,9 +27,18 @@ import {
   mentionableRowsOf,
 } from "../../product/collection-naming/mentionable.ts";
 import { type NamesMap } from "../../product/collection-naming/naming.ts";
+import { bucketRowsByName } from "./crossref-index.ts";
 import Topics, {
   activityOrderOf,
+  byActivity,
+  CARD_PAGE,
+  cardsShown,
+  distinctByIdentity,
+  mentionedBy,
+  mentionedByEach,
+  mentionListsOf,
   submitProfileTopic,
+  type TopicCrossrefRow,
   type TopicPiece,
 } from "./main.tsx";
 import Topic, {
@@ -51,10 +58,10 @@ import Topic, {
   topicAuthorFromPerson,
   topicAuthorLabel,
   type TopicComment,
+  type TopicCrossrefIndex,
   type TopicLink,
   type TopicLinkKind,
   type TopicMentionRefMap,
-  type TopicMirrored,
   type TopicSummary,
   type UnmentionEvent,
   whenLabel,
@@ -207,6 +214,22 @@ const ADA_PICTURE = [0x89, 0x50, 0x4e, 0x47];
 const isAdaPicture = (picture: FabricBytes | undefined) =>
   picture?.slice().join() === ADA_PICTURE.join();
 
+/**
+ * Returns whether `mentionedByEach()` returns, at each entry's place, the
+ * sources `mentionedBy()` returns for that entry, in the same order.
+ */
+function eachAgreesWithOne<T extends object>(
+  list: readonly T[],
+  mentions: readonly (readonly (object | undefined)[] | undefined)[],
+): boolean {
+  const each = mentionedByEach(list, mentions);
+  return each.length === list.length && list.every((topic, at) => {
+    const one = mentionedBy(topic, list, mentions);
+    return each[at].length === one.length &&
+      one.every((source, index) => equals(source, each[at][index]));
+  });
+}
+
 export default pattern(() => {
   const adaPicture = new FabricBytes(new Uint8Array(ADA_PICTURE));
 
@@ -234,27 +257,17 @@ export default pattern(() => {
   // controls. Pattern tests do not provide a #profile wish result, so bind the
   // resolved snapshot values directly here rather than inventing a production
   // fallback identity.
-  // Standalone: no board built this, so the composer is handed a collection
-  // of its own to add the topic to, and a mention universe holding nothing.
-  const profileBoard = indexedCollections<{ topics: TopicMirrored }>({
-    topics: {
-      columns: {
-        title: "text",
-        authorKind: { type: "text", path: ["filedBy", "kind"] },
-        authorName: { type: "text", path: ["filedBy", "name"] },
-      },
-      relations: ["mentioned", "mentions"],
-    },
-  });
-  const profileFiled = profileBoard.query<{
-    topic: Cell<{ createdBy?: TopicAuthor }>;
-    title: string;
-    authorKind: string;
-    authorName: string;
-  }>(
-    "SELECT member_cf_link AS topic, title, authorKind, authorName FROM topics",
+  const profileTopics = new Writable<TopicPiece[] | Default<[]>>([]);
+  // Standalone: no board built this, so there is no pivot to read and the topic
+  // it creates simply shows no inbound references. Required rather than
+  // optional so a real composer cannot forget it and silently lose them.
+  const profileBoardCrossrefs = new Writable<TopicCrossrefRow[] | Default<[]>>(
+    [],
   );
-  const profileMentionable = new Writable<TopicPiece[] | Default<[]>>([]);
+  const profileBoardCrossrefIndex = new Writable<
+    // deno-lint-ignore ban-types
+    Default<TopicCrossrefIndex, { byName: {} }>
+  >({ byName: {} });
   // The namespace the composer is handed, standalone for the same reason: the
   // composer allocates out of it and passes what it allocated into the topic
   // it files, so a browser create is numbered exactly as a headless one is.
@@ -309,8 +322,10 @@ export default pattern(() => {
   });
 
   const profileSubmitTopic = submitProfileTopic({
-    board: profileBoard,
-    mentionable: profileMentionable,
+    topics: profileTopics,
+    mentionable: profileTopics,
+    boardCrossrefs: profileBoardCrossrefs,
+    boardCrossrefIndex: profileBoardCrossrefIndex,
     names: profileNames,
     newTitle: profileTitleDraft,
     profileName: " Ada ",
@@ -560,18 +575,18 @@ export default pattern(() => {
   );
 
   const assert_profile_topic_submitted = assert(() => {
-    const list = profileFiled.result ?? [];
+    const list = profileTopics.get() ?? [];
     return list.length === 1 &&
       list[0]?.title === "Profile topic" &&
-      list[0]?.authorKind === "person" &&
-      list[0]?.authorName === "Ada" &&
+      list[0]?.createdBy?.kind === "person" &&
+      list[0]?.createdBy?.name === "Ada" &&
       // Only a comment's author carries the picture, being the one shown.
-      list[0]?.topic.get()?.createdBy?.picture === undefined &&
+      list[0]?.createdBy?.picture === undefined &&
       profileTitleDraft.get() === "";
   });
 
   // The browser composer allocates out of the same namespace the headless
-  // create does, in the same transaction as its add: drop the allocation
+  // create does, in the same transaction as its append: drop the allocation
   // and the map stays empty while the topic still lands.
   //
   // That the composer also passes the number INTO the topic is covered in
@@ -581,7 +596,7 @@ export default pattern(() => {
     Object.keys(profileNames.get()).join(",") === "1" &&
     equals(
       profileNames.get()["1"] as object,
-      profileFiled.result?.[0]?.topic as object,
+      profileTopics.key(0),
     )
   );
 
@@ -656,6 +671,71 @@ export default pattern(() => {
       profileLinkKindDraft.get() === "web";
   });
 
+  // The pivot's join, handed the SAME topic at two indices. That is the only
+  // shape that separates the rule the pivot actually holds — exclude by
+  // identity — from the one that passes every test where each topic appears
+  // once, exclude by array position. With a position check the twin at index 1
+  // is not excluded, its self-mention matches, and the topic is reported as
+  // referenced from its own second entry.
+  const twinA = Topic({ title: "Twin" });
+  const twinB = Topic({ title: "Other" });
+  const assert_self_mention_inert_through_a_twin = assert(() => {
+    // `twinB`'s mention of `twinA` is a real inbound edge, so the exclusion is
+    // not simply swallowing everything.
+    const inbound = mentionedBy(
+      twinA,
+      [twinA, twinA, twinB],
+      [[twinA], [twinA], [twinA]],
+    );
+    return inbound.length === 1 && equals(inbound[0], twinB);
+  });
+
+  // `mentionedBy()` lists a source once for each entry of the list it is
+  // handed whose mentions name the topic and which is not the topic itself,
+  // so `twinA` at two entries is listed twice. The board's backlinks count a
+  // duplicated source once because the pivot joins over the list
+  // `distinctByIdentity()` returns.
+  const assert_mentioned_by_counts_each_matching_entry = assert(() => {
+    const inbound = mentionedBy(
+      twinB,
+      [twinA, twinA, twinB],
+      [[twinB], [twinB], []],
+    );
+    return inbound.length === 2 && equals(inbound[0], twinA) &&
+      equals(inbound[1], twinA);
+  });
+
+  const assert_repeated_mentions_contribute_one_edge_per_source_entry = assert(
+    () => {
+      const inbound = mentionedBy(
+        twinB,
+        [twinA, twinB, twinA],
+        [[undefined, twinB, twinB], [twinB], undefined],
+      );
+      return inbound.length === 1 && equals(inbound[0], twinA);
+    },
+  );
+
+  const assert_mentioned_by_each_agrees_with_mentioned_by = assert(() => {
+    // The pivot runs `mentionedByEach()`, and `mentionedBy()` states its rules
+    // pair by pair. The three lists are the ones above that separate those
+    // rules from their look-alikes: a topic at two entries that mentions
+    // itself, a source at two entries, and a source that mentions one topic
+    // twice beside an entry whose mentions have not arrived.
+    return eachAgreesWithOne(
+      [twinA, twinA, twinB],
+      [[twinA], [twinA], [twinA]],
+    ) &&
+      eachAgreesWithOne([twinA, twinA, twinB], [[twinB], [twinB], []]) &&
+      eachAgreesWithOne(
+        [twinA, twinB, twinA],
+        [[undefined, twinB, twinB], [twinB], undefined],
+      ) &&
+      // And it finds what there is to find, so the agreement is not two empty
+      // results: `twinB` is the one source of `twinA` here.
+      mentionedByEach([twinA, twinB], [[], [twinA]])[0].length === 1;
+  });
+
   // A topic that has never run publishes no `lastActivityAt`, and the row
   // coalesces that absence to 0. Ordering on the 0 would file the newest topic
   // on the board below every topic that has ever run, so the order falls back
@@ -672,6 +752,39 @@ export default pattern(() => {
     activityOrderOf({ lastActivityAt: 2500, createdAt: 1700 }) === 2500
   );
 
+  // The cards run most recently active first whatever order the topics were
+  // filed in, and topics equally recently active keep their filing order.
+  const assert_cards_run_most_recently_active_first = assert(() => {
+    const row = (name: string, createdAt: number, lastActivityAt: number) => ({
+      name,
+      value: {
+        title: name,
+        body: "",
+        createdAt,
+        commentCount: 0,
+        lastActivityAt,
+      },
+    });
+    const ordered = byActivity([
+      row("filed first, active last", 100, 900),
+      row("filed second, never active", 200, 0),
+      row("filed third, active early", 300, 400),
+      row("filed fourth, as active as the third", 350, 400),
+    ]);
+    return ordered.map(({ name }) => name).join("|") ===
+      "filed first, active last|filed third, active early|" +
+        "filed fourth, as active as the third|filed second, never active";
+  });
+
+  // A session shows one page of cards until it asks for more, each press adds
+  // a page, and it never shows more cards than the board has.
+  const assert_cards_shown_page_by_page = assert(() =>
+    cardsShown(120, undefined) === CARD_PAGE &&
+    cardsShown(120, CARD_PAGE + CARD_PAGE) === 2 * CARD_PAGE &&
+    cardsShown(120, 3 * CARD_PAGE) === 120 &&
+    cardsShown(CARD_PAGE - 1, CARD_PAGE) === CARD_PAGE - 1
+  );
+
   // The ordering this exists for, stated as the comparison the sort makes: a
   // cold topic filed AFTER a warm one still sorts above it. Fixed inputs that
   // disagree with the defect — under the old `?? 0` the cold row scored 0 and
@@ -680,6 +793,81 @@ export default pattern(() => {
     const coldAndNew = { lastActivityAt: 0, createdAt: 9000 };
     const warmAndOld = { lastActivityAt: 8000, createdAt: 1000 };
     return activityOrderOf(coldAndNew) > activityOrderOf(warmAndOld);
+  });
+
+  // The pivot's row list, handed a board naming `identityTarget` twice: once
+  // directly and once as the slot of a list holding a link to it. The slot is
+  // a different link that resolves to the same document, so only a comparison
+  // that resolves both sides, as `mentionedBy`'s does, counts it as the same
+  // topic. A mid-sync entry is left out, and `identityOther`, listed again
+  // last, keeps the place of its first entry.
+  const identityTarget = new Writable({ title: "Identity target" });
+  const identityOther = new Writable({ title: "Identity other" });
+  const identityHolder = new Writable<{ title: string }[] | Default<[]>>([]);
+  const action_alias_identity_target = action(() => {
+    identityHolder.push(identityTarget);
+  });
+  const assert_distinct_by_identity_keeps_each_first_occurrence = assert(() => {
+    // Taken here rather than captured: a captured cell whose value is a link
+    // arrives already pointing at that link's target, so it would hand over
+    // the target's own link.
+    const identityAlias = identityHolder.key(0);
+    const distinct = distinctByIdentity([
+      identityOther,
+      undefined,
+      identityTarget,
+      identityAlias,
+      identityOther,
+    ]);
+    return !Writable.equalLinks(identityAlias, identityTarget) &&
+      equals(identityAlias, identityTarget) &&
+      distinct.length === 2 &&
+      Writable.equalLinks(distinct[0], identityOther) &&
+      Writable.equalLinks(distinct[1], identityTarget);
+  });
+
+  const assert_mentioned_by_each_follows_an_alias = assert(() => {
+    // The lists above hold the same two handles throughout, which a join by
+    // object identity would also get right. An alias is a different handle on
+    // the same topic: here it stands as a board entry and as a mention, and
+    // the join has to treat it as `identityTarget` in both places.
+    const identityAlias = identityHolder.key(0);
+    const list = [identityTarget, identityOther, identityAlias];
+    const mentions = [
+      [identityOther],
+      [identityAlias],
+      [identityTarget, identityOther],
+    ];
+    const each = mentionedByEach(list, mentions);
+    return !Writable.equalLinks(identityAlias, identityTarget) &&
+      eachAgreesWithOne(list, mentions) &&
+      // `identityOther` mentions the alias, so it is the one source of the
+      // target at both of the target's entries: the target's mention of itself
+      // through the alias counts at neither.
+      each[0].length === 1 && equals(each[0][0], identityOther) &&
+      each[2].length === 1 && equals(each[2][0], identityOther) &&
+      // And the target is a source of `identityOther` once for each of its
+      // entries, the alias among them.
+      each[1].length === 2 && equals(each[1][0], identityTarget) &&
+      equals(each[1][1], identityTarget);
+  });
+
+  // A source mid-sync reads back as undefined, and taking `.mentions` of that
+  // throws — which killed the pivot and, with it, the append that produced the
+  // half-written source. The first two entries are what a settled board looks
+  // like; the third is the one that used to throw. Reading its list as
+  // undefined is exactly what `mentionedBy` above declares and guards.
+  const assert_mention_lists_tolerate_a_mid_sync_source = assert(() => {
+    const settled = (m: unknown[]) => ({ get: () => ({ mentions: m }) });
+    const midSync = { get: () => undefined };
+    const lists = mentionListsOf([settled([twinA]), settled([]), midSync]);
+    return lists.length === 3 &&
+      (lists[0] as unknown[]).length === 1 &&
+      (lists[1] as unknown[]).length === 0 &&
+      lists[2] === undefined &&
+      // And the consumer stays usable on that output rather than merely not
+      // throwing: the mid-sync row contributes no inbound edge.
+      mentionedBy(twinB, [twinA, twinB], [[twinB], undefined]).length === 1;
   });
 
   const assert_pure_helpers = assert(() =>
@@ -742,14 +930,6 @@ export default pattern(() => {
     // comment count on the board's index row"); this assertion covers the
     // index tracking the board's membership.
     board.index?.[2]?.createdBy?.name === "Sol"
-  );
-
-  // The graph's rows are grouped by the number each topic carries.
-  const assert_graph_rows_are_filed_by_number = assert(() =>
-    (board.crossrefs ?? []).length === 3 &&
-    board.crossrefs?.[0]?.name === "1" &&
-    board.crossrefIndex?.byName?.["1"]?.length === 1 &&
-    board.crossrefIndex?.byName?.["3"]?.length === 1
   );
 
   // Pin the persisted navigation contract directly. A cold renderer must see
@@ -877,8 +1057,15 @@ export default pattern(() => {
 
   // --- mention retraction through the UI affordance ---
 
-  // The rules of the board's backlinks are covered by the keyed board below.
-  // What stays here is the part that never needed a board: `dropMention` is
+  // The rules of the board's mention pivot — one row per topic, a self-mention
+  // earning no inbound edge, two mentions each landing their own, and an
+  // unmention dropping only what it retracted — are in
+  // `patterns/integration/topic-board-child-contract.test.ts`, and
+  // the identity-not-position rule is in
+  // `assert_self_mention_inert_through_a_twin` above, which hands
+  // `mentionedBy()` a list holding one topic twice.
+  //
+  // What stays here is the part that never needed the pivot: `dropMention` is
   // a UI affordance over a caller's own list, and it needs two piece
   // identities and nothing else.
   // Plain cells rather than Topic pieces. `dropMention` removes by IDENTITY —
@@ -1075,115 +1262,80 @@ export default pattern(() => {
   );
 
   // A piece with no board wired in shows no inbound references rather than
-  // failing: `board` is optional, as `mentionable` is.
+  // failing: `boardCrossrefs` is optional, as `mentionable` is.
   const assert_boardless_topic_has_no_backlinks = assert(() =>
     (directTopic.referencedBy ?? []).length === 0
   );
 
-  // --- Backlinks: a topic asks the board's collection who mentions it ---
+  // --- The keyed backlink lookup: a topic finds its row by number ---
 
-  // Three topics filed through the board, which adds each to its collection
-  // and hands each its handle. The namespace holds each topic itself under its
-  // number, so that is where the test reaches a topic's verbs and outputs,
-  // read as the topic it holds; the board's `topics` is where it finds each
-  // one to compare against.
-  const keyedNames = new Writable<Record<string, TopicPiece>>({});
-  const keyedBoard = Topics({ names: keyedNames });
-  const action_keyed_board_files_three = action(() => {
+  // The index's grouping, pure: positions filed under each well-formed number
+  // in position order, a shared number giving one bucket of both positions,
+  // and anything that is not a member name filing nothing, including names an
+  // `Object.prototype` member carries.
+  const assert_bucket_rows_by_name_pure = assert(() => {
+    const bucketed = bucketRowsByName(
+      ["2", "1", undefined, " 3", "", "constructor", "__proto__", "1", 4, "03"],
+      (position) => position,
+    );
+    return JSON.stringify(bucketed) ===
+        JSON.stringify({ "2": [0], "1": [1, 7] }) &&
+      !Object.hasOwn(bucketed, "constructor") &&
+      !Object.hasOwn(bucketed, "__proto__");
+  });
+
+  // A board of its own, so the numbers its creates allocate are known: the
+  // first topic is `1` and the second `2`. Its list is a cell the test holds,
+  // which is how the test reaches each topic's own verbs and outputs.
+  const keyedTopics = new Writable<TopicPiece[] | Default<[]>>([]);
+  const keyedBoard = Topics({ topics: keyedTopics });
+  const action_keyed_board_files_two = action(() => {
     keyedBoard.addTopic.send({ title: "Keyed one", agentName: "Sol" });
     keyedBoard.addTopic.send({ title: "Keyed two", agentName: "Sol" });
-    keyedBoard.addTopic.send({ title: "Keyed three", agentName: "Sol" });
   });
-  const action_keyed_mentions = action(() => {
-    // The first topic is mentioned by the second and the third, and by
-    // itself, which earns it no backlink.
-    const one = keyedNames.key("1").resolveAsCell();
-    keyedNames.key("2").resolveAsCell().key("mention").send({ topic: one });
-    keyedNames.key("3").resolveAsCell().key("mention").send({ topic: one });
-    one.key("mention").send({ topic: one });
-  });
-  const assert_keyed_topic_lists_its_mentioners = assert(() => {
-    const first = (keyedNames.key("1").key("referencedBy").get() ??
-      []) as object[];
-    return first.length === 2 &&
-      first.some((topic) => equals(topic, keyedBoard.topics?.[1] as object)) &&
-      first.some((topic) => equals(topic, keyedBoard.topics?.[2] as object)) &&
-      (keyedNames.key("2").key("referencedBy").get() ?? []).length === 0 &&
-      (keyedNames.key("3").key("referencedBy").get() ?? []).length === 0;
-  });
-  // The whole graph as rows, which the board derives for a reader that asks:
-  // one row per topic, each mentioning topic listed once and never itself,
-  // and the rows grouped under the number each topic carries.
-  const assert_keyed_graph_has_a_row_per_topic = assert(() => {
-    const rows = keyedBoard.crossrefs ?? [];
-    const byName = keyedBoard.crossrefIndex?.byName ?? {};
-    const first = rows.find((row) =>
-      equals(row.topic as object, keyedBoard.topics?.[0] as object)
-    );
-    const second = rows.find((row) =>
-      equals(row.topic as object, keyedBoard.topics?.[1] as object)
-    );
-    return rows.length === 3 &&
-      (first?.mentionedBy ?? []).length === 2 &&
-      (second?.mentionedBy ?? []).length === 0 &&
-      Object.keys(byName).join(",") === "1,2,3" &&
-      (byName["1"]?.[0]?.mentionedBy ?? []).length === 2;
-  });
-  const action_keyed_third_unmentions = action(() => {
-    keyedNames.key("3").resolveAsCell().key("unmention").send({
-      topic: keyedNames.key("1").resolveAsCell(),
+  const action_keyed_second_mentions_first = action(() => {
+    keyedTopics.key(1).resolveAsCell().key("mention").send({
+      topic: keyedTopics.key(0),
     });
   });
-  const assert_keyed_unmention_drops_one_backlink = assert(() => {
-    const first = (keyedNames.key("1").key("referencedBy").get() ??
-      []) as object[];
-    return first.length === 1 &&
-      equals(first[0], keyedBoard.topics?.[1] as object);
+  // The board files each row under its topic's number, and the first topic
+  // finds the second among its backlinks through that bucket.
+  const assert_keyed_index_files_each_row = assert(() =>
+    keyedBoard.crossrefIndex?.byName?.["1"]?.length === 1 &&
+    keyedBoard.crossrefIndex?.byName?.["2"]?.length === 1 &&
+    keyedBoard.crossrefs?.[0]?.name === "1" &&
+    keyedBoard.crossrefs?.[1]?.name === "2"
+  );
+  const assert_keyed_lookup_finds_its_mentioner = assert(() => {
+    const first = (keyedTopics.key(0).resolveAsCell().key("referencedBy")
+      .get() ?? []) as object[];
+    const second = (keyedTopics.key(1).resolveAsCell().key("referencedBy")
+      .get() ?? []) as object[];
+    return first.length === 1 && equals(first[0], keyedTopics.key(1)) &&
+      second.length === 0;
   });
-  // Wired to this board's collection but never added to it: nothing the
-  // collection holds mentions it.
+  // An index alone says nothing about membership. A topic carrying the first
+  // topic's number and bound to this board's index, with no pivot of its own,
+  // finds the first topic's row under `1`, which is not its own, and shows no
+  // backlinks.
+  const indexOnlyTopic = Topic({
+    title: "Index without a pivot",
+    shortName: "1",
+    boardCrossrefIndex: keyedBoard.crossrefIndex,
+  });
+  // Bound to this board's pivot and its index, and carrying the first topic's
+  // number, but not on the board: the bucket under `1` holds another topic's
+  // row, and the scan finds none of its own.
   const strangerTopic = Topic({
     title: "Wired but not on the board",
-    board: keyedBoard.board,
+    shortName: "1",
+    boardCrossrefs: keyedBoard.crossrefs,
+    boardCrossrefIndex: keyedBoard.crossrefIndex,
   });
-  const assert_unlisted_topic_has_no_backlinks = assert(() =>
+  const assert_unlisted_topics_have_no_backlinks = assert(() =>
+    (indexOnlyTopic.referencedBy ?? []).length === 0 &&
     (strangerTopic.referencedBy ?? []).length === 0
   );
-
-  // --- Backlinks in filing order ---
-
-  // Two topics mention a third, and the one filed first carries the later
-  // creation time, written into its input the way a recreate writes an
-  // exported topic's. Filing order lists it first all the same, as the
-  // board's reference graph does.
-  const orderNames = new Writable<Record<string, TopicPiece>>({});
-  const orderBoard = Topics({ names: orderNames });
-  const action_order_board_files_three = action(() => {
-    orderBoard.addTopic.send({ title: "Order target", agentName: "Sol" });
-    orderBoard.addTopic.send({ title: "Filed first", agentName: "Sol" });
-    orderBoard.addTopic.send({ title: "Filed second", agentName: "Sol" });
-  });
-  const action_order_creation_times = action(() => {
-    const createdAt = (name: string) =>
-      orderNames.key(name).resolveAsCell()
-        .getArgumentCell<{ createdAt: number }>()?.key("createdAt");
-    createdAt("2")?.set(200);
-    createdAt("3")?.set(100);
-  });
-  const action_order_mentions = action(() => {
-    const target = orderNames.key("1").resolveAsCell();
-    orderNames.key("3").resolveAsCell().key("mention").send({ topic: target });
-    orderNames.key("2").resolveAsCell().key("mention").send({ topic: target });
-  });
-  const assert_backlinks_follow_filing_order = assert(() => {
-    const backlinks = (orderNames.key("1").key("referencedBy").get() ??
-      []) as object[];
-    return orderBoard.topics?.[1]?.createdAt === 200 &&
-      orderBoard.topics?.[2]?.createdAt === 100 &&
-      backlinks.length === 2 &&
-      equals(backlinks[0], orderBoard.topics?.[1] as object) &&
-      equals(backlinks[1], orderBoard.topics?.[2] as object);
-  });
 
   // --- setTitle: the rename verb, direct interface only ---
 
@@ -1351,7 +1503,6 @@ export default pattern(() => {
       { assertion: assert_third_topic },
       { render: board[UI] },
       { assertion: assert_index_tracks_the_board },
-      { assertion: assert_graph_rows_are_filed_by_number },
       { assertion: assert_mention_index_tracks_the_board },
       { action: action_submit_blank_comment_draft },
       { assertion: assert_blank_draft_rejected },
@@ -1369,7 +1520,20 @@ export default pattern(() => {
       { assertion: assert_row_universe_accepted },
       { assertion: assert_cold_row_orders_by_created_at },
       { assertion: assert_warm_row_orders_by_last_activity },
+      { assertion: assert_cards_run_most_recently_active_first },
+      { assertion: assert_cards_shown_page_by_page },
       { assertion: assert_cold_new_topic_outranks_an_older_warm_one },
+      { assertion: assert_self_mention_inert_through_a_twin },
+      { assertion: assert_mentioned_by_counts_each_matching_entry },
+      {
+        assertion:
+          assert_repeated_mentions_contribute_one_edge_per_source_entry,
+      },
+      { assertion: assert_mentioned_by_each_agrees_with_mentioned_by },
+      { action: action_alias_identity_target },
+      { assertion: assert_distinct_by_identity_keeps_each_first_occurrence },
+      { assertion: assert_mentioned_by_each_follows_an_alias },
+      { assertion: assert_mention_lists_tolerate_a_mid_sync_source },
       { action: action_mention_subject_gets_a_link },
       { assertion: assert_plain_link_is_no_mention },
       { action: action_mention_one },
@@ -1384,18 +1548,14 @@ export default pattern(() => {
       { action: action_drop_one_from_ui },
       { assertion: assert_ui_dropped_only_that_one },
       { assertion: assert_boardless_topic_has_no_backlinks },
-      { action: action_keyed_board_files_three },
-      { action: action_keyed_mentions },
-      { assertion: assert_keyed_topic_lists_its_mentioners },
-      { assertion: assert_keyed_graph_has_a_row_per_topic },
-      { action: action_keyed_third_unmentions },
-      { assertion: assert_keyed_unmention_drops_one_backlink },
+      { assertion: assert_bucket_rows_by_name_pure },
+      { action: action_keyed_board_files_two },
+      { action: action_keyed_second_mentions_first },
+      { assertion: assert_keyed_index_files_each_row },
+      { assertion: assert_keyed_lookup_finds_its_mentioner },
+      { render: indexOnlyTopic[UI] },
       { render: strangerTopic[UI] },
-      { assertion: assert_unlisted_topic_has_no_backlinks },
-      { action: action_order_board_files_three },
-      { action: action_order_creation_times },
-      { action: action_order_mentions },
-      { assertion: assert_backlinks_follow_filing_order },
+      { assertion: assert_unlisted_topics_have_no_backlinks },
       { action: action_rename_direct_topic },
       { assertion: assert_renamed_with_attribution },
       { render: directTopic[UI] },
