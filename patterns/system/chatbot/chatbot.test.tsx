@@ -17,7 +17,7 @@ import {
   fireEvent,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Chatbot from "./chatbot.tsx";
+import Chatbot from "./main.tsx";
 
 // The model fails both requests the sent message makes: the dialog's reply,
 // and the title for the untitled chat.

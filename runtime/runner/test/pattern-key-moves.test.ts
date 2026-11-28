@@ -179,7 +179,7 @@ describe("pattern-key-moves", () => {
       expect(
         mainNamesPattern(
           "/patterns/apps/foo/chatbot.tsx",
-          "system/chatbot/chatbot.tsx",
+          "system/chatbot/main.tsx",
         ),
       ).toBe(false);
       expect(

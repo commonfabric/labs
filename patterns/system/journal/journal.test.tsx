@@ -30,7 +30,7 @@ import {
   isButton,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Journal, { type JournalEntry } from "./journal.tsx";
+import Journal, { type JournalEntry } from "./main.tsx";
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
