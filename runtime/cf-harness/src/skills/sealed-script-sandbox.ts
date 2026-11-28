@@ -13,9 +13,6 @@
 
 import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
 
-/** The working directory of a sealed run: the fresh tmpfs of its container. */
-export const SEALED_SKILL_SCRIPT_CWD = "/tmp";
-
 /**
  * The runsc configuration of one sealed call, derived from the configuration
  * the run's engine built its own runtime from:
@@ -24,13 +21,14 @@ export const SEALED_SKILL_SCRIPT_CWD = "/tmp";
  *   other interface, and leaves pasta and its forwarded ports out;
  * - no fabric mount, and every other mount, the workspace included, bound
  *   read-only;
- * - a scratch directory of the call's own beside the run's, so the runtime
- *   built from it, and closed after the one call, shares no state with the
- *   run's.
+ * - a scratch directory of the call's own beside the run's, in the parent
+ *   the run's runtime verifies is private, so the runtime built from it, and
+ *   closed after the one call, shares no state with the run's.
  *
  * Each call outside a session already gets a fresh container with a fresh
- * `/tmp`, so a sealed call names no session and runs in
- * {@link SEALED_SKILL_SCRIPT_CWD}.
+ * `/tmp`, so a sealed call names no session. It runs in the workspace, which
+ * it can read and not write, and `/tmp` is its scratch: runsc keeps a call's
+ * working directory inside the mounts, and the tmpfs is not one of them.
  */
 export const sealedSkillScriptRunscConfig = (
   config: RunscSandboxConfig,
@@ -41,7 +39,6 @@ export const sealedSkillScriptRunscConfig = (
     unshare: _unshare,
     setpriv: _setpriv,
     forwardedHostPorts: _forwardedHostPorts,
-    scratchParentToVerify: _scratchParentToVerify,
     ...rest
   } = config;
   return {

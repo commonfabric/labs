@@ -27,7 +27,6 @@ import type { SandboxRuntime } from "../sandbox/types.ts";
 import { skillsShValueDigest } from "../skills-sh/acquisition.ts";
 import { acquiredSkillMountBacks } from "../skills/acquired-skill-mount.ts";
 import { harnessSkillScriptMetadata } from "../skills/registry.ts";
-import { SEALED_SKILL_SCRIPT_CWD } from "../skills/sealed-script-sandbox.ts";
 import {
   isSkillScriptAllowlisted,
   normalizeSkillScriptPath,
@@ -1190,13 +1189,13 @@ const sealedRunOf = (
 
 /**
  * Whether a call runs sealed: in the sandbox, on a runtime built for that one
- * call with every channel out off, in the fresh `/tmp` of its container.
+ * call with every channel out off, from the workspace it holds read-only.
  *
  * The call's effect class is this predicate, never a declaration: `read` when
  * it holds and `side-effect` otherwise. A host script, a run that cannot build
  * a sealed runtime, and a call that names its own `cwd` all stay side effects,
- * the last because a named directory is in the workspace, which a sealed run
- * holds read-only, so a script that asked for one is asking to work there.
+ * the last because a directory named in the call is one the script expects
+ * to work in, and a sealed run can write nowhere but its own `/tmp`.
  */
 export const runsSealedSkillScript = (
   context: Pick<
@@ -1533,7 +1532,7 @@ export const runSkillScriptTool: HarnessToolDefinition<
       }
       const sandbox = sealedRuntime ?? context.sandbox;
       const cwd = sealedRuntime !== undefined
-        ? SEALED_SKILL_SCRIPT_CWD
+        ? sealedRuntime.defaultWorkingDirectory()
         : input.cwd !== undefined
         ? context.resolvePath(input.cwd)
         : context.sandbox.defaultWorkingDirectory();
