@@ -1026,28 +1026,18 @@ type RefusalReason =
   | "staged-set-not-held"
   | "principal-expired"
   | "principal-not-held";
-/** Refusals that pass on their own, so the client holds the session. */
+/**
+ * Refusals that pass on their own, so the client holds the session: a
+ * capacity refusal, or one for a grant that expired in flight. One past a
+ * bound on what one session holds (`frame-limit`), or for a session, staged
+ * set or principal the context no longer holds, is final.
+ */
 const RETRIABLE_REFUSALS: ReadonlySet<RefusalReason> = new Set([
   "session-limit",
   "watch-limit",
   "holdings-limit",
   "principal-expired",
 ]);
-
-/**
- * A request refused on its own: answered, not a closed socket. A capacity
- * refusal, or one for a grant that expired in flight, is marked retriable;
- * one past a bound on what one session holds (`frame-limit`), or for a
- * session, staged set or principal the context no longer holds, is final.
- */
-class RoutedRequestRefusal extends Error {
-  constructor(readonly reason: RefusalReason) {
-    super(`Routed memory ${reason}`);
-  }
-  get retriable(): boolean {
-    return RETRIABLE_REFUSALS.has(this.reason);
-  }
-}
 
 /** Why the toolshed refused a proof, which closes its context. */
 type ProofRefusalReason =
@@ -2076,11 +2066,10 @@ export class RoutedMemoryHost {
         safeClose(socket);
       }
     };
+    // A header is admitted only within the request credit, which is granted
+    // from the input budget and returned only as reservations are released,
+    // so the body it reserves fits the budget.
     const incoming = new RouterAssembler((bytes) => {
-      if (pendingBytes + bytes > ROUTED_QUEUE_LIMIT) {
-        fail("data-queue-limit");
-        requireRouted(false);
-      }
       pendingBytes += bytes;
       assemblingBytes = bytes;
     });
@@ -2495,11 +2484,10 @@ export class RoutedMemoryHost {
         (typeof frame === "string"
           ? new TextEncoder().encode(frame).length
           : frame.length);
-      // The request this frame carries, once its identifier is checked, so a
-      // refusal at a capacity limit can answer it.
-      let refusedRequest: string | undefined;
-      // Its route as dispatched, so the release removes only its own: the
+      // The request this frame carries, once its identifier is checked, and
+      // its route as dispatched, so the release removes only its own: the
       // router lets a client reuse an answered ID while this turn is open.
+      let dispatchedRequest: string | undefined;
       let dispatchedRoute: Record<string, unknown> | undefined;
       // Whether the body reached the connection: its turn then owns the
       // frame's reservation and releases it when the turn ends.
@@ -2511,9 +2499,9 @@ export class RoutedMemoryHost {
       const release = (): void => {
         settleAccounting?.();
         if (
-          refusedRequest !== undefined &&
-          dispatchRoutes.get(refusedRequest) === dispatchedRoute
-        ) dispatchRoutes.delete(refusedRequest);
+          dispatchedRequest !== undefined &&
+          dispatchRoutes.get(dispatchedRequest) === dispatchedRoute
+        ) dispatchRoutes.delete(dispatchedRequest);
         pendingBytes -= frameBytes;
         if (expanded > 0) {
           expandedBytes -= expanded;
@@ -2786,7 +2774,51 @@ export class RoutedMemoryHost {
         pending.add(body.requestId);
         dispatchedRoute = routerRoute(body);
         dispatchRoutes.set(body.requestId, dispatchedRoute);
-        refusedRequest = body.requestId;
+        const requestId = body.requestId;
+        dispatchedRequest = requestId;
+        const redeemed = ticket;
+        // Denies this request alone, answered rather than closing the socket:
+        // the socket and its other sessions go on, and the answer undoes any
+        // reservation. It is called where the request is judged, after the
+        // last wait, so the output still has room for the answer.
+        const refuse = (reason: RefusalReason): void => {
+          // A watch mutation refused here never reached the server, which
+          // still holds any set the session was staging: the session keeps
+          // it, and the usage it counted before the request, unless the
+          // session has gone or the context has moved to another socket.
+          const mutation = mutations?.get(requestId);
+          if (mutation !== undefined) {
+            mutations!.delete(requestId);
+            if (redeemed.context.socket === socket) {
+              this.#setUsage(
+                redeemed.link,
+                redeemed.context,
+                mutation.key,
+                sessions.has(mutation.key) ? mutation.prior : undefined,
+              );
+            }
+          }
+          this.#audit(
+            redeemed.link,
+            redeemed.context,
+            "request-refused",
+            undefined,
+            reason,
+          );
+          try {
+            send({
+              type: "response",
+              requestId,
+              error: {
+                name: "AuthorizationError",
+                message: "Routed memory request denied",
+                ...(RETRIABLE_REFUSALS.has(reason) ? { retriable: true } : {}),
+              },
+            } as ServerMessage);
+          } catch {
+            fail("socket-send-failure");
+          }
+        };
         // While quota mirrors are kept, a session's watch mutations,
         // resumptions and close are dispatched one at a time, each once the
         // turn of the one before it has ended: each reads or changes the
@@ -2802,8 +2834,6 @@ export class RoutedMemoryHost {
         if (key !== undefined) {
           while (accounting.has(key)) {
             await accounting.get(key);
-            // The earlier request's answer may have filled the output.
-            if (outputPaused) await awaitOutputCapacity();
             requireRouted(
               !failed && socket.readyState === WebSocket.OPEN &&
                 !ticket.link.closed && !ticket.context.closed,
@@ -2816,6 +2846,15 @@ export class RoutedMemoryHost {
             settled.resolve();
           };
         }
+        // Output may have filled since the chain's head checked it, with the
+        // answer to an earlier request while this one decoded or waited for
+        // its session's turn. The wait comes before the checks below, so
+        // nothing changes between a check and the hand-off it admits.
+        if (outputPaused) await awaitOutputCapacity();
+        requireRouted(
+          !failed && socket.readyState === WebSocket.OPEN &&
+            !ticket.link.closed && !ticket.context.closed,
+        );
         if (body.type === "session.open") {
           requireRouted(typeof body.principal === "string");
           // The router forwards an open only for a principal it holds, so
@@ -2825,9 +2864,9 @@ export class RoutedMemoryHost {
           const grant = ticket.context.grants.get(body.principal);
           if (
             grant === undefined || ticket.context.released.has(body.principal)
-          ) throw new RoutedRequestRefusal("principal-not-held");
+          ) return refuse("principal-not-held");
           if (grant.statement.exp <= this.#now()) {
-            throw new RoutedRequestRefusal("principal-expired");
+            return refuse("principal-expired");
           }
           const session = routedObject(body.session);
           requireRouted(session.actingAs === undefined);
@@ -2837,7 +2876,7 @@ export class RoutedMemoryHost {
               this.#limits.sessionsPerContext,
             )
           ) {
-            throw new RoutedRequestRefusal("session-limit");
+            return refuse("session-limit");
           }
           const priorKey = typeof session.sessionId === "string"
             ? `${parsed.space} ${session.sessionId}`
@@ -2887,7 +2926,7 @@ export class RoutedMemoryHost {
             ticket.context,
             body.principal,
           );
-          if (over !== undefined) throw new RoutedRequestRefusal(over);
+          if (over !== undefined) return refuse(over);
         } else {
           routedIdentifier(body.sessionId);
           const session = sessions.get(`${parsed.space} ${body.sessionId}`);
@@ -2897,7 +2936,7 @@ export class RoutedMemoryHost {
           // then denies the session's requests itself, so this one is
           // denied as the router would deny it.
           if (session === undefined) {
-            throw new RoutedRequestRefusal("session-not-held");
+            return refuse("session-not-held");
           }
           requireRouted(session.space === parsed.space);
           if (
@@ -2987,7 +3026,7 @@ export class RoutedMemoryHost {
               mutations !== undefined && set && base === undefined &&
               typeof body.part === "number" && body.part > 0
             ) {
-              throw new RoutedRequestRefusal("staged-set-not-held");
+              return refuse("staged-set-not-held");
             }
             // Bounds on what one session holds, refused for good: the watch
             // IDs by `limits.watchesPerSession`, the views by
@@ -3008,7 +3047,7 @@ export class RoutedMemoryHost {
               (body.part !== undefined &&
                 exceedsLimit(holdings, this.#limits.holdingsPerSession))
             ) {
-              throw new RoutedRequestRefusal("frame-limit");
+              return refuse("frame-limit");
             }
             const held = {
               count: countWatches
@@ -3067,7 +3106,7 @@ export class RoutedMemoryHost {
               ticket.context,
               session.principal,
             );
-            if (over !== undefined) throw new RoutedRequestRefusal(over);
+            if (over !== undefined) return refuse(over);
           }
         }
         // Retain the frame's queue budget until its protected Memory turn ends.
@@ -3097,55 +3136,8 @@ export class RoutedMemoryHost {
           release();
         });
         openTurns.add(turn);
-      }).catch(async (error) => {
-        if (failed) return;
-        if (!(error instanceof RoutedRequestRefusal)) {
-          return fail("data-protocol");
-        }
-        // One refused request is denied; the socket and its other sessions
-        // go on, and the answer undoes any reservation.
-        const requestId = refusedRequest;
-        if (requestId === undefined || ticket === undefined) {
-          return fail("data-protocol");
-        }
-        // A watch mutation refused here never reached the server, which
-        // still holds any set the session was staging: the session keeps it,
-        // and the usage it counted before the request, unless the session
-        // has gone or the context has moved to another socket since.
-        const mutation = mutations?.get(requestId);
-        if (mutation !== undefined) {
-          mutations!.delete(requestId);
-          if (ticket.context.socket === socket) {
-            this.#setUsage(
-              ticket.link,
-              ticket.context,
-              mutation.key,
-              sessions.has(mutation.key) ? mutation.prior : undefined,
-            );
-          }
-        }
-        this.#audit(
-          ticket.link,
-          ticket.context,
-          "request-refused",
-          undefined,
-          error.reason,
-        );
-        try {
-          if (outputPaused) await awaitOutputCapacity();
-          requireRouted(!failed && socket.readyState === WebSocket.OPEN);
-          send({
-            type: "response",
-            requestId,
-            error: {
-              name: "AuthorizationError",
-              message: "Routed memory request denied",
-              ...(error.retriable ? { retriable: true } : {}),
-            },
-          } as ServerMessage);
-        } catch {
-          fail("socket-send-failure");
-        }
+      }).catch(() => {
+        if (!failed) fail("data-protocol");
       }).finally(() => {
         if (!handedOver) release();
       });

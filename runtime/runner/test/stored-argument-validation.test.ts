@@ -5,7 +5,7 @@
  */
 
 import { expect } from "@std/expect";
-import { spy } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { FabricEpochNsec } from "@commonfabric/data-model/fabric-primitives";
@@ -752,7 +752,8 @@ describe("stored-argument-validation", () => {
     /**
      * Returns the issue `slotSchema` finds with a slot holding a link to a
      * document in the argument's own space whose value is `reached`. The
-     * argument's schema defines `#/$defs/text` as a string.
+     * argument's schema defines `#/$defs/text` as a string, and
+     * `#/$defs/maybeTexts` as a handle to a list of strings, or nothing.
      */
     function linkedSlotIssue(
       slotSchema: JSONSchema,
@@ -767,7 +768,16 @@ describe("stored-argument-validation", () => {
         const schema: JSONSchema = {
           type: "object",
           properties: { slot: slotSchema },
-          $defs: { text: { type: "string" } },
+          $defs: {
+            text: { type: "string" },
+            maybeTexts: {
+              anyOf: [{ type: "undefined" }, {
+                type: "array",
+                items: { type: "string" },
+                asCell: ["cell"],
+              }],
+            },
+          },
         };
         return storedArgumentValidationIssue(argument, schema, undefined, tx);
       } finally {
@@ -835,6 +845,32 @@ describe("stored-argument-validation", () => {
       expect(linkedSlotIssue(present, "red")).toBeUndefined();
       expect(linkedSlotIssue(present, 7)).toContain("slot:");
     });
+
+    it("reads a handle or nothing as a handle", () => {
+      const maybeTexts: JSONSchema = {
+        anyOf: [{ type: "undefined" }, {
+          type: "array",
+          items: { type: "string" },
+          asCell: ["cell"],
+        }],
+      };
+      expect(linkedSlotIssue(maybeTexts, [1, 2])).toBeUndefined();
+      expect(linkedSlotIssue(maybeTexts, "red")).toContain("slot:");
+
+      const named: JSONSchema = { $ref: "#/$defs/maybeTexts" };
+      expect(linkedSlotIssue(named, [1, 2])).toBeUndefined();
+      expect(linkedSlotIssue(named, "red")).toContain("slot:");
+
+      // The same union declaring no handle judges the members it reaches.
+      const texts: JSONSchema = {
+        anyOf: [{ type: "undefined" }, {
+          type: "array",
+          items: { type: "string" },
+        }],
+      };
+      expect(linkedSlotIssue(texts, ["red"])).toBeUndefined();
+      expect(linkedSlotIssue(texts, [1, 2])).toContain("slot:");
+    });
   });
 
   describe("a stored link to a document that stores a confidentiality label", () => {
@@ -853,12 +889,14 @@ describe("stored-argument-validation", () => {
 
     /**
      * Commits a document holding `value` at `cause`, labeled at its root with
-     * `confidentiality` where that holds any atom, and returns its cell.
+     * `confidentiality` where that holds any atom, in an envelope of format
+     * `version`, and returns its cell.
      */
     const seedDocument = async (
       cause: string,
       value: unknown,
       confidentiality: readonly string[],
+      version = 1,
     ) => {
       const tx = runtime.edit();
       const cell = runtime.getCell<unknown>(space, cause, undefined, tx);
@@ -867,7 +905,7 @@ describe("stored-argument-validation", () => {
       seedStoredEnvelope(tx, { space, scope: "space", id, path: [] }, {
         value,
         cfc: {
-          version: 1,
+          version,
           schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
           labelMap: {
             version: 1,
@@ -914,6 +952,58 @@ describe("stored-argument-validation", () => {
         argument.set({ source: plain });
         expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
           .toContain("count: value does not match type number");
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("judges a link to a document whose label metadata this build cannot interpret as labeled", async () => {
+      const unknown = await seedDocument(
+        "unknown-source",
+        { count: "many" },
+        [],
+        3,
+      );
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ source: unknown });
+        const unknownId = unknown.getAsNormalizedFullLink().id;
+        using reads = spyReads(tx);
+        expect(storedArgumentValidationIssue(argument, schema, undefined, tx))
+          .toBeUndefined();
+        expect(
+          reads.addresses().filter((address) =>
+            address.id === unknownId && address.path[0] === "value"
+          ),
+        ).toEqual([]);
+      } finally {
+        tx.abort();
+      }
+    });
+
+    it("propagates a failure to read a document's label metadata", async () => {
+      const plain = await seedDocument("failing-source", { count: "many" }, []);
+      const plainId = plain.getAsNormalizedFullLink().id;
+      const tx = runtime.edit();
+      try {
+        const argument = runtime.getCell(space, "argument", undefined, tx);
+        argument.set({ source: plain });
+        const failure = new Error("label metadata read failed");
+        const readOrThrow = tx.readOrThrow.bind(tx);
+        using _reads = stub(
+          tx,
+          "readOrThrow",
+          (address, options) => {
+            if (address.id === plainId && address.path[0] === "cfc") {
+              throw failure;
+            }
+            return readOrThrow(address, options);
+          },
+        );
+        expect(() =>
+          storedArgumentValidationIssue(argument, schema, undefined, tx)
+        ).toThrow(failure);
       } finally {
         tx.abort();
       }
@@ -1184,6 +1274,28 @@ describe("stored-argument-validation", () => {
 
         expect(fromStaged).toEqual(readBack);
         expect(readBack.slots).toEqual(["FabricEpochNsec"]);
+      });
+
+      it("agrees on an argument that is a list holding an unreadable link", () => {
+        const absent = (tx: IExtendedStorageTransaction) =>
+          runtime.getCell(space, "absent", undefined, tx);
+        const texts: JSONSchema = { type: "array", items: { type: "string" } };
+
+        const unreadable = judgeBothWays(
+          (tx) => [absent(tx)],
+          (tx) => [absent(tx)],
+          texts,
+        );
+        expect(unreadable.fromStaged).toEqual(unreadable.readBack);
+        expect(unreadable.readBack.issue).toBeUndefined();
+
+        const mistaken = judgeBothWays(
+          (tx) => [absent(tx), 7],
+          (tx) => [absent(tx), 7],
+          texts,
+        );
+        expect(mistaken.fromStaged).toEqual(mistaken.readBack);
+        expect(mistaken.readBack.issue).toContain("value does not match type");
       });
     });
 

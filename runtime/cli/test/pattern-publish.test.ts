@@ -416,27 +416,44 @@ describe("pattern-publish", () => {
       ).toBe(false);
     });
 
-    it("shares through an index that keeps no lineages as it did before", async () => {
+    /** Deps whose index answers listing lineages with `status`. */
+    const depsListingLineagesFailing = (status: number): PublishDeps => {
       const deps = depsWith(scripted([PASS], []));
       const client = deps.client;
+      return {
+        ...deps,
+        client: {
+          getGardenerPrompt: (r) => client.getGardenerPrompt(r),
+          publishPattern: (r) => client.publishPattern(r),
+          requestListing: (r) => client.requestListing(r),
+          shareVersion: (r) => client.shareVersion(r),
+          getPattern: (r) => client.getPattern(r),
+          whoami: () => client.whoami(),
+          listLineages: () =>
+            Promise.reject(new PatternIndexError("listLineages", status)),
+        },
+      };
+    };
+
+    it("shares through an index that keeps no lineages as it did before", async () => {
       const report = await publishedReport(
         { entry, slot: "cf-path:old" },
-        {
-          ...deps,
-          client: {
-            getGardenerPrompt: (r) => client.getGardenerPrompt(r),
-            publishPattern: (r) => client.publishPattern(r),
-            requestListing: (r) => client.requestListing(r),
-            shareVersion: (r) => client.shareVersion(r),
-            getPattern: (r) => client.getPattern(r),
-            whoami: () => client.whoami(),
-            listLineages: () =>
-              Promise.reject(new PatternIndexError("listLineages", 404)),
-          },
-        },
+        depsListingLineagesFailing(404),
       );
 
       expect(report.outcome).toBe("shared");
+    });
+
+    it("throws, publishing nothing, when listing lineages fails otherwise", async () => {
+      const thrown = await publishPatternFromDisk(
+        { entry, slot: "cf-path:old" },
+        depsListingLineagesFailing(500),
+      ).catch((error) => error);
+
+      expect(thrown).toBeInstanceOf(PatternIndexError);
+      expect(thrown.status).toBe(500);
+      expect(index.calls.some((call) => call.fn === "publishPattern"))
+        .toBe(false);
     });
 
     it("throws naming cf index join, before compiling, for an identity that is no member", async () => {
@@ -536,6 +553,31 @@ describe("pattern-publish", () => {
 
       expect(report.remixedFrom).toBe("id-theirs");
       expect(report.priorPatternId).toBeUndefined();
+    });
+
+    it("credits the pattern named by remixedFrom over the one the source was fetched from", async () => {
+      await store.recordSource([entry], "id-fetched");
+      const report = await publishedReport(
+        { entry, remixedFrom: "id-named" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.remixedFrom).toBe("id-named");
+      expect(report.priorPatternId).toBeUndefined();
+      const publish = index.calls.find((call) => call.fn === "publishPattern")!;
+      expect(publish.body.remixedFrom).toBe("id-named");
+    });
+
+    it("credits no remix when remixedFrom names the pattern being published", async () => {
+      await store.recordSource([entry], "id-fetched");
+      const report = await publishedReport(
+        { entry, remixedFrom: "id-original" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.remixedFrom).toBeUndefined();
+      const publish = index.calls.find((call) => call.fn === "publishPattern")!;
+      expect(publish.body).not.toHaveProperty("remixedFrom");
     });
 
     it("names one's own pattern the source was fetched from as the prior version, not a remix", async () => {
@@ -829,6 +871,31 @@ describe("pattern-publish", () => {
         "Listing: error: the check failed to run and waits for an admin re-run.",
       );
       expect(meaning("not_requested")).toBe("Listing: unlisted.");
+    });
+
+    it("returns what was shared when the index names no listing state", () => {
+      expect(publishReportLines(shared({ status: "requested" }))[2])
+        .toBe("Listing: shared.");
+    });
+
+    it("returns what each listing state means on beta", () => {
+      const meaning = (listing?: PatternIndexListing) =>
+        publishReportLines(
+          shared({ status: "requested", listing, channel: "beta" }),
+        )[2];
+      expect(meaning("passed")).toBe(
+        "Beta: reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable.",
+      );
+      expect(meaning("held")).toBe(
+        "Beta: held: the index found something identifying; see cf pattern mine.",
+      );
+      expect(meaning("error")).toBe(
+        "Beta: error: the check failed to run and waits for an admin re-run.",
+      );
+      expect(meaning("pending")).toBe(
+        "Beta: once the index's privacy check passes, it is reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable.",
+      );
+      expect(meaning(undefined)).toBe(meaning("pending"));
     });
 
     it("returns why the listing was not requested when the request failed", () => {

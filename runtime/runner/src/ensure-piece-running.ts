@@ -167,6 +167,8 @@ async function startInputSources(
             { originFollowed: options.originFollowed }),
           ...(options?.forEvent !== undefined &&
             { forEvent: options.forEvent }),
+          ...(options?.forRead !== undefined &&
+            { forRead: options.forRead }),
           ...(options?.enclosingSourcesOnly !== undefined &&
             { enclosingSourcesOnly: options.enclosingSourcesOnly }),
           ...(required && { sourcesRequired: true, propagateErrors: true }),
@@ -689,6 +691,13 @@ export type EnsurePieceOptions = {
    * (`RunnerStartOptions.forEvent`).
    */
   forEvent?: boolean;
+
+  /**
+   * The walk answers a read of a value the owning piece has not written, so
+   * each piece it starts, the pieces its inputs come from included, is started
+   * as one (`RunnerStartOptions.forRead`).
+   */
+  forRead?: boolean;
 };
 
 /**
@@ -890,7 +899,10 @@ async function ensureVerdict(
 
       // Start the existing piece - this registers event handlers without
       // re-running setup and potentially allocating different metadata cells.
-      await runtime.start(resultCell, { forEvent: options?.forEvent });
+      await runtime.start(resultCell, {
+        forEvent: options?.forEvent,
+        forRead: options?.forRead,
+      });
 
       logger.debug("ensure-piece", () => [
         `Piece started successfully`,
@@ -980,11 +992,11 @@ export type StartWithInputSourcesOptions = {
  * done.
  *
  * Starting what encloses `piece` is best effort. An enclosing piece that
- * cannot start, one whose origin's follow cannot be settled, and an argument
- * whose links cannot be read each leave `piece` to start without it, so an
- * open fails only where the piece's own start does; each is logged as a
- * warning naming the opened piece. Where `runtime`'s runs echo the served
- * ones, or `piece` runs already, this only starts `piece`.
+ * cannot start and an argument whose links cannot be read each leave `piece`
+ * to start without it, so an open fails only where the piece's own start
+ * does; each is logged as a warning naming the opened piece. Where
+ * `runtime`'s runs echo the served ones, or `piece` runs already, this only
+ * starts `piece`.
  *
  * @returns What `Runtime.start()` returns, or `Runtime.startWithCommit()` with
  *   `awaitSetupCommit`.
@@ -1032,7 +1044,7 @@ async function startEnclosingFollowingOrigins(
   root: OwningRootAddress,
   { followOrigins = false }: StartWithInputSourcesOptions,
 ): Promise<void> {
-  const followed = new Map<string, OwningRootAddress>();
+  const followed = new Set<string>();
   let owed: OwningRootAddress[] = [];
   const originFollowed = followOrigins
     ? (source: OwningRootAddress) => {
@@ -1066,18 +1078,11 @@ async function startEnclosingFollowingOrigins(
         `handlers read what ${source.id} derived last.`,
       ]);
     }
+    // Only a piece whose origin the walk was told is not followed yet holds
+    // the walk back, and `owed` names it.
     if (pending === undefined) return;
-    const toFollow = owed.filter((source) => !followed.has(rootKey(source)));
-    if (toFollow.length === 0) {
-      openLogger.warn("input-sources", () => [
-        `Opened ${root.id} without ${pending.root?.id ?? "a piece"} that ` +
-        `encloses it, whose origin's follow could not be settled; its ` +
-        `handlers read what that piece derived last.`,
-      ]);
-      return;
-    }
-    for (const source of toFollow) {
-      followed.set(rootKey(source), source);
+    for (const source of owed) {
+      followed.add(rootKey(source));
       // The reconciler reads the piece's pattern pointer and origin off the
       // loaded document, as the serving loop's follow does.
       const cell = runtime.getCellFromLink({ ...source, path: [] });

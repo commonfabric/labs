@@ -193,10 +193,15 @@ export class NodeRegistry {
 
   /**
    * The roots each node is filed under in `#nodesByDemandRoot`, as they were
-   * read off its action when it was filed. Unfiling goes by these, so it does
-   * not depend on what the action names by then.
+   * read off its action when it was filed, each with the set it was added to.
+   * Unfiling goes by these, so it does not depend on what the action names by
+   * then. A set holding the node is not empty, so it is still the one
+   * `#nodesByDemandRoot` maps its root to.
    */
-  #filedDemandRoots = new Map<SchedulerNode, readonly string[]>();
+  #filedDemandRoots = new Map<
+    SchedulerNode,
+    ReadonlyMap<string, Set<SchedulerNode>>
+  >();
 
   /**
    * When each active node joined the active set, as a count. `nodes()` yields
@@ -659,16 +664,19 @@ export class NodeRegistry {
     const named = identity?.demandRootIds ??
       (identity?.pieceRootId !== undefined ? [identity.pieceRootId] : []);
     if (named.length === 0) return;
-    const roots = [...new Set(named)];
-    for (const id of roots) {
-      const filed = this.#nodesByDemandRoot.get(id);
+    const roots = new Map<string, Set<SchedulerNode>>();
+    for (const id of named) {
+      if (roots.has(id)) continue;
+      let filed = this.#nodesByDemandRoot.get(id);
       if (filed === undefined) {
-        this.#nodesByDemandRoot.set(id, new Set([record]));
-        continue;
+        filed = new Set();
+        this.#nodesByDemandRoot.set(id, filed);
+      } else if (!joining) {
+        // A node that joined earlier now sits after ones that joined later.
+        this.#unorderedDemandRoots.add(id);
       }
       filed.add(record);
-      // A node that joined earlier now sits after ones that joined later.
-      if (!joining) this.#unorderedDemandRoots.add(id);
+      roots.set(id, filed);
     }
     this.#filedDemandRoots.set(record, roots);
   }
@@ -676,9 +684,7 @@ export class NodeRegistry {
   #unfileFromDemandRoots(record: SchedulerNode): void {
     const roots = this.#filedDemandRoots.get(record);
     if (roots === undefined) return;
-    for (const id of roots) {
-      const filed = this.#nodesByDemandRoot.get(id);
-      if (filed === undefined) continue;
+    for (const [id, filed] of roots) {
       filed.delete(record);
       if (filed.size === 0) {
         this.#nodesByDemandRoot.delete(id);

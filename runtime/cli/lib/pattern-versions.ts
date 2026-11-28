@@ -59,7 +59,10 @@ export interface GitCheckout {
   remote: string;
 }
 
-/** The checkout `dir` is in, or `undefined` outside one or without `origin`. */
+/**
+ * The checkout `dir` is in, or `undefined` outside one or without `origin`.
+ * Throws when `git` cannot be started at all.
+ */
 export async function gitCheckoutOf(
   dir: string,
 ): Promise<GitCheckout | undefined> {
@@ -68,7 +71,7 @@ export async function gitCheckoutOf(
       args: ["-C", dir, ...args],
       stdout: "piped",
       stderr: "null",
-    }).output().catch(() => ({ code: 1, stdout: new Uint8Array() }));
+    }).output();
     return code === 0 ? new TextDecoder().decode(stdout).trim() : undefined;
   };
   const root = await git("rev-parse", "--show-toplevel");

@@ -28,6 +28,27 @@ export interface WebWorkerRuntimeTransportOptions {
   workerUrl?: URL;
 }
 
+/**
+ * The URL of the worker a transport starts: `workerUrl` when one is given,
+ * and otherwise, when `scope` is Deno, the backend's entry module beside this
+ * one. Outside Deno that module is TypeScript source the host cannot load as
+ * it stands, so a hosted build of it has to be named.
+ *
+ * @throws If `workerUrl` is undefined and `scope` is not Deno.
+ */
+export function transportWorkerUrl(
+  workerUrl: URL | undefined,
+  scope: object = globalThis,
+): URL {
+  if (workerUrl) return workerUrl;
+  if (!isDeno(scope)) {
+    throw new Error(
+      "RuntimeClient `workerUrl` must be explicitly defined in non-Deno environments.",
+    );
+  }
+  return new URL("../../../backends/web-worker/index.ts", import.meta.url);
+}
+
 export class WebWorkerRuntimeTransport
   extends EventEmitter<RuntimeTransportEvents>
   implements RuntimeTransport {
@@ -37,17 +58,8 @@ export class WebWorkerRuntimeTransport
   #worker: Worker;
   constructor(options: WebWorkerRuntimeTransportOptions = {}) {
     super();
-    const workerUrl = options.workerUrl ??
-      (isDeno()
-        ? new URL("../../../backends/web-worker/index.ts", import.meta.url)
-        : undefined);
-    if (!workerUrl) {
-      throw new Error(
-        "RuntimeClient `workerUrl` must be explicitly defined in non-Deno environments.",
-      );
-    }
     this.#worker = new Worker(
-      workerUrl,
+      transportWorkerUrl(options.workerUrl),
       {
         type: "module",
         name: "runtime-worker",

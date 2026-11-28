@@ -93,7 +93,10 @@ describe("PiecesController runtime diagnostics", () => {
     assertEquals(await pieces.getReadingFrom(piece), []);
     assertEquals(messages.length, 1);
     assertStrictEquals(messages[0].method, ConsoleMethod.Debug);
-    assertStrictEquals(messages[0].args[0], "Error getting argument value:");
+    assertStrictEquals(
+      messages[0].args[0],
+      "Error finding references in piece arguments:",
+    );
     assertStrictEquals(messages[0].args[1], failure);
   });
 
@@ -123,88 +126,6 @@ describe("PiecesController runtime diagnostics", () => {
     assertStrictEquals(
       messages[0].args[0],
       "Error finding references in piece arguments:",
-    );
-    assertStrictEquals(messages[0].args[1], failure);
-  });
-
-  it("sends array traversal failures to the runtime console handler", async () => {
-    const failure = new Error("array element read failed");
-    const argumentValue: unknown[] = [];
-    Object.defineProperty(argumentValue, 0, {
-      enumerable: true,
-      get: () => {
-        throw failure;
-      },
-    });
-    const argumentCell = {
-      getRaw: () => argumentValue,
-      sync() {
-        return Promise.resolve(this);
-      },
-    } as unknown as Cell<unknown>;
-    Object.defineProperty(pieces, "getArgument", {
-      configurable: true,
-      value: () => argumentCell,
-    });
-    const piece = {
-      resolveAsCell() {
-        return this;
-      },
-      asSchema() {
-        return this;
-      },
-      sync() {
-        return Promise.resolve(this);
-      },
-    } as unknown as Cell<unknown>;
-
-    assertEquals(await pieces.getReadingFrom(piece), []);
-    assertEquals(messages.length, 1);
-    assertStrictEquals(messages[0].method, ConsoleMethod.Debug);
-    assertStrictEquals(
-      messages[0].args[0],
-      "Error processing array item at index 0:",
-    );
-    assertStrictEquals(messages[0].args[1], failure);
-  });
-
-  it("sends object traversal failures to the runtime console handler", async () => {
-    const failure = new Error("object property read failed");
-    const argumentValue = {};
-    Object.defineProperty(argumentValue, "broken", {
-      enumerable: true,
-      get: () => {
-        throw failure;
-      },
-    });
-    const argumentCell = {
-      getRaw: () => argumentValue,
-      sync() {
-        return Promise.resolve(this);
-      },
-    } as unknown as Cell<unknown>;
-    Object.defineProperty(pieces, "getArgument", {
-      configurable: true,
-      value: () => argumentCell,
-    });
-    const piece = {
-      resolveAsCell() {
-        return this;
-      },
-      asSchema() {
-        return this;
-      },
-      sync() {
-        return Promise.resolve(this);
-      },
-    } as unknown as Cell<unknown>;
-
-    assertEquals(await pieces.getReadingFrom(piece), []);
-    assertEquals(messages.length, 1);
-    assertStrictEquals(messages[0].method, ConsoleMethod.Debug);
-    assertStrictEquals(
-      messages[0].args[0],
-      "Error processing object property 'broken':",
     );
     assertStrictEquals(messages[0].args[1], failure);
   });

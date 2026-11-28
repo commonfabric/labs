@@ -1,6 +1,7 @@
 import ts from "typescript";
 
 import {
+  type ArrayMethodFamilyName,
   classifyArrayMethodCall,
   detectCallKind,
   getCallArgumentPosition,
@@ -175,6 +176,17 @@ function getSiteLiftedCollectionLocalSymbol(
 }
 
 /**
+ * A call `shouldTransformArrayMethod()` accepts: `<receiver>.<method>(...)`
+ * where the member names a source (not yet lowered) array method. A source
+ * method's name is its family's name.
+ */
+export type SourceArrayMethodCall = ts.CallExpression & {
+  readonly expression: ts.PropertyAccessExpression & {
+    readonly name: ts.Identifier & { readonly text: ArrayMethodFamilyName };
+  };
+};
+
+/**
  * Check if an array method call should be transformed to its WithPattern variant.
  *
  * Type-based approach with context awareness (CT-1186 fix):
@@ -189,7 +201,7 @@ function getSiteLiftedCollectionLocalSymbol(
 export function shouldTransformArrayMethod(
   methodCall: ts.CallExpression,
   context: TransformationContext,
-): boolean {
+): methodCall is SourceArrayMethodCall {
   if (!ts.isPropertyAccessExpression(methodCall.expression)) return false;
 
   const arrayMethodInfo = classifyArrayMethodCall(methodCall);

@@ -296,12 +296,13 @@ One more lives in the shell package, because it needs a browser as well:
 ## Topics
 
 The Topics board (`../../apps/topics/`) is the collection this library exists
-for, and it calls it: `addTopic` allocates in the same transaction as its append
-and passes the name into the topic it creates, its `backfillNames` verb runs
-`recordNames` over what the board held before, each topic stores its own name
-and publishes it as `shortName`, and both boards derive their mention universe
-through `mentionable.ts`. Every place a number shows on either board reads that
-one property: the header, the cards, the survey rows, and the universe rows the
+for, and it calls it: `addTopic` allocates in the same transaction as it adds
+the topic it creates to the board's collection and passes the name into that
+topic, its `backfillNames` verb runs `recordNames` over the topics the
+collection holds, each topic stores its own name and publishes it as
+`shortName`, and both boards derive their mention universe through
+`mentionable.ts`. Every place a number shows on either board reads that one
+property: the header, the cards, the survey rows, and the universe rows the
 derivation copies from each member. The deployed Topics board carries the
 namespace — every topic numbered, the `names` map dense with no gaps, and the
 `top` slug bound — and every topic on it publishes the number it stores.

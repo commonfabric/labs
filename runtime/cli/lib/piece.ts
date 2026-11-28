@@ -169,7 +169,6 @@ import {
   deriveSelectedValue,
 } from "./cell-selection.ts";
 import { cliCommand } from "./cli-name.ts";
-import { connectionCompileCache } from "./compile-byte-cache.ts";
 import { holdDelegationChainFiles } from "./delegation.ts";
 import {
   type ExecCommandSpec,
@@ -814,6 +813,11 @@ export async function loadPieces(
   // both stand for.
   await validateEmbeddedSpaces(config.embeddedSpaces, session);
   const runtimeErrors: CliRuntimeErrorRecord[] = [];
+  // Only a connection reads compiled modules, and the cache reaches the
+  // runner's shared compile cache, so a command that never connects should not
+  // load it.
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  const { connectionCompileCache } = await import("./compile-byte-cache.ts");
   const compileCache = connectionCompileCache().reportingTo(navigateFailure);
   const runtime = await timeCliPhase(
     "loadPieces.runtime",
@@ -1210,9 +1214,7 @@ async function resolveRegisteredDocumentOwner(
     const key = cellDocumentTraversalKey(current);
     if (visited.has(key)) {
       throw new Error(
-        `Cycle found while resolving piece ownership for ${
-          pieceId(cell) ?? "an unknown Cell"
-        }`,
+        `Cycle found while resolving piece ownership for ${pieceId(cell)}`,
       );
     }
     if (ownerCache.documents.has(key)) {
@@ -1221,7 +1223,6 @@ async function resolveRegisteredDocumentOwner(
     visited.add(key);
     traversed.push(key);
 
-    const currentId = pieceId(current);
     // Nested piece results can point to a parent result. Stop at the nearest
     // registered result before following its parent metadata.
     const currentDocument = pieceDocumentIdentity(current);
@@ -1232,9 +1233,8 @@ async function resolveRegisteredDocumentOwner(
     await current.sync();
     const argumentLink = getMetaLink(current, "argument");
     if (
-      currentId !== undefined &&
-      (getPatternIdentityRef(current) !== undefined ||
-        argumentLink !== undefined)
+      getPatternIdentityRef(current) !== undefined ||
+      argumentLink !== undefined
     ) {
       return finish(currentDocument);
     }
@@ -3333,8 +3333,7 @@ async function resolveLinkedPiece(
   // A piece is the document its pattern identity is written on.
   const piece = pieceId(resolved);
   if (
-    link.path.length > 0 || piece === undefined ||
-    getPatternIdentityRef(resolved) === undefined
+    link.path.length > 0 || getPatternIdentityRef(resolved) === undefined
   ) {
     const ending = `\`cf piece call\` takes a piece, or a path that links ` +
       `to one.`;

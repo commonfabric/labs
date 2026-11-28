@@ -15,6 +15,7 @@ import {
   type FabricPlainObject,
   isFabricPlainObject,
 } from "@commonfabric/data-model";
+import { armTurn } from "@commonfabric/async/turn";
 import { getLogger } from "@commonfabric/logger";
 import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
@@ -361,6 +362,385 @@ describe("client", () => {
       const sent = await cancelledMount(false);
       expect(sent.filter((type) => type === "session.open")).toHaveLength(2);
       expect(sent).not.toContain("session.close");
+    });
+
+    /** Mounts on a transport whose `hello.ok` says `sessionClose`, and
+     * cancels the mount with `reason` just as its open is answered: once the
+     * wait for the answer has settled and stops listening for a
+     * cancellation, before the mount reads the signal again. Returns what
+     * the mount settled with and the frames sent by the time a later mount
+     * has completed. */
+    const mountCancelledAsAnswered = async (name: string, reason: unknown) => {
+      const transport = new ScriptedTransport(serverFor(name));
+      const controller = new AbortController();
+      let answered = false;
+      transport.incoming = (frame) => {
+        if (isFabricPlainObject(frame.ok) && "sessionToken" in frame.ok) {
+          answered = true;
+        }
+        return withHelloFlags(frame, { sessionClose: true });
+      };
+      const removeEventListener = controller.signal.removeEventListener.bind(
+        controller.signal,
+      );
+      using _removed = stub(
+        controller.signal,
+        "removeEventListener",
+        (type: string, listener: EventListenerOrEventListenerObject) => {
+          removeEventListener(type, listener);
+          if (answered && !controller.signal.aborted) {
+            controller.abort(reason);
+          }
+        },
+      );
+      const client = await connected(transport);
+
+      const outcome = await client.mount(
+        spaceFor(name),
+        {},
+        testSessionOpenAuthFactory,
+        controller.signal,
+      ).then((session) => session, (error: unknown) => error);
+      await client.mount(
+        spaceFor(`${name}-after`),
+        {},
+        testSessionOpenAuthFactory,
+      );
+
+      expect(controller.signal.aborted).toBe(true);
+      return { outcome, sent: transport.sent.map((frame) => frame.type) };
+    };
+
+    it("rejects a mount cancelled just as its open is answered with the caller's reason, and closes the session the open made", async () => {
+      const reason = new Error("mount cancelled for the test");
+      const { outcome, sent } = await mountCancelledAsAnswered(
+        "cancelled-as-answered",
+        reason,
+      );
+
+      expect(outcome).toBe(reason);
+      expect(sent.filter((type) => type === "session.open")).toHaveLength(2);
+      expect(sent.filter((type) => type === "session.close")).toHaveLength(1);
+    });
+
+    it("rejects a mount cancelled just as its open is answered with a reason that is not an error as cancelled", async () => {
+      const { outcome } = await mountCancelledAsAnswered(
+        "cancelled-as-answered-without-error",
+        "the caller went away",
+      );
+
+      expect(outcome).toBeInstanceOf(Error);
+      expect(outcome).toMatchObject({
+        message: "memory session mount cancelled",
+      });
+    });
+  });
+
+  describe("a reconnect's restore", () => {
+    it("replays a commit once, on the connection after one that drops just as the session reopens", async () => {
+      const transport = new ScriptedTransport(serverFor("drop-as-reopened"));
+      const client = await connected(transport);
+      const session = await client.mount(
+        spaceFor("drop-as-reopened"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const hellos = () =>
+        transport.sent.filter((frame) => frame.type === "hello").length;
+      // The commit's first send never reaches the server, so the commit is
+      // still outstanding when the connection drops.
+      transport.outgoing = (frame) =>
+        frame.type === "transact" && hellos() === 1 ? undefined : frame;
+      // The reopen on the second connection is answered, and that
+      // connection drops in the same turn.
+      transport.incoming = (frame) => {
+        if (
+          hellos() === 2 && isFabricPlainObject(frame.ok) &&
+          "sessionToken" in frame.ok
+        ) {
+          transport.deliver(frame);
+          transport.disconnect();
+          return undefined;
+        }
+        return frame;
+      };
+      const committing = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
+      });
+      await transport.nextSent("transact");
+      transport.disconnect();
+
+      expect((await committing).seq).toBe(1);
+      // Closing the session waits for every send of a commit it has begun.
+      await session.close();
+      expect(hellos()).toBe(3);
+      // The first send, and the replay on the third connection; the second
+      // connection was gone before its replay could go out, and that replay
+      // sends nothing on a later one.
+      expect(transport.sent.filter((frame) => frame.type === "transact"))
+        .toHaveLength(2);
+    });
+  });
+
+  describe("close()", () => {
+    it("hands the view no effect that arrived behind a watch response once the session has closed", async () => {
+      const transport = new ScriptedTransport(serverFor("closed-behind"));
+      const client = await connected(transport);
+      const session = await client.mount(
+        spaceFor("closed-behind"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const watch = (id: string) => ({
+        id,
+        kind: "graph" as const,
+        query: {
+          roots: [{ id: `of:${id}`, selector: { path: [], schema: false } }],
+        },
+      });
+      const view = await session.watchSet([watch("first")]);
+      const syncs = view.subscribeSync();
+      const seen: string[] = [];
+      const consumed = (async () => {
+        for (;;) {
+          const next = await syncs.next();
+          if (next.done) return;
+          for (const upsert of next.value.upserts) seen.push(upsert.id);
+        }
+      })();
+      const effect = (id: string) => ({
+        type: "session/effect",
+        space: session.space,
+        sessionId: session.sessionId,
+        effect: {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 0,
+          upserts: [{ branch: "", id, seq: 0, doc: { value: id } }],
+          removes: [],
+        },
+      });
+      transport.deliver(effect("of:while-open"));
+
+      // The close waits for the commit it has begun, whose answer is held
+      // until the end, so the view is still open while the effect that
+      // arrived behind the watch response is handled.
+      let commit: unknown;
+      const commitAnswer = Promise.withResolvers<Frame>();
+      let watchAdd: unknown;
+      transport.outgoing = (frame) => {
+        if (frame.type === "transact") commit = frame.requestId;
+        if (frame.type === "session.watch.add") watchAdd = frame.requestId;
+        return frame;
+      };
+      let closing: Promise<void> | undefined;
+      transport.incoming = (frame) => {
+        if (frame.type !== "response") return frame;
+        if (frame.requestId === commit) {
+          commitAnswer.resolve(frame);
+          return undefined;
+        }
+        if (frame.requestId === watchAdd) {
+          transport.deliver(frame);
+          transport.deliver(effect("of:behind-the-response"));
+          closing = session.close();
+          return undefined;
+        }
+        return frame;
+      };
+      const committing = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
+      }).catch(() => undefined);
+      await transport.nextSent("transact");
+      await session.watchAdd([watch("second")]).catch(() => undefined);
+      expect(closing).toBeDefined();
+      transport.deliver(await commitAnswer.promise);
+      await closing;
+      await committing;
+      await consumed;
+
+      expect(seen).toContain("of:while-open");
+      expect(seen).not.toContain("of:behind-the-response");
+    });
+  });
+
+  describe("a restore after a frame the client could not read", () => {
+    it("ends a session whose view holds a scope instance, and restores one whose view holds none", async () => {
+      const transport = new ScriptedTransport(serverFor("scoped-instance"));
+      transport.incoming = (frame) =>
+        withHelloFlags(frame, { syncPartsV1: false });
+      const client = await connected(transport);
+      const scoped = await client.mount(
+        spaceFor("scoped-instance"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const plain = await client.mount(
+        spaceFor("scoped-instance-plain"),
+        {},
+        testSessionOpenAuthFactory,
+      );
+      // A holding names no scope instance, so what the scoped session's
+      // view holds cannot be declared as the reconnect's delivery base.
+      transport.deliver({
+        type: "session/effect",
+        space: scoped.space,
+        sessionId: scoped.sessionId,
+        effect: {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 0,
+          upserts: [{
+            branch: "",
+            id: "of:scoped-instance",
+            scope: "user",
+            scopeKey: "user:did%3Akey%3Aalice",
+            seq: 0,
+            doc: { value: { who: "alice" } },
+          }],
+          removes: [],
+        },
+      });
+      const rehello = transport.nextSent("hello");
+      // A sync part from a server that did not negotiate parts is a frame
+      // the client cannot read.
+      transport.deliver({
+        type: "session/effect",
+        space: plain.space,
+        sessionId: plain.sessionId,
+        effect: {
+          type: "sync",
+          fromSeq: 0,
+          toSeq: 0,
+          upserts: [],
+          removes: [],
+          more: true,
+        },
+      });
+      await rehello;
+      await client.restoreConnection();
+
+      expect(scoped.closeError?.name).toBe("InvalidMessageError");
+      expect(plain.closeError).toBeUndefined();
+      await plain.whenRestored();
+    });
+  });
+
+  describe("a session restored between connections", () => {
+    // A commit outstanding across a drop is replayed on the next connection,
+    // which drops as soon as the replay is answered. The restore completes
+    // with the client between connections, and the handshake after that
+    // waits for `greet()`.
+    const restoredBetweenConnections = async (name: string) => {
+      const transport = new ScriptedTransport(serverFor(name));
+      const client = await connected(transport);
+      const session = await client.mount(
+        spaceFor(name),
+        {},
+        testSessionOpenAuthFactory,
+      );
+      const hellos = () =>
+        transport.sent.filter((frame) => frame.type === "hello").length;
+      let replay: unknown;
+      const greeting = Promise.withResolvers<Frame>();
+      transport.outgoing = (frame) => {
+        if (frame.type !== "transact") return frame;
+        if (hellos() === 1) return undefined;
+        if (hellos() === 2) replay = frame.requestId;
+        return frame;
+      };
+      transport.incoming = (frame) => {
+        if (
+          hellos() === 2 && frame.type === "response" &&
+          frame.requestId === replay
+        ) {
+          transport.deliver(frame);
+          transport.disconnect();
+          return undefined;
+        }
+        if (hellos() === 3 && frame.type === "hello.ok") {
+          greeting.resolve(frame);
+          return undefined;
+        }
+        return frame;
+      };
+      const committed = session.transact({
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{ op: "set", id: "of:doc", value: { value: "A" } }],
+      });
+      await transport.nextSent("transact");
+      transport.disconnect();
+      await session.whenRestored();
+
+      expect((await committed).seq).toBe(1);
+      expect(client.isConnected()).toBe(false);
+      return {
+        session,
+        greet: async () => transport.deliver(await greeting.promise),
+      };
+    };
+
+    it("sends a watch made then once the next connection has restored the session", async () => {
+      const { session, greet } = await restoredBetweenConnections(
+        "watch-between",
+      );
+
+      const watching = session.watchSet([{
+        id: "doc",
+        kind: "graph",
+        query: {
+          roots: [{ id: "of:doc", selector: { path: [], schema: false } }],
+        },
+      }]);
+      // The greeting comes on a later turn of the event loop, which a watch
+      // that went round and round instead of waiting would never let come.
+      await new Promise<void>((resolve) => armTurn(resolve));
+      await greet();
+
+      expect((await watching).entities.map((entity) => entity.id))
+        .toEqual(["of:doc"]);
+    });
+
+    it("rejects a query made then with the session's close when the session closes before the next connection", async () => {
+      const { session, greet } = await restoredBetweenConnections(
+        "query-between",
+      );
+
+      const querying = session.queryGraph({ roots: [] }).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      await session.close();
+      await greet();
+
+      expect(session.closeError).toBeInstanceOf(Error);
+      expect(await querying).toBe(session.closeError);
+    });
+  });
+
+  describe("restartConnection()", () => {
+    it("discards a connected client's connection and handshakes again, and leaves a closed client alone", async () => {
+      const transport = new ScriptedTransport(serverFor("restart"));
+      const client = await connected(transport);
+      const restarts = connectionRestartsLogged();
+      const rehello = transport.nextSent("hello");
+
+      client.restartConnection(new Error("restarted for the test"));
+      await rehello;
+      expect(connectionRestartsLogged()).toBe(restarts + 1);
+
+      await client.close();
+      client.restartConnection(new Error("restarted after the close"));
+
+      expect(connectionRestartsLogged()).toBe(restarts + 1);
+      expect(client.connectionState).toBe("closed");
+      expect(transport.sent.filter((frame) => frame.type === "hello"))
+        .toHaveLength(2);
     });
   });
 

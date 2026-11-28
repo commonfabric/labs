@@ -28,6 +28,23 @@ const hex = (bytes: number[]) =>
 
 const utf8 = (text: string) => [...new TextEncoder().encode(text)];
 
+/** HMAC-SHA-256 of `message` under `key` from WebCrypto, as a reference. */
+async function webCryptoHmac(key: string, message: string): Promise<number[]> {
+  const cryptoKey = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(key),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  const signature = await crypto.subtle.sign(
+    "HMAC",
+    cryptoKey,
+    new TextEncoder().encode(message),
+  );
+  return [...new Uint8Array(signature)];
+}
+
 function rule(field: string, pattern: string, predicts = true): CanonicalRule {
   const checked = checkRule({ field, pattern, predicts });
   if (!checked.ok) throw new Error(checked.reason);
@@ -68,6 +85,27 @@ describe("keyed hash", () => {
     // RFC 4231, test case 2.
     expect(hex(hmacSha256("Jefe", "what do ya want for nothing?"))).toBe(
       "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843",
+    );
+  });
+
+  it("encodes a key and message beyond ASCII as UTF-8", async () => {
+    // One character of each UTF-8 length, then an unpaired surrogate, which
+    // both this hash and TextEncoder read as U+FFFD.
+    const key = "clé €";
+    const message = "naïve ☃ 😀 \ud800 end";
+    expect(hmacSha256(key, message)).toEqual(await webCryptoHmac(key, message));
+    expect(hmacSha256(key, "\ufffd")).toEqual(hmacSha256(key, "\udfff"));
+    expect(hmacSha256(key, "é")).not.toEqual(hmacSha256(key, "e"));
+    expect(hmacSha256("☃", message)).not.toEqual(hmacSha256("😀", message));
+  });
+
+  it("hashes a key longer than the block before using it", async () => {
+    const long = "k".repeat(65);
+    expect(hmacSha256(long, "message")).toEqual(
+      await webCryptoHmac(long, "message"),
+    );
+    expect(hmacSha256(long, "message")).not.toEqual(
+      hmacSha256(long.slice(0, 64), "message"),
     );
   });
 });
@@ -412,6 +450,8 @@ describe("sealed release", () => {
       expect(releaseSealed(list)).toEqual([]);
     }
     expect(isSealed(SEAL)).toBe(true);
+    expect(isSealed(null)).toBe(false);
+    expect(isSealed(undefined)).toBe(false);
   });
 
   it("mints a seal from a valid config and refuses an invalid one", () => {

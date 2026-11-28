@@ -4817,6 +4817,111 @@ describe("v2-server-acl", () => {
       );
     });
 
+    it("refuses its sole OWNER's deletion whose write transaction finds a member another connection added after the server checked the deletion", async () => {
+      const directory = await Deno.makeTempDir({
+        prefix: "memory-acl-deleted-member-added-",
+      });
+      const store = toFileUrl(`${directory}/`);
+      const space = "did:key:z6Mk-acl-deleted-member-added";
+      const server = new Server({
+        store,
+        subscriptionRefreshDelayMs: 0,
+        authorizeSessionOpen: (message) => {
+          const iss = message.invocation?.iss;
+          return typeof iss === "string" ? iss : undefined;
+        },
+        sessionOpenAuth: { audience: TEST_AUDIENCE },
+        acl: { mode: "enforce", serviceDids: [SERVICE] },
+        ownsSpace: (target) => target === space,
+      });
+      const members = { [ALICE]: "OWNER", [BOB]: "READ" };
+      // A routed session's authority is asked again once the transact has
+      // opened the engine and checked the deletion, ahead of its write
+      // transaction: the member lands through the other connection then.
+      let engineOpened = false;
+      let landed = false;
+      let other: Engine.Engine | undefined;
+      const messages: ServerMessage[] = [];
+      const connection = server.connectRouted(
+        (message) => messages.push(message),
+        (target) => {
+          if (engineOpened && !landed && other !== undefined) {
+            landed = true;
+            Engine.applyCommit(other, {
+              sessionId: "invite-service",
+              space,
+              commitClass: "system",
+              commit: {
+                localSeq: Engine.serverSeq(other) + 1,
+                reads: { confirmed: [], pending: [] },
+                operations: [{
+                  op: "set",
+                  id: `of:${space}`,
+                  value: { value: members },
+                }],
+              },
+            });
+          }
+          return target === space;
+        },
+      );
+      try {
+        await initializeSpaceAcl(server, space, { [ALICE]: "OWNER" });
+        await connection.receive(encodeMemoryBoundary(HELLO));
+        shiftMessage(messages);
+        connection.admitRoutedPrincipal(ALICE, server.nowSeconds() + 600);
+        await connection.receive(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: nextRequestId("routed-open"),
+          space,
+          principal: ALICE,
+          session: {},
+        }));
+        const opened = nextResponse<SessionOpenResult>(messages);
+        expectExists(opened.ok);
+        other = await Engine.open({
+          url: resolveSpaceStoreUrl(store, space as `did:${string}:${string}`),
+        });
+        server.accessForTestingOnly.engineOpener = (requested, open) => {
+          if (requested === space) engineOpened = true;
+          return open(requested);
+        };
+
+        await connection.receive(encodeMemoryBoundary({
+          type: "transact",
+          requestId: nextRequestId("delete"),
+          space,
+          sessionId: opened.ok.sessionId,
+          commit: {
+            localSeq: 1,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: `of:${space}`,
+              value: { value: { deleted: { by: ALICE } } },
+            }],
+          },
+        }));
+
+        expect(landed).toBe(true);
+        expect(nextResponse<unknown>(messages).error).toEqual({
+          name: "AuthorizationError",
+          message: `Only the sole member of ${space} may delete it`,
+        });
+        expect(
+          Engine.read(await server.engineForSpace(space), {
+            id: `of:${space}`,
+          })?.value,
+        ).toEqual(members);
+      } finally {
+        server.accessForTestingOnly.engineOpener = undefined;
+        if (other !== undefined) Engine.close(other);
+        connection.close();
+        await server.close();
+        await Deno.remove(directory, { recursive: true });
+      }
+    });
+
     /** A transact by `harness`'s session writing `value` as the ACL. */
     const writeAcl = (
       harness: Harness,

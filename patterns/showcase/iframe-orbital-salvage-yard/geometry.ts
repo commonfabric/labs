@@ -47,23 +47,31 @@ export function rotateVectorY(
 }
 
 export function worldConnectors(module: StationModule): WorldConnector[] {
-  return module.connectors.map((connector) => {
-    const offset = rotateVectorY(
-      connector.offset,
+  return module.connectors.map((connector) =>
+    worldConnector(module, connector)
+  );
+}
+
+/** Places one of a module's connectors at the module's transform. */
+export function worldConnector(
+  module: StationModule,
+  connector: ModuleConnector,
+): WorldConnector {
+  const offset = rotateVectorY(
+    connector.offset,
+    module.transform.rotationQuarterTurns,
+  );
+  return {
+    ...connector,
+    offset: [...connector.offset],
+    normal: [...connector.normal],
+    moduleId: module.id,
+    position: add(module.transform.position, offset),
+    worldNormal: rotateVectorY(
+      connector.normal,
       module.transform.rotationQuarterTurns,
-    );
-    return {
-      ...connector,
-      offset: [...connector.offset],
-      normal: [...connector.normal],
-      moduleId: module.id,
-      position: add(module.transform.position, offset),
-      worldNormal: rotateVectorY(
-        connector.normal,
-        module.transform.rotationQuarterTurns,
-      ),
-    };
-  });
+    ),
+  };
 }
 
 export function findConnections(

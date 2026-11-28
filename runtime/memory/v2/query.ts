@@ -265,6 +265,12 @@ export type QueryTraversalStats = GraphQueryWalkStats & {
    * refresh this counts the documents that actually changed. */
   schemaRefScans: number;
 
+  /** Records the cycle sweep visited (`sweepSuspects`). Each search starts
+   * at a record that lost an attribution and kept a walker, and reads back
+   * through what attributes it until it reaches a root, or until it has
+   * read every record that could reach it, which then retire. */
+  sweepVisits: number;
+
   /** Roots this evaluation visited. A cache hit visits none. */
   rootsVisited: number;
 
@@ -283,6 +289,7 @@ export type QueryTraversalStats = GraphQueryWalkStats & {
 const createQueryTraversalStats = (): QueryTraversalStats => ({
   managerReads: 0,
   schemaRefScans: 0,
+  sweepVisits: 0,
   rootsVisited: 0,
   rootsElapsedMs: 0,
   ...createGraphQueryWalkStats(),
@@ -1661,6 +1668,34 @@ const crossingsView = (
   of: state.crossingsOf,
 });
 
+/** Adds `value` to the set `index` holds under `key`. */
+const addAttribution = (
+  index: Map<string, Set<string>>,
+  key: string,
+  value: string,
+): void => {
+  let values = index.get(key);
+  if (values === undefined) {
+    values = new Set();
+    index.set(key, values);
+  }
+  values.add(value);
+};
+
+/** Removes `value` from the set `index` holds under `key`, and the set with
+ * it once it is empty. Returns whether the set went. */
+const removeAttribution = (
+  index: Map<string, Set<string>>,
+  key: string,
+  value: string,
+): boolean => {
+  const values = index.get(key);
+  values?.delete(value);
+  if (values === undefined || values.size > 0) return false;
+  index.delete(key);
+  return true;
+};
+
 /** The walk-side recorder over attributed selectors — a graph state's
  * misses or its crossings: records the key's selector and its referrer
  * attribution (see GraphQueryWalkOptions.onMissedDoc and onCrossing for
@@ -1677,18 +1712,8 @@ const attributedRecorderFor = (
   if (!attributed.keys.has(key)) changed?.add(key);
   attributed.keys.add(key, selector);
   if (referrerKey === undefined) return;
-  let refs = attributed.by.get(key);
-  if (refs === undefined) {
-    refs = new Set();
-    attributed.by.set(key, refs);
-  }
-  refs.add(referrerKey);
-  let keys = attributed.of.get(referrerKey);
-  if (keys === undefined) {
-    keys = new Set();
-    attributed.of.set(referrerKey, keys);
-  }
-  keys.add(key);
+  addAttribution(attributed.by, key, referrerKey);
+  addAttribution(attributed.of, referrerKey, key);
 };
 
 /** Retire one key outright — a miss whose target arrived, or one every
@@ -1701,16 +1726,10 @@ const retireAttributed = (
 ): void => {
   if (attributed.keys.has(key)) changed?.add(key);
   attributed.keys.delete(key);
-  const refs = attributed.by.get(key);
-  if (refs !== undefined) {
-    for (const referrerKey of refs) {
-      const keys = attributed.of.get(referrerKey);
-      if (keys === undefined) continue;
-      keys.delete(key);
-      if (keys.size === 0) attributed.of.delete(referrerKey);
-    }
-    attributed.by.delete(key);
+  for (const referrerKey of attributed.by.get(key) ?? []) {
+    removeAttribution(attributed.of, referrerKey, key);
   }
+  attributed.by.delete(key);
 };
 
 /** A referrer is about to be re-walked: its previous attributions no
@@ -1725,12 +1744,8 @@ const releaseReferrer = (
   if (keys === undefined) return;
   attributed.of.delete(referrerKey);
   for (const key of keys) {
-    const refs = attributed.by.get(key);
-    if (refs === undefined) continue;
-    refs.delete(referrerKey);
-    if (refs.size === 0) {
+    if (removeAttribution(attributed.by, key, referrerKey)) {
       changed?.add(key);
-      attributed.by.delete(key);
       attributed.keys.delete(key);
     }
   }
@@ -1795,19 +1810,6 @@ type TrackedRecorder = (
   referrer: string | undefined,
   kind: "walked" | "covered",
 ) => void;
-
-const addAttribution = (
-  index: Map<string, Set<string>>,
-  key: string,
-  value: string,
-): void => {
-  let values = index.get(key);
-  if (values === undefined) {
-    values = new Set();
-    index.set(key, values);
-  }
-  values.add(value);
-};
 
 /**
  * The recorder over `state`'s tracker attribution, which also records each
@@ -1895,16 +1897,8 @@ const dropAttribution = (
   referrer: string,
   retirement: Retirement,
 ): void => {
-  const walked = state.trackedBy.get(entry);
-  if (walked !== undefined) {
-    walked.delete(referrer);
-    if (walked.size === 0) state.trackedBy.delete(entry);
-  }
-  const covered = state.coveredBy.get(entry);
-  if (covered !== undefined) {
-    covered.delete(referrer);
-    if (covered.size === 0) state.coveredBy.delete(entry);
-  }
+  removeAttribution(state.trackedBy, entry, referrer);
+  removeAttribution(state.coveredBy, entry, referrer);
   if (!state.trackedBy.has(entry)) retirement.candidates.add(entry);
   else retirement.suspects.add(entry);
 };
@@ -2005,7 +1999,7 @@ const retireEmptied = (
   retirement.emptied.clear();
   for (const docKey of emptied) {
     if (state.tracker.has(docKey)) {
-      for (const record of recordsOf(state, docKey)) {
+      for (const record of recordsOf(state, docKey).keys()) {
         retirement.suspects.add(record);
       }
       continue;
@@ -2121,8 +2115,9 @@ const rewalkDocument = (
   // covering record instead, as a covered root or link is, so that it is
   // walked on its own when that record goes.
   for (const selector of selectors) {
-    if (state.tracker.hasValue(docKey, selector)) continue;
-    const covering = coveringSelector(state.tracker, docKey, selector);
+    const covering = state.tracker.hasValue(docKey, selector)
+      ? undefined
+      : coveringSelector(state.tracker, docKey, selector);
     if (covering === undefined) continue;
     const entry = trackedRecordKey(docKey, selector);
     for (const index of [state.trackedBy, state.coveredBy]) {
@@ -2170,101 +2165,146 @@ const retiredInSpace = (
   return removed;
 };
 
-/** The keys of every record the tracker holds of `docKey`. */
-const recordsOf = (state: TrackedGraphState, docKey: QueryDocKey): string[] =>
-  [...state.tracker.values(docKey)].map((selector) =>
-    trackedRecordKey(docKey, selector)
+/** The selector of every record the tracker holds of `docKey`, by key. */
+const recordsOf = (
+  state: TrackedGraphState,
+  docKey: QueryDocKey,
+): Map<string, SchemaPathSelector> =>
+  new Map(
+    [...state.tracker.values(docKey)].map((selector) => [
+      trackedRecordKey(docKey, selector),
+      selector,
+    ]),
   );
 
 /**
  * The records whose walks `referrer`, a key that is not a root's, stands
- * for: the record it names, or every record of the document a closure key
- * or a document's own key names.
+ * for, by key: the record it names, or every record of the document a
+ * closure key or a document's own key names. A record the tracker no
+ * longer holds walks nothing, so it stands for nothing.
  */
 const recordsOfReferrer = (
   state: TrackedGraphState,
   referrer: string,
-): string[] =>
-  !referrer.startsWith(CLOSURE_REFERRER_PREFIX) && referrer.includes("\0")
-    ? [referrer]
-    : recordsOf(state, referrerDocKey(referrer));
+): Map<string, SchemaPathSelector> => {
+  const records = recordsOf(state, referrerDocKey(referrer));
+  return !referrer.startsWith(CLOSURE_REFERRER_PREFIX) &&
+      referrer.includes("\0")
+    ? new Map([...records].filter(([record]) => record === referrer))
+    : records;
+};
+
+/**
+ * One record on `searchBackForRoot()`'s path, and how far the search has
+ * read what attributes it: the referrers not yet read, and the records the
+ * referrer it is reading stands for.
+ */
+type SearchFrame = {
+  entry: string;
+  referrers: Iterator<string>;
+  records: readonly (readonly [string, SchemaPathSelector])[];
+  next: number;
+};
+
+/** The referrers that attribute `entry`, walked and covered alike. */
+function* referrersOfEntry(
+  state: TrackedAttribution,
+  entry: string,
+): Generator<string, void, undefined> {
+  yield* state.trackedBy.get(entry) ?? [];
+  yield* state.coveredBy.get(entry) ?? [];
+}
+
+/**
+ * Helper for `sweepSuspects()`, which searches back from `suspect` through
+ * what attributes it, referrer by referrer, for a root or a record in
+ * `reachable`. Returns `undefined` once it reaches one, having added to
+ * `reachable` the records on its way back to `suspect`, and otherwise every
+ * record it visited, with its selector: a closed set of records nothing
+ * reaches. `selector` is the suspect's own. The search
+ * is depth first, so a record with many referrers costs the one it follows
+ * back to a root rather than all of them.
+ */
+const searchBackForRoot = (
+  state: TrackedGraphState,
+  suspect: string,
+  selector: SchemaPathSelector,
+  reachable: Set<string>,
+  stats: QueryTraversalStats,
+): Map<string, SchemaPathSelector> | undefined => {
+  const seen = new Map<string, SchemaPathSelector>();
+  // The records from `suspect` to the one being read, each attributed by a
+  // referrer standing for the record after it, so a root reached from the
+  // last one proves every one of them reachable.
+  const path: SearchFrame[] = [];
+  // Puts `entry` on the path, and returns whether it is a root itself: a
+  // record nothing attributes counts as one.
+  const enter = (entry: string, entrySelector: SchemaPathSelector): boolean => {
+    seen.set(entry, entrySelector);
+    stats.sweepVisits++;
+    path.push({
+      entry,
+      referrers: referrersOfEntry(state, entry),
+      records: [],
+      next: 0,
+    });
+    return !state.trackedBy.has(entry) && !state.coveredBy.has(entry);
+  };
+  let rooted = enter(suspect, selector);
+  while (!rooted && path.length > 0) {
+    const frame = path[path.length - 1];
+    if (frame.next < frame.records.length) {
+      const [record, recordSelector] = frame.records[frame.next++];
+      if (reachable.has(record)) rooted = true;
+      else if (!seen.has(record)) rooted = enter(record, recordSelector);
+      continue;
+    }
+    const referrer = frame.referrers.next();
+    if (referrer.done) {
+      path.pop();
+    } else if (referrer.value.startsWith(ROOT_REFERRER_PREFIX)) {
+      rooted = true;
+    } else {
+      frame.records = [...recordsOfReferrer(state, referrer.value)];
+      frame.next = 0;
+    }
+  }
+  if (!rooted) return seen;
+  for (const { entry } of path) reachable.add(entry);
+  return undefined;
+};
 
 /**
  * Retires the suspect records no root reaches through the attribution,
  * with every record reachable only through them. Attribution alone retires
  * a record when its last referrer lets go, which two records reached only
  * through each other never do, so each record that lost an attribution and
- * kept a walker is searched for backwards, referrer by referrer, until a
- * root or a record already found reachable: a search that finds neither
- * has found a closed set of records nothing reaches, which retires
- * together, and a document left with no record is emptied. A record
- * nothing attributes counts as a root.
+ * kept a walker is searched for backwards (`searchBackForRoot()`): a
+ * search that finds no root has found a closed set of records nothing
+ * reaches, which retires together, and a document left with no record is
+ * emptied.
  */
 const sweepSuspects = (
   state: TrackedGraphState,
   retirement: Retirement,
   changedMisses: Set<string>,
+  stats: QueryTraversalStats,
 ): void => {
   const reachable = new Set<string>();
   const suspects = [...retirement.suspects];
   retirement.suspects.clear();
-  const selectorOf = (entry: string) =>
-    selectorOfEntry(state.tracker, entryDocKey(entry), entry);
   for (const suspect of suspects) {
-    if (reachable.has(suspect) || selectorOf(suspect) === undefined) {
-      continue;
-    }
-    // The search runs backwards from the suspect through referrers. A
-    // referrer found rooted proves reachable only the records on its way
-    // back to the suspect, not every referrer the search visited, so the
-    // parents record that way.
-    const seen = new Set<string>([suspect]);
-    const parent = new Map<string, string>();
-    const queue: string[] = [suspect];
-    let rooted: string | undefined;
-    search: while (queue.length > 0) {
-      const entry = queue.pop()!;
-      const walked = state.trackedBy.get(entry);
-      const covered = state.coveredBy.get(entry);
-      if (walked === undefined && covered === undefined) {
-        rooted = entry;
-        break;
-      }
-      for (const referrers of [walked, covered]) {
-        for (const referrer of referrers ?? []) {
-          if (referrer.startsWith(ROOT_REFERRER_PREFIX)) {
-            rooted = entry;
-            break search;
-          }
-          for (const record of recordsOfReferrer(state, referrer)) {
-            if (reachable.has(record)) {
-              rooted = entry;
-              break search;
-            }
-            if (!seen.has(record)) {
-              seen.add(record);
-              parent.set(record, entry);
-              queue.push(record);
-            }
-          }
-        }
-      }
-    }
-    if (rooted !== undefined) {
-      for (
-        let entry: string | undefined = rooted;
-        entry !== undefined;
-        entry = parent.get(entry)
-      ) {
-        reachable.add(entry);
-      }
-      continue;
-    }
-    for (const entry of seen) {
-      const selector = selectorOf(entry);
-      if (selector === undefined) continue;
+    const selector = selectorOfEntry(
+      state.tracker,
+      entryDocKey(suspect),
+      suspect,
+    );
+    if (reachable.has(suspect) || selector === undefined) continue;
+    const seen = searchBackForRoot(state, suspect, selector, reachable, stats);
+    if (seen === undefined) continue;
+    for (const [entry, entrySelector] of seen) {
       const docKey = entryDocKey(entry);
-      state.tracker.deleteValue(docKey, selector);
+      state.tracker.deleteValue(docKey, entrySelector);
       releaseRecord(state, entry, retirement, changedMisses);
       for (const index of [state.trackedBy, state.coveredBy]) {
         for (const referrer of index.get(entry) ?? []) {
@@ -2303,7 +2343,7 @@ const settleRetirement = (
       retireEmptied(state, retirement, changedMisses);
       if (retirement.candidates.size > 0) continue;
       if (retirement.suspects.size === 0) break;
-      sweepSuspects(state, retirement, changedMisses);
+      sweepSuspects(state, retirement, changedMisses, stats);
       // A record the sweep retires can orphan what its walk reached, with
       // or without emptying a document.
       if (

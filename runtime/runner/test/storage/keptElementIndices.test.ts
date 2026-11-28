@@ -42,6 +42,21 @@ describe("keptElementIndices()", () => {
     expect(keptBetween(["a", "b", "c"], ["a", "q", "c"])).toEqual([0, -1, 2]);
   });
 
+  it("keeps the elements between runs and after the last run", () => {
+    expect(keptBetween(["a", "x", "m", "y", "z"], ["a", "m", "z"])).toEqual([
+      0,
+      -1,
+      1,
+      -1,
+      2,
+    ]);
+    expect(keptBetween(["a", "m", "z"], ["a", "x", "m", "y", "z"])).toEqual([
+      0,
+      2,
+      4,
+    ]);
+  });
+
   it("returns only the common prefix and suffix where no script is short enough", () => {
     expect(
       keptBetween(["a", "p", "q", "r", "z"], ["a", "r", "q", "p", "z"], 2),

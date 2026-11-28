@@ -5,12 +5,13 @@
  * and title. A card is selected by clicking it and removed by its ×, and
  * removing one keeps the selection on the same contact where it can and keeps
  * the groups' indices pointing at the same contacts. A button adds an empty
- * group.
+ * group. While a contact is selected, the detail pane shows it with an Open
+ * button that navigates to it.
  *
  * This adds three contacts, selects and removes them in an order that moves
- * the selection both ways, and adds a group, reading the cards and the groups
- * after each step. `contacts.test.tsx` covers adding contacts and the records
- * they hold.
+ * the selection both ways, adds a group, and opens the selected contact,
+ * reading the cards and the groups after each step. `contacts.test.tsx`
+ * covers adding contacts and the records they hold.
  */
 import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
@@ -18,6 +19,7 @@ import {
   findElements,
   findNode,
   fireClick,
+  hasText,
   isButton,
   propValue,
   textContent,
@@ -85,6 +87,12 @@ export default pattern(() => {
   // Assertions
   // ==========================================================================
 
+  // With nothing selected the detail pane offers no Open button.
+  const assert_nothing_selected = assert(() =>
+    hasText(contacts[UI], "Select a contact to view details") &&
+    !hasText(contacts[UI], "Open ↗")
+  );
+
   // A one-word title shows one initial and a longer one two. Adding a contact
   // selects it.
   const assert_person_added = assert(() =>
@@ -126,6 +134,15 @@ export default pattern(() => {
     listing(contacts[UI]) === "FMFamily Member×*"
   );
 
+  const assert_detail_shown = assert(() =>
+    hasText(contacts[UI], "Open ↗") &&
+    !hasText(contacts[UI], "Select a contact to view details")
+  );
+  const assert_opened_unchanged = assert(() =>
+    contacts.count === 1 && listing(contacts[UI]) === "FMFamily Member×*" &&
+    hasText(contacts[UI], "Open ↗")
+  );
+
   const assert_group_added = assert(() =>
     contacts.groups.length === 2 && contacts.groups[0]?.name === "Everyone" &&
     contacts.groups[1]?.name === "New Group" &&
@@ -134,6 +151,7 @@ export default pattern(() => {
 
   return {
     [TESTS]: [
+      { assertion: assert_nothing_selected },
       { action: action_add_person },
       { assertion: assert_person_added },
       { action: action_add_family_member },
@@ -152,6 +170,13 @@ export default pattern(() => {
       { assertion: assert_last_removed },
       { action: action_add_group },
       { assertion: assert_group_added },
+      { assertion: assert_detail_shown },
+      // Open hands the selected contact to the shell to show on its own. The
+      // runner records the navigation, which no assertion can read, so the
+      // step checks that opening runs cleanly and leaves the list and
+      // selection as they were.
+      { press: contacts[UI], control: "Open ↗" },
+      { assertion: assert_opened_unchanged },
     ],
     contacts,
   };

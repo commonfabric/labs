@@ -66,6 +66,24 @@ export default pattern<Record<string, never>>(() => {
     });
   });
 
+  describe("authored causes", () => {
+    it("adds no `.for()` to a call of `Writable.for` under another name", async () => {
+      // `make` is `Writable.for` itself, so `keyed` already carries the
+      // author's cause even though its chain spells no `.for`; `plain` is
+      // the cell that does take one.
+      const output = await compile(`
+export default pattern<Record<string, never>>(() => {
+  const make = Writable.for;
+  const keyed = make("authored");
+  const plain = Writable.of(1);
+  return { keyed, plain };
+});`);
+
+      expect(forCauseTexts(initializerOf(output, "keyed"))).toEqual([]);
+      expect(forCauseTexts(initializerOf(output, "plain"))).toEqual(["plain"]);
+    });
+  });
+
   describe("sub-pattern instance names", () => {
     // `registry.for(...)` hands back a set of pattern factories, so `reg`
     // and `regKeyed` are instances whose chain carries an authored `.for()`.

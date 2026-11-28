@@ -25,10 +25,12 @@ export const checkoutSkillsRoot = (): string | undefined => {
  * skill registry and no profile preloads.
  *
  * This is the one derivation of the dial, so a surface stating its tool policy
- * and the engine building the registry reach the same answer.
+ * and the engine building the registry reach the same answer. `checkout`
+ * names the checkout's tree, {@link checkoutSkillsRoot} when absent.
  */
 export const resolveHarnessSkillsRoot = (
   configured?: string,
+  checkout: () => string | undefined = checkoutSkillsRoot,
 ): HarnessSkillsRootRecord | undefined => {
   if (configured !== undefined) {
     return {
@@ -37,7 +39,7 @@ export const resolveHarnessSkillsRoot = (
       hostPath: configured,
     };
   }
-  const hostPath = checkoutSkillsRoot();
+  const hostPath = checkout();
   return hostPath === undefined ? undefined : {
     type: "cf-harness.skills-root-record",
     source: "checkout-default",

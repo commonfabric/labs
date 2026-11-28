@@ -93,6 +93,13 @@ turns a result into something typed. Without it the rows come back as
 `Record<string, unknown>`, and a `_cf_link` column comes back as a raw link
 string rather than a live cell.
 
+An INTEGER column within ±(2^53 − 1) arrives as a `number`, which covers a
+rowid, a count, and an epoch-millisecond timestamp. A value beyond that range
+arrives as a `bigint`, including in a field declared `number`. For a column
+that holds such values (a 64-bit id, a nanosecond timestamp), declare the field
+`number | bigint`, or select it as text with `CAST(col AS TEXT)` and declare it
+`string`.
+
 The tables are declared on the database rather than on the pattern, so a
 pattern reading an input database does not restate them. What it needs to know
 is which tables and columns are there — the shape of the contract it is
@@ -390,7 +397,9 @@ export default pattern<{ favorite: Cell<Donut> }, {
   `bakerName: { type: "text", path: ["baker", "name"] }`, and a relation a
   field holding one reference as well as a list of them. A column whose
   field is absent holds `NULL`, and a relation whose field is absent has no
-  row.
+  row. A field the member computes, such as one its pattern returns from a
+  `lift()`, reads the same way until the computation has run, and is filled
+  in once it has.
 - `add(kind, member)` and `remove(kind, member)` are called in a handler. After `add()`,
   you write to the member and nothing else: the runtime re-reads a member when
   a document its mirrored fields were read from is written.

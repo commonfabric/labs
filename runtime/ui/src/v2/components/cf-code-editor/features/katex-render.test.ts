@@ -26,9 +26,17 @@ describe("katex-render", () => {
 
     it("returns KaTeX's message for TeX it cannot parse", () => {
       const rendered = renderFormula("\\frac{1", false);
-      expect("error" in rendered && rendered.error).toContain(
-        "KaTeX parse error",
+      expect("error" in rendered && rendered.error).toMatch(
+        /^KaTeX parse error: /,
       );
+    });
+
+    it("returns the engine's error for TeX that nests too deeply to set", () => {
+      const nested = (depth: number) =>
+        `${"{".repeat(depth)}x${"}".repeat(depth)}`;
+      expect(htmlOf(nested(100))).toContain('class="katex"');
+      const rendered = renderFormula(nested(100_000), false);
+      expect(rendered).toEqual({ error: "Maximum call stack size exceeded" });
     });
 
     it("returns no link for a formula that asks for one", () => {

@@ -18,6 +18,7 @@ import {
   OFFCUTS_RETRY_MS,
   OFFCUTS_SWEEP_MS,
   OffcutsScan,
+  parseGrepForTestingOnly,
   type ScanTarget,
 } from "../offcuts-scan.ts";
 import type { Job } from "../ci-jobs-page.ts";
@@ -837,6 +838,62 @@ describe("offcuts-scan", () => {
         code: 1,
         header: "",
       });
+    });
+  });
+
+  describe("parseGrepForTestingOnly()", () => {
+    const tree = "refs/heads/scanned";
+    const match = (path: string, line: string, text: string) =>
+      `${tree}:${path}\0${line}\0${text}\n`;
+    const refusal = (rest: string) =>
+      `Unexpected \`git grep\` output: ${JSON.stringify(rest)}`;
+    // Each case follows one well-formed match, so the message has to quote
+    // the output from the malformed match on, not from the start.
+    const first = match("deps.txt", "1", `${OFFCUTS}/a`);
+
+    it("returns one reference per line, however many matches that line holds", () => {
+      const output = match("deps.txt", "3", `${OFFCUTS}/a`) +
+        match("deps.txt", "3", `${OFFCUTS}/b`) +
+        match("deps.txt", "4", `${OFFCUTS}/a`) +
+        match("odd\nname.md", "3", `${OFFCUTS}/a`);
+
+      expect(parseGrepForTestingOnly(output)).toEqual([
+        { path: "deps.txt", line: 3 },
+        { path: "deps.txt", line: 4 },
+        { path: "odd\nname.md", line: 3 },
+      ]);
+    });
+
+    it("throws, quoting the rest of the output, on a match outside the scanned tree", () => {
+      const rest = `refs/heads/other:deps.txt\x003\0${OFFCUTS}/a\n`;
+
+      expect(() => parseGrepForTestingOnly(first + rest)).toThrow(
+        refusal(rest),
+      );
+    });
+
+    it("throws, quoting the rest of the output, on a line number that is not an integer", () => {
+      const rest = match("deps.txt", "3.5", `${OFFCUTS}/a`);
+
+      expect(() => parseGrepForTestingOnly(first + rest)).toThrow(
+        refusal(rest),
+      );
+    });
+
+    it("throws, quoting the rest of the output, on a match with no separator after its line number", () => {
+      const rest = `${tree}:deps.txt\x003 ${OFFCUTS}/a\n`;
+
+      expect(() => parseGrepForTestingOnly(first + rest)).toThrow(
+        refusal(rest),
+      );
+    });
+
+    it("throws, quoting the rest of the output, on output that ends before a match's newline", () => {
+      const rest = `${tree}:deps.txt\x003\0${OFFCUTS}/a`;
+
+      expect(() => parseGrepForTestingOnly(first + rest)).toThrow(
+        refusal(rest),
+      );
     });
   });
 });

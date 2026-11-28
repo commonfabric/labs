@@ -281,6 +281,21 @@ describe("carried-demand", () => {
           expect(carried.retryOwed).toBe(false);
         });
 
+        it("owes no retry for a set the space did not take once a later set has been sent", async () => {
+          failure = new Error("not taken");
+          carried.send(rowsOf("of:far"));
+          carried.send(rowsOf("of:near"));
+          await carried.settled;
+
+          expect(sent.map(({ rows }) => rows)).toEqual([["of:near"]]);
+          expect(carried.retryOwed).toBe(false);
+
+          carried.send(rowsOf("of:near"));
+          await carried.settled;
+
+          expect(sent).toHaveLength(1);
+        });
+
         it("sends an empty set again that the space did not take", async () => {
           carried.send(rowsOf("of:far"));
           await carried.settled;

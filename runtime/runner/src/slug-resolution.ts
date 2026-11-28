@@ -22,8 +22,7 @@ export class SlugResolutionError extends Error {
       | "malformed"
       | "not-piece"
       | "inside-piece"
-      | "missing-member"
-      | "missing-piece-id",
+      | "missing-member",
   ) {
     super(message);
     this.name = "SlugResolutionError";

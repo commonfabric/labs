@@ -1,4 +1,4 @@
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { expect } from "@std/expect";
 
 import {
@@ -15,13 +15,16 @@ import {
   SNAPSHOT_PATH,
   specsDirectory,
 } from "./cfc-spec-snapshot.ts";
-import type { Git } from "./repository-files.ts";
+import { type Git, gitIn } from "./repository-files.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   afterEach,
   beforeEach,
   describe,
   it,
 } from "@commonfabric/test-support/test";
+
+const ROOT = fromFileUrl(new URL("..", import.meta.url));
 
 const SPECS_COMMIT = "9e751d583760fe44780aad2f4b138edb2667fa1a";
 
@@ -371,6 +374,100 @@ describe("cfc-spec-snapshot", () => {
         }),
       ).rejects.toThrow("unexpected `git rev-parse HEAD^{commit}`");
       await expect(Deno.stat(target)).rejects.toThrow(Deno.errors.NotFound);
+    });
+  });
+
+  describe("the command-line entry point", () => {
+    let repo: string;
+
+    beforeEach(async () => {
+      repo = await Deno.makeTempDir();
+      const git = gitIn(repo);
+      const commit = async (chapter: string) => {
+        await Deno.writeTextFile(join(repo, "cfc", "03-labels.md"), chapter);
+        await git("add", ".");
+        await git(
+          "-c",
+          "user.name=Test",
+          "-c",
+          "user.email=test@example.com",
+          "-c",
+          "commit.gpgsign=false",
+          "commit",
+          "-q",
+          "-m",
+          "specs",
+        );
+      };
+      await Deno.mkdir(join(repo, "cfc"));
+      await git("init", "-q");
+      await commit("# 3. Labels\n```ts\nfunction atom() {}\n```\n");
+      await git("tag", "v1");
+      // `HEAD` holds a chapter whose fence never closes, which no snapshot
+      // can be built from.
+      await commit("# 3. Labels\n```ts\nfunction atom() {}\n");
+    });
+
+    afterEach(async () => {
+      await Deno.remove(repo, { recursive: true });
+    });
+
+    /**
+     * Runs the script as its own process with `args`, reading the specs
+     * checkout at `repo`, with the permissions the `cfc-spec-snapshot` task
+     * grants except write access, so the committed snapshot stays as it is.
+     */
+    const run = async (args: readonly string[]) => {
+      const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+        root: ROOT,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(ROOT, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--no-prompt",
+          "--allow-read",
+          "--allow-run=git",
+          "--allow-env=CF_SPECS_DIR,HOME",
+          join(ROOT, "tasks", "cfc-spec-snapshot.ts"),
+          ...args,
+        ],
+        env: { CF_SPECS_DIR: join(repo, "cfc") },
+      });
+      return {
+        code,
+        stdout: new TextDecoder().decode(stdout),
+        stderr: new TextDecoder().decode(stderr),
+      };
+    };
+
+    it("asks for write access to the committed snapshot once it has read the `--rev` revision of the checkout `CF_SPECS_DIR` names", async () => {
+      const { code, stdout, stderr } = await run(["--rev", "v1"]);
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(
+        `Requires write access to "${join(ROOT, SNAPSHOT_PATH)}"`,
+      );
+      expect(stderr).not.toContain("never closed");
+    });
+
+    it("writes nothing when the checkout `CF_SPECS_DIR` names cannot be read at `HEAD` and no `--rev` is given", async () => {
+      const { code, stdout, stderr } = await run([]);
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(
+        "03-labels.md: the fence opened at line 2 is never closed",
+      );
+      expect(stderr).not.toContain("write access");
+    });
+
+    it("writes nothing when `--rev` names a revision the checkout lacks", async () => {
+      const { code, stdout, stderr } = await run(["--rev", "v2"]);
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("`git rev-parse v2^{commit}` failed");
+      expect(stderr).not.toContain("write access");
     });
   });
 });

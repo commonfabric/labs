@@ -154,7 +154,8 @@ const marker = (
  * Verifies `result` against `against`: steps 1 to 6 of the plan's §3, each
  * a named check that passes or fails on its own, so a failing verification
  * says which property the result lost. Throws only when a file cannot be
- * opened or attached; everything found inside the files is a check.
+ * opened, attached or queried (a table missing a column every read needs);
+ * everything found in the rows is a check.
  */
 export function verifyCompaction(
   options: VerifyCompactionOptions,
@@ -651,8 +652,10 @@ export function verifyCompaction(
       }
     };
 
-    let rightPrint: FingerprintReport | undefined;
-    let rightPrintError: { error: unknown } | undefined;
+    let rightPrint:
+      | { report: FingerprintReport }
+      | { error: unknown }
+      | undefined;
     let comparisonError: { index: number; error: unknown } | undefined;
     if (!sampled) {
       const headIndices = new Map<string, Map<string, number>>();
@@ -662,7 +665,7 @@ export function verifyCompaction(
         ids.set(row.id, index);
       }
       try {
-        rightPrint = contentFingerprint(backup, {
+        const report = contentFingerprint(backup, {
           onEntity: (at, outcome) => {
             const index = headIndices.get(at.scope)?.get(at.id);
             if (index === undefined) return;
@@ -677,8 +680,9 @@ export function verifyCompaction(
             }
           },
         });
+        rightPrint = { report };
       } catch (error) {
-        rightPrintError = { error };
+        rightPrint = { error };
       }
     }
     // A fingerprint may refuse a cap or fail before reaching a head. A head
@@ -930,19 +934,17 @@ export function verifyCompaction(
 
     // 4. Complete the fingerprints whose primary reads also served the head
     // comparison. Fingerprint failures are reported in result/backup order.
-    if (!sampled) {
+    if (leftReader !== undefined && rightPrint !== undefined) {
       try {
-        const leftPrint = leftReader!.finish();
-        if (rightPrintError !== undefined) throw rightPrintError.error;
-        if (rightPrint === undefined) {
-          throw new Error("The backup fingerprint has no result.");
-        }
+        const leftPrint = leftReader.finish();
+        if ("error" in rightPrint) throw rightPrint.error;
+        const { hash } = rightPrint.report;
         check(
           "fingerprint",
-          leftPrint.hash === rightPrint.hash,
-          leftPrint.hash === rightPrint.hash
+          leftPrint.hash === hash,
+          leftPrint.hash === hash
             ? `${leftPrint.hash} on both`
-            : `${leftPrint.hash} ≠ ${rightPrint.hash}`,
+            : `${leftPrint.hash} ≠ ${hash}`,
         );
       } catch (error) {
         check(

@@ -1,5 +1,10 @@
 import { expect } from "@std/expect";
 import ts from "typescript";
+import type {
+  MutableJSONSchema,
+  MutableJSONSchemaObj,
+} from "@commonfabric/api";
+import { unionBranches } from "../../src/formatters/common-fabric-formatter.ts";
 import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import {
@@ -312,6 +317,79 @@ describe("common-fabric-formatter", () => {
         },
       });
     });
+
+    it("emits the payload of a wrapper beside `undefined` that a generic member writes through an alias it cannot bind, read from its type", async () => {
+      // The member's node writes `Outer<T>`, whose `T` is a parameter of
+      // `Box` that `Required` has instantiated, so no union is read from
+      // the alias chain, and the wrapper `Required` leaves is read from its
+      // type, as it is where the alias is written with its argument.
+      const schemaOf = (payload: string) =>
+        propertySchema(
+          `type Inner<U> = PerUser<U> | undefined;
+          type Outer<T> = Inner<T>;
+          interface Box<T> { h?: Outer<T> }
+          interface X extends Required<Box<${payload}>> {}`,
+          "h",
+        );
+
+      expect(await schemaOf("string")).toEqual({
+        type: "string",
+        scope: "user",
+      });
+      expect(await schemaOf("string")).toEqual(
+        await propertySchema(
+          `type Inner<U> = PerUser<U> | undefined;
+          type Outer<T> = Inner<T>;
+          type X = Required<{ h?: Outer<string> }>;`,
+          "h",
+        ),
+      );
+      expect(await schemaOf("number")).toEqual({
+        type: "number",
+        scope: "user",
+      });
+    });
+  });
+
+  describe("unionBranches", () => {
+    const cell: MutableJSONSchemaObj = { type: "string", asCell: ["cell"] };
+
+    it("reads each branch of a union as the chain of the schemas it reaches", () => {
+      const definitions: Record<string, MutableJSONSchema> = {
+        Handle: cell,
+        Maybe: { anyOf: [{ $ref: "#/$defs/Handle" }, { type: "null" }] },
+      };
+
+      expect(unionBranches({ $ref: "#/$defs/Maybe" }, definitions)).toEqual([
+        [{ $ref: "#/$defs/Handle" }, cell],
+        [{ type: "null" }],
+      ]);
+    });
+
+    it("reads a branch that is itself a union for its own branches, ending at a union met again", () => {
+      // Each definition's union holds a reference to the other's.
+      const definitions: Record<string, MutableJSONSchema> = {
+        A: { anyOf: [{ $ref: "#/$defs/B" }, cell] },
+        B: { anyOf: [{ $ref: "#/$defs/A" }, { type: "null" }] },
+      };
+
+      expect(unionBranches({ $ref: "#/$defs/A" }, definitions)).toEqual([
+        [{ type: "null" }],
+        [cell],
+      ]);
+    });
+
+    it("reads no branches where a cell or a schema with no union comes first", () => {
+      const definitions: Record<string, MutableJSONSchema> = {
+        Handle: { anyOf: [{ type: "null" }, cell] },
+        Labelled: { ...cell, ifc: { confidentiality: ["owner"] } },
+      };
+
+      expect(unionBranches(cell, definitions)).toBeUndefined();
+      expect(unionBranches({ type: "string" }, definitions)).toBeUndefined();
+      expect(unionBranches({ $ref: "#/$defs/Labelled" }, definitions))
+        .toBeUndefined();
+    });
   });
 
   describe("cell wrappers", () => {
@@ -519,6 +597,31 @@ describe("common-fabric-formatter", () => {
         required: ["a"],
         asCell: ["cell"],
       });
+    });
+
+    it("emits the wrappers of a union beside a type parameter, which adds nothing", async () => {
+      const { schema } = await generate(
+        "interface X<T> { a: Cell<string> | T | null; b: Cell<string> | null }",
+      );
+      const properties = asObjectSchema(schema).properties;
+
+      expect(properties?.a).toEqual({
+        anyOf: [{ type: "null" }, { type: "string", asCell: ["cell"] }],
+      });
+      expect(properties?.a).toEqual(properties?.b);
+    });
+
+    it("emits the wrappers of a union beside a conditional type its parameter defers, which adds nothing", async () => {
+      const { schema } = await generate(
+        `interface X<T> {
+          a: Cell<string> | (T extends string ? Cell<number> : Cell<boolean>);
+          b: Cell<string> | Cell<number>;
+        }`,
+      );
+      const properties = asObjectSchema(schema).properties;
+
+      expect(properties?.a).toEqual({ type: "string", asCell: ["cell"] });
+      expect(properties?.b).not.toEqual(properties?.a);
     });
   });
 

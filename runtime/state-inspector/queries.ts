@@ -67,15 +67,9 @@ export function summarizeSpace(space: SpaceDb): SpaceSummary {
     .all<{ scope_key: string; count: number }>();
 
   const hasSched = hasSchedulerBasisTable(db);
-  let schedulerBasisRows = 0;
-  if (hasSched) {
-    try {
-      schedulerBasisRows =
-        one<{ n: number }>(`SELECT count(*) n FROM scheduler_basis`).n;
-    } catch {
-      schedulerBasisRows = 0;
-    }
-  }
+  const schedulerBasisRows = hasSched
+    ? one<{ n: number }>(`SELECT count(*) n FROM scheduler_basis`).n
+    : 0;
 
   // A store from before the head table has no ACL head to read.
   const acl = tableNames(db).includes("head") ? readAclHeads(db) : [];

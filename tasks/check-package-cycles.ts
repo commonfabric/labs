@@ -48,7 +48,9 @@
  * up as a cycle that has to be explained, where a missed edge would let a real
  * one through unseen.
  *
- * Usage: deno run --allow-read --allow-run=git ./tasks/check-package-cycles.ts
+ * Usage: deno run --allow-read --allow-run=git ./tasks/check-package-cycles.ts [root]
+ *
+ * `root` is the repository to scan, and defaults to the one holding this file.
  */
 
 import { walk } from "@std/fs/walk";
@@ -56,6 +58,7 @@ import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl, relative, resolve } from "@std/path";
 import { packageDirOf, withoutPackageParent } from "./package-layout.ts";
 import { gitLsFiles } from "./repository-files.ts";
+import { runOnRoot } from "./root-argument.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -165,16 +168,31 @@ export function isProductionSource(
   path: string,
   members: readonly string[],
 ): boolean {
+  return productionPackageOf(path, members) !== undefined;
+}
+
+/**
+ * The package, named as {@link packageOfPath} names it, that a repo-relative
+ * path is production source of, or undefined when it is production source of
+ * none.
+ */
+function productionPackageOf(
+  path: string,
+  members: readonly string[],
+): string | undefined {
   const dir = memberDirOf(path, members);
-  if (dir === undefined) return false;
+  if (dir === undefined) return undefined;
   const dot = path.lastIndexOf(".");
-  if (dot === -1 || !CODE_EXTENSIONS.has(path.slice(dot))) return false;
+  if (dot === -1 || !CODE_EXTENSIONS.has(path.slice(dot))) return undefined;
   // Only the segments below the package decide this, so a member whose own
   // directory is named `test` does not exclude itself.
   const inside = path.slice(`${dir}/`.length).split("/");
   const base = inside[inside.length - 1];
-  if (/\.(test|bench)\.[^.]+$/.test(base)) return false;
-  return !inside.slice(0, -1).some((s) => TEST_DIRECTORIES.has(s));
+  if (/\.(test|bench)\.[^.]+$/.test(base)) return undefined;
+  if (inside.slice(0, -1).some((s) => TEST_DIRECTORIES.has(s))) {
+    return undefined;
+  }
+  return withoutPackageParent(dir);
 }
 
 /**
@@ -261,6 +279,12 @@ async function gitTrackedFiles(root: string): Promise<string[] | null> {
   return paths.length > 0 ? paths : null;
 }
 
+// Repo-relative, forward-slash paths of the files under `root`: those git
+// tracks, or every file a walk finds where git tracks none.
+async function repositoryPaths(root: string): Promise<string[]> {
+  return await gitTrackedFiles(root) ?? await walkFiles(root);
+}
+
 async function walkFiles(root: string): Promise<string[]> {
   const paths: string[] = [];
   for await (
@@ -276,17 +300,16 @@ export async function productionPaths(
   root: string,
   workspace: Workspace,
 ): Promise<string[]> {
-  return (await gitTrackedFiles(root) ?? await walkFiles(root))
+  return (await repositoryPaths(root))
     .filter((path) => isProductionSource(path, workspace.members));
 }
 
 /** Every import edge between two different packages' production source. */
 export async function buildEdges(root: string): Promise<Edge[]> {
   const workspace = await readWorkspace(root);
-  const paths = await productionPaths(root, workspace);
   const edges: Edge[] = [];
-  for (const path of paths) {
-    const from = packageOfPath(path, workspace.members);
+  for (const path of await repositoryPaths(root)) {
+    const from = productionPackageOf(path, workspace.members);
     if (from === undefined) continue;
     let source: string;
     try {
@@ -550,4 +573,7 @@ export async function main(
   return 0;
 }
 
-if (import.meta.main) Deno.exit(await main());
+/** What the command line may hold. */
+const USAGE = "check-package-cycles.ts [root]";
+
+if (import.meta.main) Deno.exit(await runOnRoot(Deno.args, USAGE, main));

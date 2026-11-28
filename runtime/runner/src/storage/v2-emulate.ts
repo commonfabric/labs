@@ -1,7 +1,9 @@
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
+import { aclDocId, type DeletionTombstone } from "@commonfabric/memory/acl";
+import type { DID, MemorySpace, Signer } from "@commonfabric/memory/interface";
 import type { MemoryProtocolFlags } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { namesInstancesByDefault } from "../builder/instance-name.ts";
@@ -253,17 +255,17 @@ export class EmulatedStorageManager extends StorageManager {
     options: Options,
     serverFactory: (manager: EmulatedStorageManager) => MemoryV2Server.Server,
   ) {
-    const serverHolder: { get: () => MemoryV2Server.Server } = {
-      get: () => {
-        throw new Error("Emulated server requested before initialization");
-      },
-    };
+    // The factory asks for the server only when it opens a session or reads
+    // the server's flags, both after construction, so `manager` is assigned
+    // by then.
+    // deno-lint-ignore prefer-const -- assigned once `this` exists
+    let manager: EmulatedStorageManager;
     super(
       options,
-      new EmulatedSessionFactory(() => serverHolder.get(), options.demand),
+      new EmulatedSessionFactory(() => manager.server(), options.demand),
     );
     this.#serverFactory = serverFactory;
-    serverHolder.get = () => this.server();
+    manager = this;
   }
 
   /**
@@ -286,6 +288,36 @@ export class EmulatedStorageManager extends StorageManager {
       await this.#server.close();
       this.#server = undefined;
     }
+  }
+
+  /**
+   * Deletes `space` on this manager's server, as a deletion by `by` leaves
+   * it (INV-15 in `docs/specs/memory-v2/09-invariants.md`): a deletion
+   * tombstone naming `by` where its access list was, and every session open
+   * on it revoked as deleted. The tombstone is written into the space's store
+   * directly, so a space whose list names others than `by`, such as a
+   * self-owned space, is deleted too. It is for a test of what follows a
+   * deletion, which the emulation lets it bring about on any space.
+   */
+  async deleteSpace(space: MemorySpace, by: DID): Promise<void> {
+    const server = this.server();
+    const engine = await server.engineForSpace(space);
+    const tombstone: DeletionTombstone = { deleted: { by } };
+    Engine.applyCommit(engine, {
+      sessionId: "emulated-deletion",
+      space,
+      commitClass: "system",
+      commit: {
+        localSeq: Engine.serverSeq(engine) + 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: aclDocId(space),
+          value: { value: tombstone },
+        }],
+      },
+    });
+    server.noticeDeletedSpace(space);
   }
 
   protected server(): MemoryV2Server.Server {

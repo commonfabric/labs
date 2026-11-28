@@ -19,6 +19,7 @@ import { runEventKey } from "../../src/executor/run-beacon.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";
 import { servingRuntimeFactory } from "../../src/executor/serving-runtime.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
+import { getServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { DelegationStore } from "../../src/storage/delegation-store.ts";
@@ -278,6 +279,18 @@ describe("ExecutorHost", () => {
         await close();
       }
     });
+
+    it("is what the process's serving-loop counters read while the host is open, and nothing is once it has closed", async () => {
+      const { host, close } = newHost();
+      try {
+        expect(getServingLoopStats()?.activeSpaces).toBe(0);
+        await host.runLifecycleVerb(space, probeVerb("served", []));
+        expect(getServingLoopStats()?.activeSpaces).toBe(1);
+      } finally {
+        await close();
+      }
+      expect(getServingLoopStats()).toBeUndefined();
+    });
   });
 
   describe("runLifecycleVerb()", () => {
@@ -357,6 +370,24 @@ describe("ExecutorHost", () => {
 
         expect([...host.accessForTestingOnly.failedEvents.get(space)!.keys()])
           .toEqual([runEventKey(event)]);
+      } finally {
+        await close();
+      }
+    });
+
+    it("records an event failed for a space while the host is open, and none once it has closed", async () => {
+      const { host, close } = newHost();
+      const other = (await Identity.generate()).did() as MemorySpace;
+      try {
+        host.failEvent(space, event, "ended");
+        await host.close();
+        host.failEvent(other, event, "ended");
+
+        const { failedEvents } = host.accessForTestingOnly;
+        expect([...failedEvents.get(space)!.keys()]).toEqual([
+          runEventKey(event),
+        ]);
+        expect(failedEvents.has(other)).toBe(false);
       } finally {
         await close();
       }

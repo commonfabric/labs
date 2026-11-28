@@ -21,6 +21,7 @@ import {
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 import { installCustomRoot } from "../install-custom-root.ts";
 import {
+  firstPicked,
   type PrivateInboxRequestOutcome,
   requestPrivateInboxOf,
 } from "../../src/ops/private-inbox.ts";
@@ -438,5 +439,48 @@ describe("requestPrivateInboxOf()", () => {
 
     await expect(requestPrivateInboxOf(runtime, home, profile)).rejects
       .toThrow("postponed");
+  });
+
+  describe("firstPicked()", () => {
+    /**
+     * A document named `name`, and a pick of its name that counts in
+     * `reads()` how many values it has been handed.
+     */
+    async function namedDocument(name: string): Promise<{
+      cell: Cell<{ name: string }>;
+      pick: (value: Readonly<{ name: string }>) => string;
+      reads: () => number;
+    }> {
+      const cell = runtime.getCell<{ name: string }>(
+        identity.did(),
+        crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => cell.withTx(tx).set({ name }));
+      let reads = 0;
+      const pick = (value: Readonly<{ name: string }>) => {
+        reads++;
+        return value.name;
+      };
+      return { cell, pick, reads: () => reads };
+    }
+
+    it("resolves with what `pick` makes of the value while the signal is live", async () => {
+      const { cell, pick, reads } = await namedDocument("inbox");
+
+      expect(
+        await firstPicked(runtime, cell, pick, new AbortController().signal),
+      ).toBe("inbox");
+      expect(reads()).toBeGreaterThan(0);
+    });
+
+    it("resolves with `undefined`, reading nothing, when the signal has already aborted", async () => {
+      const { cell, pick, reads } = await namedDocument("inbox");
+      const controller = new AbortController();
+      controller.abort();
+
+      expect(await firstPicked(runtime, cell, pick, controller.signal))
+        .toBeUndefined();
+      expect(reads()).toBe(0);
+    });
   });
 });

@@ -117,9 +117,8 @@ export async function pairWithService(options: PairOptions): Promise<Paired> {
 }
 
 /**
- * Makes the keyfile's directory and checks nothing stands at its path, before
- * the code is spent: a place that cannot take the key fails here, not after
- * the service has handed the key over.
+ * Makes the keyfile's directory before the code is spent: a place that cannot
+ * take the key fails here, not after the service has handed the key over.
  */
 async function preparePlace(keyfile: string): Promise<void> {
   try {
@@ -130,31 +129,32 @@ async function preparePlace(keyfile: string): Promise<void> {
         (error as Error).message,
     );
   }
+}
+
+/**
+ * The DID a keyfile holds, undefined when nothing stands at its path. Anything
+ * else there, a link to nothing included, is refused.
+ */
+async function existingIdentity(
+  keyfile: string,
+): Promise<`did:key:${string}` | undefined> {
   try {
     await Deno.lstat(keyfile);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return;
+    if (error instanceof Deno.errors.NotFound) return undefined;
     throw new PairingError(
       `cf cannot check ${keyfile}: ${(error as Error).message}`,
     );
   }
-  throw new PairingError(
-    `${keyfile} is a link or a file cf cannot read as a key; cf will not ` +
-      "write the key there.",
-  );
-}
-
-/** The DID a keyfile holds, undefined when there is none; a file that is no key is refused. */
-async function existingIdentity(
-  keyfile: string,
-): Promise<`did:key:${string}` | undefined> {
   let bytes: Uint8Array;
   try {
     bytes = await Deno.readFile(keyfile);
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return undefined;
     throw new PairingError(
-      `cf cannot read ${keyfile}: ${(error as Error).message}`,
+      error instanceof Deno.errors.NotFound
+        ? `${keyfile} is a link or a file cf cannot read as a key; cf will ` +
+          "not write the key there."
+        : `cf cannot read ${keyfile}: ${(error as Error).message}`,
     );
   }
   try {

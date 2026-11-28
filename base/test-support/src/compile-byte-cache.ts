@@ -558,7 +558,13 @@ function writeCompileByteCache(
   }
 }
 
-function writeTextFileAtomicSync(path: string, text: string): void {
+/**
+ * Writes `text` to `path` whole: to a temporary name beside it, then renamed,
+ * so that a reader sees all of the file or none of it. A failed write throws
+ * what failed, having first removed the temporary file where it can; a
+ * temporary file that cannot be removed then is left behind.
+ */
+export function writeTextFileAtomicSync(path: string, text: string): void {
   const tempPath = `${path}.${crypto.randomUUID()}.tmp`;
   try {
     Deno.writeTextFileSync(tempPath, text);
@@ -567,7 +573,8 @@ function writeTextFileAtomicSync(path: string, text: string): void {
     try {
       Deno.removeSync(tempPath);
     } catch {
-      // The temp file may not have been created yet.
+      // The temporary file may not have been created, and what failed is
+      // what this throws.
     }
     throw error;
   }

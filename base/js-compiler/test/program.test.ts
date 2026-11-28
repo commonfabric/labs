@@ -489,6 +489,50 @@ describe("listDataFiles()", () => {
     }
   });
 
+  it("returns undefined for a directory that is not grounded", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets"));
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "assets/glaze.png"), "");
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      expect(await resolver.listDataFiles("assets")).toBeUndefined();
+      expect(await resolver.listDataFiles("/assets")).toEqual([
+        "/assets/glaze.png",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
+  it("reports a link in the directory that loops rather than leaving it out", async () => {
+    const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
+    try {
+      await Deno.mkdir(path.join(root, "assets"));
+      await Deno.mkdir(path.join(root, "other"));
+      await Deno.writeTextFile(path.join(root, "main.tsx"), "");
+      await Deno.writeTextFile(path.join(root, "other/glaze.png"), "");
+      await Deno.symlink("loop.png", path.join(root, "assets/loop.png"));
+      const resolver = new FileSystemProgramResolver(
+        path.join(root, "main.tsx"),
+        root,
+      );
+
+      await expect(resolver.listDataFiles("/assets")).rejects.toThrow(
+        Deno.errors.FilesystemLoop,
+      );
+      expect(await resolver.listDataFiles("/other")).toEqual([
+        "/other/glaze.png",
+      ]);
+    } finally {
+      await Deno.remove(root, { recursive: true });
+    }
+  });
+
   it("refuses a directory that climbs out of the root", async () => {
     const root = await Deno.makeTempDir({ prefix: "list-data-files-" });
     try {

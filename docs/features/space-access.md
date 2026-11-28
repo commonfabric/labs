@@ -488,5 +488,9 @@ creates, and gets one naming the test's identity as its only OWNER; a store a
 caller supplies to the runner (`TestRunnerOptions.storageHost`) keeps any list
 it already holds, and that list decides the level. The test lane's storage does
 not enforce the list.
+
+A `{ deleteSpace: cell }` step deletes the space `cell`'s value lives in, so
+that `spaceDeleted(target)` returns `true` for it in the steps after
+([the step format](../specs/PATTERN_TESTING_SPEC.md#test-step-format-discriminated-union)).
 [The test's space and its access list](../common/workflows/pattern-testing.md#the-tests-space-and-its-access-list)
 says how a participant declares its level.

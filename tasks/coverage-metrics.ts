@@ -655,33 +655,20 @@ function uncoveredProfileLineNumbers(coverage: LcovFileCoverage): number[] {
 export async function lcovFromCoverageProfile(
   coverageProfileDir: string,
 ): Promise<string> {
-  const tmpDir = await Deno.makeTempDir({ prefix: "coverage-lcov-" });
-  const outputPath = path.join(tmpDir, "coverage.lcov");
-  try {
-    const result = await new Deno.Command(Deno.execPath(), {
-      args: [
-        "coverage",
-        "--lcov",
-        `--output=${outputPath}`,
-        coverageProfileDir,
-      ],
-      stdout: "piped",
-      stderr: "piped",
-    }).output();
+  const result = await new Deno.Command(Deno.execPath(), {
+    args: ["coverage", "--lcov", coverageProfileDir],
+    stdout: "piped",
+    stderr: "piped",
+  }).output();
 
-    if (!result.success) {
-      const stderr = new TextDecoder().decode(result.stderr);
-      throw new Error(`deno coverage failed: ${stderr.trim()}`);
-    }
-
-    // Same generation-point normalization the CI artifact writer applies
-    // (write-coverage-lcov.ts) — this is the LOCAL generation path.
-    return normalizeLcovInstancePaths(await Deno.readTextFile(outputPath));
-  } finally {
-    try {
-      await Deno.remove(tmpDir, { recursive: true });
-    } catch { /* ignore cleanup errors */ }
+  if (!result.success) {
+    const stderr = new TextDecoder().decode(result.stderr);
+    throw new Error(`deno coverage failed: ${stderr.trim()}`);
   }
+
+  // Same generation-point normalization the CI artifact writer applies
+  // (write-coverage-lcov.ts) — this is the LOCAL generation path.
+  return normalizeLcovInstancePaths(new TextDecoder().decode(result.stdout));
 }
 
 async function existsDirectory(dir: string): Promise<boolean> {
@@ -710,8 +697,8 @@ async function* walkFiles(dir: string): AsyncGenerator<string> {
   }
 }
 
-const USAGE = `Usage: deno run --allow-read --allow-write --allow-run \\
-  --allow-env tasks/coverage-metrics.ts [--root=<dir>] \\
+const USAGE = `Usage: deno run --allow-read --allow-run --allow-env \\
+  tasks/coverage-metrics.ts [--root=<dir>] \\
   (--profile-dir=<dir> | --lcov=<file>) [--by-file [--under=<path>]]`;
 
 /**

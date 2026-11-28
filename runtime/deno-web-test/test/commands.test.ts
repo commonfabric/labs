@@ -12,6 +12,7 @@ test("a test presses keys the browser treats as the person's", async function ()
       "a pressed Tab moves focus, and Shift\\+Tab moves it back",
       "a dispatched Tab moves nothing",
       "a press settles once the browser has handled all of it",
+      "a command with no id is reported, and the next command still runs",
     ]
   ) {
     run.assert(
@@ -35,7 +36,18 @@ test("a test presses keys the browser treats as the person's", async function ()
     /`Hyper` is not a key a test may hold down/.test(run.stdoutText),
     "the failure names the modifier",
   );
-  run.assert(/3 passed \| 2 failed/.test(run.stdoutText), "summary");
+  const reports = run.stderrText.match(
+    /browser: A test sent a command with no id: `not a command`/g,
+  );
+  run.assert(
+    reports?.length === 1,
+    "the command with no id is reported on the console, once",
+  );
+  run.assert(
+    !/could not be settled/.test(run.stderrText),
+    "every command with an id, refused or not, is settled",
+  );
+  run.assert(/4 passed \| 2 failed/.test(run.stdoutText), "summary");
 });
 
 test("the driver reads a command's id only where it is a number", function () {

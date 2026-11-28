@@ -17,8 +17,8 @@
  * never failed has nothing to be told. An absent or invalid payload is
  * reported and skipped. Posting is best-effort: a failure to reach GitHub is
  * logged rather than thrown, so the workflow stays green. A missing
- * `HEAD_SHA` is a misconfigured workflow rather than a failure of GitHub's,
- * and fails the run.
+ * `GITHUB_TOKEN` or `HEAD_SHA` is a misconfigured workflow rather than a
+ * failure of GitHub's, and fails the run.
  *
  * The payload was written by the pull request's own code, and this posts with
  * a write token, so the pull request it names is held to being the one whose
@@ -69,11 +69,16 @@ function payloadOf(raw: unknown): CoverageCommentPayload | undefined {
 
 /**
  * Reads the pending payload and posts or updates the pull request's coverage
- * comment accordingly. Throws when `HEAD_SHA` is unset or empty, whatever the
- * payload. Never throws for a missing or invalid payload, or for a failure to
- * reach GitHub; each is logged instead.
+ * comment accordingly, sending `token`, which defaults to `GITHUB_TOKEN`, to
+ * GitHub. Throws when `token` or `HEAD_SHA` is unset or empty, whatever the
+ * payload.
+ * Never throws for a missing or invalid payload, or for a failure to reach
+ * GitHub; each is logged instead.
  */
-export async function postCoverageComment(): Promise<void> {
+export async function postCoverageComment(
+  token: string | undefined = TOKEN,
+): Promise<void> {
+  if (!token) throw new Error("`GITHUB_TOKEN` is required.");
   const tested = Deno.env.get("HEAD_SHA");
   if (tested === undefined || tested.length === 0) {
     throw new Error(
@@ -107,6 +112,7 @@ export async function postCoverageComment(): Promise<void> {
   try {
     const pull = await githubGet<{ head: { sha: string } }>(
       `/repos/${REPO}/pulls/${prNumber}`,
+      { token },
     );
     if (pull.head.sha !== tested) {
       console.error(
@@ -115,9 +121,9 @@ export async function postCoverageComment(): Promise<void> {
       );
       return;
     }
-    const marked = (await fetchIssueComments(prNumber)).find((comment) =>
-      comment.body.includes(COVERAGE_SUGGESTION_MARKER)
-    );
+    const marked = (await fetchIssueComments(prNumber, { token })).find((
+      comment,
+    ) => comment.body.includes(COVERAGE_SUGGESTION_MARKER));
     if (marked === undefined) {
       if (state === "resolved") {
         console.log(
@@ -125,7 +131,11 @@ export async function postCoverageComment(): Promise<void> {
         );
         return;
       }
-      await githubPost(`/repos/${REPO}/issues/${prNumber}/comments`, { body });
+      await githubPost(
+        `/repos/${REPO}/issues/${prNumber}/comments`,
+        { body },
+        { token },
+      );
       console.log(`Posted coverage comment to PR #${prNumber}.`);
       return;
     }
@@ -133,9 +143,11 @@ export async function postCoverageComment(): Promise<void> {
       console.log(`Coverage comment on PR #${prNumber} already up to date.`);
       return;
     }
-    await githubPatch(`/repos/${REPO}/issues/comments/${marked.id}`, {
-      body,
-    });
+    await githubPatch(
+      `/repos/${REPO}/issues/comments/${marked.id}`,
+      { body },
+      { token },
+    );
     console.log(`Updated coverage comment on PR #${prNumber}.`);
   } catch (error) {
     console.warn(
@@ -144,10 +156,4 @@ export async function postCoverageComment(): Promise<void> {
   }
 }
 
-if (import.meta.main) {
-  if (!TOKEN) {
-    console.error("GITHUB_TOKEN is required.");
-    Deno.exit(1);
-  }
-  await postCoverageComment();
-}
+if (import.meta.main) await postCoverageComment();

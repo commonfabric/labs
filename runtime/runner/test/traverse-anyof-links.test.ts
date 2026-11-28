@@ -108,6 +108,9 @@ function walk(
     ),
   );
   if (!narrows) traverser.accessForTestingOnly.narrowsReachedValues = false;
+  // A comparison with a walk that still narrows would compare a walk with
+  // itself, so each walk states which kind it is.
+  expect(traverser.accessForTestingOnly.narrowsReachedValues).toBe(narrows);
   const { ok, error } = traverser.traverseWithSchema({
     address: { space: SPACE, id: ROOT, type: TYPE, path: ["value"] },
     value: docs[ROOT],
@@ -368,6 +371,41 @@ describe("traverse-anyof-links", () => {
     }
   });
 
+  describe("a link whose schema types an option `unknown`", () => {
+    // The empty option takes the link's `unknown` schema, which answers for
+    // whatever value the link leads to, so the option stays though the
+    // target's type is not `unknown`.
+    const schema: JSONSchema = internSchema<JSONSchema>({
+      type: "object",
+      properties: { child: { anyOf: [{ type: "string" }, {}] } },
+    });
+    const docs = {
+      [ROOT]: {
+        child: {
+          "/": {
+            [LINK_V1_TAG]: {
+              id: "of:child",
+              path: [],
+              schema: { type: "unknown" },
+            },
+          },
+        },
+      },
+      "of:child": 5,
+    };
+
+    for (const traverseCells of [true, false]) {
+      it(`keeps the option as a walk without narrowing does with traverseCells ${traverseCells}`, () => {
+        const { options, rejects } = expectSameWalk(
+          docs,
+          schema,
+          traverseCells,
+        );
+        expect(options - rejects).toBe(1);
+      });
+    }
+  });
+
   describe("a linked value more than one option matches", () => {
     const schema: JSONSchema = internSchema<JSONSchema>({
       type: "object",
@@ -436,6 +474,17 @@ describe("traverse-anyof-links", () => {
       const docs = { [ROOT]: { child: link("of:child") }, "of:child": "text" };
       const { result, options, rejects } = expectSameWalk(docs, schema, false);
       expect(result).toEqual({ child: "text" });
+      expect(options - rejects).toBe(1);
+    });
+
+    it("keeps a `true` option for whatever the link leads to", () => {
+      const schema: JSONSchema = {
+        type: "object",
+        properties: { child: { anyOf: [{ type: "string" }, true] } },
+      };
+      const docs = { [ROOT]: { child: link("of:child") }, "of:child": 5 };
+      const { result, options, rejects } = expectSameWalk(docs, schema);
+      expect(result).toEqual({ child: 5 });
       expect(options - rejects).toBe(1);
     });
   });

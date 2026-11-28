@@ -195,6 +195,30 @@ describe("llm-dialog", () => {
       expect(JSON.stringify(result.value)).not.toContain('secret"');
     });
 
+    it("redacts a plain value above the ceiling when there is no root link", () => {
+      const value = { body: "classified" };
+
+      const result = serializeForLLMObservation({
+        value,
+        schema: secretSchema,
+        contextSpace: space,
+        observationMaxConfidentiality: ["internal"],
+      });
+
+      expect(result.value).toBe("[redacted: exceeds observation ceiling]");
+      expect(result.observedConfidentiality).toEqual([]);
+
+      const admitted = serializeForLLMObservation({
+        value,
+        schema: secretSchema,
+        contextSpace: space,
+        observationMaxConfidentiality: ["secret"],
+      });
+
+      expect(admitted.value).toEqual(value);
+      expect(admitted.observedConfidentiality).toEqual(["secret"]);
+    });
+
     it("renders a query result above the ceiling as the handle of the cell behind it", async () => {
       const cell = await storedCell("over-ceiling query result", {
         body: "secret",

@@ -2,7 +2,7 @@
 
 import { backtickQuote } from "@commonfabric/text/markdown";
 import { isDeno } from "@commonfabric/platform/env";
-import type { IncrementalHasher } from "@/interface.ts";
+import type { Implementation } from "@/interface.ts";
 import {
   BaseSmallChunkUpdatingHasher,
 } from "@/BaseSmallChunkUpdatingHasher.ts";
@@ -15,28 +15,20 @@ interface NodeHash {
   digest(encoding: "base64url"): string;
 }
 
-// Can't `import` at the top, because then `import`ing this module would fail
-// in a non-Deno environment.
-let crypto: { createHash: (algorithm: string) => NodeHash } | null = null;
-
-if (isDeno()) {
-  try {
-    // deno-lint-ignore cf-imports/no-inline-module-import
-    crypto = await import("node:crypto");
-  } catch {
-    // We're not in a Deno environment.
-  }
+/** The part of `node:crypto` this module uses. */
+interface NodeCrypto {
+  createHash(algorithm: string): NodeHash;
 }
 
 /**
- * Throws an error indicating that this module is not usable, if it is not in
- * fact usable. Otherwise, does nothing.
+ * `node:crypto`, where the environment is Deno, which always provides it, and
+ * `null` elsewhere. It is not `import`ed at the top, because then `import`ing
+ * this module would fail in a non-Deno environment.
  */
-function assertUsable() {
-  if (crypto === null) {
-    throw new Error("Cannot use `sha256-deno` in this environment.");
-  }
-}
+const crypto: NodeCrypto | null = isDeno()
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  ? await import("node:crypto")
+  : null;
 
 /**
  * Whether `hash-wasm` is ready to hash short inputs: `undefined` until the first
@@ -60,15 +52,23 @@ const EMPTY = new Uint8Array(0);
  * Deno-specific incremental hasher. Small updates are collected before they
  * reach `node:crypto`, where each `update()` call costs enough to dominate a
  * hash fed as many short chunks. A short input arrives as a single collected
- * chunk, and is digested by `sha256Deno()`, so that it costs no `node:crypto`
+ * chunk, and is digested by `sha256With()`, so that it costs no `node:crypto`
  * hasher at all.
  */
 class DenoHasher extends BaseSmallChunkUpdatingHasher {
+  /** The `node:crypto` the hasher hashes with. */
+  readonly #crypto: NodeCrypto;
+
   /** The `node:crypto` hasher, once the input is known not to be short. */
   #hasher: NodeHash | null = null;
 
   /** A copy of the only chunk so far, while that chunk is short. */
   #whole: Uint8Array | null = null;
+
+  constructor(crypto: NodeCrypto) {
+    super();
+    this.#crypto = crypto;
+  }
 
   /** @inheritDoc */
   protected _rawUpdate(data: Uint8Array) {
@@ -78,7 +78,7 @@ class DenoHasher extends BaseSmallChunkUpdatingHasher {
         this.#whole = data.slice();
         return;
       }
-      this.#hasher = crypto!.createHash("sha256");
+      this.#hasher = this.#crypto.createHash("sha256");
       if (this.#whole !== null) this.#hasher.update(this.#whole);
       this.#whole = null;
     }
@@ -88,7 +88,7 @@ class DenoHasher extends BaseSmallChunkUpdatingHasher {
   /** @inheritDoc */
   protected _rawDigest(encoding: string | undefined): Uint8Array | string {
     if (this.#hasher === null) {
-      return sha256Deno(this.#whole ?? EMPTY);
+      return sha256With(this.#crypto, this.#whole ?? EMPTY);
     }
 
     switch (encoding) {
@@ -112,15 +112,8 @@ class DenoHasher extends BaseSmallChunkUpdatingHasher {
   }
 }
 
-/** Indicates whether this module is usable. */
-export function canUseDeno() {
-  return crypto !== null;
-}
-
-/** Performs a hash on a single array. */
-export function sha256Deno(payload: Uint8Array): Uint8Array {
-  assertUsable();
-
+/** Performs a hash on a single array, with `crypto`. */
+function sha256With(crypto: NodeCrypto, payload: Uint8Array): Uint8Array {
   if (payload.length <= MAX_WASM_INPUT_LENGTH) {
     if (wasmReady) return sha256Wasm(payload);
     if (wasmReady === undefined) {
@@ -134,12 +127,19 @@ export function sha256Deno(payload: Uint8Array): Uint8Array {
   // `node:crypto digest()` returns a `Buffer` (a `Uint8Array` subclass);
   // normalize it to plain `Uint8Array`, so downstream equality checks work
   // correctly.
-  const buf = crypto!.createHash("sha256").update(payload).digest();
+  const buf = crypto.createHash("sha256").update(payload).digest();
   return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
 }
 
-/** Creates an incremental hasher. */
-export function createHasherDeno(): IncrementalHasher {
-  assertUsable();
-  return new DenoHasher();
-}
+/**
+ * The implementation over `node:crypto`, where the environment provides it,
+ * and `null` elsewhere.
+ */
+export const denoImplementation: Implementation | null = crypto && {
+  sha256: function sha256Deno(payload) {
+    return sha256With(crypto, payload);
+  },
+  createHasher: function createHasherDeno() {
+    return new DenoHasher(crypto);
+  },
+};

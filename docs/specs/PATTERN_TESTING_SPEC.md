@@ -99,6 +99,7 @@ type TestStep =
   }
   | { render: VNode } // one headless VDOM demand window
   | { settle: true } // wait for full async settlement
+  | { deleteSpace: unknown } // a cell: delete the space its value is in
   | { label: string } // announce a marker to other participants
   | { await: string }; // block until a participant announces it
 ```
@@ -124,6 +125,19 @@ the keys named and false for the rest, so `["meta"]` is a Cmd-click on a Mac. A
 press step that finds no such control, or more than one, fails, and so does one
 whose `modifiers` names any other key. It counts as an action in the results,
 and settles as one.
+
+A `{ deleteSpace }` step deletes the space the value of `deleteSpace` lives
+in, on the store `cf test` creates, as a deletion by the test's identity leaves
+it: a deletion tombstone where its access list was, and every session open on
+it revoked as deleted. It does so whoever the list names, so a test can delete
+a self-owned space such as a profile's, which the memory server lets only its
+sole member delete. The step returns once the test's runtime has heard of the
+deletion, so `spaceDeleted()` returns `true` for the space in the steps after,
+and settles what the deletion sets off. Ending those sessions logs errors, so a
+test with such a step usually sets `allowConsoleErrors: true`. Like a settle
+step, it reports no result, and a failure fails the run. A run on a store the
+caller supplies (`TestRunnerOptions.storageHost`) fails at the step, and a
+multi-user test refuses it.
 
 `{ label }` and `{ await }` synchronize a multi-user test — a participant
 announces reaching `label`, and another blocks on `await` until it is

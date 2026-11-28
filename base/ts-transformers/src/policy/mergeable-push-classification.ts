@@ -125,7 +125,6 @@ function containsEarlyExit(statement: ts.Node): boolean {
  */
 function isNamePosition(identifier: ts.Identifier): boolean {
   const parent = identifier.parent;
-  if (!parent) return false;
   if (ts.isPropertyAccessExpression(parent)) return parent.name === identifier;
   if (ts.isPropertyAssignment(parent)) return parent.name === identifier;
   if (ts.isVariableDeclaration(parent)) return parent.name === identifier;

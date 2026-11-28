@@ -134,5 +134,19 @@ describe("traverse-combinator-branches", () => {
       expect(canBranchMatch(falseRef, 1)).toBe(false);
       expect(canBranchMatch(trueRef, 1)).toBe(true);
     });
+
+    it("does not require a value to carry a property whose `$ref` declares a default", () => {
+      const branch = (count: JSONSchema): JSONSchema => ({
+        $defs: { Count: count },
+        type: "object",
+        properties: { count: { $ref: "#/$defs/Count" } },
+        required: ["count"],
+      });
+      expect(canBranchMatch(branch({ type: "number", default: 3 }), {}))
+        .toBe(true);
+      expect(canBranchMatch(branch({ type: "number" }), {})).toBe(false);
+      expect(canBranchMatch(branch({ type: "number" }), { count: 1 }))
+        .toBe(true);
+    });
   });
 });

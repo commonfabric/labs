@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 
 import { aclDocId } from "../acl.ts";
 import {
@@ -34,6 +35,9 @@ const READER = "did:key:z6Mk-carried-demand-reader";
 
 /** A second space that carries demand into `SOURCE`. */
 const OTHER = "did:key:z6Mk-carried-demand-other";
+
+/** A reading space whose store this server does not hold. */
+const ABSENT = "did:key:z6Mk-carried-demand-absent";
 const OWNER = "did:key:z6Mk-carried-demand-owner";
 const ALICE = "did:key:z6Mk-carried-demand-alice";
 const BOB = "did:key:z6Mk-carried-demand-bob";
@@ -411,6 +415,78 @@ describe("v2-server-carried-demand", () => {
 
           expect(demand()).toEqual([]);
         });
+
+        describe("once a change to the instance the reading space registered disarms it", () => {
+          /** Writes the registered instance and waits for what it queued. */
+          const change = async () => {
+            await server.writeDocument(SOURCE, "computed:far", { n: 99 });
+            await server.idle();
+          };
+
+          it("pulls again for the reading space while it offers demand there, which arms it", async () => {
+            const alice = await session(ALICE, "alice-one");
+            await arm();
+            await server.setCarriedDemand(SOURCE, READER, [
+              shared("computed:far", alice),
+            ]);
+            const { pulls } = server.currencyDelivery();
+
+            await change();
+
+            expect(server.currencyDelivery().pulls).toBe(pulls + 1);
+            expect(server.currencyReadersArmedOn(SOURCE)).toEqual([READER]);
+          });
+
+          it("pulls nothing for a reading space that offers no demand there", async () => {
+            await arm();
+            const { pulls } = server.currencyDelivery();
+
+            await change();
+
+            expect(server.currencyDelivery().pulls).toBe(pulls);
+            expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+          });
+
+          it("warns, naming both spaces, when the pull fails, and leaves the reading space unarmed", async () => {
+            const alice = await session(ALICE, "alice-one");
+            await arm();
+            await server.setCarriedDemand(SOURCE, READER, [
+              shared("computed:far", alice),
+            ]);
+            const failure = new Error("the store cannot be opened");
+            server.accessForTestingOnly.engineOpener = (space, open) => {
+              if (space !== READER) return open(space);
+              server.accessForTestingOnly.engineOpener = undefined;
+              return Promise.reject(failure);
+            };
+            using warned = stub(console, "warn");
+
+            await change();
+
+            expect(server.accessForTestingOnly.engineOpener).toBeUndefined();
+            expect(warned.calls.map(({ args }) => args)).toEqual([[
+              `memory v2: the pull queued for ${READER} from ${SOURCE} failed`,
+              failure,
+            ]]);
+            expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+          });
+        });
+
+        it("pulls nothing for a reading space this server holds no store of, and adds the row", async () => {
+          const alice = await session(ALICE, "alice-one");
+          const { pulls } = server.currencyDelivery();
+
+          await server.setCarriedDemand(SOURCE, ABSENT, [
+            shared("computed:far", alice),
+          ]);
+
+          expect(server.currencyDelivery().pulls).toBe(pulls);
+          expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+          expect(demand().map(({ id }) => id)).toEqual([
+            "computed:far",
+            "of:producer",
+          ]);
+        });
       });
 
       it("adds a row to the space's demand set for the instance, as a root, with the pair of the origin session", async () => {
@@ -742,6 +818,27 @@ describe("v2-server-carried-demand", () => {
 
         expect(replayed).toMatchObject([{ kind: "opened", principal: ALICE }]);
         expect(server.sessionSnapshot(SOURCE)).toEqual(replayed);
+      });
+
+      it("warns when the observer throws on `demandChanged`, and still holds the row it carried", async () => {
+        const alice = await session(ALICE, "alice-one");
+        const failure = new Error("observer failure");
+        server.setServerExecutionObserver({
+          demandChanged: () => {
+            throw failure;
+          },
+        });
+        using warned = stub(console, "warn");
+
+        await server.setCarriedDemand(SOURCE, READER, [
+          shared("of:far", alice),
+        ]);
+
+        expect(warned.calls.map(({ args }) => args)).toEqual([[
+          "memory v2: server-execution observer threw on demandChanged",
+          failure,
+        ]]);
+        expect(demand().map(({ id }) => id)).toEqual(["of:far"]);
       });
     });
   });

@@ -40,6 +40,7 @@ export {
   type RestoreTarget,
   selectRestoreRevision,
 } from "./piece-restore.ts";
+export type { PhaseTrace } from "./piece-phase-timing.ts";
 export {
   assertPlanRunsFixer,
   collectLinkPaths,

@@ -1,0 +1,1 @@
+{"date":"2026-11-26","from":{"k":"unit","s":"js-compiler","n":"TypeScriptCompiler > compileToModulesCollecting reports a program-wide diagnostic under no file"},"to":{"k":"unit","s":"js-compiler","n":"TypeScriptCompiler > compileToModulesCollecting reports a program-wide diagnostic once, under no file"}}

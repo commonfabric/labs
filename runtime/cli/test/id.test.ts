@@ -1,10 +1,11 @@
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
-import { encode } from "@commonfabric/text/utf8";
+import { decode, encode } from "@commonfabric/text/utf8";
 import { describe, it } from "@commonfabric/test-support/test";
+import { join } from "@std/path/join";
 
-import { argv, cf, checkStderr } from "./utils.ts";
+import { argv, cf, checkStderr, exists } from "./utils.ts";
 
 const PKCS8_KEY = `-----BEGIN PRIVATE KEY-----
 MMC4CAQAwBQYDK2VwBCIEICWSvx4QOW+mogjWSsjInQaPpmjErsDBqf2ZOoK+Y4IO
@@ -148,5 +149,117 @@ describe("cli id", () => {
     const { code, stdout } = await cf(argv`id derive inline -- ${file}`);
     expect(code).not.toBe(0);
     expect(stdout.length).toBe(0);
+  });
+
+  describe("pair", () => {
+    // A pairing code as Weaver shows it, and the canonical form the service
+    // is sent.
+    const SHOWN_CODE = "abcde-fghjk";
+    const CANONICAL_CODE = "ABCDEFGHJK";
+
+    /**
+     * Runs `body` against a stand-in service on this machine that trades
+     * `CANONICAL_CODE` for a fresh key and refuses any other code, recording
+     * the request bodies it receives.
+     */
+    async function withService(
+      body: (
+        service: string,
+        did: string,
+        received: unknown[],
+      ) => Promise<void>,
+    ): Promise<void> {
+      const pkcs8 = await Identity.generatePkcs8();
+      const did = (await Identity.fromPkcs8(pkcs8)).did();
+      const received: unknown[] = [];
+      const server = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+        async (request) => {
+          const { pathname } = new URL(request.url);
+          if (
+            request.method !== "POST" || pathname !== "/identity-pairing/redeem"
+          ) {
+            return new Response(null, { status: 404 });
+          }
+          const sent = await request.json();
+          received.push(sent);
+          if (sent.code !== CANONICAL_CODE) {
+            return Response.json({}, { status: 403 });
+          }
+          // The PKCS8 key is PEM text, so `btoa` takes it as it is.
+          return Response.json({ pkcs8Base64: btoa(decode(pkcs8)), did });
+        },
+      );
+      try {
+        await body(`http://127.0.0.1:${server.addr.port}`, did, received);
+      } finally {
+        await server.shutdown();
+      }
+    }
+
+    it("keeps the key the code read from stdin buys, and leaves a keyfile holding it alone", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        await withService(async (service, did, received) => {
+          const keyfile = join(dir, "nested", "identity.key");
+
+          const first = await cf(argv`id pair ${service} ${keyfile}`, {
+            stdin: `${SHOWN_CODE}\n`,
+          });
+          expect(first.code).toBe(0);
+          expect(first.stdout).toEqual([`Paired: ${keyfile} now holds ${did}`]);
+          checkStderr(first.stderr);
+          expect(received).toEqual([
+            {
+              code: CANONICAL_CODE,
+              device: { name: "cf", platform: Deno.build.os },
+            },
+          ]);
+          const kept = await Identity.fromPkcs8(await Deno.readFile(keyfile));
+          expect(kept.did()).toBe(did);
+          // A regular file, readable and writable by its owner only.
+          expect((await Deno.stat(keyfile)).mode).toBe(0o100600);
+
+          const again = await cf(argv`id pair ${service} ${keyfile}`, {
+            stdin: SHOWN_CODE,
+          });
+          expect(again.code).toBe(0);
+          expect(again.stdout).toEqual([
+            `${keyfile} already holds ${did}; nothing changed`,
+          ]);
+          checkStderr(again.stderr);
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("writes nothing and fails for a code the service refuses", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        await withService(async (service, _did, received) => {
+          const keyfile = join(dir, "identity.key");
+
+          const { code, stdout, stderr } = await cf(
+            argv`id pair ${service} ${keyfile}`,
+            { stdin: "zzzzz-zzzzz\n" },
+          );
+          expect(code).not.toBe(0);
+          expect(stdout).toEqual([]);
+          expect(stderr.join("\n")).toContain(
+            "The service did not accept that code",
+          );
+          expect(received).toEqual([
+            {
+              code: "ZZZZZZZZZZ",
+              device: { name: "cf", platform: Deno.build.os },
+            },
+          ]);
+          expect(await exists(keyfile)).toBe(false);
+        });
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
   });
 });

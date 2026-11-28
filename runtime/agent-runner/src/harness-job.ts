@@ -361,6 +361,16 @@ export type HarnessJobResult =
     | { outcome: "cancelled" }
   );
 
+/** Helper for the job, which reports the tool calls and artifacts of a run. */
+const runStateReport = (
+  runState: HarnessPromptLoopResult["runState"],
+): AgentRunReport => ({
+  toolCalls: runState.toolOutputs.length,
+  ...(runState.artifactRoot !== undefined
+    ? { runRef: runState.artifactRoot }
+    : {}),
+});
+
 /** Helper for the job, which turns a loop result into a report. */
 const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
   const usage = result.totalUsage ?? result.usage;
@@ -381,10 +391,7 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
         modelAttributionComplete: result.modelAttributionComplete,
       }
       : {}),
-    toolCalls: result.runState.toolOutputs.length,
-    ...(result.runState.artifactRoot !== undefined
-      ? { runRef: result.runState.artifactRoot }
-      : {}),
+    ...runStateReport(result.runState),
   };
 };
 
@@ -739,25 +746,21 @@ export const runHarnessJob = async (
   const failedTurns = promptLoopModelTurnsFromError(loopError);
   const failedState = readRunState?.();
   // These are partial measurements, not a completeness claim. A failed
-  // provider call may have spent tokens it never reported.
-  const failedReport: AgentRunReport | undefined =
-    failedTurns !== undefined || reportedUsage !== undefined
-      ? {
-        ...(reportedUsage !== undefined
-          ? {
-            usage: { ...reportedUsage },
-            usageCoverage: reportedUsageCoverage,
-          }
-          : {}),
-        ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
-        ...(failedState !== undefined
-          ? { toolCalls: failedState.toolOutputs.length }
-          : {}),
-        ...(failedState?.artifactRoot !== undefined
-          ? { runRef: failedState.artifactRoot }
-          : {}),
-      }
-      : undefined;
+  // provider call may have spent tokens it never reported. Only a loop the
+  // harness built counts turns and usage, and that loop has run state.
+  const failedReport: AgentRunReport | undefined = failedState !== undefined &&
+      (failedTurns !== undefined || reportedUsage !== undefined)
+    ? {
+      ...(reportedUsage !== undefined
+        ? {
+          usage: { ...reportedUsage },
+          usageCoverage: reportedUsageCoverage,
+        }
+        : {}),
+      ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
+      ...runStateReport(failedState),
+    }
+    : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
   const recordedRun = runRef !== undefined &&
     await canContinueRecordedRun(runRef);

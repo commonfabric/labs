@@ -130,6 +130,7 @@ import {
   flowJoinObservationsOf,
   servedRunActsForNoOne,
 } from "./cfc/prepare.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -219,7 +220,10 @@ import {
   type PieceSourceRecord,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
-import { isCellResultForDereferencing } from "./query-result-proxy.ts";
+import {
+  isCellResultForDereferencing,
+  snapshotQueryResult,
+} from "./query-result-proxy.ts";
 import type { CommitRetryPullFailure, Runtime } from "./runtime.ts";
 import {
   type Action,
@@ -652,10 +656,11 @@ type StartAttempt = {
   // runs again from the top after the read, and must not read again for a
   // grant the durable metadata does not carry.
   authorityReadFor?: Set<string>;
-  // Whether every caller of this attempt asked for it to deliver an event
-  // (`RunnerStartOptions.forEvent`). A caller that joins the attempt for any
-  // other reason clears it.
-  forEventOnly?: boolean;
+  // What every caller of this attempt asked for it for, when each asked for
+  // the same passing reason: to deliver an event (`RunnerStartOptions.forEvent`)
+  // or to answer a read (`RunnerStartOptions.forRead`). A caller that joins the
+  // attempt for any other reason clears it.
+  onlyFor?: TransientStartPurpose;
   // The work the attempt's instantiation waits for and has not yet waited for
   // (`RunnerStartOptions.instantiateAfter`), its callers' and its joiners'.
   readonly instantiateAfter: Promise<unknown>[];
@@ -672,6 +677,14 @@ export type RunnerStartOptions = {
   forEvent?: boolean;
 
   /**
+   * The start answers a read: a client read reached a value the piece derives
+   * and has not written, and the piece starts to derive it. A piece whose
+   * every start was such a start is one `Runner.releaseReadStart()` may stop.
+   * A start with `forEvent` as well is an event's.
+   */
+  forRead?: boolean;
+
+  /**
    * Work the start waits for before it instantiates the piece's graph. The
    * start's own loads, of the piece's root, its pattern, and the documents
    * the pattern reads, run while this is under way. A piece that is running
@@ -684,15 +697,24 @@ export type RunnerStartOptions = {
   instantiateAfter?: Promise<unknown>;
 };
 
-/** A piece an event's delivery started, and that no other start has asked for. */
-type EventStart = {
-  /** The registration the event's start installed. */
+/** What a start was asked for, when it was asked for one passing reason. */
+type TransientStartPurpose = "event" | "read";
+
+/**
+ * A running piece whose every start was asked for one passing reason, which
+ * `Runner.releaseEventStart()` or `Runner.releaseReadStart()` may stop.
+ */
+type TransientStart = {
+  /** What every start of the piece was asked for. */
+  readonly purpose: TransientStartPurpose;
+
+  /** The registration the start installed. */
   readonly registration: PieceRegistration;
 
   /** The piece's result document. */
   readonly link: NormalizedFullLink;
 
-  /** Where the start falls in the runner's count of event starts. */
+  /** Where an event's start falls in the runner's count of event starts. */
   readonly sequence: number;
 };
 
@@ -1459,6 +1481,17 @@ function positionalNumber(partialCause: unknown): number {
 }
 
 /**
+ * Whether `schema` declares a reclassification anywhere (`ifc.reclassify`,
+ * the lowered form of `Reclassified`).
+ */
+function declaresReclassification(schema: JSONSchema | undefined): boolean {
+  return schema !== undefined &&
+    cfcSchemaEntries(schema).some((entry) =>
+      (entry.schema.ifc as Record<string, unknown>).reclassify !== undefined
+    );
+}
+
+/**
  * The sub-pattern nodes of `pattern`, each with its child pattern and its
  * child's partial cause.
  */
@@ -1536,7 +1569,7 @@ function missingDefaultFields(
 function ownedCellOwesSeed(
   link: NormalizedFullLink,
   ownerScope: CellScope,
-): boolean {
+): link is NormalizedFullLink & { schema: JSONSchemaObj } {
   return isObjectOrArray(link.schema) &&
     link.schema.default !== undefined &&
     scopeRank(link.scope) > scopeRank(ownerScope);
@@ -1552,8 +1585,9 @@ function ownedCellOwesSeed(
  * that part alone, where a seed would have written the rest of the default
  * beside it.
  */
-function absentReadsAsSeed(link: NormalizedFullLink): boolean {
-  if (!isObjectOrArray(link.schema)) return false;
+function absentReadsAsSeed(
+  link: NormalizedFullLink & { schema: JSONSchemaObj },
+): boolean {
   const schemaDefault = link.schema.default;
   return schemaDefault === null || typeof schemaDefault === "string" ||
     typeof schemaDefault === "number" || typeof schemaDefault === "boolean";
@@ -2194,6 +2228,9 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.parentPieceRootId`. */
   parentPieceRootId?: string;
 
+  /** See `RunnerRunOptions.parentPieceSpace`. */
+  parentPieceSpace?: MemorySpace;
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -2604,6 +2641,10 @@ export type RunnerRunOptions = {
   // instance) run supply resolves a nested piece's demanded instances
   // through the OUTER piece a client watches.
   parentPieceRootId?: string;
+  // The space `parentPieceRootId` lives in, where it is not the space of the
+  // piece this run sets up: a child placed in a space of its own
+  // (`inSpace()`). A setup reads the parent's creator record there.
+  parentPieceSpace?: MemorySpace;
   // Argument fields a collection builtin fills with a link to a cell that
   // exists already: a list's entry, the list itself. Each one whose staged
   // value is a link that is not a write redirect is recorded as a protected
@@ -3145,15 +3186,20 @@ export class Runner {
   >();
 
   /**
-   * The running pieces whose registration an event's delivery installed
-   * (`RunnerStartOptions.forEvent`), by result document, while no other
+   * The running pieces whose registration a start asked for one passing
+   * reason installed, an event's delivery (`RunnerStartOptions.forEvent`) or a
+   * read (`RunnerStartOptions.forRead`), by result document, while no other
    * start, and no enclosing pattern, has asked for them since. An entry's
    * registration is the one `#cancels` holds for its document: every removal
    * from `#cancels` drops the entry with it.
    */
-  #eventStarts = new Map<`${MemorySpace}/${ScopeKey}/${URI}`, EventStart>();
+  #transientStarts = new Map<
+    `${MemorySpace}/${ScopeKey}/${URI}`,
+    TransientStart
+  >();
 
-  /** How many entries `#eventStarts` has been given, for `eventStartMark`. */
+  /** How many event starts `#transientStarts` has been given, for
+   * `eventStartMark`. */
   #eventStartCount = 0;
 
   /**
@@ -3162,6 +3208,22 @@ export class Runner {
    * release of the parent re-instantiates it, whichever space it is in.
    */
   #handlerResultPatterns = new WeakSet<Pattern>();
+
+  /**
+   * The piece whose handler produced each receipt a handler's result is set
+   * up into, by the receipt's document key. A receipt is a keyless piece,
+   * which records no creator, so a child the result instantiates takes the
+   * producing piece's record instead (`#pieceCreatorFor`). The child is set
+   * up after the receipt's own setup returns, so an entry outlives that
+   * setup; a handler that returns no pattern adds none. Bounded like the
+   * pointer maps, since every handled event that returns a pattern adds one:
+   * a child whose entry was evicted records no creator, so nothing it writes
+   * is reclassified, which fails closed.
+   */
+  #receiptProducers = new BoundedKeyMap<
+    string,
+    { id: URI; space: MemorySpace }
+  >(RESULT_SHORTCUT_LIMIT);
 
   /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
   #releasingServedResult = false;
@@ -3489,7 +3551,9 @@ export class Runner {
    * syncer and deferred-start committer a test may supply, the setup,
    * storage-subscription, commit-gated run, ownership, key, sync, walk, and
    * retry steps, the implementation invoker, the node planner, which a
-   * test drives directly, the wave kick, the count of node bindings held
+   * test drives directly, the wave kick, the repeat of a scoped-default
+   * seed a wave dropped, the named-family gate's absence and argument-link
+   * probes, the count of node bindings held
    * and the step that drops them, and the pre-sync plan recorder, node
    * binding recorder and resume yield a test installs.
    */
@@ -3577,6 +3641,25 @@ export class Runner {
       cells: readonly Cell<any>[],
       kick: (cell: Cell<any>) => Promise<unknown>,
     ): Promise<void>;
+    seedAgainIfDropped(
+      settlement: NonNullable<ReturnType<typeof waveSettlementOf>>,
+      instance: ResumePatternInstance,
+      owed: readonly NormalizedFullLink[],
+      identity: ScopeKeyIdentity | undefined,
+      isCurrent: () => boolean,
+      options: { retry: boolean; onLost?: () => void },
+    ): Promise<void>;
+    absenceUnexamined(
+      readTx: IExtendedStorageTransaction,
+      links: readonly NormalizedFullLink[],
+    ): boolean;
+    argumentLinksAbsent(
+      argument: unknown,
+      argumentLink: NormalizedFullLink,
+      resultCell: Cell<any>,
+      readTx: IExtendedStorageTransaction,
+      present: (link: NormalizedFullLink) => boolean,
+    ): boolean;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -3714,6 +3797,38 @@ export class Runner {
         outerThis.#resumeYield = value;
       },
       kickResumeWave: (cells, kick) => this.#kickResumeWave(cells, kick),
+      seedAgainIfDropped: (
+        settlement,
+        instance,
+        owed,
+        identity,
+        isCurrent,
+        options,
+      ) =>
+        this.#seedAgainIfDropped(
+          settlement,
+          instance,
+          owed,
+          identity,
+          isCurrent,
+          options,
+        ),
+      absenceUnexamined: (readTx, links) =>
+        this.#absenceUnexamined(readTx, links),
+      argumentLinksAbsent: (
+        argument,
+        argumentLink,
+        resultCell,
+        readTx,
+        present,
+      ) =>
+        this.#argumentLinksAbsent(
+          argument,
+          argumentLink,
+          resultCell,
+          readTx,
+          present,
+        ),
     };
   }
 
@@ -5400,15 +5515,15 @@ export class Runner {
    * The principal a piece set up in `tx` records as its creator, or none.
    *
    * A child a piece instantiates names its parent's creator, read from the
-   * parent's record: the actor whose run instantiated it is not the creator
-   * of what the parent's code made, and a parent without a record leaves the
-   * child without one. A piece a builtin instantiates from a continuation of
-   * its action, which declines attribution and names no parent, records
-   * nothing. Any other piece names the acting principal of the transaction's
-   * trust snapshot, which is the principal every attributed claim in the same
-   * transaction names, unless the run acts for no one
-   * (`servedRunActsForNoOne`): a served run with no actor, or one under the
-   * serving runtime's own snapshot.
+   * parent's record in the space the parent lives in: the actor whose run
+   * instantiated it is not the creator of what the parent's code made, and a
+   * parent without a record leaves the child without one. A piece a builtin
+   * instantiates from a continuation of its action, which declines
+   * attribution and names no parent, records nothing. Any other piece names
+   * the acting principal of the transaction's trust snapshot, which is the
+   * principal every attributed claim in the same transaction names, unless
+   * the run acts for no one (`servedRunActsForNoOne`): a served run with no
+   * actor, or one under the serving runtime's own snapshot.
    */
   #pieceCreatorFor(
     tx: IExtendedStorageTransaction,
@@ -5416,13 +5531,26 @@ export class Runner {
     options: SetupValidationOptions,
   ): string | undefined {
     if (options.parentPieceRootId !== undefined) {
-      const { space } = resultCell.getAsNormalizedFullLink();
-      const recorded = this.#runtime.getCellFromLink(
+      const space = options.parentPieceSpace ??
+        resultCell.getAsNormalizedFullLink().space;
+      const parent = this.#runtime.getCellFromLink(
         { id: options.parentPieceRootId as URI, space, path: [] },
         undefined,
         tx,
+      );
+      const recorded = parent.getMetaRaw("creator", {
+        meta: ignoreReadForScheduling,
+      });
+      if (typeof recorded === "string") return recorded;
+      // A receipt records no creator; its producing piece does.
+      const producer = this.#receiptProducers.get(this.#getDocKey(parent));
+      if (producer === undefined) return undefined;
+      const produced = this.#runtime.getCellFromLink(
+        { ...producer, path: [] },
+        undefined,
+        tx,
       ).getMetaRaw("creator", { meta: ignoreReadForScheduling });
-      return typeof recorded === "string" ? recorded : undefined;
+      return typeof produced === "string" ? produced : undefined;
     }
     if (options.attributeInitialization === false) return undefined;
     const snapshot = tx.getCfcState().trustSnapshot;
@@ -5847,7 +5975,8 @@ export class Runner {
    *
    * `options.forEvent` says the start delivers an event; any other start of
    * the piece, this one's join included, takes it off what
-   * `releaseEventStart()` may stop.
+   * `releaseEventStart()` may stop. `options.forRead` says the same of a
+   * start that answers a read, for `releaseReadStart()`.
    */
   start<T = any>(
     resultCell: Cell<T>,
@@ -5907,11 +6036,18 @@ export class Runner {
     resultCell: Cell<T>,
     options?: RunnerStartOptions,
   ): { attempt: StartAttempt; settled: Promise<boolean> } {
-    const forEvent = options?.forEvent === true;
+    const purpose: TransientStartPurpose | undefined =
+      options?.forEvent === true
+        ? "event"
+        : options?.forRead === true
+        ? "read"
+        : undefined;
     const startKey = this.#getDocKey(resultCell);
-    // A start for anything but an event asks for the piece from this moment,
-    // before it has resolved the piece the document leads to.
-    if (!forEvent) this.#eventStarts.delete(startKey);
+    // A start for any other reason asks for the piece from this moment, before
+    // it has resolved the piece the document leads to.
+    if (this.#transientStarts.get(startKey)?.purpose !== purpose) {
+      this.#transientStarts.delete(startKey);
+    }
     const inFlight = this.#inFlightStartsByDoc.get(startKey);
     const instantiateAfter = options?.instantiateAfter;
     // The work is awaited only once the start's loads are done, or never, for
@@ -5921,7 +6057,7 @@ export class Runner {
     if (
       inFlight?.settled !== undefined && this.#isStartAttemptCurrent(inFlight)
     ) {
-      if (!forEvent) inFlight.forEventOnly = false;
+      if (inFlight.onlyFor !== purpose) inFlight.onlyFor = undefined;
       if (instantiateAfter !== undefined) {
         inFlight.instantiateAfter.push(instantiateAfter);
       }
@@ -5931,7 +6067,7 @@ export class Runner {
       lifecycleEpoch: this.#lifecycleEpoch,
       generationsByDoc: new Map(),
       preResolutionStopKeys: new Set(),
-      forEventOnly: forEvent,
+      onlyFor: purpose,
       instantiateAfter: instantiateAfter === undefined
         ? []
         : [instantiateAfter],
@@ -5964,7 +6100,7 @@ export class Runner {
           this.#cancels.has(target);
         if (stillRunning) {
           this.#independentlyStartedResults.add(target);
-          this.#noteEventStart(attempt, target);
+          this.#noteTransientStart(attempt, target);
         }
         return stillRunning;
       })
@@ -5979,25 +6115,27 @@ export class Runner {
   /**
    * Helper for `#joinOrBeginStart()`, which records what a start attempt that
    * left `target` running says about the piece: one made only to deliver
-   * events, that installed the piece's registration, makes the piece an
-   * event start; any other takes it off them.
+   * events, or only to answer reads, that installed the piece's registration,
+   * makes the piece a start of that kind; any other takes it off them.
    */
-  #noteEventStart(
+  #noteTransientStart(
     attempt: StartAttempt,
     target: `${MemorySpace}/${ScopeKey}/${URI}`,
   ): void {
     const registration = this.#cancels.get(target);
-    if (attempt.forEventOnly !== true) {
-      this.#eventStarts.delete(target);
+    const purpose = attempt.onlyFor;
+    if (purpose === undefined) {
+      this.#transientStarts.delete(target);
     } else if (
       registration !== undefined &&
       registration === attempt.installedRegistration &&
       attempt.targetLink !== undefined
     ) {
-      this.#eventStarts.set(target, {
+      this.#transientStarts.set(target, {
+        purpose,
         registration,
         link: attempt.targetLink,
-        sequence: ++this.#eventStartCount,
+        sequence: purpose === "event" ? ++this.#eventStartCount : 0,
       });
     }
   }
@@ -6010,8 +6148,10 @@ export class Runner {
    */
   eventStartsSince(mark: number): NormalizedFullLink[] {
     const links: NormalizedFullLink[] = [];
-    for (const start of this.#eventStarts.values()) {
-      if (start.sequence > mark) links.push(start.link);
+    for (const start of this.#transientStarts.values()) {
+      if (start.purpose === "event" && start.sequence > mark) {
+        links.push(start.link);
+      }
     }
     return links;
   }
@@ -6029,9 +6169,34 @@ export class Runner {
    * Returns whether it stopped the piece.
    */
   releaseEventStart<T>(resultCell: Cell<T>): boolean {
+    return this.#releaseTransientStart(resultCell, "event");
+  }
+
+  /**
+   * Stops the piece whose result document is `resultCell`'s when every start
+   * of it answered a read (`RunnerStartOptions.forRead`), no start of its
+   * document is in flight, and the scheduler holds no event for it, releasing
+   * the documents nothing reads then, as `releaseEventStart()` does for a
+   * piece an event started. What the piece wrote stays in the store, and a
+   * read or an event starts it again.
+   *
+   * Returns whether it stopped the piece.
+   */
+  releaseReadStart<T>(resultCell: Cell<T>): boolean {
+    return this.#releaseTransientStart(resultCell, "read");
+  }
+
+  /**
+   * Helper for `releaseEventStart()` and `releaseReadStart()`, which stops the
+   * piece if every start of it was asked for `purpose`.
+   */
+  #releaseTransientStart<T>(
+    resultCell: Cell<T>,
+    purpose: TransientStartPurpose,
+  ): boolean {
     const key = this.#getDocKey(resultCell);
-    const start = this.#eventStarts.get(key);
-    if (start === undefined) return false;
+    const start = this.#transientStarts.get(key);
+    if (start === undefined || start.purpose !== purpose) return false;
     const { space, id } = start.link;
     if (
       (this.#activeStartAttemptsByDoc.get(key)?.size ?? 0) > 0 ||
@@ -6047,14 +6212,14 @@ export class Runner {
   /**
    * Helper for the teardowns of `registration`, the registration of the piece
    * whose result document is `key`, outside `#stopResult()`, which takes it
-   * off `#eventStarts`.
+   * off `#transientStarts`.
    */
   #forgetStartsOf(
     key: `${MemorySpace}/${ScopeKey}/${URI}`,
     registration: PieceRegistration,
   ): void {
-    if (this.#eventStarts.get(key)?.registration === registration) {
-      this.#eventStarts.delete(key);
+    if (this.#transientStarts.get(key)?.registration === registration) {
+      this.#transientStarts.delete(key);
     }
   }
 
@@ -6076,8 +6241,10 @@ export class Runner {
 
   /**
    * Helper for a handler's result on a serving runtime, which stops the pieces
-   * the result started once its transaction has committed, leaving what the store
-   * holds. A demand or an event starts one again, as either does after a restart.
+   * the result started once its transaction has committed and the scheduler is
+   * idle after it, leaving what the store holds, including what the work that
+   * commit set off read of them. A demand or an event starts one again, as
+   * either does after a restart.
    * A piece keeps running where a client demands, at this moment, its document or
    * anything its nodes write: that demand has already made its one attempt to load
    * the piece, and nothing would make another. A stopped piece's index entry goes
@@ -6110,7 +6277,7 @@ export class Runner {
   /** Holds a child for a parent node group's lifetime. */
   retainChild<T>(resultCell: Cell<T>): Cancel {
     // An enclosing pattern now asks for the piece.
-    this.#eventStarts.delete(this.#getDocKey(resultCell));
+    this.#transientStarts.delete(this.#getDocKey(resultCell));
     if (!this.#usesScopedPrograms(resultCell)) {
       return () => this.releaseChild(resultCell, undefined);
     }
@@ -6405,13 +6572,11 @@ export class Runner {
     // keep its `tx`, the start's transaction, for that long.
     const { tx: startTx, givenPattern, parentPieceRootId } = options;
     const pieceKey = this.#getDocKey(resultCell);
+    // A run asking for a program of a registered piece reaches the
+    // registration's `ensure()` through `#startWithTx()`, so a start that
+    // finds the piece registered has nothing to add to it.
     const existing = this.#scopedPieces.get(pieceKey);
-    if (existing !== undefined) {
-      if (startTx && givenPattern) {
-        existing.ensure(startTx, givenPattern);
-      }
-      return existing;
-    }
+    if (existing !== undefined) return existing;
     const variants = new Map<string, PieceRegistration>();
     const programs = new Map<string, Pattern>();
     const originInstances = new Set<ScopeKey>();
@@ -8668,7 +8833,7 @@ export class Runner {
     }
     if (this.#cancels.has(key)) {
       // A run of a piece that is running asks for it.
-      this.#eventStarts.delete(key);
+      this.#transientStarts.delete(key);
       return undefined;
     }
 
@@ -10579,6 +10744,9 @@ export class Runner {
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         parentPieceRootId: options.parentPieceRootId,
+        ...(options.parentPieceSpace !== undefined
+          ? { parentPieceSpace: options.parentPieceSpace }
+          : {}),
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -10804,7 +10972,7 @@ export class Runner {
       throw new Error("a synced run requires a pattern");
     }
     // A run asks for the piece, whether or not it finds it running.
-    this.#eventStarts.delete(this.#getDocKey(resultCell));
+    this.#transientStarts.delete(this.#getDocKey(resultCell));
     // A module runs as the one-node pattern `run()` wraps it in, and the
     // pre-sync names what that node reads: `inputs` under the module's
     // argument schema.
@@ -13265,7 +13433,7 @@ export class Runner {
     const setupKey = this.#getSetupKey(resultCell);
     this.#scopedChildOwners.delete(key);
     this.#independentlyStartedResults.delete(key);
-    this.#eventStarts.delete(key);
+    this.#transientStarts.delete(key);
     this.#registrationsInstalledByRefusedRuns.delete(key);
     // TODO(hixie): This reaches every pending commit-gated start for the result,
     // which is wider than a release's authority: one that another launch
@@ -13359,7 +13527,8 @@ export class Runner {
    * which is the right guard while the cascade is still resolving; claiming
    * the target's lifetime at settle time asks about the target alone, because
    * a stop of an intermediate link doc does not touch the target's
-   * registration.
+   * registration. A target in a space under view replication is reported
+   * without the whole-attempt check, so a tombstone is checked here too.
    */
   #isStartAttemptCurrentFor(
     attempt: StartAttempt,
@@ -13524,7 +13693,7 @@ export class Runner {
     // later start can join one; dropping the index releases the attempts too.
     this.#inFlightStartsByDoc.clear();
     this.#independentlyStartedResults.clear();
-    this.#eventStarts.clear();
+    this.#transientStarts.clear();
     this.#registrationsInstalledByRefusedRuns.clear();
     for (const key of [...this.#pendingDeferredStarts.keys()]) {
       this.#cancelPendingDeferredStarts(key);
@@ -14863,6 +15032,17 @@ export class Runner {
       })()
       : undefined;
 
+    // A child the result places takes the producing piece's creator, the
+    // receipt recording none; every start path below, deferred or not, reads
+    // this.
+    {
+      const producer = patternResultCell.getAsNormalizedFullLink();
+      this.#receiptProducers.set(receiptKey, {
+        id: producer.id,
+        space: producer.space,
+      });
+    }
+
     if (deferForNavigate && result === undefined) {
       // navigateTo results are commit-gated (startAfterSuccessfulCommit);
       // the receipt precondition rides the deferred start's own create.
@@ -14899,6 +15079,7 @@ export class Runner {
         return setup.resultCell;
       })()
       : (() => {
+        const producer = patternResultCell.getAsNormalizedFullLink();
         const run = this.#runWithStartOwnership(
           tx,
           resultPattern,
@@ -14907,8 +15088,7 @@ export class Runner {
           {
             // A result-as-pattern child's demand roots include the producing
             // piece's chain (see RunnerRunOptions).
-            parentPieceRootId: patternResultCell.getAsNormalizedFullLink()
-              .id,
+            parentPieceRootId: producer.id,
           },
         );
         installedCancel = run.installedCancel;
@@ -14953,18 +15133,29 @@ export class Runner {
         this.stop(resultCell);
       });
       // A serving runtime keeps no graph nothing demands (serving-loop.md §1),
-      // so the parent holds nothing past this transaction's commit.
+      // so the parent holds nothing past this transaction's commit and the
+      // work it sets off. That work includes every derivation that reads what
+      // the new pieces derive, a board's index of its topics among them, and
+      // it runs before the scheduler is idle. A piece released at the commit
+      // itself would have written none of those values, and a read that
+      // reaches them through a link does not start it to write them.
       if (waveRunContextOf(tx) === undefined || cancelDeferredStart) {
         addCancel(cancelOwnedStart);
       } else {
         tx.addCommitCallback((_committedTx, commitResult) => {
-          if (!commitResult.error) {
+          if (commitResult.error) return;
+          this.#runtime.idle().then(() =>
             this.#releaseServedHandlerResult(
               resultCell,
               installedCancel,
               resultPattern,
-            );
-          }
+            )
+          ).catch((error) => {
+            logger.warn("served-release-failed", () => [
+              "releasing the pieces a handler's result started failed:",
+              error,
+            ]);
+          });
         });
       }
       // Spec scheduler-v2 §7.6 rule 2: the launch is speculative; if this
@@ -15344,6 +15535,13 @@ export class Runner {
     narrowestReadScope?: CellScope,
   ): any {
     if (!resultHasReactives && frame.reactives.size === 0) {
+      // A reclassified result is the computation's own value: what it keeps
+      // of its inputs is stored as a copy, under the label the
+      // reclassification gives it. Stored as references into the inputs, its
+      // items would still be read under the inputs' labels.
+      if (declaresReclassification(resultSchema)) {
+        result = snapshotQueryResult(result, { keepInstances: true });
+      }
       recordOutputSchemaPolicyInputs(
         tx,
         this.#runtime,
@@ -18194,6 +18392,7 @@ export class Runner {
           schedulerRehydration,
         ),
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
+        ...(crossSpace ? { parentPieceSpace: parentResultCell.space } : {}),
       };
       if (leftAlone && this.isRunning(childResultCell)) {
         this.#stopResult(childResultCell);

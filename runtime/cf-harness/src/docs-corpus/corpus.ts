@@ -87,6 +87,39 @@ interface WalkState {
   truncated: boolean;
 }
 
+/** Something bytes are read from, a chunk at a time, as `Deno.FsFile` is. */
+export interface ChunkReader {
+  /**
+   * Fills a prefix of `into`, returning its length, or `null` or `0` at the
+   * end.
+   */
+  read(into: Uint8Array): Promise<number | null>;
+}
+
+/**
+ * The first `size` bytes `reader` yields, or every byte it yields when it ends
+ * sooner, as it does for a file that shrank after its size was taken. A read
+ * that fills nothing ends it, so a reader that reports its end as `0` rather
+ * than `null` is not read from forever. Nothing
+ * past `size` is read, so a file that grew in the meantime is admitted at the
+ * size it was checked at.
+ */
+export const readAtMost = async (
+  reader: ChunkReader,
+  size: number,
+): Promise<Uint8Array> => {
+  const bytes = new Uint8Array(size);
+  let filled = 0;
+  while (filled < size) {
+    const read = await reader.read(bytes.subarray(filled));
+    if (!read) {
+      return bytes.subarray(0, filled);
+    }
+    filled += read;
+  }
+  return bytes;
+};
+
 /**
  * Reads one document through a single open handle: the size the budget is
  * checked against and the bytes admitted come from the same file, so a path
@@ -114,21 +147,13 @@ const readDocument = async (
       state.truncated = true;
       return;
     }
-    const bytes = new Uint8Array(info.size);
-    let filled = 0;
-    while (filled < bytes.length) {
-      const read = await file.read(bytes.subarray(filled));
-      if (read === null) {
-        break;
-      }
-      filled += read;
-    }
-    state.bytes += filled;
+    const bytes = await readAtMost(file, info.size);
+    state.bytes += bytes.length;
     state.files += 1;
     const sections = splitMarkdownSections({
       path: corpusPath,
       integrity: [operatorProvisionedReferenceAtom(root.hostPath)],
-    }, new TextDecoder().decode(bytes.subarray(0, filled)));
+    }, new TextDecoder().decode(bytes));
     for (const section of sections) state.sections.push(section);
   } finally {
     file.close();

@@ -60,7 +60,7 @@ async function copy(
 
 describe("prepareBoundaryCommit()", () => {
   // The specification spells an `exactCopyOf` claim as a JSON Pointer
-  // (§8.8).
+  // (§8.8). A string without the leading slash names one top-level field.
 
   const copied = {
     email: "a@example.com",
@@ -71,7 +71,7 @@ describe("prepareBoundaryCommit()", () => {
     confirmed: { email: "b@example.com" },
   };
 
-  for (const spelling of ["/email"]) {
+  for (const spelling of ["/email", "email"]) {
     describe(`an \`exactCopyOf\` claim spelled \`${spelling}\``, () => {
       it("returns no reason, and carries the source's label to the copy, where the copy holds the source's value", async () => {
         const { reasons, entries } = await copy(spelling, copied);

@@ -32,6 +32,7 @@ import {
   buildSourceDocs,
   type ClosureLoadTally,
   compileCacheClosureHoldsStamp,
+  type CompileCacheStampRepair,
   COMPILED_INTEGRITY_ATOM,
   compiledDocKey,
   deriveModulePredecessors,
@@ -992,11 +993,18 @@ export class PatternManager {
   #persistedClosureSpaces = new Map<string, Map<MemorySpace, Set<string>>>();
 
   /**
-   * The closures, by `stringTupleKey([space, identity])`, whose stamp repair
-   * this session refused: a refusal stands until the records change, so it is
-   * not tried again here.
+   * The stamp repairs of closures, by `stringTupleKey([space, identity])`,
+   * that this session has under way or refused, each resolving to its
+   * outcome, or to `undefined` where it threw. A preparation that finds a
+   * repair under way waits for it rather than starting another. A refusal
+   * stands until the records change, so it is not tried again here. Any other
+   * outcome is forgotten once reached: a conflict is a race the next load may
+   * win, and a session refused write access may be granted it.
    */
-  #unrepairedStampedClosures = new Set<string>();
+  #stampRepairs = new Map<
+    string,
+    Promise<CompileCacheStampRepair | undefined>
+  >();
 
   /**
    * Failed replications _parked_ for event-driven re-supply (the one supplier
@@ -2711,13 +2719,7 @@ export class PatternManager {
     this.#trackCacheWriteBack(space, entryIdentity, [], staging);
     try {
       const { error } = await staging;
-      if (error !== undefined) {
-        logger.warn("delegation-staging-failed", () => [
-          `staging the delegations of ${entryIdentity} in ${space} failed`,
-          error,
-        ]);
-        return;
-      }
+      if (error !== undefined) throw error;
       this.#runtime.registerModuleDelegations(space, committed);
     } catch (error) {
       logger.warn("delegation-staging-failed", () => [
@@ -2782,7 +2784,7 @@ export class PatternManager {
    * Helper for `prepareSourceClosureVerification()`, which returns whether a
    * record of `identity`'s closure in `space` holds a flow stamp, read in
    * `tx` (`compileCacheClosureHoldsStamp()`), and is not one this session's
-   * repair already gave up on.
+   * repair gave up on, waiting for a repair of it under way to end.
    */
   async #closureHoldsStamp(
     space: MemorySpace,
@@ -2790,11 +2792,8 @@ export class PatternManager {
     tx: IExtendedStorageTransaction,
     closure: ReadonlyMap<string, SourceDoc>,
   ): Promise<boolean> {
-    if (
-      this.#unrepairedStampedClosures.has(stringTupleKey([space, identity]))
-    ) {
-      return false;
-    }
+    const repair = this.#stampRepairs.get(stringTupleKey([space, identity]));
+    if (await repair === "refused") return false;
     try {
       return await compileCacheClosureHoldsStamp(
         this.#runtime,
@@ -2828,7 +2827,24 @@ export class PatternManager {
     identity: string,
   ): Promise<void> {
     const key = stringTupleKey([space, identity]);
-    if (this.#unrepairedStampedClosures.has(key)) return;
+    const underWay = this.#stampRepairs.get(key);
+    if (underWay !== undefined) {
+      await underWay;
+      return;
+    }
+    const repair = this.#repairStampsOf(space, identity);
+    this.#stampRepairs.set(key, repair);
+    if (await repair !== "refused") this.#stampRepairs.delete(key);
+  }
+
+  /**
+   * Helper for `#repairCompileCacheStamps()`, which runs one repair and
+   * returns its outcome, or `undefined` where it threw.
+   */
+  async #repairStampsOf(
+    space: MemorySpace,
+    identity: string,
+  ): Promise<CompileCacheStampRepair | undefined> {
     try {
       const runtimeVersion = await this.compileCacheRuntimeVersion({
         patternCoverage: this.#patternCoverageFor() !== undefined,
@@ -2845,10 +2861,6 @@ export class PatternManager {
             directCommit: true,
           }),
       );
-      // A refusal stands until the records change. A conflict is a race the
-      // next load may win, and a session refused write access may be granted
-      // it, so each of those is tried again.
-      if (outcome === "refused") this.#unrepairedStampedClosures.add(key);
       if (outcome !== "clean" && outcome !== "unverified") {
         logger.debug("compile-cache-stamp-repair", () => [
           `entry=${identity}`,
@@ -2856,12 +2868,14 @@ export class PatternManager {
           outcome,
         ]);
       }
+      return outcome;
     } catch (error) {
       logger.warn("compile-cache-stamp-repair-failed", () => [
         `entry=${identity}`,
         `space=${space}`,
         error,
       ]);
+      return undefined;
     }
   }
 

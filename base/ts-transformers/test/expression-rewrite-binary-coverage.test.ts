@@ -314,6 +314,37 @@ test(
 );
 
 test(
+  "emitBinaryExpression leaves a neutral && over a non-reactive object alias untouched",
+  () => {
+    // `options` is an object literal holding a cell. Resolving the alias
+    // records the cell read in the analysis graph, so the binary arrives with
+    // a relevant dataflow, but neither operand is reactive and there is no
+    // subexpression to compute-wrap.
+    const source = (left: string) =>
+      `export default pattern((_s) => {
+        const count = cell(0);
+        const options = { initial: count };
+        return { [UI]: <div>{${left} && <span>x</span>}</div> };
+      });`;
+    const neutral: RewriteOptions = {
+      reactiveContextKind: "neutral",
+      containerKind: "jsx-expression",
+    };
+
+    const { result } = rewriteBinary(source("options"), AND, neutral);
+    assertEquals(result, undefined);
+
+    // Reading the cell through the alias makes the binary reactive, so the
+    // same site is wrapped.
+    const { printed } = rewriteBinary(source("options.initial"), AND, neutral);
+    assert(printed, "expected a reactive && to be wrapped");
+    const root = parseModule(printed);
+    assertEquals(callsNamed(root, "lift").length, 1);
+    assertEquals(callsNamed(root, "when").length, 0);
+  },
+);
+
+test(
   "emitBinaryExpression rewrites a synthetic compute-owned array-method receiver without asserting compute-wrap invariants",
   () => {
     const { printed } = rewriteBinary(

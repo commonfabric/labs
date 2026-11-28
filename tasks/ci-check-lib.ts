@@ -123,10 +123,16 @@ export interface IssueComment {
 // GitHub API helpers
 //
 
-function apiHeaders(): Record<string, string> {
+/** Which token a request to GitHub carries. */
+export interface TokenOptions {
+  /** The bearer token sent, `GITHUB_TOKEN` when absent. */
+  token?: string;
+}
+
+function apiHeaders(token: string | undefined): Record<string, string> {
   return {
     Accept: "application/vnd.github+json",
-    Authorization: `Bearer ${TOKEN}`,
+    Authorization: `Bearer ${token}`,
     "X-GitHub-Api-Version": "2022-11-28",
   };
 }
@@ -345,13 +351,13 @@ async function readRefusalBody(resp: Response): Promise<string> {
 
 export async function githubGet<T>(
   path: string,
-  { sleep: wait = sleep }: RetryOptions = {},
+  { sleep: wait = sleep, token = TOKEN }: RetryOptions & TokenOptions = {},
 ): Promise<T> {
   const url = path.startsWith("http") ? path : `https://api.github.com${path}`;
   for (let attempt = 1;; attempt++) {
     let resp: Response;
     try {
-      resp = await fetch(url, { headers: apiHeaders() });
+      resp = await fetch(url, { headers: apiHeaders(token) });
     } catch (error) {
       if (attempt === GITHUB_GET_MAX_ATTEMPTS) throw error;
       await wait(githubRetryDelayMs(attempt));
@@ -382,10 +388,11 @@ export async function githubGet<T>(
 export async function githubPost<T>(
   path: string,
   body: Record<string, unknown>,
+  { token = TOKEN }: TokenOptions = {},
 ): Promise<T> {
   const resp = await fetch(`https://api.github.com${path}`, {
     method: "POST",
-    headers: { ...apiHeaders(), "Content-Type": "application/json" },
+    headers: { ...apiHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -397,10 +404,11 @@ export async function githubPost<T>(
 export async function githubPatch<T>(
   path: string,
   body: Record<string, unknown>,
+  { token = TOKEN }: TokenOptions = {},
 ): Promise<T> {
   const resp = await fetch(`https://api.github.com${path}`, {
     method: "PATCH",
-    headers: { ...apiHeaders(), "Content-Type": "application/json" },
+    headers: { ...apiHeaders(token), "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
   if (!resp.ok) {
@@ -451,10 +459,14 @@ type ArtifactExtraction =
  * Write the artifact zip carried by `resp` into a fresh temporary directory and
  * unzip it there, returning the directory. When either step fails the directory
  * is removed again and the failure is described for the caller's attempt log.
+ * A directory that is still there but cannot be removed is named in that
+ * description after the failure itself, so the attempt still counts as a
+ * failed one; one that is already gone needs no removing.
  */
 async function extractArtifactZip(
   resp: Response,
   tmpPrefix: string,
+  removeDirectory: (path: string) => Promise<void>,
 ): Promise<ArtifactExtraction> {
   const tmpDir = await Deno.makeTempDir({ prefix: tmpPrefix });
   const zipPath = `${tmpDir}/artifact.zip`;
@@ -483,16 +495,31 @@ async function extractArtifactZip(
   }
 
   try {
-    await Deno.remove(tmpDir, { recursive: true });
-  } catch { /* ignore cleanup errors */ }
-
+    await removeDirectory(tmpDir);
+  } catch (cause) {
+    if (!(cause instanceof Deno.errors.NotFound)) {
+      error += `, and ${tmpDir} could not be removed: ${cause}`;
+    }
+  }
   return { extracted: false, error };
+}
+
+/** What {@link downloadAndExtractArtifact} takes beyond its retry options. */
+export interface ArtifactDownloadOptions extends RetryOptions {
+  /**
+   * Removes a directory and everything in it; `Deno.remove()`, recursively,
+   * when absent.
+   */
+  removeDirectory?: (path: string) => Promise<void>;
 }
 
 export async function downloadAndExtractArtifact(
   artifactId: number,
   tmpPrefix: string,
-  { sleep: wait = sleep }: RetryOptions = {},
+  {
+    sleep: wait = sleep,
+    removeDirectory = (path) => Deno.remove(path, { recursive: true }),
+  }: ArtifactDownloadOptions = {},
 ): Promise<string | null> {
   const artifactPath = `/repos/${REPO}/actions/artifacts/${artifactId}/zip`;
   const url = `https://api.github.com${artifactPath}`;
@@ -506,7 +533,7 @@ export async function downloadAndExtractArtifact(
   for (let attempt = 1; attempt <= GITHUB_GET_MAX_ATTEMPTS; attempt++) {
     let resp: Response;
     try {
-      resp = await fetch(url, { headers: apiHeaders() });
+      resp = await fetch(url, { headers: apiHeaders(TOKEN) });
     } catch (error) {
       recordFailure(attempt, `fetch failed: ${error}`);
       if (attempt === GITHUB_GET_MAX_ATTEMPTS) break;
@@ -543,7 +570,11 @@ export async function downloadAndExtractArtifact(
       continue;
     }
 
-    const extraction = await extractArtifactZip(resp, tmpPrefix);
+    const extraction = await extractArtifactZip(
+      resp,
+      tmpPrefix,
+      removeDirectory,
+    );
     if (extraction.extracted) return extraction.tmpDir;
     recordFailure(attempt, extraction.error);
 
@@ -642,6 +673,7 @@ export function coverageGroupsForChangedFiles(
 /** Fetch every issue comment on a PR (PR conversation comments). */
 export async function fetchIssueComments(
   issueNumber: number,
+  options: TokenOptions = {},
 ): Promise<IssueComment[]> {
   const comments: IssueComment[] = [];
   const perPage = 100;
@@ -651,6 +683,7 @@ export async function fetchIssueComments(
       { id: number; body: string | null; user?: { login?: string } }[]
     >(
       `/repos/${REPO}/issues/${issueNumber}/comments?per_page=${perPage}&page=${page}`,
+      options,
     );
     for (const comment of data) {
       comments.push({

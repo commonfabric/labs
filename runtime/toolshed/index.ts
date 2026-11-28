@@ -27,7 +27,7 @@ import {
   startServerExecutionHost,
   stopServerExecutionHost,
 } from "@/lib/server-execution.ts";
-import { listenForHeapProfileSignal } from "@/lib/heap-profiles.ts";
+import { createHeapProfileSignal } from "@/lib/heap-profiles.ts";
 import {
   startIndexedCollectionHost,
   stopIndexedCollectionHost,
@@ -70,7 +70,7 @@ if (import.meta.main) {
   });
   Deno.addSignalListener("SIGINT", shutdown.handle);
   Deno.addSignalListener("SIGTERM", shutdown.handle);
-  await listenForHeapProfileSignal({
+  const heapProfiles = createHeapProfileSignal({
     directory: Deno.env.get("HEAP_PROFILE_DIR") ||
       `${Deno.env.get("TMPDIR") || "/tmp"}/toolshed-heap-profiles`,
     sampleMainThread: env.HEAP_PROFILE_MAIN_THREAD,
@@ -80,6 +80,8 @@ if (import.meta.main) {
     log,
     error,
   });
+  Deno.addSignalListener("SIGUSR2", heapProfiles.handle);
+  await heapProfiles.sampling;
 
   // This process's runtimes: the webhook runtime and, under
   // EXPERIMENTAL_SERVER_EXECUTION, the serving loop's host, or without it

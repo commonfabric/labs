@@ -73,7 +73,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { GFM } from "@lezer/markdown";
 import { consume } from "@lit/context";
-import { type CSSResult, html, PropertyValues, unsafeCSS } from "lit";
+import { html, PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
 
 import { BaseElement } from "../../core/base-element.ts";
@@ -278,21 +278,20 @@ const getLangExtFromMimeType = (mime: MimeType, math: boolean) => {
 // deno-lint-ignore cf-imports/no-inline-module-import
 const loadKatex = () => import("cf-katex-render");
 
+/** The module `loadKatex()` loads. */
+type KatexRender = Awaited<ReturnType<typeof loadKatex>>;
+
 /** What the editor needs of a handle it computes writes from. */
 type EditorInput = Pick<CellHandle<unknown>, "lastRead" | "pull">;
 
 /**
- * What `cell` holds, or nothing where the worker refuses its read. A piece
- * found among the mentionable entries is read with `get()`, the one read every
- * such handle answers, and a refusal reads as nothing rather than rejecting.
+ * What `cell` holds, or nothing while the worker's refusal of its read stands,
+ * when `get()` would throw.
  */
-function readUnlessRefused(cell: { get(): unknown }): unknown {
-  try {
-    return cell.get();
-  } catch (error) {
-    if (error instanceof CellReadRefusedError) return undefined;
-    throw error;
-  }
+function readUnlessRefused(
+  cell: Pick<CellHandle<unknown>, "get" | "refusal">,
+): unknown {
+  return cell.refusal === undefined ? cell.get() : undefined;
 }
 
 /**
@@ -534,12 +533,15 @@ export class CFCodeEditor extends BaseElement {
   private _proseMarkdownComp = new Compartment();
 
   /** KaTeX's layout rules, made into a sheet once and shared by every editor. */
-  static #katexStyles: CSSResult | undefined;
+  static #katexStyles: CSSStyleSheet | undefined;
+
+  /** Loads KaTeX, the first time this editor draws math. */
+  readonly #importKatex: () => Promise<KatexRender>;
 
   /**
    * KaTeX, once loaded. It loads the first time this editor draws math.
    */
-  #katex: Awaited<ReturnType<typeof loadKatex>> | undefined;
+  #katex: KatexRender | undefined;
 
   /** The load of `#katex`, from when it starts; it never rejects. */
   #katexLoad: Promise<void> | undefined;
@@ -718,8 +720,13 @@ export class CFCodeEditor extends BaseElement {
     },
   });
 
-  constructor() {
+  /**
+   * An editor that loads KaTeX with `importKatex`, by default from
+   * `cf-katex-render`.
+   */
+  constructor(importKatex: () => Promise<KatexRender> = loadKatex) {
     super();
+    this.#importKatex = importKatex;
     this.value = "";
     this.language = MimeType.markdown;
     this.disabled = false;
@@ -3216,43 +3223,34 @@ export class CFCodeEditor extends BaseElement {
 
   /**
    * Starts loading KaTeX, unless a load has started, and draws formulas once
-   * it arrives. A load that fails is reported as `cf-error`, and the formulas
-   * stay as their TeX: a page that maps no script to `cf-katex-render` is
-   * one where that happens.
+   * it arrives. KaTeX's layout rules join the sheets of the view's root, the
+   * editor's shadow root, after those already there, CodeMirror's among them.
+   * A view gone by then draws nothing more. A load that fails is reported as
+   * `cf-error`, and the formulas stay as their TeX: a page that maps no
+   * script to `cf-katex-render` is one where that happens.
    */
   #loadKatex(): void {
     if (this.#katexLoad !== undefined) return;
-    this.#katexLoad = loadKatex().then((katex) => {
+    this.#katexLoad = this.#importKatex().then((katex) => {
       this.#katex = katex;
-      CFCodeEditor.#katexStyles ??= unsafeCSS(katex.KATEX_STYLES);
-      this.#adoptMathStyles(CFCodeEditor.#katexStyles);
-      if (this._editorView !== undefined && this.#drawsMath) {
-        this._editorView.dispatch({
-          effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
-        });
+      const view = this._editorView;
+      if (view === undefined) return;
+      if (CFCodeEditor.#katexStyles === undefined) {
+        CFCodeEditor.#katexStyles = new CSSStyleSheet();
+        CFCodeEditor.#katexStyles.replaceSync(katex.KATEX_STYLES);
       }
+      const root = view.root;
+      root.adoptedStyleSheets = [
+        ...root.adoptedStyleSheets,
+        CFCodeEditor.#katexStyles,
+      ];
+      view.dispatch({
+        effects: this._proseMarkdownComp.reconfigure(this.#proseExtension()),
+      });
     }, (cause: unknown) => {
       const error = cause instanceof Error ? cause : new Error(String(cause));
       this.emit("cf-error", { error, message: error.message });
     });
-  }
-
-  /**
-   * Adds KaTeX's layout rules to this editor's shadow root, after the sheets
-   * already there. Lit's `adoptStyles()` would replace those, CodeMirror's
-   * own among them.
-   */
-  #adoptMathStyles(mathStyles: CSSResult): void {
-    const root = this.shadowRoot;
-    if (root === null) return;
-    const sheet = mathStyles.styleSheet;
-    if (sheet === undefined) {
-      const style = document.createElement("style");
-      style.textContent = mathStyles.cssText;
-      root.append(style);
-    } else if (!root.adoptedStyleSheets.includes(sheet)) {
-      root.adoptedStyleSheets = [...root.adoptedStyleSheets, sheet];
-    }
   }
 
   /**
@@ -3778,18 +3776,9 @@ export class CFCodeEditor extends BaseElement {
     const curIds = this._getCurrentMentionedIds(this.mentioned);
 
     // Compare ID sets to avoid unnecessary writes
-    if (newIds.size === curIds.size) {
-      let same = true;
-      for (const id of newIds) {
-        if (!curIds.has(id)) {
-          same = false;
-          break;
-        }
-      }
-      if (same) {
-        return; // No change
-      }
-    }
+    const unchanged = newIds.size === curIds.size &&
+      [...newIds].every((id) => curIds.has(id));
+    if (unchanged) return;
 
     // Resolve IDs to Mentionable values and update the cell
     const newMentioned = this._extractMentionedPieces(content);

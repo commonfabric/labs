@@ -96,8 +96,21 @@ const cursors = fabric.presence("cursors");
 const root = document.querySelector<HTMLDivElement>("#root");
 if (!root) throw new Error("Cursor Canvas needs a #root element.");
 
+/**
+ * The name and hue this page goes by until the user picks a name. Nothing
+ * stores them: viewing the board writes nothing of the user's.
+ */
+const visitorProfile: Profile = (() => {
+  const [nameSeed, hueSeed] = crypto.getRandomValues(new Uint32Array(2));
+  return { name: visitorName(nameSeed), hue: hueSeed % 360 };
+})();
+
 let hydrated = false;
-let profile: Profile | undefined;
+/**
+ * The name and hue this page goes by: the visitor ones until the board has
+ * loaded, and from then on the ones the user stored, where there are any.
+ */
+let profile = visitorProfile;
 let selectedId: string | undefined;
 let drag: LocalDrag | undefined;
 let roomStatus: RoomStatus = "joining";
@@ -414,10 +427,10 @@ function renderStatus(): void {
 
 function render(): void {
   title.textContent = input.get()?.title ?? DEFAULT_INPUT.title;
-  addRectangle.disabled = !hydrated || !profile;
-  addEllipse.disabled = !hydrated || !profile;
-  nameInput.disabled = !hydrated || !profile;
-  if (profile) meDot.style.background = ink(profile.hue);
+  addRectangle.disabled = !hydrated;
+  addEllipse.disabled = !hydrated;
+  nameInput.disabled = !hydrated;
+  if (hydrated) meDot.style.background = ink(profile.hue);
   renderShapes();
   renderPeers();
   renderStatus();
@@ -436,7 +449,7 @@ function publish(publication: Promise<void>): void {
 }
 
 function publishProfile(): void {
-  if (!profile || !leaveRoom) return;
+  if (!hydrated || !leaveRoom) return;
   publish(cursors.setName(profile.name));
   publish(cursors.setFacet(USER_FACET, { hue: profile.hue }));
 }
@@ -524,9 +537,8 @@ function grab(
   target: HTMLElement,
   corner?: Corner,
 ): void {
-  if (!hydrated || event.button !== 0 || drag) return;
   const shape = storedShapes().find((entry) => entry.id === id);
-  if (!shape) return;
+  if (!hydrated || event.button !== 0 || drag || !shape) return;
   event.preventDefault();
   event.stopPropagation();
   selectedId = id;
@@ -613,8 +625,11 @@ function releaseDragFacet(): void {
   publish(cursors.clearFacet(DRAG_FACET));
 }
 
+/**
+ * Adds a shape in the user's hue. Its buttons stay disabled until the board
+ * has loaded.
+ */
 function addShape(kind: CanvasShape["kind"]): void {
-  if (!hydrated || !profile) return;
   const shape = createShape(kind, crypto.randomUUID(), profile.hue, added++);
   shapesCell.push(shape).then(() => state.pull()).then(() => {
     selectedId = shape.id;
@@ -657,20 +672,11 @@ document.addEventListener("keydown", (event) => {
 // Profile
 //
 
-/**
- * The name and hue this page goes by until the user picks a name. Nothing
- * stores them: viewing the board writes nothing of the user's.
- */
-const visitorProfile: Profile = (() => {
-  const [nameSeed, hueSeed] = crypto.getRandomValues(new Uint32Array(2));
-  return { name: visitorName(nameSeed), hue: hueSeed % 360 };
-})();
-
 /** Takes the profile the user stored, or the visitor one where there is none. */
 function adoptProfile(value: Readonly<IframeOutputData> | undefined): void {
   const name = value?.displayName || visitorProfile.name;
   const hue = readHue(value?.hue) ?? visitorProfile.hue;
-  const changed = profile?.name !== name || profile?.hue !== hue;
+  const changed = profile.name !== name || profile.hue !== hue;
   profile = { name, hue };
   // A name being typed is a draft, and stays until it is committed.
   if (document.activeElement !== nameInput) nameInput.value = profile.name;
@@ -678,7 +684,7 @@ function adoptProfile(value: Readonly<IframeOutputData> | undefined): void {
 }
 
 nameInput.addEventListener("change", () => {
-  if (!hydrated || !profile) return;
+  if (!hydrated) return;
   const name = displayNameOf(nameInput.value, profile.name);
   nameInput.value = name;
   if (name === profile.name) return;
@@ -711,8 +717,9 @@ void (async () => {
     await Promise.all([input.pull(), state.pull(), output.pull()]);
     await state.initialize(DEFAULT_STATE);
     await state.pull();
-    hydrated = true;
     adoptProfile(output.get());
+    hydrated = true;
+    publishProfile();
     render();
   } catch (cause) {
     showError(cause);

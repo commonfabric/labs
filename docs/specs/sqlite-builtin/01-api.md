@@ -336,6 +336,18 @@ parse it, because whether SQLite marks such a column as JSON depends on the
 query plan (a sort or a materialized subquery unmarks it), and a column's type
 under `Row` has to hold under every plan. Declare the column `string` in `Row`.
 
+An INTEGER column reaches the row as the integer SQLite holds. A value within
+±(2^53 − 1) arrives as a `number`, so an epoch-millisecond timestamp, a rowid,
+and a count are ordinary numbers. A value beyond that range arrives as a
+`bigint`, because no `number` names it. The JS type therefore follows each
+row's value, not the column: `number` and `bigint` both lower to a schema the
+runtime reads a stored `bigint` under
+([schema mapping](../schema-generator/ts_to_json_schema_mapping.md)), so a
+field declared `number` holds a `bigint` in a row whose value is past 2^53.
+Declare a column that can hold such values (a 64-bit id, a nanosecond
+timestamp) `number | bigint`, or select it as text, `CAST(n AS TEXT)`, and
+declare it `string`, which reads every value as its digits.
+
 This handles projections the table schema can't: because `Cell<T>` lowers to
 `asCell`, declaring a result field as `Cell<User>` tells the runtime that column
 is cell-bearing **even when an alias hides the `_cf_link` suffix**:

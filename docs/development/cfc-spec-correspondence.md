@@ -348,6 +348,35 @@ that authorization does not establish specification conformance or amend this
 procedure. The conformance statement records the gap until a ruling and a
 reconciled pin address it.
 
+The display's committed-subject membership candidate is a nonconforming
+semantic gap pending
+[specs#110](https://github.com/commonfabric/specs/pull/110), stacked on
+[specs#49](https://github.com/commonfabric/specs/pull/49). A module-policy
+subject held in commitment form nominates each space the render read from
+whose digest it is, which #49's §4.9.3 refuses. It admits more at the strict
+default: its `cfcCommittedSubjectCandidates` dial defaults to on, and off
+restores #49's text. Its deciding site carries a `SPEC-PENDING` marker naming
+#110. This does not satisfy step 4 above. Berni directed building the simpler
+rule ahead of the ruling and revising it after; that direction does not
+supply a ruling. The conformance statement records the gap until #110 merges
+and a reconciled pin addresses it.
+
+Pattern reclassification is a semantic gap pending
+[specs#111](https://github.com/commonfabric/specs/pull/111) (SC-58), which
+cites the creator record of
+[specs#87](https://github.com/commonfabric/specs/pull/87). With its dial on,
+a value written under an `ifc.reclassify` declaration is stored with each
+clause that is its piece's recorded creator's alone to release, and names
+them only as a `User`, widened to that clause or the declared policy. That
+holds only when one declaration covers every path the transaction writes on
+the document and every writer there is the module the piece's
+`patternIdentity` names; otherwise the join is stored as derived. §3.1.8 and
+§8.12.7 do not permit the widening today. It sits behind the
+`cfcPatternReclassification` dial, which defaults to off and has effect only
+with `pieceCreatorRecord`, so the strict default is unchanged. Its deciding
+site in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker
+naming #111.
+
 An owner release (§8.12.7 route 2c) whose path holds a `*` segment is a
 nonconforming semantic gap pending
 [specs#86](https://github.com/commonfabric/specs/pull/86). The pinned route

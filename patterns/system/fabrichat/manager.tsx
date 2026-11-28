@@ -998,25 +998,17 @@ interface OfferMemberState {
 }
 
 /**
- * The profiles attesting `member` that the rosters of `rooms` list, each
- * once, in the order the rooms, and then each roster, list them. A room's
- * roster is read as it was last stored.
+ * The profiles attesting `member` that the rosters of `rooms` list, in the
+ * order the rooms, and then each roster, list them. A room's roster is read
+ * as it was last stored. A profile two of the rosters list is listed twice,
+ * which `offerRooms` and `deliverOffers` treat as once.
  */
 const memberProfilesIn = (
   rooms: readonly Cell<ChatRoomLink>[],
   member: string,
 ): Cell<ChatManagerProfile>[] =>
-  rooms.reduce<Cell<ChatManagerProfile>[]>(
-    (found, room) =>
-      (room.key("roster").get() ?? []).reduce(
-        (known, profile) =>
-          profileOwnerOf(profile) !== member ||
-            known.some((each) => equals(each, profile))
-            ? known
-            : [...known, profile],
-        found,
-      ),
-    [],
+  rooms.flatMap((room) => room.key("roster").get() ?? []).filter((profile) =>
+    profileOwnerOf(profile) === member
   );
 
 /**
@@ -1421,12 +1413,13 @@ const performManagerAct = (
   }
 
   // A start needs to know who this user is, to leave them out of the
-  // room's other members.
+  // room's other members, and an offer, to offer the room to no one but
+  // others.
   const self = currentPrincipal();
-  if (isStart(act) && self === undefined) {
+  if ((isStart(act) || act === "offerRoom") && self === undefined) {
     recordOutcome(state, requestId, {
       status: "refused",
-      reason: "Starting a chat needs a signed-in user.",
+      reason: "Starting or offering a chat needs a signed-in user.",
     });
     return;
   }
@@ -1755,15 +1748,7 @@ const performManagerAct = (
       });
       return;
     }
-    const from = currentPrincipal();
-    if (from === undefined) {
-      recordOutcome(state, requestId, {
-        status: "refused",
-        reason: "Offering a room needs a signed-in user.",
-      });
-      return;
-    }
-    if (member === from) {
+    if (member === self) {
       recordOutcome(state, requestId, {
         status: "refused",
         reason: "The member is this user.",

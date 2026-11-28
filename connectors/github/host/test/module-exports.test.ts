@@ -1,5 +1,4 @@
 import { assertEquals } from "@std/assert";
-import "../main.ts";
 import * as host from "../mod.ts";
 import { test } from "@commonfabric/test-support/test";
 

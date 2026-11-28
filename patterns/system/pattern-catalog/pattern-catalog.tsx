@@ -382,7 +382,7 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       return blocked;
     });
     return {
-      [NAME]: computed(() => "Get it"),
+      [NAME]: "Get it",
       [UI]: (
         <cf-hstack
           gap="2"

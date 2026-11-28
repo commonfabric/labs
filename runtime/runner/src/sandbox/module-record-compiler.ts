@@ -750,6 +750,22 @@ export function computeFabricModuleIdentities(
   return result;
 }
 
+/**
+ * Returns the identity `identityByPath` holds for `path`, as
+ * {@link computeFabricModuleIdentities} computed it, and throws for a path
+ * outside the set the identities were computed over.
+ */
+export function requiredModuleIdentity(
+  identityByPath: ReadonlyMap<string, string>,
+  path: string,
+): string {
+  const identity = identityByPath.get(path);
+  if (identity === undefined) {
+    throw new Error(`No module identity computed for '${path}'`);
+  }
+  return identity;
+}
+
 function mountPrefix(mount: FabricMount): string {
   return `${FABRIC_MOUNT_ROOT}${mount.entryIdentity}/`;
 }

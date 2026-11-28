@@ -1,6 +1,7 @@
 import { encodeBase64 } from "@std/encoding/base64";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   agentConfigReport,
@@ -12,6 +13,7 @@ import {
   type KeyToolDeps,
   requestCommand,
   runCli,
+  runCommand,
   setupCommand,
   uninstallCommand,
   watchForInterrupt,
@@ -1765,6 +1767,29 @@ describe("test-records-key", () => {
       expect(typeof wiring.githubToken).toBe("function");
       expect(typeof wiring.pause).toBe("function");
     });
+
+    it("pauses for one five-second polling interval", async () => {
+      const waited: number[] = [];
+      const wiring = defaultDeps((ms) => {
+        waited.push(ms);
+        return Promise.resolve();
+      });
+      expect(waited).toEqual([]);
+
+      await wiring.pause();
+      expect(waited).toEqual([5_000]);
+    });
+  });
+
+  describe("runCommand()", () => {
+    it("returns the exit code and standard output, not standard error", async () => {
+      const { code, stdout } = await runCommand(Deno.execPath(), [
+        "eval",
+        "console.log('out'); console.error('err'); Deno.exit(3)",
+      ]);
+      expect(code).toBe(3);
+      expect(new TextDecoder().decode(stdout)).toBe("out\n");
+    });
   });
 
   describe("INTERRUPT_NOTICE", () => {
@@ -2143,6 +2168,43 @@ describe("test-records-key", () => {
       deps.githubToken = () => Promise.reject(new RangeError("bug"));
 
       await expect(runCli(["collect"], deps)).rejects.toThrow(RangeError);
+    });
+  });
+
+  describe("the command-line entry point", () => {
+    const root = fromFileUrl(new URL("..", import.meta.url));
+    const script = fromFileUrl(
+      new URL("./test-records-key.ts", import.meta.url),
+    );
+
+    async function runScript(args: string[]) {
+      const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lock) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lock,
+          script,
+          ...args,
+        ],
+      });
+      const decoder = new TextDecoder();
+      return {
+        code,
+        stdout: decoder.decode(stdout),
+        stderr: decoder.decode(stderr),
+      };
+    }
+
+    it("exits with the status runCli returns for its arguments", async () => {
+      const { code, stdout, stderr } = await runScript(["wat"]);
+      expect(code).toBe(2);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(
+        "usage: deno task test-records-key <setup [--rotate]|request|collect|uninstall>",
+      );
     });
   });
 });

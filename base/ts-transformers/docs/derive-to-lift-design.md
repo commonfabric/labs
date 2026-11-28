@@ -611,7 +611,10 @@ the relevant phase lands.
   arrives at the `isToSchemaCall` branch as `__cfHelpers.ComparableCell<…>` with
   `pos < 0`) by detecting it structurally and short-circuiting the redundant
   re-shrink — which left the channel without a consumer and let it be deleted.
-  The current CrossStageState inventory is maintained in
+  That structural check is gone too: schema injection now writes the
+  lift-applied form function-first (`lift(cb, argSchema, resultSchema)(value)`),
+  so no schema-first lift with a synthetic argument reaches the `isToSchemaCall`
+  branch. The current CrossStageState inventory is maintained in
   `src/core/cross-stage-state.ts` and summarized in the behavior spec §2.2.
   Note: the earlier session-prep doc framed the registry as "derive-bound, dies
   with derive removal"; that was wrong — the consumer was schema-injection's own

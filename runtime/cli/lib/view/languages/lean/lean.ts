@@ -169,17 +169,16 @@ class Scanner {
   constructor(text: string) {
     this.#text = text;
     this.classes = new Array<TokenClass | undefined>(text.length);
-    for (let at = 0; at < text.length;) at = this.#next(at);
+    // Every character starts a match of TOKEN, so the scan reaches the end.
+    TOKEN.lastIndex = 0;
+    for (let match; (match = TOKEN.exec(text)) !== null;) {
+      TOKEN.lastIndex = this.#next(match);
+    }
   }
 
-  /** Scans the token at `at` and returns the offset after it. */
-  #next(at: number): number {
-    TOKEN.lastIndex = at;
-    const match = TOKEN.exec(this.#text);
-    if (match?.groups === undefined) {
-      throw new Error(`No Lean token matches at offset ${at}`);
-    }
-    const { groups, 0: text } = match;
+  /** Scans the token `match` found and returns the offset after it. */
+  #next(match: RegExpExecArray): number {
+    const { groups = {}, index: at, 0: text } = match;
     const end = at + text.length;
     if (groups.space !== undefined) {
       const feed = text.lastIndexOf("\n");

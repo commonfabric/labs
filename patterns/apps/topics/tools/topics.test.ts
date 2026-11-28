@@ -30,6 +30,7 @@ import {
   similarAction,
   stdinText,
   syncAction,
+  systemPrograms,
   titleAction,
   type TopicsDeps,
   USAGE,
@@ -68,8 +69,6 @@ describe("topics command", () => {
   let dir: string;
   let output: string[];
   let warnings: string[];
-  let opened: string[];
-  let copied: string[];
   let calls: Call[];
   let results: Map<string, unknown>;
   let stepped: string[];
@@ -86,8 +85,6 @@ describe("topics command", () => {
     dir = await Deno.makeTempDir({ prefix: "topics-tool-command-" });
     output = [];
     warnings = [];
-    opened = [];
-    copied = [];
     calls = [];
     results = new Map();
     stepped = [];
@@ -308,8 +305,8 @@ describe("topics command", () => {
     },
     write: (text) => output.push(text),
     warn: (text) => warnings.push(text),
-    openUrl: (url) => Promise.resolve(void opened.push(url)),
-    copyText: (text) => Promise.resolve(void copied.push(text)),
+    // Programs that fail, for a test that opens or copies to replace.
+    programs: { open: ["false"], copy: ["false"] },
     identityDid: () => Promise.resolve("did:key:z6Mk-tester"),
     env: (name) =>
       ({
@@ -1540,6 +1537,36 @@ describe("topics command", () => {
       expect(state.drafts).toEqual({});
     });
 
+    it("puts the Topic read in `browse` on the clipboard with the program it is given", async () => {
+      const clipboard = join(dir, "clipboard");
+      let keys: ReadableStreamDefaultController<Uint8Array> | undefined;
+      const terminal = liveTerminal((live) => {
+        keys = live;
+        keys.enqueue(new TextEncoder().encode("y"));
+      });
+      await main(["browse", "1"], {
+        ...deps,
+        programs: {
+          open: ["false"],
+          copy: ["sh", "-c", 'cat > "$0"', clipboard],
+        },
+        terminal: {
+          ...terminal,
+          // The input ends once the copy is reported done, or failed.
+          write(text) {
+            terminal.write(text);
+            if (keys !== undefined && /Copied top\/1\.|exited/.test(text)) {
+              keys.close();
+              keys = undefined;
+            }
+          },
+        },
+      });
+
+      expect(await Deno.readTextFile(clipboard)).toBe("top/1");
+      expect(stripAnsi(output.join(""))).not.toContain("exited with status");
+    });
+
     it("takes back the newest link to an address for `unlink`", async () => {
       await run("link", "1", "https://example.com/c", "--agent-name", "Sol");
       await run("unlink", "1", "https://example.com/c", "--agent-name", "Sol");
@@ -1878,6 +1905,23 @@ describe("topics command", () => {
       await expect(run("sync", "--json")).rejects.toThrow(
         "`sync` takes no `--json`.",
       );
+    });
+  });
+
+  describe("systemPrograms()", () => {
+    it("returns the programs that open a web browser and fill the clipboard on each system", () => {
+      expect(systemPrograms("darwin")).toEqual({
+        open: ["open"],
+        copy: ["pbcopy"],
+      });
+      expect(systemPrograms("linux")).toEqual({
+        open: ["xdg-open"],
+        copy: ["xclip", "-selection", "clipboard"],
+      });
+      expect(systemPrograms("windows")).toEqual({
+        open: ["explorer"],
+        copy: ["clip"],
+      });
     });
   });
 

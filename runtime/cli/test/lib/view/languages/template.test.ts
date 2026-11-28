@@ -481,6 +481,23 @@ describe("template", () => {
       expect(classesOf(doc.lines, "old")).toEqual(["identifier"]);
       expect(classesOf(doc.lines, "new")).toEqual(["identifier"]);
     });
+
+    it("refuses a host whose lines do not reconstruct the source it read", () => {
+      const host = {
+        ...plainTextLanguage,
+        highlightLines: (text: string) =>
+          plainTextLanguage.highlightLines(text.slice(1)),
+      };
+      expect(() =>
+        templateLanguage(jinjaSyntax, host).highlightLines("a {{ b }}")
+      )
+        .toThrow("The host's lines do not reconstruct the hidden source");
+      expect(verbatim(
+        templateLanguage(jinjaSyntax, plainTextLanguage).highlightLines(
+          "a {{ b }}",
+        ),
+      )).toBe("a {{ b }}");
+    });
   });
 
   describe("structure", () => {
@@ -640,6 +657,16 @@ describe("template", () => {
       expect(labels[0]).toBe("a".repeat(45) + "_0…");
     });
 
+    it("spells a cut mark after a `…` that the source holds", () => {
+      const label = (as: number) =>
+        languageForName("jinja-typescript")!.parseDocument(
+          `throw "${"a".repeat(as)}…" + {{ q }};\n`,
+        ).flatStructure[0].label;
+      expect(label(31)).toBe(`throw "${"a".repeat(31)}…" + {{ q }}…`);
+      expect(label(32)).toBe(`throw "${"a".repeat(32)}…" + {{ q }}…`);
+      expect(label(33)).toBe(`throw "${"a".repeat(33)}…" + …`);
+    });
+
     it("spells a cut mark in a label whose name holds a region", () => {
       const [node] = languageForName("jinja-typescript")!.parseDocument(
         "const f{{a}} = (gggggggggggg{{ b }} || h)(1);\n",
@@ -741,6 +768,41 @@ describe("template", () => {
       const document = jinjaShell.parseDocument('x={{ "😀" }}; f() { :; }\n');
       const [node] = document.flatStructure;
       expect([node.label, node.startCol]).toEqual(["f()", 13]);
+    });
+
+    it("counts the lines of a definition the host lists no entry for in the source", () => {
+      // The host reads the region's line break as fill, so it counts `x` on
+      // its second line where the source has it on its third.
+      const host = {
+        ...plainTextLanguage,
+        parseDocument(text: string) {
+          const startOffset = text.indexOf("x");
+          const line = text.slice(0, startOffset).split("\n").length - 1;
+          return {
+            ...plainTextLanguage.parseDocument(text),
+            definitions: new Map([["x", [{
+              name: "x",
+              kind: "variable" as const,
+              startLine: line,
+              endLine: line,
+              startOffset,
+              endOffset: startOffset + 1,
+            }]]]),
+          };
+        },
+      };
+      const document = templateLanguage(jinjaSyntax, host).parseDocument(
+        "{{ a\n }}\nx\n",
+      );
+      expect(document.flatStructure).toEqual([]);
+      expect(document.definitions.get("x")).toEqual([{
+        name: "x",
+        kind: "variable",
+        startLine: 2,
+        endLine: 2,
+        startOffset: 9,
+        endOffset: 10,
+      }]);
     });
 
     it("lists the host's entries that declare no name", () => {

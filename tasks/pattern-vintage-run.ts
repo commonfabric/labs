@@ -124,10 +124,6 @@ function patternsPrefix(roots: GateRoots): string {
   return `${roots.patternsRoot.slice(roots.repoRoot.length)}/`;
 }
 
-function localProgramOptions(roots: GateRoots, key: string) {
-  return { main: `${roots.patternsRoot}/${key}`, root: roots.repoRoot };
-}
-
 /**
  * Whether a recorded instantiation is something today's source can be applied
  * to. Four ways it is not:
@@ -596,12 +592,16 @@ export async function replayVintage(
     // the materialize reads the schema THE REPLAY JUST WROTE — so the fixture
     // defect it exists to name would always report as the second one.
     const hadSchemaByCell = new Map<string, boolean>();
-    for (const entry of targets) {
-      // Skip what the presence check already reported. Reading it would only
-      // re-derive "absent" and risk reporting the same root twice.
-      if (missing.has(entry)) continue;
-      const key = `${entry.space}/${entry.cellId}`;
-      if (beforeByCell.has(key)) continue;
+    // Each root once, however many targets name it, and none the presence
+    // check already reported: reading one would only re-derive "absent" and
+    // risk reporting the same root twice.
+    const held = new Map(
+      targets.filter((entry) => !missing.has(entry)).map((entry) => [
+        `${entry.space}/${entry.cellId}`,
+        entry,
+      ]),
+    );
+    for (const [key, entry] of held) {
       beforeByCell.set(
         key,
         await readVintageState(runtimeVintage, entry.space, entry.cellId),
@@ -831,19 +831,9 @@ export async function replayVintage(
         // never re-derived here: this line runs AFTER the update, so asking the
         // root now would see the schema the replay just wrote.
         //
-        // UNTESTED, deliberately and with the reason recorded. The no-schema
-        // half needs a root the presence control ACCEPTS that carries no
-        // result schema. A NATIVE capture cannot make one — `runner.ts` stamps
-        // `patternSetupIdentity` and the schema in the same setup — and an
-        // attempt to construct one by hand did not reach this branch at all.
-        // Since the presence control also accepts the older `patternIdentity`
-        // marker (an adopted fixture's roots carry only that), the shape is
-        // REACHABLE in principle from an old store whose setup never wrote a
-        // schema; none observed — every runner back to the oldest adopted
-        // vintage stamps the schema in the same transaction as the identity —
-        // so the case stays defensive. What the pre-materialize read buys is
-        // that the OTHER half, which IS reachable, cannot be misreported as
-        // this one.
+        // A NATIVE capture makes neither shape — `runner.ts` stamps
+        // `patternSetupIdentity` and the schema in the same setup — so both
+        // are tested against a fixture whose stored schema was rewritten.
         report.failures.push({
           ...where,
           detail: `recorded instantiation ${entry.identity}#${entry.symbol} ` +
@@ -1165,6 +1155,34 @@ export function testPathFor(roots: GateRoots, testKey: string): string {
 }
 
 /**
+ * The identity a fixture captured by running `testKey` is named by: the
+ * identity the run recorded for the test pattern itself.
+ *
+ * The TEST's, because the test is what was run. That is provenance for the
+ * capture as a whole; which PATTERNS it covers is the manifest's job, and a
+ * fixture routinely covers several. Deriving the name from one of them would
+ * have to pick a privileged one, and there is no principled choice — a test
+ * that drives two patterns equally has no primary. Taken from the recorded
+ * instantiations, so the name is always one the replay finds in the manifest.
+ *
+ * @throws If `entries` records no instantiation of the test's own file.
+ */
+export function fixtureIdentity(
+  roots: GateRoots,
+  testKey: string,
+  entries: readonly VintageManifestEntry[],
+): string {
+  const main = `${patternsPrefix(roots)}${testKey}`;
+  const test = entries.find((e) => e.main === main);
+  if (test === undefined) {
+    throw new Error(
+      `cannot capture ${testKey}: the run recorded no instantiation of ${main}`,
+    );
+  }
+  return test.identity;
+}
+
+/**
  * Capture a vintage by running a TEST against a file-backed store, then
  * snapshotting.
  *
@@ -1257,32 +1275,12 @@ export async function captureVintage(
           `fixture would hold no test-written state`,
       );
     }
-    // The identity that names the fixture is the TEST's, because the test is
-    // what was run. That is provenance for the capture as a whole; which
-    // PATTERNS it covers is the manifest's job, and a fixture routinely covers
-    // several. Deriving the name from one of them would have to pick a
-    // privileged one, and there is no principled choice — a test that drives
-    // two patterns equally has no primary.
-    const program = await resolveLocalProgram(
-      (r) => vintage.runtime.harness.resolve(r),
-      localProgramOptions(roots, testKey),
-    );
-    const pattern = await vintage.runtime.patternManager.compilePattern(
-      program as never,
-      { space: vintage.space as never },
-    );
-    const ref = vintage.runtime.patternManager.getArtifactEntryRef(pattern);
-    if (ref === undefined) {
-      throw new Error(
-        `cannot capture ${testKey}: compiled test has no identity`,
-      );
-    }
-
     // Every instantiation carries its own authored file: the runtime stamps it
     // at module-index time and resolves it through the derivation chain, so a
     // nested sub-pattern names its own source rather than the entry's. Nothing
     // to fill in here.
     const entries = [...seen.values()];
+    const identity = fixtureIdentity(roots, testKey, entries);
     // Refuse to PIN a fixture holding a root nothing can address, rather than
     // waiting for the replay to fail on it. The replay does fail closed, but it
     // would do so on whoever's PR next ran the gate; catching it here blames the
@@ -1324,7 +1322,7 @@ export async function captureVintage(
     await writeVintageManifest(vintage, entries);
     const outDir = `${roots.vintagesRoot}/${testKey}/${tier}`;
     await Deno.mkdir(outDir, { recursive: true });
-    const path = `${outDir}/${vintageFileName(stampFor(now), ref.identity)}`;
+    const path = `${outDir}/${vintageFileName(stampFor(now), identity)}`;
     // Never write over an existing fixture, in EITHER tier. `captureMissing`
     // already skips a covered key, so reaching this with the file present
     // means something else did — and the cleanup below deletes files on the

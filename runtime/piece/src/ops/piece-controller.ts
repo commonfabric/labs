@@ -316,11 +316,7 @@ function replaceMaterializedCellValueAtPath(
   path: readonly (string | number)[],
   value: unknown,
 ): unknown {
-  while (isCell(current) && !isStream(current)) {
-    const next = current.get();
-    if (next === current) break;
-    current = next;
-  }
+  while (isCell(current) && !isStream(current)) current = current.get();
   if (path.length === 0) return value;
 
   const [segment, ...remaining] = path;
@@ -941,11 +937,7 @@ export function materializedValueAtPath(
 ): unknown {
   let current = root;
   const followCell = (): void => {
-    while (isCell(current) && !isStream(current)) {
-      const next = current.get();
-      if (next === current) break;
-      current = next;
-    }
+    while (isCell(current) && !isStream(current)) current = current.get();
   };
   for (const segment of path) {
     followCell();
@@ -1090,11 +1082,12 @@ export function currentValuePathContracts(
   active = new WeakSet<object>(),
 ): PathSchemaContract[] {
   const contract = resolvePathSchemaContract(unresolved);
+  const { schema, root } = contract;
+  // A boolean schema is every child's contract as it stands.
+  if (!isObjectOrArray(schema)) return [contract];
   try {
     return linkPathContracts([contract], [segment]);
   } catch (originalError) {
-    const { schema, root } = contract;
-    if (!isObjectOrArray(schema)) throw originalError;
     if (active.has(schema)) {
       throw new Error("recursive correlated write schema cannot be localized");
     }
@@ -3401,6 +3394,8 @@ function validateDurableSourceRoots(
 
   for (const group of groups) {
     const schemaView = group.cell.asSchema(group.root).get();
+    // The schema view is present, so the root itself is never reported as a
+    // missing alias.
     let candidate = omitMissingProjectionAliases(
       group.cell.asSchema(undefined).get(),
       group.cell.getRawUntyped(),
@@ -3411,7 +3406,6 @@ function validateDurableSourceRoots(
       group.paths,
       acceptOpaqueValue,
     );
-    if (candidate === MISSING_PROJECTION_ALIAS) candidate = undefined;
     for (const path of group.paths) {
       candidate = replaceMaterializedValueAtPath(candidate, path, nextValue);
     }
@@ -4109,19 +4103,11 @@ class PiecePropIo implements PieceCellIo {
             // server-derived-late sibling race the ruling closed.
             for (let depth = writePath.length - 1; depth >= 0; depth--) {
               const ancestorPath = writePath.slice(0, depth);
-              let ancestorContracts:
-                | ReturnType<typeof linkPathContracts>
-                | undefined;
-              try {
-                ancestorContracts = linkPathContracts(
-                  [{ schema, root: schema }],
-                  ancestorPath,
-                );
-              } catch {
-                // Undecomposable (correlated anyOf): the whole-result
-                // fallback branch below owns those paths.
-                continue;
-              }
+              // Every prefix of a path that decomposed decomposes too.
+              const ancestorContracts = linkPathContracts(
+                [{ schema, root: schema }],
+                ancestorPath,
+              );
               for (const contract of ancestorContracts) {
                 const ancestorSchema = contract.schema;
                 if (
@@ -4980,18 +4966,19 @@ export class PieceController<T = unknown> {
       }
     }
 
+    // Source the origin offers failing to compile, or exporting no pattern,
+    // is the origin's failure; retained source doing so is not.
     let candidate: Pattern;
     try {
       candidate = await compileProgram(this.#pieces, program);
     } catch (error) {
-      // Source the origin offers failing to compile is the origin's failure;
-      // retained source failing to is not.
       throw origin === null ? error : originFailure(error);
     }
     const candidateRef = this.#pieces.runtime.patternManager
       .getArtifactEntryRef(candidate);
     if (candidateRef === undefined) {
-      throw new Error("the candidate source has no pattern identity");
+      const error = new Error("the candidate source has no pattern identity");
+      throw origin === null ? error : originFailure(error);
     }
     // Only an origin says when what it serves was released; a restore
     // adopts retained source, which no deployment is serving.
@@ -6198,6 +6185,7 @@ function systemRoute(
   try {
     classified = classifyOrigin(pieces.runtime, pieces.getSpace(), origin);
   } catch (error) {
+    // An origin classifyOrigin refuses names no route.
     if (error instanceof PieceOriginError) return undefined;
     throw error;
   }
@@ -6234,8 +6222,10 @@ function systemRoute(
  * not commits: a deployment whose patterns route served source its gate never
  * judged is trusted for it here, as the automatic update from the origin
  * trusts it.
+ *
+ * @internal Exported for focused release-gate tests.
  */
-async function isGatedReleaseStep(
+export async function isGatedReleaseStep(
   pieces: PiecesController,
   running: { identity: string; symbol: string },
   piece: Cell<unknown>,

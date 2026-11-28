@@ -240,7 +240,7 @@ test("mounted is announced only after the session loop and signal handlers", asy
   );
   assertAppearsBefore(
     source,
-    'Deno.addSignalListener("SIGTERM"',
+    'host.addSignalListener("SIGTERM"',
     'reportSupervisorState("mounted")',
     "signal handlers installed before mounted is announced",
   );

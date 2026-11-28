@@ -8,7 +8,12 @@
 
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
-import { type Cell, Runtime } from "@commonfabric/runner";
+import {
+  type Cell,
+  type NormalizedFullLink,
+  Runtime,
+  type sendEvent,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
   afterEach,
@@ -75,19 +80,13 @@ describe("callVerb under a read ceiling", () => {
   });
 
   /**
-   * Creates the piece without starting it, its stored `note` labelled
-   * {@link SECRET_ATOM} when `labelled`, and returns its result cell.
+   * Labels the value at `path` of the document `link` names
+   * {@link SECRET_ATOM}.
    */
-  const createPiece = async (
-    labelled: boolean,
-  ): Promise<Cell<{ count: number }>> => {
-    const created = await pieces.create<{ count: number }>(SOURCE, {
-      input: {},
-      start: false,
-    });
-    const cell = created.getCell();
-    if (!labelled) return cell;
-    const { space, id } = cell.getAsNormalizedFullLink();
+  const labelSecret = async (
+    { space, id }: NormalizedFullLink,
+    path: string[],
+  ): Promise<void> => {
     const address = { space, scope: "space" as const, id, path: [] };
     const seed = runtime.edit();
     const stored = storedFields(seed, address);
@@ -99,14 +98,26 @@ describe("callVerb under a read ceiling", () => {
         schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
         labelMap: {
           version: 1,
-          entries: [{
-            path: ["note"],
-            label: { confidentiality: [SECRET_ATOM] },
-          }],
+          entries: [{ path, label: { confidentiality: [SECRET_ATOM] } }],
         },
       },
     });
     expect((await seed.commit().settled).ok).toBeDefined();
+  };
+
+  /**
+   * Creates the piece without starting it, its stored `note` labelled
+   * {@link SECRET_ATOM} when `labelled`, and returns its result cell.
+   */
+  const createPiece = async (
+    labelled: boolean,
+  ): Promise<Cell<{ count: number }>> => {
+    const created = await pieces.create<{ count: number }>(SOURCE, {
+      input: {},
+      start: false,
+    });
+    const cell = created.getCell();
+    if (labelled) await labelSecret(cell.getAsNormalizedFullLink(), ["note"]);
     return cell;
   };
 
@@ -142,5 +153,38 @@ describe("callVerb under a read ceiling", () => {
 
     expect(call.status).toBe("settled");
     expect(await cell.key("count").pull()).toBe(1);
+  });
+
+  it("settles a call whose receipt is above the ceiling, saying why its result was not read", async () => {
+    // The stand-in send commits a handling whose receipt is a document
+    // labelled above the ceiling.
+    const cell = await createPiece(false);
+    const { space } = cell.getAsNormalizedFullLink();
+    const write = runtime.edit();
+    const document = runtime.getCell(space, "verb-call-read-ceiling receipt");
+    document.withTx(write).set({ count: 1 });
+    expect((await write.commit().settled).ok).toBeDefined();
+    const receipt = document.getAsNormalizedFullLink();
+    await labelSecret(receipt, []);
+    const send: typeof sendEvent = (_stream, _event, onCommit) => {
+      const handling = runtime.edit();
+      handling.handlingReceiptLink = receipt;
+      void handling.commit().settled.then(() => onCommit?.(handling));
+    };
+
+    const call = await callVerb(
+      runtime,
+      cell.getAsNormalizedFullLink(),
+      "bump",
+      undefined,
+      { sendEvent: send },
+    );
+
+    expect(call).toEqual({
+      status: "settled",
+      receipt,
+      unread: "the runtime read ceiling withholds this value",
+    });
+    expect(JSON.stringify(call)).not.toContain(SECRET_ATOM);
   });
 });
