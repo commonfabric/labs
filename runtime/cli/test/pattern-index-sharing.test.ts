@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 import { sharingChange, sharingLines } from "../commands/pattern-index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SETTINGS = {
   enabled: true,

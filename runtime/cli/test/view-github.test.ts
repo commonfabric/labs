@@ -1,6 +1,5 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   abortable,
@@ -13,11 +12,11 @@ import {
   readPullRequestList,
 } from "../lib/view/github.ts";
 import { realPushIo } from "../lib/view/push.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A git that answers as a checkout would whose remotes have the fetch
- * addresses `remotes` holds, each with `main` as its default branch, and
- * whose `origin` is pushed to `push`.
+ * addresses `remotes` holds, and whose `origin` is pushed to `push`.
  */
 function remotesGit(
   remotes: Readonly<Record<string, string>>,
@@ -29,13 +28,9 @@ function remotesGit(
       return push === undefined ? null : `${push}\n`;
     }
     const fetch = /^remote get-url (\w+)$/.exec(asked)?.[1];
-    if (fetch !== undefined) {
-      return remotes[fetch] === undefined ? null : `${remotes[fetch]}\n`;
-    }
-    const head = /^symbolic-ref --quiet refs\/remotes\/(\w+)\/HEAD$/.exec(
-      asked,
-    )?.[1];
-    return head === undefined ? null : `refs/remotes/${head}/main\n`;
+    return fetch === undefined || remotes[fetch] === undefined
+      ? null
+      : `${remotes[fetch]}\n`;
   };
 }
 
@@ -45,7 +40,6 @@ const TARGET = {
   owner: "fork",
   head: "fork:feature",
   branch: "feature",
-  base: "main",
 };
 
 /** A fetch that answers each request with `status` and `body`, recording
@@ -79,7 +73,7 @@ function git(cwd: string, env: Record<string, string>, ...args: string[]) {
 
 describe("github", () => {
   describe("pullRequestTarget()", () => {
-    it("goes to upstream's repository and default branch, with the head in origin's repository", () => {
+    it("goes to upstream's repository, with the head in origin's repository", () => {
       const target = pullRequestTarget(
         remotesGit({
           origin: "git@github.com:fork/repo.git",
@@ -129,25 +123,13 @@ describe("github", () => {
       ).toBe("feature");
     });
 
-    it("throws when origin is not on GitHub, or the target's remote names no default branch", () => {
+    it("throws when origin is not on GitHub", () => {
       expect(() =>
         pullRequestTarget(
           remotesGit({ origin: "https://example.test/repo.git" }),
           "feature",
         )
       ).toThrow("origin is not a GitHub repository");
-      expect(() =>
-        pullRequestTarget(
-          (args) =>
-            args[0] === "remote" && args.at(-1) === "origin"
-              ? "git@github.com:octo/repo.git\n"
-              : null,
-          "feature",
-        )
-      ).toThrow(
-        "origin's default branch is unknown. " +
-          "`git remote set-head origin --auto` finds it",
-      );
     });
   });
 
@@ -189,12 +171,15 @@ describe("github", () => {
           realPushIo({ cwd: root, env, write() {}, step: () => () => {} })
             .query;
 
-        expect(pullRequestText(query, TARGET)).toEqual({
+        expect(pullRequestText(query, TARGET, "main")).toEqual({
           title: "Fix the frobnicator",
           body: "It was broken.\n\nNow not.",
         });
+        expect(() => pullRequestText(query, TARGET, "trunk")).toThrow(
+          "git cannot compare the branch with refs/remotes/upstream/trunk",
+        );
         run("update-ref", "refs/remotes/upstream/main", "HEAD");
-        expect(() => pullRequestText(query, TARGET)).toThrow(
+        expect(() => pullRequestText(query, TARGET, "main")).toThrow(
           "the branch has no commits that refs/remotes/upstream/main does not have",
         );
       } finally {
@@ -207,6 +192,7 @@ describe("github", () => {
         pullRequestText(
           (args) => args[0] === "rev-list" ? "abc123\n" : null,
           TARGET,
+          "main",
         )
       ).toThrow("git cannot read commit abc123");
     });
@@ -276,6 +262,52 @@ describe("github", () => {
         ),
       ).toBeNull();
       expect(requests[0].init.headers).not.toHaveProperty("Authorization");
+    });
+
+    it("resolves with the repository's default branch, with the token when there is one", async () => {
+      for (const token of ["t0k", null]) {
+        const { send, requests } = fakeFetch(
+          200,
+          JSON.stringify({ full_name: "octo/repo", default_branch: "trunk" }),
+        );
+
+        expect(
+          await githubApi(() => token, send).defaultBranch(
+            "octo/repo",
+            new AbortController().signal,
+          ),
+        ).toBe("trunk");
+        expect(requests[0].url).toBe("https://api.github.com/repos/octo/repo");
+        expect(requests[0].init.method).toBe("GET");
+        if (token === null) {
+          expect(requests[0].init.headers).not.toHaveProperty("Authorization");
+        } else {
+          expect(requests[0].init.headers).toMatchObject({
+            Authorization: "Bearer t0k",
+          });
+        }
+      }
+    });
+
+    it("rejects when GitHub names no default branch, and with a refusal that cannot succeed when GitHub refuses to say", async () => {
+      const ask = (status: number, body: string) =>
+        githubApi(() => null, fakeFetch(status, body).send).defaultBranch(
+          "octo/repo",
+          new AbortController().signal,
+        );
+
+      for (const body of ["{}", JSON.stringify({ default_branch: "" }), "[]"]) {
+        const error = await ask(200, body).catch((error) => error);
+        expect(error).not.toBeInstanceOf(GitHubRefusal);
+        expect(error.message).toBe(
+          "GitHub did not say which branch is octo/repo's default",
+        );
+      }
+      const refusal = await ask(404, JSON.stringify({ message: "Not Found" }))
+        .catch((error) => error);
+      expect(refusal).toBeInstanceOf(GitHubRefusal);
+      expect(refusal.status).toBe(404);
+      expect(refusal.retryable).toBe(false);
     });
 
     it("creates a pull request and resolves with its address", async () => {

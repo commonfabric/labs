@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
@@ -12,6 +11,7 @@ import {
   parseInviteLink,
 } from "@commonfabric/runner/space-invites";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Opens no memory session, so every operation goes over the stubbed HTTP. */
 const httpOnly: InviteStorageOpener = () =>

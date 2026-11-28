@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type CompileCacheVersionCommands,
@@ -6,6 +5,12 @@ import {
 } from "./compile-cache-version.ts";
 import { OUTPUT_VERSION_MEMO_PATH } from "../runtime/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
 import type { CorpusEntryCompiled } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const VERSION = "cf/esm-compile/OutputVersion001";
 

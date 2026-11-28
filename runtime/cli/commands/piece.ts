@@ -147,11 +147,19 @@ import {
   type UnreportedRunDeps,
 } from "../lib/unreported-run.ts";
 import { absPath } from "../lib/utils.ts";
+import { loadIdentity } from "../lib/identity.ts";
 import {
   PatternIndexStore,
   patternIndexStoreDir,
 } from "@commonfabric/pattern-index/store";
-import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
+import {
+  DEFAULT_PATTERN_INDEX_URL,
+  openPatternIndexClient,
+} from "@commonfabric/pattern-index/access";
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+} from "@commonfabric/pattern-index/client";
 import { noteWroteTo } from "../lib/write-receipt.ts";
 import type {
   DeployedSource,
@@ -1501,6 +1509,15 @@ const VERSION_ENTRY_HELP =
 const NO_INDEX_VERSION_HELP =
   "Keep no version of this deploy in the pattern index, and do not wait on it.";
 
+const VERSION_ORIGIN_HELP =
+  "Who wrote the source the kept version holds: `agent` for an agent deploying for the person. It is kept as agent work, in the history of the piece it is deployed to.";
+
+const VERSION_DESCRIPTION_HELP =
+  "What the kept version says the pattern does, in place of the entry's doc comment.";
+
+const BUILT_FROM_HELP =
+  "The index pattern the source was built from: credited as a remix when it is someone else's.";
+
 const PIECE_OPTION_HELP =
   "The target cell: an id, slug, or reference (/tracker, /of:fid1:.../). A " +
   "space embedded in the reference (//my-space/tracker) supplies --space " +
@@ -2525,6 +2542,10 @@ export const piece = targetOptions(
     ),
     `Create a piece from a published pattern, deployed the way run_pattern deploys one.`,
   )
+  .example(
+    cliText(`cf piece new ${EX_ID} ${EX_COMP} --from-link a-k3x9AbCdEf@beta`),
+    `Create a piece from what a shared link names now, here its beta.`,
+  )
   .arguments("[main:string]")
   .option(
     "--from-index <patternId:string>",
@@ -2540,17 +2561,36 @@ export const piece = targetOptions(
       ],
     },
   )
+  .option(
+    "--from-link <link:string>",
+    "Create the piece from the shared version a pattern link names now, as --from-index would; cf pattern link prints one.",
+    {
+      conflicts: [
+        "from-index",
+        "request-key",
+        "version-entry",
+        "main-export",
+        "root",
+        "repository",
+        "test",
+        "datafile",
+      ],
+    },
+  )
   .env(
     "CF_PATTERN_INDEX_URL=<url:string>",
-    "Base URL of the pattern index --from-index reads.",
+    "Base URL of the pattern index --from-index and --from-link read.",
     { prefix: "CF_" },
   )
   .option(
     "--pattern-index-url <url:string>",
-    "Base URL of the pattern index --from-index reads; the deployment's by default.",
+    "Base URL of the pattern index --from-index and --from-link read; the deployment's by default.",
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
+  .option("--version-origin <origin:string>", VERSION_ORIGIN_HELP)
+  .option("--version-description <text:string>", VERSION_DESCRIPTION_HELP)
+  .option("--built-from <patternId:string>", BUILT_FROM_HELP)
   .option(
     "--request-key <key:string>",
     "Reuse a creation request after an uncertain result without creating another piece.",
@@ -2594,7 +2634,7 @@ export const piece = targetOptions(
   )
   .option(
     "--json",
-    'Output {"pieceId", "name"} as JSON; name only for --from-index, when the index has one.',
+    'Output {"pieceId", "name"} as JSON; name only from the index, when it has one.',
   )
   .action(newPieceFromCommand)
   /* piece set-slug */
@@ -2715,6 +2755,9 @@ export const piece = targetOptions(
   )
   .option("--no-index-version", NO_INDEX_VERSION_HELP)
   .option("--version-entry <path:string>", VERSION_ENTRY_HELP)
+  .option("--version-origin <origin:string>", VERSION_ORIGIN_HELP)
+  .option("--version-description <text:string>", VERSION_DESCRIPTION_HELP)
+  .option("--built-from <patternId:string>", BUILT_FROM_HELP)
   .option(
     "--check",
     "Report whether the source could replace the piece's current one, without issuing storage writes. Exits non-zero when it could not.",
@@ -3624,6 +3667,15 @@ export interface PieceCLIOptions {
    * continues, in place of the file deployed.
    */
   versionEntry?: string;
+
+  /** `setsrc` and `new`: who wrote the source (`agent`), for its version. */
+  versionOrigin?: string;
+
+  /** `setsrc` and `new`: what the kept version says the pattern does. */
+  versionDescription?: string;
+
+  /** `setsrc` and `new`: the index pattern the source was built from. */
+  builtFrom?: string;
   json?: boolean;
 }
 
@@ -5325,6 +5377,67 @@ function versionEntryOf(
 }
 
 /**
+ * What `--version-origin`, `--version-description` and `--built-from` say
+ * about the version a deploy keeps.
+ *
+ * @throws ValidationError for a `--version-origin` other than `agent`, an
+ * empty value, any of them beside `--no-index-version` (no version to
+ * describe) or `--origin` (a piece that follows another pattern keeps no
+ * version of its own), or `--version-origin agent` beside `--version-entry`
+ * (an agent's version follows the piece, not a file).
+ */
+function versionFactsOf(
+  options: Pick<
+    PieceCLIOptions,
+    | "indexVersion"
+    | "versionEntry"
+    | "origin"
+    | "versionOrigin"
+    | "versionDescription"
+    | "builtFrom"
+  >,
+): Pick<DeployedSource, "versionOrigin" | "description" | "builtFrom"> {
+  const { versionOrigin, versionDescription, builtFrom } = options;
+  if (
+    versionOrigin === undefined && versionDescription === undefined &&
+    builtFrom === undefined
+  ) return {};
+  const refuse = (message: string): never => {
+    throw new ValidationError(message, { exitCode: 1 });
+  };
+  if (options.indexVersion === false) {
+    refuse(
+      "--version-origin, --version-description and --built-from describe the version a deploy keeps; --no-index-version keeps none.",
+    );
+  }
+  if (options.origin !== undefined) {
+    refuse(
+      "--version-origin, --version-description and --built-from describe a version of the piece's own source; a piece that follows --origin keeps none.",
+    );
+  }
+  if (versionOrigin !== undefined && versionOrigin !== "agent") {
+    refuse(
+      `--version-origin takes \`agent\`, not "${versionOrigin}"; leave it out for your own source.`,
+    );
+  }
+  if (versionOrigin !== undefined && options.versionEntry !== undefined) {
+    refuse(
+      "--version-origin agent keeps the version in the piece's history; --version-entry names a file's.",
+    );
+  }
+  const description = versionDescription?.trim();
+  const from = builtFrom?.trim();
+  if (description === "" || from === "") {
+    refuse("--version-description and --built-from take a non-empty value.");
+  }
+  return {
+    ...(versionOrigin === undefined ? {} : { versionOrigin: "agent" as const }),
+    ...(description === undefined ? {} : { description }),
+    ...(from === undefined ? {} : { builtFrom: from }),
+  };
+}
+
+/**
  * Records no version, for `--no-index-version`: a deploy in a tight edit
  * loop makes no index call and never waits on the index.
  */
@@ -5344,6 +5457,8 @@ function versionRecorder(
   entry: string,
   origin: string | undefined,
   print: (line: string) => void,
+  facts: Pick<DeployedSource, "versionOrigin" | "description" | "builtFrom"> =
+    {},
 ): {
   onDeployed: (deployed: DeployedProgram) => void;
   settle: () => Promise<VersionOutcome | undefined>;
@@ -5354,6 +5469,7 @@ function versionRecorder(
       pending = record({
         entry,
         ...deployed,
+        ...facts,
         ...(origin === undefined ? {} : { origin }),
       });
     },
@@ -5386,6 +5502,12 @@ export interface NewPieceCommandDependencies {
 
   /** Where the version's line goes, stderr unless the caller says otherwise. */
   note?: (message: string) => void;
+
+  /** The index `--from-link` asks what a link names; the real one by default. */
+  openIndexClient?: (
+    patternIndexUrl: string,
+    identity: string,
+  ) => Promise<Pick<PatternIndexClient, "getPattern">>;
 
   /** Records which published pattern a piece came from; the local store by default. */
   recordIndexedPiece?: (
@@ -5421,16 +5543,64 @@ export const recordIndexedPiece = async (
 };
 
 /**
- * `cf piece new`'s action, as a function a test can call.
- *
- * The registration chain around it is not reachable from a test, so an action
- * left inline is not either — and what this one decides is worth reaching:
- * which options become the naming request `newPiece` receives, and that the
- * address it points a reader at is the slug when there is one.
+ * The pattern id of the shared version `link` names now, as the index answers
+ * `getPattern {ref}`: a bare link is the pattern's stable version, `@beta` its
+ * beta, `@<n>` exactly shared version n. The answer is one immutable version,
+ * so the deploy that follows reads exactly what was resolved, and the piece
+ * records it as `--from-index` would, for remix credit.
  */
+export async function patternIdForLink(
+  client: Pick<PatternIndexClient, "getPattern">,
+  link: string,
+): Promise<string> {
+  let answer;
+  try {
+    answer = await client.getPattern({ ref: link });
+  } catch (error) {
+    if (error instanceof PatternIndexError && error.status === 404) {
+      throw new ValidationError(
+        `No shared pattern answers to the link ${link}: it may be mistyped, withdrawn, or not shared on that channel yet${
+          link.includes("@") ? "" : ` (${link}@beta names its beta)`
+        }.`,
+        { exitCode: 1 },
+      );
+    }
+    throw new Error(
+      `pattern index lookup failed for the link ${link}: ${
+        describeFailure(error)
+      }`,
+      { cause: error },
+    );
+  }
+  // An index that answers without `link` did not read the ref as a link.
+  if (answer.link === undefined) {
+    throw new Error(
+      `the pattern index did not resolve ${link} as a link; it may predate pattern links`,
+    );
+  }
+  return answer.patternId;
+}
+
+/** A client for the index at `patternIndexUrl`, signing as `identity`. */
+const openIndexClient = async (
+  patternIndexUrl: string,
+  identity: string,
+): Promise<Pick<PatternIndexClient, "getPattern">> =>
+  await openPatternIndexClient({
+    baseUrl: patternIndexUrl,
+    signer: await loadIdentity(identity),
+  });
+
+/** A shared link `cf piece new --from-link` names, and the index to ask. */
+interface LinkedPatternEntry {
+  link: string;
+  patternIndexUrl: string;
+}
+
 /**
  * Where `cf piece new`'s program comes from: the `main` file, or the
- * published pattern `--from-index` names, never both and never neither. A
+ * published pattern `--from-index` (or the link `--from-link`) names, never
+ * both and never neither. A
  * published pattern is read from the index the flag or `CF_PATTERN_INDEX_URL`
  * names, else the deployment's, and a malformed URL is refused here rather
  * than when the deploy reaches the network.
@@ -5438,6 +5608,8 @@ export const recordIndexedPiece = async (
 function newPieceEntry(
   options: {
     fromIndex?: string;
+    fromLink?: string;
+    requestKey?: string;
     patternIndexUrl?: string;
     mainExport?: string;
     repository?: string;
@@ -5446,23 +5618,38 @@ function newPieceEntry(
     datafile?: string[];
   },
   main: string | undefined,
-): PieceEntry {
-  if (options.fromIndex === undefined) {
+): PieceEntry | LinkedPatternEntry {
+  if (options.fromIndex !== undefined && options.fromLink !== undefined) {
+    throw new ValidationError("Pass --from-index or --from-link, not both.");
+  }
+  const [flag, given] = options.fromLink === undefined
+    ? ["--from-index", options.fromIndex]
+    : ["--from-link", options.fromLink];
+  if (given === undefined) {
     if (main === undefined) {
       throw new ValidationError(
-        "Missing a pattern: pass a source file, or --from-index <patternId>.",
+        "Missing a pattern: pass a source file, --from-index <patternId>, or --from-link <link>.",
       );
     }
     return localPatternEntry(main, options);
   }
-  if (main !== undefined) {
+  if (flag === "--from-link" && options.requestKey !== undefined) {
     throw new ValidationError(
-      `--from-index creates the piece from a published pattern; drop the source file "${main}", or drop --from-index.`,
+      "--request-key replays a creation of one fixed version, and a link can name a newer one by the retry; pass --from-index <patternId> instead.",
     );
   }
-  const patternId = options.fromIndex.trim();
-  if (patternId === "") {
-    throw new ValidationError("--from-index requires a non-blank pattern id.");
+  if (main !== undefined) {
+    throw new ValidationError(
+      `${flag} creates the piece from a published pattern; drop the source file "${main}", or drop ${flag}.`,
+    );
+  }
+  const named = given.trim();
+  if (named === "") {
+    throw new ValidationError(
+      flag === "--from-index"
+        ? "--from-index requires a non-blank pattern id."
+        : "--from-link requires a non-blank link.",
+    );
   }
   // The same index every cf pattern command uses: the flag, else
   // CF_PATTERN_INDEX_URL, else the deployment's.
@@ -5484,9 +5671,19 @@ function newPieceEntry(
       `--pattern-index-url must not carry a query or fragment: ${patternIndexUrl}`,
     );
   }
-  return { patternId, patternIndexUrl };
+  return flag === "--from-index"
+    ? { patternId: named, patternIndexUrl }
+    : { link: named, patternIndexUrl };
 }
 
+/**
+ * `cf piece new`'s action, as a function a test can call.
+ *
+ * The registration chain around it is not reachable from a test, so an action
+ * left inline is not either — and what this one decides is worth reaching:
+ * which options become the naming request `newPiece` receives, and that the
+ * address it points a reader at is the slug when there is one.
+ */
 export async function newPieceFromCommand(
   // deno-lint-ignore no-explicit-any
   options: any,
@@ -5494,7 +5691,7 @@ export async function newPieceFromCommand(
   deps: NewPieceCommandDependencies = {},
 ): Promise<void> {
   setQuietMode(!!options.quiet);
-  const entry = newPieceEntry(options, main);
+  const named = newPieceEntry(options, main);
   const spaceConfig = parseSpaceOptions(options);
   const input = options.inputFile === undefined
     ? undefined
@@ -5505,12 +5702,34 @@ export async function newPieceFromCommand(
   ) {
     throw new Error("`--input-file` must contain a JSON object.");
   }
+  const facts = versionFactsOf(options);
+  if (main === undefined && Object.keys(facts).length > 0) {
+    throw new ValidationError(
+      "--version-origin, --version-description and --built-from describe the version a deploy of a file keeps; a piece from the index keeps none.",
+      { exitCode: 1 },
+    );
+  }
+  // A link is resolved to the one shared version it names now, which then
+  // deploys and is recorded exactly as `--from-index` would.
+  const entry: PieceEntry = "link" in named
+    ? {
+      patternId: await patternIdForLink(
+        await (deps.openIndexClient ?? openIndexClient)(
+          named.patternIndexUrl,
+          spaceConfig.identity,
+        ),
+        named.link,
+      ),
+      patternIndexUrl: named.patternIndexUrl,
+    }
+    : named;
   const version = main === undefined ? undefined : versionRecorder(
     options.indexVersion === false ? skipIndexVersion : deps.recordVersion ??
       ((deployed) => recordVersionInIndex(spaceConfig.identity, deployed)),
     versionEntryOf(options, main),
     undefined,
     deps.note ?? note,
+    facts,
   );
   const { pieceId, name } = await (deps.newPiece ?? newPieceWithReceipt)(
     spaceConfig,
@@ -5905,6 +6124,7 @@ export async function applyPieceSourceCommandAction(
     versionEntryOf(options, mainPath),
     options.origin,
     deps.warn ?? note,
+    versionFactsOf(options),
   );
   const { config, update } = await (
     deps.setPieceSourceFromCommand ?? setPieceSourceFromCommand

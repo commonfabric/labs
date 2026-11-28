@@ -8,13 +8,13 @@
  * either way.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { SetPropOp } from "@commonfabric/html/vdom-ops";
 import { WorkerReconciler } from "@commonfabric/html/worker";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { ownerChannelSizes, postToClient } from "@/backends/post-to-client.ts";
 import {

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -8,6 +7,7 @@ import {
   toLongQuotedDebugString,
   toShortQuotedDebugString,
 } from "@";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A value whose compact rendering runs past 5000 characters. */
 const BIG = {

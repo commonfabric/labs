@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { assertEquals, assertRejects } from "@std/assert";
 import { ValidationError } from "@cliffy/command";
 
 import { inspect } from "../commands/inspect.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const BASE = "http://inspect-validation.invalid:9999";
 const SPACE = "did:key:z6MkInspectValidation";

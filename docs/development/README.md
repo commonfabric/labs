@@ -105,9 +105,10 @@ mapped in [`../README.md`](../README.md).
   — why `deno coverage` reports a one-line guard as uncovered whenever its
   branch is not taken
 - [`BENCHMARKS.md`](BENCHMARKS.md) — how the `deno bench` files run in
-  continuous integration, where the results are charted, what a bench
-  file must do to be tracked, and the end-to-end benchmark that navigates a
-  data-heavy board in a browser
+  continuous integration, where the results are charted and served as JSON
+  for finding the commit behind a rise, what a bench file must do to be
+  tracked, and the end-to-end benchmark that navigates a data-heavy board in
+  a browser
 
 ## Priorities
 

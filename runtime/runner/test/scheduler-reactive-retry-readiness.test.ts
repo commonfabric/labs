@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { Action } from "../src/scheduler/types.ts";
@@ -19,6 +18,7 @@ import {
   space,
 } from "./scheduler-test-utils.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("scheduler-reactive-retry-readiness", () => {
   it("does not wake a replacement registration's consumers when an old commit succeeds", async () => {

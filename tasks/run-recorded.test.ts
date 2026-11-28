@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { readSpool } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { runRecorded, type Spawn, spawnInherited } from "./run-recorded.ts";
 
 /** A spawner that records what it was asked to start and ends as told. */

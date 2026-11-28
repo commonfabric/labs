@@ -12,7 +12,6 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
@@ -20,6 +19,12 @@ import {
   type MultiRuntimeSession,
   type PieceAddress,
 } from "./multi-runtime-harness.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const PROGRAM_PATH = join(
   import.meta.dirname!,

@@ -6,7 +6,6 @@
  * cases where the same input shape produces a value instead.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/api";
@@ -19,6 +18,7 @@ import {
   SHALLOW_UNFROZEN_CLONE,
 } from "@commonfabric/data-model/fabric-bases";
 import { FabricError } from "@commonfabric/data-model/fabric-instances";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { EntityDocument, PatchOp } from "../v2.ts";
 import {

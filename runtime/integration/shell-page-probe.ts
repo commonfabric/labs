@@ -130,6 +130,16 @@ export interface ShellPageProbe {
   runtime: boolean;
 
   /**
+   * The shell's runtime-creation task, read before a runtime is published.
+   * `status` is Lit's numeric task status. `generation` identifies the latest
+   * creation, and `error` carries a rejection recorded by that task.
+   */
+  runtimeTask?: { status: number; generation: number; error?: string };
+
+  /** Why the runtime-creation task could not be read. */
+  runtimeTaskError?: string;
+
+  /**
    * The requests that runtime has sent its worker and has no reply to, oldest
    * first, which is the order it reports them in. Reading these needs no
    * worker round trip, so a worker that has stopped answering is named here
@@ -228,7 +238,14 @@ async function readPageFields(
   ) => {
     const scope = globalThis as typeof globalThis & {
       __cfcWaiters?: Map<string, { elements(): ConditionElement[] }>;
-      app?: { serialize?: () => { view?: unknown; identityDid?: string } };
+      app?: {
+        serialize?: () => { view?: unknown; identityDid?: string };
+        accessForTestingOnly?: {
+          readonly rt: { readonly status: number };
+          readonly runtimeTaskError?: unknown;
+          readonly runtimeGeneration: number;
+        };
+      };
       commonfabric?: {
         rt?: { getPendingRequests?: () => PendingRequestDiagnostic[] };
       };
@@ -254,6 +271,23 @@ async function readPageFields(
       } catch (error) {
         viewError = String(error);
       }
+    }
+
+    let runtimeTask: ShellPageProbe["runtimeTask"];
+    let runtimeTaskError: string | undefined;
+    try {
+      const access = scope.app?.accessForTestingOnly;
+      if (access !== undefined) {
+        runtimeTask = {
+          status: access.rt.status,
+          generation: access.runtimeGeneration,
+          error: access.runtimeTaskError === undefined
+            ? undefined
+            : String(access.runtimeTaskError),
+        };
+      }
+    } catch (error) {
+      runtimeTaskError = String(error);
     }
 
     const rt = scope.commonfabric?.rt;
@@ -303,6 +337,8 @@ async function readPageFields(
       viewError,
       identityDid,
       runtime: rt !== undefined,
+      runtimeTask,
+      runtimeTaskError,
       pendingRequests,
       pendingRequestsError,
       conditionElements,
@@ -630,6 +666,19 @@ export function describeShellPage(probe: ShellPageProbe): string {
     );
   } else {
     lines.push("  globalThis.app: absent");
+  }
+  if (probe.runtimeTaskError !== undefined) {
+    lines.push(
+      `  runtime creation task: reading it threw: ${probe.runtimeTaskError}`,
+    );
+  } else if (probe.runtimeTask !== undefined) {
+    const task = probe.runtimeTask;
+    lines.push(
+      `  runtime creation task: status ${task.status}, generation ${task.generation}`,
+    );
+    if (task.error !== undefined) {
+      lines.push(`  runtime creation error: ${task.error}`);
+    }
   }
   for (const line of describeConditionElements(probe)) lines.push(line);
   for (const line of describePendingRequests(probe)) lines.push(line);

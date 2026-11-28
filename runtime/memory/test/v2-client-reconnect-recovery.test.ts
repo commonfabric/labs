@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { FabricPlainObject } from "@commonfabric/api";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,

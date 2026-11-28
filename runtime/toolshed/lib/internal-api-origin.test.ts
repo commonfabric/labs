@@ -17,6 +17,7 @@ import {
   verifyInternalApiOrigin,
 } from "@/lib/internal-api-origin.ts";
 import { Exited } from "@/test/support/exited.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const PUBLIC = "https://toolshed.example";
 const INTERNAL = "http://127.0.0.1:8007";
@@ -39,7 +40,7 @@ async function withRecordedFetch(
   }
 }
 
-Deno.test("rewritingFetch sends requests addressed to the public origin to the internal one and nothing else", async () => {
+test("rewritingFetch sends requests addressed to the public origin to the internal one and nothing else", async () => {
   await withRecordedFetch(async (requests) => {
     const fetch = rewritingFetch(PUBLIC, INTERNAL);
     // A string, a URL and a Request addressed to the public origin: the
@@ -71,7 +72,7 @@ Deno.test("rewritingFetch sends requests addressed to the public origin to the i
   });
 });
 
-Deno.test("rewritingFetch reads the platform fetch at call time, and selfDirectedFetch is nothing when no internal origin is set", async () => {
+test("rewritingFetch reads the platform fetch at call time, and selfDirectedFetch is nothing when no internal origin is set", async () => {
   // Late binding: a test or harness that replaces `globalThis.fetch` after
   // construction is honored, as the Runtime's own default fetch does.
   const fetch = rewritingFetch(PUBLIC, INTERNAL);
@@ -89,7 +90,7 @@ Deno.test("rewritingFetch reads the platform fetch at call time, and selfDirecte
   );
 });
 
-Deno.test("rewritingFetch passes a request that names no absolute URL to the platform fetch as given", async () => {
+test("rewritingFetch passes a request that names no absolute URL to the platform fetch as given", async () => {
   const seen: (RequestInfo | URL)[] = [];
   const platform = globalThis.fetch;
   globalThis.fetch = ((input: RequestInfo | URL) => {
@@ -117,7 +118,7 @@ function answering(
   return { fetch: impl as typeof fetch, requests };
 }
 
-Deno.test("verifyInternalApiOrigin accepts the origin whose answer followed the probe's arrival here", async () => {
+test("verifyInternalApiOrigin accepts the origin whose answer followed the probe's arrival here", async () => {
   const meta = answering(() => Response.json({ did: "did:key:z6MkSelf" }));
   const verdict = await verifyInternalApiOrigin({
     origin: INTERNAL,
@@ -136,7 +137,7 @@ Deno.test("verifyInternalApiOrigin accepts the origin whose answer followed the 
   assertEquals(meta.requests[0].redirect, "error");
 });
 
-Deno.test("verifyInternalApiOrigin refuses an answer that did not come through this process, a non-answer and a failure", async () => {
+test("verifyInternalApiOrigin refuses an answer that did not come through this process, a non-answer and a failure", async () => {
   const probe = `${INTERNAL}/api/meta`;
   const verify = (
     respond: (request: Request) => Response | Promise<Response>,
@@ -183,7 +184,7 @@ Deno.test("verifyInternalApiOrigin refuses an answer that did not come through t
   );
 });
 
-Deno.test("verifyInternalApiOrigin gives up on an origin that does not answer in time", async () => {
+test("verifyInternalApiOrigin gives up on an origin that does not answer in time", async () => {
   const verdict = await verifyInternalApiOrigin({
     origin: INTERNAL,
     token: TOKEN,
@@ -205,7 +206,7 @@ Deno.test("verifyInternalApiOrigin gives up on an origin that does not answer in
   );
 });
 
-Deno.test("describeError joins an error with its causes and tolerates non-errors", () => {
+test("describeError joins an error with its causes and tolerates non-errors", () => {
   assertEquals(
     describeError(
       new TypeError("fetch failed", {
@@ -223,7 +224,7 @@ Deno.test("describeError joins an error with its causes and tolerates non-errors
   );
 });
 
-Deno.test("startupGate passes only the token-bearing probe until admitted, and records it", async () => {
+test("startupGate passes only the token-bearing probe until admitted, and records it", async () => {
   const served: string[] = [];
   const handler = (request: Request, info: { peer: string }) => {
     served.push(
@@ -312,7 +313,7 @@ function runSequence(
   return { run, events };
 }
 
-Deno.test("admitInternalApiOrigin starts the runtimes, admits the listener and signals readiness, in that order, once verified", async () => {
+test("admitInternalApiOrigin starts the runtimes, admits the listener and signals readiness, in that order, once verified", async () => {
   const { run, events } = runSequence(() =>
     Promise.resolve({ verified: true })
   );
@@ -326,7 +327,7 @@ Deno.test("admitInternalApiOrigin starts the runtimes, admits the listener and s
   ]);
 });
 
-Deno.test("admitInternalApiOrigin exits without a runtime when the origin is refused or the probe throws", async () => {
+test("admitInternalApiOrigin exits without a runtime when the origin is refused or the probe throws", async () => {
   for (
     const verdict of [
       () => Promise.resolve({ verified: false, reason: "answered 404" }),
@@ -347,7 +348,7 @@ Deno.test("admitInternalApiOrigin exits without a runtime when the origin is ref
   }
 });
 
-Deno.test("admitInternalApiOrigin exits when the runtimes fail to start, and ends quietly during a shutdown", async () => {
+test("admitInternalApiOrigin exits when the runtimes fail to start, and ends quietly during a shutdown", async () => {
   const failing = runSequence(
     () => Promise.resolve({ verified: true }),
     { startRuntimesThrows: true },

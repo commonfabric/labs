@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { loadPieces } from "../lib/piece.ts";
 import { withEnv } from "./utils.ts";
 

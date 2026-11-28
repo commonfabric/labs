@@ -5,10 +5,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { isPrefixPath, pathsOverlap } from "../../v2/path.ts";
 import { TouchedPathIndex } from "../../v2/touched-path-index.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Returns every path over `segments` of each length up to `depth`. */
 const pathsUpTo = (

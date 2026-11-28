@@ -4,9 +4,9 @@
  * value or an authored word does not, at every depth.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { schemaShapeOnly } from "../src/schema-shape.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("schema-shape", () => {
   describe("schemaShapeOnly", () => {

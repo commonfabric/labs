@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ConsoleRunView } from "../../../console/src/run-view.ts";
 import { bindingOn, handlerOn, templateText } from "./lit-template.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const realFetch = globalThis.fetch;
 

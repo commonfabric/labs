@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import { decomposeSchema } from "../src/schema-decompose.ts";

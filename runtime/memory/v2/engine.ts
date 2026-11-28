@@ -15,6 +15,7 @@ import {
   SCHEMA_META_MEMBER,
   schemaMetaRefHashes,
 } from "@commonfabric/data-model-schema/schema-refs";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
   isObjectNotArray,
@@ -88,12 +89,14 @@ import {
   findSyncSchemaRef,
 } from "./sync-schema-ref.ts";
 import { aclDocId, isDeletionTombstone } from "../acl.ts";
+import { SPACE_INVITES_REVISION_DOC_ID } from "../space-invites.ts";
 import { deletionTombstoneOf, readAclHeads } from "./acl-heads.ts";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
   type BranchInfo,
   type BranchName,
+  carriesMarkedSplice,
   type CellScope,
   type ClientCommit,
   type CommitClass,
@@ -227,6 +230,12 @@ const NEW_DB_PRAGMAS = `
   PRAGMA page_size = 32768;
 `;
 
+/** The default branch every store holds, which the schema seeds. */
+const SEED_DEFAULT_BRANCH = `
+INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
+VALUES ('', 0, 0, 'active');
+`;
+
 // The schema, like the migrations below, opens with an immediate transaction:
 // it takes the write lock up front and waits on the busy timeout for it. A
 // deferred transaction reads the schema first and writes after, and fails at
@@ -279,11 +288,12 @@ CREATE TABLE IF NOT EXISTS "commit" (
   -- actually held the lease at admission time.
   holder             TEXT,
   -- Per-write identity annotations WITHIN a derived commit's body
-  -- (protocol.md §1: the addressing/attribution pair, per action run) and
+  -- (protocol.md §1: the addressing/attribution pair, per action run, and
+  -- the action whose run made each write) and
   -- the eventIds the commit consequences (protocol.md §7: consequenceOf,
   -- derived only — bounded by the wave's input, never graph-scaled). JSON
-  -- arrays; NULL on every non-derived class. Attribution is recorded, not
-  -- read (protocol.md §1); the scopeKey half was CONSUMED at admission to
+  -- arrays; NULL on every non-derived class. Attribution decides nothing
+  -- (protocol.md §1); the scopeKey half was CONSUMED at admission to
   -- key scoped rows.
   annotations        JSON,
   consequence_of     JSON,
@@ -425,9 +435,7 @@ CREATE TABLE IF NOT EXISTS branch (
   deleted_at     TEXT,
   FOREIGN KEY (parent_branch) REFERENCES branch(name)
 );
-INSERT OR IGNORE INTO branch (name, created_seq, head_seq, status)
-VALUES ('', 0, 0, 'active');
-
+${SEED_DEFAULT_BRANCH}
 -- Unused: the single-deriver lease lives in the memory server's memory
 -- (docs/specs/server-side-execution/serving-loop.md §2). Nothing reads or
 -- writes this table. TODO(seefeld): Drop it once no deployed process writes
@@ -482,6 +490,203 @@ CREATE TABLE IF NOT EXISTS scheduler_basis (
 -- full-table walk, the successor of idx_scheduler_read_index_lookup.
 CREATE INDEX IF NOT EXISTS idx_scheduler_basis_entity
   ON scheduler_basis (branch, entity_space, entity, entity_scope_key);
+
+-- Server-execution v2: the currency index
+-- (docs/specs/server-side-execution/serving-loop.md §3b) — which stored
+-- outputs a serving loop vouched for, and what marks them stale. Ids + seqs
+-- ONLY, overwritten in place per slice of a piece; never payloads, never
+-- per-run history. The writer and every reader is currency-index.ts. Rows
+-- are never pushed to subscribers and never read at admission.
+--
+-- A piece is recorded in slices, one per scope key its computations ran at:
+-- 'space' for what every viewer shares, and a user's or a session's key for
+-- what was computed for them alone. The slice leads each key, so reading
+-- one viewer's slices reads no other viewer's rows.
+--
+-- One row per recorded slice: the raw id of the piece's result document, the
+-- slice's mark (0 clean, 1 a piece that writes one of its inputs is marked,
+-- 2 one of its own rows is behind or it was not vouched for), whether it has
+-- been clean since its record was stored, the epoch it was recorded under,
+-- and whether its latest record was stored not vouched for. A recorded piece
+-- always has a 'space' slice.
+CREATE TABLE IF NOT EXISTS currency_slice (
+  branch    TEXT    NOT NULL,
+  slice     TEXT    NOT NULL,
+  piece     TEXT    NOT NULL,
+  mark      INTEGER NOT NULL,
+  was_clean INTEGER NOT NULL,
+  epoch     TEXT    NOT NULL,
+  unvouched INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY (branch, slice, piece)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_slice_piece
+  ON currency_slice (branch, piece);
+-- When a slice stops being current whatever its rows say: the time, in
+-- milliseconds since the epoch, of the next tick of a clock one of its runs
+-- read. No commit marks a slice then, so the index marks it the next time
+-- its marks are brought up to date. A slice with no row holds until a commit
+-- marks it. The time is a REAL: this store's connection reads an INTEGER as
+-- 32 bits, which a time in milliseconds does not fit.
+CREATE TABLE IF NOT EXISTS currency_expiry (
+  branch     TEXT NOT NULL,
+  slice      TEXT NOT NULL,
+  piece      TEXT NOT NULL,
+  expires_at REAL NOT NULL,
+  PRIMARY KEY (branch, slice, piece)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_expiry_time
+  ON currency_expiry (branch, expires_at);
+-- The pieces that enclose a recorded piece: a demand for one of theirs is a
+-- demand for it.
+CREATE TABLE IF NOT EXISTS currency_under (
+  branch TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  root   TEXT NOT NULL,
+  PRIMARY KEY (branch, piece, root)
+);
+-- The pieces a root encloses, which a judgment asks of each root it would
+-- leave unstarted.
+CREATE INDEX IF NOT EXISTS idx_currency_under_root
+  ON currency_under (branch, root, piece);
+-- What a slice read: the document instance, with the seq the slice saw it
+-- at. entity_scope_key = '*' is a read whose instance the recording loop
+-- could not name, which a change to any instance of the document is ahead
+-- of. derived = 1 names a document some computation writes, which a slice is
+-- only as current as.
+CREATE TABLE IF NOT EXISTS currency_read (
+  branch           TEXT    NOT NULL,
+  slice            TEXT    NOT NULL,
+  piece            TEXT    NOT NULL,
+  entity_space     TEXT    NOT NULL,
+  entity           TEXT    NOT NULL,
+  entity_scope_key TEXT    NOT NULL,
+  derived          INTEGER NOT NULL,
+  seq              INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, entity_space, entity, entity_scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_read_entity
+  ON currency_read (branch, entity_space, entity, entity_scope_key);
+-- What a piece writes, whoever it runs for: the declared write surface of
+-- every computation registered under it (owned = 0), and the cells it owns
+-- (owned > 0), which are state a write to is no staleness of. owned = 2 is
+-- an owned cell an absent instance of which reads as its default.
+CREATE TABLE IF NOT EXISTS currency_write (
+  branch TEXT    NOT NULL,
+  piece  TEXT    NOT NULL,
+  id     TEXT    NOT NULL,
+  owned  INTEGER NOT NULL,
+  PRIMARY KEY (branch, piece, id)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_write_id
+  ON currency_write (branch, id);
+-- The document instances a piece vouches for, each filed under the slice
+-- whose scope key is the instance's: a live, clean computation of the piece
+-- wrote it, and seq is where the instance stood then. held = 0 is a row the
+-- slice's latest record no longer vouches for, kept for its seq: the piece
+-- last answered for the instance there, which says whether a later head is
+-- an overwrite.
+CREATE TABLE IF NOT EXISTS currency_vouch (
+  branch TEXT    NOT NULL,
+  slice  TEXT    NOT NULL,
+  piece  TEXT    NOT NULL,
+  id     TEXT    NOT NULL,
+  seq    INTEGER NOT NULL,
+  held   INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, id)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_vouch_id
+  ON currency_vouch (branch, slice, id);
+-- The document instances at another key that a slice's runs wrote, as the
+-- redirect a run made for one viewer leaves at the user's and the space's
+-- key. What such a slot holds was decided by the run, so its row is filed
+-- under the run's slice, with the key the slot is at and the seq it stood at
+-- when the slice was recorded. A slot several slices' runs wrote has a row
+-- for each, and a row behind the slot's head answers for nothing. seq = -1
+-- is a slot the slice was recorded as holding a later write than its own. A
+-- store whose index was recorded without this table loses those records when
+-- it is opened (dropCurrencyRecordsBeforeDecides).
+CREATE TABLE IF NOT EXISTS currency_decide (
+  branch       TEXT    NOT NULL,
+  slice        TEXT    NOT NULL,
+  piece        TEXT    NOT NULL,
+  id           TEXT    NOT NULL,
+  instance_key TEXT    NOT NULL,
+  seq          INTEGER NOT NULL,
+  PRIMARY KEY (branch, slice, piece, id, instance_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_decide_instance
+  ON currency_decide (branch, instance_key, id);
+-- The recorded pieces that record a source origin (serving-loop.md §3e). A
+-- serving loop follows the origin of each before it leaves a demanded root
+-- that rests on the piece unstarted.
+CREATE TABLE IF NOT EXISTS currency_origin (
+  branch TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  PRIMARY KEY (branch, piece)
+);
+-- The seq the marks are complete through.
+CREATE TABLE IF NOT EXISTS currency_cursor (
+  branch TEXT    NOT NULL PRIMARY KEY,
+  seq    INTEGER NOT NULL
+);
+-- The other spaces a slice read, one row for each, so that a judgment finds
+-- the spaces to ask about a slice without reading its read rows.
+CREATE TABLE IF NOT EXISTS currency_slice_source (
+  branch TEXT NOT NULL,
+  slice  TEXT NOT NULL,
+  piece  TEXT NOT NULL,
+  source TEXT NOT NULL,
+  PRIMARY KEY (branch, slice, piece, source)
+);
+-- What another space last said of an instance of its store that a slice
+-- here read: the instance's head seq there, and whether what it holds is
+-- stale upstream (stale = 1). That is a derived document no recorded piece
+-- of that space writes, or an instance a recorded piece there computes
+-- while a slice that decides it is marked or none vouches for it.
+CREATE TABLE IF NOT EXISTS currency_import (
+  branch    TEXT    NOT NULL,
+  source    TEXT    NOT NULL,
+  id        TEXT    NOT NULL,
+  scope_key TEXT    NOT NULL,
+  head      INTEGER NOT NULL,
+  stale     INTEGER NOT NULL,
+  PRIMARY KEY (branch, source, id, scope_key)
+);
+-- How far this store has followed each space it reads: the position of that
+-- space its last pull returned.
+CREATE TABLE IF NOT EXISTS currency_source (
+  branch   TEXT    NOT NULL,
+  source   TEXT    NOT NULL,
+  position INTEGER NOT NULL,
+  PRIMARY KEY (branch, source)
+);
+-- The other spaces whose slices read an instance of this store, each
+-- registered when one of them recorded the read.
+CREATE TABLE IF NOT EXISTS currency_reader (
+  branch    TEXT NOT NULL,
+  reader    TEXT NOT NULL,
+  id        TEXT NOT NULL,
+  scope_key TEXT NOT NULL,
+  PRIMARY KEY (branch, reader, id, scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_reader_instance
+  ON currency_reader (branch, id, scope_key);
+-- What this store last told the spaces that read a registered instance: its
+-- head seq, whether it is stale upstream, and the position at which either
+-- last changed, 0 for a row that has not changed since its instance was
+-- first registered. A position is a counter of this store's own, which a
+-- reading space pulls from.
+CREATE TABLE IF NOT EXISTS currency_export (
+  branch    TEXT    NOT NULL,
+  id        TEXT    NOT NULL,
+  scope_key TEXT    NOT NULL,
+  head      INTEGER NOT NULL,
+  stale     INTEGER NOT NULL,
+  position  INTEGER NOT NULL,
+  PRIMARY KEY (branch, id, scope_key)
+);
+CREATE INDEX IF NOT EXISTS idx_currency_export_position
+  ON currency_export (branch, position);
 
 -- Server-execution v2: the DURABLE half of the outbox
 -- (docs/specs/server-side-execution/serving-loop.md §5, FP1 RULED
@@ -740,6 +945,20 @@ WHERE branch = :branch
   AND scope_key = :scope_key
   AND seq <= :seq
 ORDER BY seq DESC, op_index DESC
+LIMIT 1
+`;
+
+// The seq of the newest revision of an instance below a seq, on the branch's
+// own rows. It selects no revision data, so a `set` row costs no more than a
+// `patch` row.
+const SELECT_PRECEDING_REVISION_SEQ = `
+SELECT seq
+FROM revision
+WHERE branch = :branch
+  AND id = :id
+  AND scope_key = :scope_key
+  AND seq < :seq
+ORDER BY seq DESC
 LIMIT 1
 `;
 
@@ -1908,6 +2127,7 @@ const STATEMENTS = {
   insertSnapshot: INSERT_SNAPSHOT,
   selectActiveOperationFields: SELECT_ACTIVE_OPERATION_FIELDS,
   selectAtSeqLocal: SELECT_AT_SEQ_LOCAL,
+  selectPrecedingRevisionSeq: SELECT_PRECEDING_REVISION_SEQ,
   selectAuthoredSeqThrough: SELECT_AUTHORED_SEQ_THROUGH,
   selectBlob: SELECT_BLOB,
   selectBranch: SELECT_BRANCH,
@@ -2380,6 +2600,100 @@ const migrateSchedulerObservationTablesToBasis = (database: Database): void => {
   }).immediate();
 };
 
+/**
+ * Drops the currency index of a store that holds it laid out one row per
+ * piece, ahead of the schema that creates it laid out per slice. The index
+ * holds nothing a serving loop does not record again, so such a store loses
+ * its records once and every piece of it starts on its next demand.
+ */
+const dropUnslicedCurrencyTables = (database: Database): void => {
+  if (!hasTable(database, "currency_piece")) return;
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS currency_piece;
+      DROP TABLE IF EXISTS currency_under;
+      DROP TABLE IF EXISTS currency_read;
+      DROP TABLE IF EXISTS currency_write;
+      DROP TABLE IF EXISTS currency_vouch;
+      DROP TABLE IF EXISTS currency_cursor;
+    `);
+  }).immediate();
+};
+
+/**
+ * Drops the records of a currency index laid out before a slice answered
+ * for the slots its runs wrote at another key (`currency_decide`), ahead of
+ * the schema that creates the tables as they are now. Such records file a
+ * redirect under the slice at the redirect's own key, and hold no row that
+ * says whether a slice was stored not vouched for. The index holds nothing a
+ * serving loop does not record again, so such a store loses its records once
+ * and every piece of it starts on its next demand. What the store tells the
+ * spaces that read it stays, as does what it heard from the spaces it reads:
+ * a space that kept its records goes on hearing of a change here, and the
+ * index brings each row it tells up to date the first time it is changed
+ * with no cursor (`advance()` in `currency-index.ts`).
+ */
+const dropCurrencyRecordsBeforeDecides = (database: Database): void => {
+  if (
+    !hasTable(database, "currency_slice") ||
+    hasTable(database, "currency_decide")
+  ) return;
+  database.transaction(() => {
+    database.exec(`
+      DROP TABLE IF EXISTS currency_slice;
+      DROP TABLE IF EXISTS currency_under;
+      DROP TABLE IF EXISTS currency_read;
+      DROP TABLE IF EXISTS currency_write;
+      DROP TABLE IF EXISTS currency_vouch;
+      DROP TABLE IF EXISTS currency_expiry;
+      DROP TABLE IF EXISTS currency_slice_source;
+      DROP TABLE IF EXISTS currency_cursor;
+    `);
+  }).immediate();
+};
+
+/**
+ * Brings a store's tables to the current schema: drops the layouts the schema
+ * replaces, creates whatever it lacks, and migrates what remains.
+ */
+const prepareSchema = (database: Database): void => {
+  dropUnslicedCurrencyTables(database);
+  dropCurrencyRecordsBeforeDecides(database);
+  database.exec(INIT);
+  migrateScopedEntityTables(database);
+  migrateHeadCurrentOp(database);
+  migrateCommitClass(database);
+  migrateCommitHolder(database);
+  migrateCommitWaveCarriage(database);
+  migrateCommitDerivedThrough(database);
+  migrateCommitDelegation(database);
+  migrateExecutionOutboxEventCarriage(database);
+  migrateExecutionOutboxPayloadEncoding(database);
+  migrateSchedulerObservationTablesToBasis(database);
+  migrateIntegratedOperationIds(database);
+};
+
+/**
+ * The in-memory database holding the current schema and no rows, which
+ * `open()` copies into every in-memory store with SQLite's backup API before
+ * seeding the store's default branch. It depends on nothing but this module's
+ * schema and is never written once prepared, so each isolate keeps one for as
+ * long as it runs.
+ */
+let memorySchema: Database | undefined;
+
+/** Returns `memorySchema`, preparing it on first use. */
+const memorySchemaTemplate = (): Database => {
+  if (memorySchema === undefined) {
+    const database = new Database(":memory:");
+    database.exec(NEW_DB_PRAGMAS);
+    prepareSchema(database);
+    database.exec("DELETE FROM branch");
+    memorySchema = database;
+  }
+  return memorySchema;
+};
+
 export const open = async (
   {
     url,
@@ -2407,21 +2721,18 @@ export const open = async (
     documentCacheBudgetBytes,
     documentCacheMaxEntries,
   });
-  const database = await new Database(toDatabaseAddress(url), { create: true });
+  const inFile = url.protocol === "file:";
+  const database = await new Database(inFile ? url : ":memory:", {
+    create: true,
+  });
   database.exec(NEW_DB_PRAGMAS);
   database.exec(PRAGMAS);
-  database.exec(INIT);
-  migrateScopedEntityTables(database);
-  migrateHeadCurrentOp(database);
-  migrateCommitClass(database);
-  migrateCommitHolder(database);
-  migrateCommitWaveCarriage(database);
-  migrateCommitDerivedThrough(database);
-  migrateCommitDelegation(database);
-  migrateExecutionOutboxEventCarriage(database);
-  migrateExecutionOutboxPayloadEncoding(database);
-  migrateSchedulerObservationTablesToBasis(database);
-  migrateIntegratedOperationIds(database);
+  if (inFile) {
+    prepareSchema(database);
+  } else {
+    memorySchemaTemplate().backup(database);
+    database.exec(SEED_DEFAULT_BRANCH);
+  }
   const prepared = preparedOnFirstUse(database);
   return {
     url,
@@ -3211,6 +3522,29 @@ export const headSeq = (
   branch: BranchName = DEFAULT_BRANCH,
 ): number => getBranch(engine, branch)?.headSeq ?? 0;
 
+/**
+ * Returns the seq of the newest revision of the instance `scopeKey` of
+ * document `id` that `branch` itself holds below `seq`, or `undefined` when
+ * it holds none there. A revision the branch reads through its parent is not
+ * one it holds, and neither is one that compaction removed, so `undefined`
+ * does not say the instance had no earlier state.
+ */
+export const precedingRevisionSeq = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+  },
+): number | undefined =>
+  (engine.statement("selectPrecedingRevisionSeq").get({
+    branch: revision.branch,
+    id: revision.id,
+    scope_key: revision.scopeKey,
+    seq: revision.seq,
+  }) as { seq: number } | undefined)?.seq;
+
 export const serverSeq = (engine: Engine): number => {
   return (engine.statement("selectServerSeq").get() as { seq: number }).seq;
 };
@@ -3435,6 +3769,33 @@ const refuseAuthoredAttentionIndexWrites = (
       throw new ProtocolError(
         `authored write to server-owned attention index ` +
           `"${SERVER_EXECUTION_ATTENTION_DOC_ID}" refused`,
+      );
+    }
+  }
+};
+
+/**
+ * Refuses a write to the invitation service's revision document
+ * (`SPACE_INVITES_REVISION_DOC_ID`) in any commit but a system one. The
+ * document is the service's word that its private ledger moved, written in the
+ * transaction that moves the ledger. A write from anyone else would say the
+ * ledger moved when it had not, and send every client watching the document to
+ * read the ledger for nothing.
+ */
+const refuseInviteRevisionWritesOutsideTheService = (
+  commit: ClientCommit,
+  commitClass: CommitClass,
+): void => {
+  if (commitClass === "system") return;
+  for (const operation of commit.operations) {
+    if (
+      operation.op !== "sqlite" &&
+      operation.id === SPACE_INVITES_REVISION_DOC_ID
+    ) {
+      throw new ProtocolError(
+        `write to the invitation service's revision document ` +
+          `\`${SPACE_INVITES_REVISION_DOC_ID}\` refused: only the invitation ` +
+          `service writes it`,
       );
     }
   }
@@ -4541,15 +4902,37 @@ ORDER BY seq, op_index
 };
 
 /**
- * The value paths that one session's authored commits overwrote in one doc
- * instance after `sinceSeq`, the session being `sessionId` opened by
- * `principal`. This is the input to the wave commit step's supersession of an
- * event consequence by a later write of the session that fired the event
- * (serving-loop.md §3d). Only writes that replace what sits at their path
- * count: a `set` or `delete` revision reports the root path, and a `patch`
- * revision reports the paths of its `replace`, `add` and `remove` patches and
- * both paths of a `move`. A patch that merges into existing content — an
- * append, a splice, an increment — overwrites nothing and is left out.
+ * Where a session's write overwrote a document: a value path, standing for
+ * the value there and everything beneath it, or `{ array, fromIndex,
+ * toIndex }`, standing for the elements of the array at `array` from index
+ * `fromIndex` up to `toIndex`, or every one from `fromIndex` on where
+ * `toIndex` is absent, and everything beneath them.
+ */
+export type SessionOverwrite =
+  | readonly string[]
+  | {
+    readonly array: readonly string[];
+    readonly fromIndex: number;
+    readonly toIndex?: number;
+  };
+
+/**
+ * Where one session's authored commits overwrote one doc instance after
+ * `sinceSeq`, the session being `sessionId` opened by `principal`. This is
+ * the input to the wave commit step's supersession of an event consequence
+ * by a later write of the session that fired the event (serving-loop.md
+ * §3d). Only writes that replace what sits at their path count: a `set` or
+ * `delete` revision reports the root path, and a `patch` revision reports
+ * the paths of its `replace`, `add` and `remove` patches and both paths of a
+ * `move`. The marked splices a revision makes to one array (`PatchOp`'s
+ * `pinned`) report, as ranges (`SessionOverwrite`), the indices both before
+ * and after it whose value differs, from the first splice's index on: the
+ * indices the per-index form of the same change replaces
+ * (`overwrittenArrayElements()`). An element a splice only appends past the
+ * old end, and one it only drops off the new end, is overwritten by nothing.
+ * An unmarked splice, such as the tail splice of the per-index form, merges
+ * into existing content, as an append or an increment does: it overwrites
+ * nothing and is left out.
  */
 export const selectSessionOverwritePathsSince = (
   engine: Engine,
@@ -4561,24 +4944,29 @@ export const selectSessionOverwritePathsSince = (
     principal: string;
     sessionId: SessionId;
   },
-): Array<readonly string[]> => {
+): Array<SessionOverwrite> => {
+  const branch = options.branch ?? DEFAULT_BRANCH;
   const rows = engine.prepare(`
-SELECT r.op, r.data FROM revision r JOIN "commit" c ON c.seq = r.commit_seq
+SELECT r.seq, r.op_index, r.op, r.data FROM revision r
+JOIN "commit" c ON c.seq = r.commit_seq
 WHERE r.branch = :branch AND r.id = :id AND r.scope_key = :scope_key
   AND r.seq > :since_seq
   AND c.class = 'authored' AND c.session_id = :session_id
 ORDER BY r.seq, r.op_index
 `).all({
-      branch: options.branch ?? DEFAULT_BRANCH,
+      branch,
       id: options.id,
       scope_key: options.scopeKey,
       since_seq: options.sinceSeq,
       session_id: resolveCommitSessionKey(options.sessionId, options.principal),
-    }) as Array<{ op: string; data: string | null }>;
-  const paths: Array<readonly string[]> = [];
+    }) as Array<
+      { seq: number; op_index: number; op: string; data: string | null }
+    >;
+  const paths: Array<SessionOverwrite> = [];
   for (const row of rows) {
     if (row.op === "patch" && row.data !== null) {
       const patches = decodeTrustedMemoryBoundary(row.data) as PatchOp[];
+      const splicedArrays = new Map<string, SplicedArray>();
       for (const patch of patches) {
         if (
           patch.op === "replace" || patch.op === "add" || patch.op === "remove"
@@ -4587,6 +4975,39 @@ ORDER BY r.seq, r.op_index
         } else if (patch.op === "move") {
           paths.push(parsePointer(patch.from));
           paths.push(parsePointer(patch.path));
+        } else if (patch.op === "splice" && patch.pinned === true) {
+          const spliced = splicedArrays.get(patch.path) ??
+            { fromIndex: Infinity, shrinkBound: 0 };
+          // As the store applied it (`spliceAll()`): `Array.prototype.splice`
+          // takes the index and the count as whole numbers, truncating any
+          // fraction and reading `NaN` as 0, in a row an older server stored
+          // before such commits were refused.
+          spliced.fromIndex = Math.min(
+            spliced.fromIndex,
+            Math.trunc(patch.index) || 0,
+          );
+          spliced.shrinkBound += (Math.trunc(patch.remove) || 0) -
+            patch.add.length;
+          splicedArrays.set(patch.path, spliced);
+        }
+      }
+      if (splicedArrays.size === 0) continue;
+      const documents = revisionDocuments(engine, {
+        branch,
+        id: options.id,
+        scopeKey: options.scopeKey,
+        seq: row.seq,
+        opIndex: row.op_index,
+      });
+      for (const [pointer, spliced] of splicedArrays) {
+        for (
+          const overwrite of overwrittenArrayElements(
+            parsePointer(pointer),
+            spliced,
+            documents,
+          )
+        ) {
+          paths.push(overwrite);
         }
       }
     } else if (row.op === "set" || row.op === "delete") {
@@ -4594,6 +5015,433 @@ ORDER BY r.seq, r.op_index
     }
   }
   return paths;
+};
+
+/**
+ * The documents one revision row's overwrites are worked out from, each read
+ * at most once, on first use, and shared by every array the row splices: the
+ * document as the row left it, and as it stood before the row.
+ */
+type RevisionDocuments = {
+  after(): EntityDocument | null;
+  before(): EntityDocument | null;
+};
+
+/**
+ * Helper for {@link selectSessionOverwritePathsSince}, which returns the
+ * {@link RevisionDocuments} of the revision row `revision`.
+ */
+const revisionDocuments = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): RevisionDocuments => {
+  let after: { document: EntityDocument | null } | undefined;
+  let before: { document: EntityDocument | null } | undefined;
+  return {
+    after: () =>
+      (after ??= { document: readRevision(engine, revision) }).document,
+    before: () =>
+      (before ??= { document: previousRevisionDocument(engine, revision) })
+        .document,
+  };
+};
+
+/**
+ * What one revision's splices of one array say of it: the lowest index they
+ * splice at, and the most the array's length before the revision can exceed
+ * its length after, which is what they can remove less what they add.
+ */
+type SplicedArray = { fromIndex: number; shrinkBound: number };
+
+/**
+ * Helper for {@link selectSessionOverwritePathsSince}, which returns the
+ * elements of the array at `array` that one revision's splices of it,
+ * `spliced`, overwrote: as ranges, the indices from the first splice's index
+ * up to the shorter of the array's lengths before and after the revision
+ * whose value differs between the two. That is what the per-index form of the
+ * same change writes: a `replace` at each index whose value it changed, and a
+ * splice at the tail for the length. An index below the first splice's is
+ * one no splice reaches. A first splice at or past the array's prior length,
+ * as a tail append's is, changes no index both sides hold, and the earlier
+ * document is not read.
+ *
+ * That is exact because the splices are marked: the store admitted them only
+ * under a read that pins the array, so they landed on the array they were
+ * diffed from, and alone on their array in the commit, so nothing else in it
+ * changed the array from their first index on (`refuseUnfoundedMarkedSplices()`).
+ */
+const overwrittenArrayElements = (
+  array: readonly string[],
+  spliced: SplicedArray,
+  documents: RevisionDocuments,
+): SessionOverwrite[] => {
+  const after = arrayAtPath(documents.after(), array) ?? [];
+  if (spliced.fromIndex >= after.length + spliced.shrinkBound) return [];
+  const before = arrayAtPath(documents.before(), array) ?? [];
+
+  const overwritten: SessionOverwrite[] = [];
+  const bound = Math.min(before.length, after.length);
+  for (let index = spliced.fromIndex; index < bound; index += 1) {
+    if (valueEqual(before[index]!, after[index]!)) continue;
+    const start = index;
+    while (index < bound && !valueEqual(before[index]!, after[index]!)) {
+      index += 1;
+    }
+    overwritten.push({ array, fromIndex: start, toIndex: index });
+  }
+  return overwritten;
+};
+
+/**
+ * Throws a {@link ProtocolError} where `patches`, one patch operation's on the
+ * document `id`, hold a splice whose index or count of removals is not a
+ * whole number at or above zero. The store would apply one with the number
+ * truncated (`spliceAll()`), so the index its patch names would not be the
+ * one it changed.
+ */
+const refuseFractionalSplices = (
+  id: string,
+  patches: readonly PatchOp[],
+): void => {
+  for (const patch of patches) {
+    if (patch.op !== "splice") continue;
+    if (
+      Number.isInteger(patch.index) && patch.index >= 0 &&
+      Number.isInteger(patch.remove) && patch.remove >= 0
+    ) {
+      continue;
+    }
+    throw new ProtocolError(
+      `memory v2 commit splices ${patch.path} in document ${id} at index ` +
+        `${patch.index}, removing ${patch.remove}: a splice's index and count ` +
+        "must be whole numbers at or above zero",
+    );
+  }
+};
+
+/**
+ * Throws a {@link ProtocolError} where a marked splice in `commit`
+ * (`PatchOp`'s `pinned`) does not stand as its mark says, which is what lets
+ * the indices it overwrote be read back exactly (`overwrittenArrayElements()`):
+ *
+ * - The commit must carry a recursive read of the array or of a path above
+ *   it, on the branch the commit writes, so that the store refuses the
+ *   commit where the array moved since the read, and the splice lands on the
+ *   array it was diffed from. The read is confirmed, or pending and naming
+ *   its confirmed basis (`PendingRead`'s `basisSeq`), from which the store
+ *   checks it over the whole interval since.
+ * - Its document instance must have no other operation in the commit, where
+ *   a second one could change the array around it.
+ * - Every splice of its array must be marked, and nothing else in its patch
+ *   operation may touch the array at or past the lowest index the splices
+ *   name, add, remove or move an element of the array, or touch the array
+ *   itself or a value above it, save a splice of an array above it past the
+ *   element the array is in. Nor may it add, remove or move an element of an
+ *   array above the array at or before the element the array is in, which
+ *   would move the array; whether a container above it is an array is read
+ *   from the document as the store holds it.
+ *
+ * `principal` and `sessionId` are the identity the commit writes as, a
+ * delegated commit's acting one, so each operation's instance resolves as
+ * its write does.
+ *
+ * The runner sends nothing else: it marks only splices it diffed under such a
+ * read, sends one operation per document, drops what a splice would cover,
+ * sends no add, remove or move at an element, and diffs an array a mergeable
+ * op reaches index by index. An unmarked splice is left to the rules every
+ * patch meets.
+ */
+const refuseUnfoundedMarkedSplices = (
+  engine: Engine,
+  options: {
+    commit: ClientCommit;
+    branch: BranchName;
+    principal?: string;
+    sessionId: SessionId;
+    scopeKeyByOpIndex: ReadonlyMap<number, string>;
+  },
+): void => {
+  const { commit, branch, principal, sessionId, scopeKeyByOpIndex } = options;
+  if (!carriesMarkedSplice(commit)) return;
+  // The instance each operation writes, keyed as the write keys it
+  // (`writeOperation()`): an annotated scope key, or the scope resolved for
+  // the identity the commit writes as, which `principal` and `sessionId` are.
+  const scopeKeyOf = (
+    operation: { scope?: CellScope },
+    opIndex: number,
+  ): string =>
+    scopeKeyByOpIndex.get(opIndex) ??
+      resolveScopeKey(operation.scope, { principal, sessionId });
+  const instanceOf = (
+    operation: { id: string; scope?: CellScope },
+    opIndex: number,
+  ) => `${operation.id}\0${scopeKeyOf(operation, opIndex)}`;
+  const operationsByInstance = new Map<string, number>();
+  commit.operations.forEach((operation, opIndex) => {
+    if (operation.op !== "sqlite") {
+      const instance = instanceOf(operation, opIndex);
+      operationsByInstance.set(
+        instance,
+        (operationsByInstance.get(instance) ?? 0) + 1,
+      );
+    }
+  });
+  // Only a read of the branch the commit writes pins what it writes, and a
+  // pending read only where it names its confirmed basis (`basisSeq`): one
+  // that does not is checked for staleness from its highest dependency's
+  // resolution on, which misses a peer's write landing before that (INV-1's
+  // CT-1910 deviation, docs/specs/memory-v2/09-invariants.md). The pointers
+  // each document's recursive reads cover, keyed by document and scope.
+  const pins = new Map<string, Set<string>>();
+  for (
+    const read of [
+      ...commit.reads.confirmed,
+      ...commit.reads.pending.filter((read) => read.basisSeq !== undefined),
+    ]
+  ) {
+    if (
+      read.nonRecursive === true ||
+      (("branch" in read ? read.branch : undefined) ?? branch) !== branch
+    ) {
+      continue;
+    }
+    const key = `${read.id}\0${normalizeScope(read.scope)}`;
+    const covered = pins.get(key) ?? new Set<string>();
+    covered.add(encodePointer(read.path));
+    pins.set(key, covered);
+  }
+  const structural = (patch: PatchOp): boolean =>
+    patch.op === "add" || patch.op === "remove" || patch.op === "move";
+
+  commit.operations.forEach((operation, opIndex) => {
+    if (operation.op !== "patch") return;
+    const firstMarked = new Map<string, number>();
+    for (const patch of operation.patches) {
+      if (patch.op !== "splice" || patch.pinned !== true) continue;
+      firstMarked.set(
+        patch.path,
+        Math.min(firstMarked.get(patch.path) ?? Infinity, patch.index),
+      );
+    }
+    if (firstMarked.size === 0) return;
+    const scope = normalizeScope(operation.scope);
+    const refuse = (array: string, why: string): never => {
+      throw new ProtocolError(
+        `memory v2 commit marks a splice of ${array} in document ` +
+          `${operation.id} ${why}: a marked splice must stand under a read ` +
+          "that pins its array, alone on the array in its commit",
+      );
+    };
+    let current: { document: EntityDocument | null | undefined } | undefined;
+    const currentDocument = (): EntityDocument | null | undefined =>
+      (current ??= {
+        document: readStateForScopeKey(engine, {
+          branch,
+          id: operation.id,
+          scope,
+          scopeKey: scopeKeyOf(operation, opIndex),
+        })?.document,
+      }).document;
+
+    // Every pointer the operation's patches name (a move names two), summed
+    // up once, so that each marked array looks up only the paths from the
+    // root down to it, one lookup per path:
+    // - `at`, by the pointer itself: its first op other than a splice, whether
+    //   any splice there is unmarked, and the lowest index a splice names;
+    // - `beneath`, by each pointer above it: the ops themselves;
+    // - `shifting`, by the pointer of its parent, for an add, remove or move
+    //   at an element: the one at the lowest index.
+    type Named = { patch: PatchOp; pointer: string; path: string[] };
+    type At = { other?: Named; unmarked: boolean; lowestSplice: number };
+    const at = new Map<string, At>();
+    const beneath = new Map<string, Named[]>();
+    const shifting = new Map<string, { lowest: number; named: Named }>();
+    for (const patch of operation.patches) {
+      const pointers = patch.op === "move"
+        ? [patch.from, patch.path]
+        : [patch.path];
+      for (const pointer of pointers) {
+        const path = parsePointer(pointer);
+        const named = { patch, pointer, path };
+        const key = encodePointer(path);
+        const here = at.get(key) ??
+          { unmarked: false, lowestSplice: Infinity };
+        if (patch.op === "splice") {
+          here.unmarked ||= patch.pinned !== true;
+          here.lowestSplice = Math.min(here.lowestSplice, patch.index);
+        } else {
+          here.other ??= named;
+        }
+        at.set(key, here);
+        for (let depth = 0; depth < path.length; depth++) {
+          const above = encodePointer(path.slice(0, depth));
+          const entries = beneath.get(above);
+          if (entries === undefined) beneath.set(above, [named]);
+          else entries.push(named);
+        }
+        const segment = path[path.length - 1];
+        if (
+          structural(patch) && segment !== undefined &&
+          isArrayIndexPropertyName(segment)
+        ) {
+          const parent = encodePointer(path.slice(0, -1));
+          const lowest = shifting.get(parent);
+          if (lowest === undefined || Number(segment) < lowest.lowest) {
+            shifting.set(parent, { lowest: Number(segment), named });
+          }
+        }
+      }
+    }
+    const reads = pins.get(`${operation.id}\0${scope}`);
+    // Whether the container at each pointer above a marked array is an array
+    // in the document as the store holds it, read once per pointer.
+    const arrays = new Map<string, boolean>();
+    const isArrayAt = (pointer: string, path: readonly string[]): boolean => {
+      let known = arrays.get(pointer);
+      if (known === undefined) {
+        known = arrayAtPath(currentDocument(), path) !== undefined;
+        arrays.set(pointer, known);
+      }
+      return known;
+    };
+
+    for (const [array, first] of firstMarked) {
+      if ((operationsByInstance.get(instanceOf(operation, opIndex)) ?? 0) > 1) {
+        refuse(array, "beside another operation on the document");
+      }
+      const arrayPath = parsePointer(array);
+      // The pointer of each path from the root down to the array, the array's
+      // own last.
+      const above = Array.from(
+        { length: arrayPath.length + 1 },
+        (_, depth) => encodePointer(arrayPath.slice(0, depth)),
+      );
+      if (!above.some((pointer) => reads?.has(pointer) === true)) {
+        refuse(array, "without a recursive read of the array or above it");
+      }
+      for (let depth = 0; depth <= arrayPath.length; depth++) {
+        const here = at.get(above[depth]);
+        if (here === undefined) continue;
+        // At the array or above it, nothing but splices: every one of the
+        // array's own marked, and one of an array above it only past the
+        // element the array is in.
+        if (here.other !== undefined) {
+          refuse(
+            array,
+            `beside a ${here.other.patch.op} at ${here.other.pointer}`,
+          );
+        }
+        if (depth === arrayPath.length) {
+          if (here.unmarked) refuse(array, "beside an unmarked one");
+          continue;
+        }
+        const ours = arrayPath[depth]!;
+        if (
+          here.lowestSplice !== Infinity &&
+          !(isArrayIndexPropertyName(ours) && here.lowestSplice > Number(ours))
+        ) {
+          refuse(array, `beside a splice at ${above[depth]}`);
+        }
+      }
+      // Beneath the array: below the first index, and no element added,
+      // removed or moved.
+      for (const named of beneath.get(above[arrayPath.length]) ?? []) {
+        const segment = named.path[arrayPath.length]!;
+        if (
+          !isArrayIndexPropertyName(segment) || Number(segment) >= first ||
+          (named.path.length === arrayPath.length + 1 &&
+            structural(named.patch))
+        ) {
+          refuse(array, `beside a ${named.patch.op} at ${named.pointer}`);
+        }
+      }
+      // An element of an array above it, added, removed or moved at or
+      // before the element the array is in, moves the array.
+      for (let depth = 0; depth < arrayPath.length; depth++) {
+        const shift = shifting.get(above[depth]);
+        const ours = arrayPath[depth]!;
+        if (
+          shift !== undefined && isArrayIndexPropertyName(ours) &&
+          shift.lowest <= Number(ours) &&
+          isArrayAt(above[depth], arrayPath.slice(0, depth))
+        ) {
+          refuse(
+            array,
+            `beside a ${shift.named.patch.op} at ${shift.named.pointer} ` +
+              "that moves it",
+          );
+        }
+      }
+    }
+  });
+};
+
+/** The array at `path` of `document`, or `undefined` where there is none. */
+const arrayAtPath = (
+  document: EntityDocument | null | undefined,
+  path: readonly string[],
+): readonly FabricValue[] | undefined => {
+  let node: unknown = document;
+  for (const segment of path) {
+    node = isObjectOrArray(node)
+      ? (node as Record<string, unknown>)[segment]
+      : undefined;
+  }
+  return Array.isArray(node) ? node : undefined;
+};
+
+/**
+ * The document as it stood before the revision row of `revision`: as the
+ * document's previous row on the branch left it, or, where the row is the
+ * branch's first of the document, as the branch inherited it at its fork
+ * point; `null` where there was none.
+ */
+const previousRevisionDocument = (
+  engine: Engine,
+  revision: {
+    branch: BranchName;
+    id: EntityId;
+    scopeKey: string;
+    seq: number;
+    opIndex: number;
+  },
+): EntityDocument | null => {
+  const previous = engine.prepare(`
+SELECT seq, op_index FROM revision
+WHERE branch = :branch AND id = :id AND scope_key = :scope_key
+  AND (seq < :seq OR (seq = :seq AND op_index < :op_index))
+ORDER BY seq DESC, op_index DESC
+LIMIT 1
+`).get({
+      branch: revision.branch,
+      id: revision.id,
+      scope_key: revision.scopeKey,
+      seq: revision.seq,
+      op_index: revision.opIndex,
+    }) as { seq: number; op_index: number } | undefined;
+  if (previous !== undefined) {
+    return readRevision(engine, {
+      branch: revision.branch,
+      id: revision.id,
+      scopeKey: revision.scopeKey,
+      seq: previous.seq,
+      opIndex: previous.op_index,
+    });
+  }
+  // The branch's first row of the document: a read of the branch just
+  // before it resolves the document the branch inherited at its fork point.
+  return read(engine, {
+    id: revision.id,
+    branch: revision.branch,
+    scopeKey: revision.scopeKey,
+    seq: revision.seq - 1,
+  });
 };
 
 /**
@@ -6630,6 +7478,15 @@ const applyCommitTransaction = (
   // already answered from the store above.
   refuseDeletedSpace(engine, space);
 
+  // A splice names its index and its count of removals in whole numbers
+  // (`refuseFractionalSplices()`). Fresh commits only: an exact replay
+  // already answered from the store above.
+  for (const operation of commit.operations) {
+    if (operation.op === "patch") {
+      refuseFractionalSplices(operation.id, operation.patches);
+    }
+  }
+
   // The derived-class admission rule (serving-loop.md §2, protocol.md §2's
   // `derived` row): the producer holds the space's lease — ONE equality check
   // against the holder the memory server's map names, not admission
@@ -7874,6 +8731,18 @@ const applyCommitTransaction = (
   // result — the original admission stamped it; re-running the CAS here
   // would wrongly reject the replay as its own duplicate) and before the
   // seq allocation; the stamps apply per-op in the write loop below.
+  // A marked splice stands as its mark says (`refuseUnfoundedMarkedSplices()`).
+  // Its document is read as the write keys it: a delegated commit's scoped
+  // writes key from the carried acting identity (see the write loop below).
+  refuseUnfoundedMarkedSplices(engine, {
+    commit,
+    branch,
+    principal: delegated?.actingPrincipal ?? principal,
+    sessionId: delegated?.actingSession ?? sessionId,
+    scopeKeyByOpIndex,
+  });
+
+  refuseInviteRevisionWritesOutsideTheService(commit, commitClass);
   const eventAppendPlan = validateEventAppends(engine, {
     commit,
     commitClass,
@@ -10389,8 +11258,4 @@ const commitMetadataRefsRequired = (database: Database): boolean => {
   const byName = new Map(rows.map((row) => [row.name, row.notnull] as const));
   return byName.get("invocation_ref") === 1 ||
     byName.get("authorization_ref") === 1;
-};
-
-const toDatabaseAddress = (url: URL): URL | string => {
-  return url.protocol === "file:" ? url : ":memory:";
 };

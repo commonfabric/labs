@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
@@ -9,6 +8,12 @@ import {
   USE_MARK_INTERVAL_MS,
 } from "../src/compilation-cache/shared-compile-cache.deno.ts";
 import { CompileTurns } from "../src/harness/compile-interleave.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const VERSION = "test-runtime-version";
 

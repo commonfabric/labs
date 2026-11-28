@@ -6,11 +6,11 @@
 // bare array to stdout that its consumers parse. The scan semantics themselves
 // are pinned in runtime/state-inspector/test/scan-extent.test.ts.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { argv, cf, type CliResult, stripAnsi } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SESSION = "session:did%3Akey%3AzAlice:s1";
 const MODULE_IDENTITY = "pf1v3J_M5Nep7cq-Uh8EYG0ZQaE217FfDfcjbwGdjVI";

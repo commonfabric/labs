@@ -1069,7 +1069,10 @@ function readValueAtResolvedLink(
   // Read without telling the scheduler. Whatever materializes this value —
   // the traverser or a view — registers its own reads as it walks.
   const meta = {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   };
   const value = tx.readOrThrow(address, meta);
   if (value !== undefined || link.path.at(-1) !== "length") return value;
@@ -1649,7 +1652,7 @@ export function validateAndTransform(
     (missing, sourceSpace) => {
       unservedHop ??= missing;
       // Absent link targets get an async load kicked (cross-space always;
-      // same-space only when the replica has never seen the doc); the
+      // same-space only when `shouldPullDoc()` reserves the load); the
       // tracked read re-runs the reader on arrival. A served per-instance
       // run's absent target loads AS that run's instance (stage A — the
       // runner's explicit-instance read).

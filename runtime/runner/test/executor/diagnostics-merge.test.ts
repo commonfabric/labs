@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type {
   LogCounts,
   LoggerBreakdown,
   TimingStats,
 } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   mergeServingLoopDiagnostics,
   mergeTimingStats,

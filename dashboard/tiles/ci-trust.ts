@@ -9,7 +9,7 @@
  * cancelled attempt in which a job timed out, was stopped by a person, or
  * failed on a runner among them, makes the run a failure, and so does a second
  * try whatever its result, since the run needed a rerun. A run with no try left
- * is left out of the share. One factory builds the labs, loom, and weaver
+ * is left out of the share. One factory builds the labs, cfs, and weaver
  * instances against their own repository and workflow. Each tile links to its
  * repository's page, and each cell of its strip to its run.
  */
@@ -28,8 +28,8 @@ import { strip } from "../lib.ts";
 import { repoPageHref } from "../repo-page-href.ts";
 import {
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
   TRUST_GOOD,
   TRUST_RUNS_MAX,
@@ -117,5 +117,5 @@ function makeCiTrust(opts: { label: string; repo: string; workflow: string }): T
 }
 
 export const labsCiTrust = makeCiTrust({ label: "labs ci trust", repo: REPO, workflow: CI_WORKFLOW });
-export const loomCiTrust = makeCiTrust({ label: "loom ci trust", repo: LOOM_REPO, workflow: LOOM_CI_WORKFLOW });
+export const cfsCiTrust = makeCiTrust({ label: "cfs ci trust", repo: CFS_REPO, workflow: CFS_CI_WORKFLOW });
 export const weaverCiTrust = makeCiTrust({ label: "weaver ci trust", repo: WEAVER_REPO, workflow: WEAVER_CI_WORKFLOW });

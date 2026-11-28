@@ -1,6 +1,5 @@
 /** Shared follow-up history, state retention, and chat replay boundaries. */
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
@@ -20,6 +19,7 @@ import {
 } from "../src/run-state.ts";
 import { CfHarnessPromptLoop } from "../src/prompt-loop.ts";
 import { INERT_RUNSC } from "./support/inert-runsc.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const history: HarnessTranscriptMessage[] = [
   { role: "user", content: "First task" },

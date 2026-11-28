@@ -150,7 +150,6 @@ export const createRuntimeCfcModulePolicySource = (
         reference,
         tx,
         space as MemorySpace,
-        false,
       );
     } finally {
       tx.clearReadOnly?.();

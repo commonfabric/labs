@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -8,6 +7,7 @@ import {
   recordsSpooledBy,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RECORD: TestRecord = {
   line: "record",

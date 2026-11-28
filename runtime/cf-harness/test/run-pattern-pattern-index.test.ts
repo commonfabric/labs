@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
@@ -30,6 +29,12 @@ import {
   patternIndexDependencies,
   runtimeProgramFromIndex,
 } from "@commonfabric/pattern-index/deploy";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { OUTPUT_CONCERN_MESSAGES } from "../src/run-pattern-output-concerns.ts";
 import type {
   RunPatternToolErrorOutput,

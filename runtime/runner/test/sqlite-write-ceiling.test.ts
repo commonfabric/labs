@@ -3,9 +3,9 @@
 // tested without the runtime label machinery (the real reader is
 // cfcLabelViewForCell, exercised end-to-end elsewhere).
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { checkSqliteWriteCeiling } from "../src/builtins/sqlite/write-ceiling.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // `emails.body` is capped at confidentiality {support}; everything else uncapped.
 const TABLES = {

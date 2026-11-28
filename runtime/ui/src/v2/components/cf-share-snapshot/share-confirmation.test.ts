@@ -7,9 +7,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { ContextProvider } from "@lit/context";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   createMockCellHandle,

@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import type { TestIdentity } from "@commonfabric/test-support/records";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   CAPABILITIES,
   type Capability,

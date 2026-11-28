@@ -37,10 +37,13 @@ import {
   type LanePlan,
   listObjects,
   type Manifest,
+  type ManifestEntry,
   MANIFEST_SCHEMA_VERSION,
   objectUrl,
   parseManifest,
   SELECTION_AREA,
+  testIdentityKey,
+  type WithheldEntry,
   writtenAhead,
 } from "@commonfabric/test-support/records";
 
@@ -263,4 +266,26 @@ export function shareLabel(selected: number, corpus: number): string {
 /** How many identities are held back for being too noisy to judge by. */
 export function flakyCount(manifest: Manifest): number {
   return manifest.withheld.filter((entry) => entry.reason === "flaky").length;
+}
+
+/** A test held back as flaky, with what the corpus says of it. */
+export interface FlakyTest {
+  withheld: WithheldEntry;
+
+  /** Absent where the corpus does not hold the test. */
+  entry?: ManifestEntry;
+}
+
+/** The tests held back as flaky, worst-measured first. */
+export function flakyTests(manifest: Manifest): FlakyTest[] {
+  const entries = new Map(
+    manifest.entries.map((entry) => [testIdentityKey(entry.test), entry]),
+  );
+  return manifest.withheld
+    .filter((withheld) => withheld.reason === "flaky")
+    .map((withheld) => {
+      const entry = entries.get(testIdentityKey(withheld.test));
+      return entry === undefined ? { withheld } : { withheld, entry };
+    })
+    .sort((a, b) => (b.entry?.flakeRate ?? 0) - (a.entry?.flakeRate ?? 0));
 }

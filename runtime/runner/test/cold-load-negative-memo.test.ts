@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ColdLoadNegativeMemo } from "../src/cold-load-negative-memo.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ColdLoadNegativeMemo", () => {
   it("suppresses a failure only under the version that recorded it", () => {

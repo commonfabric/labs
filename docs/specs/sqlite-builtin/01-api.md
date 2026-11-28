@@ -214,6 +214,18 @@ because a declarative diff can't tell a rename from a drop+add. A post-V1 opt-in
 older on-disk versions while still erroring by default. (See
 [08-open-questions.md](./08-open-questions.md) Q9.)
 
+A table can declare secondary indexes in the third argument of `table()`:
+`table(columns, rule, { indexes: [["ts"], ["author_cf_link", "ts"]] })`. Each
+entry lists column names in key order. The database creates each one with
+`CREATE INDEX IF NOT EXISTS` when it creates the table, so adding an index to
+an existing table is additive like adding a table. An index naming a column
+the table does not declare is refused when `table()` is called, and again
+where the statement is generated.
+
+`indexedCollections()` declares a database whose tables the runtime derives
+and keeps current with a set of member cells; see
+[indexed collections](../../features/indexed-collections.md).
+
 ## `db.query<Row>(sql, options?)` — reactive read
 
 ```ts
@@ -323,6 +335,18 @@ holding JSON, which the pattern parses itself. The read connection does not
 parse it, because whether SQLite marks such a column as JSON depends on the
 query plan (a sort or a materialized subquery unmarks it), and a column's type
 under `Row` has to hold under every plan. Declare the column `string` in `Row`.
+
+An INTEGER column reaches the row as the integer SQLite holds. A value within
+±(2^53 − 1) arrives as a `number`, so an epoch-millisecond timestamp, a rowid,
+and a count are ordinary numbers. A value beyond that range arrives as a
+`bigint`, because no `number` names it. The JS type therefore follows each
+row's value, not the column: `number` and `bigint` both lower to a schema the
+runtime reads a stored `bigint` under
+([schema mapping](../schema-generator/ts_to_json_schema_mapping.md)), so a
+field declared `number` holds a `bigint` in a row whose value is past 2^53.
+Declare a column that can hold such values (a 64-bit id, a nanosecond
+timestamp) `number | bigint`, or select it as text, `CAST(n AS TEXT)`, and
+declare it `string`, which reads every value as its digits.
 
 This handles projections the table schema can't: because `Cell<T>` lowers to
 `asCell`, declaring a result field as `Cell<User>` tells the runtime that column

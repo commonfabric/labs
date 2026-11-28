@@ -81,12 +81,13 @@ const startIfReady = (
 };
 
 /** How a player is drawn: their picture, or else their avatar text. */
-type PlayerLook = Pick<PlayerData, "picture" | "avatar">;
+type PlayerLook = Pick<PlayerData, "pictureBlob" | "picture" | "avatar">;
 
 /** How the lobby shows a seat: its player's look and name, or "Open". A
  * computed reads the seat's fields here, since reading a field through an
  * empty seat's `null` is a read error. */
 const seatOf = (player: PlayerData | null) => ({
+  pictureBlob: player?.pictureBlob,
   picture: player?.picture,
   avatar: player?.avatar,
   name: player?.name ?? "?",
@@ -402,6 +403,7 @@ export const BattleshipLobbyCore = pattern<LobbyCoreInput, LobbyOutput>(
                     }}
                   >
                     <cf-avatar
+                      blob={seat1.pictureBlob}
                       bytes={seat1.picture}
                       src={seat1.avatar}
                       name={seat1.name}
@@ -417,6 +419,7 @@ export const BattleshipLobbyCore = pattern<LobbyCoreInput, LobbyOutput>(
                     }}
                   >
                     <cf-avatar
+                      blob={seat2.pictureBlob}
                       bytes={seat2.picture}
                       src={seat2.avatar}
                       name={seat2.name}

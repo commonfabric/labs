@@ -1,0 +1,2 @@
+# Always keep main's version of pieces.json on merge.
+coordination/pieces.json merge=ours

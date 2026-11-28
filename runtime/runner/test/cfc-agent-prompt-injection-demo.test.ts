@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type {
   BuiltInLLMMessage,
@@ -13,6 +12,7 @@ import {
   loadConversationFixture,
 } from "@commonfabric/llm/client";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { LLMMessageSchema } from "../src/builtins/llm-schemas.ts";
 import { createLLMFriendlyLink } from "../src/link-types.ts";
@@ -28,7 +28,7 @@ const space = signer.did();
 
 // End-to-end drive of the CFC agent prompt-injection demo's two agents (Epic
 // D2, docs/history/specs/cfc-trusted-agent-tool-integrity.md test plan). This mirrors
-// patterns/examples/cfc-agent-prompt-injection-demo/main.tsx — same atoms,
+// patterns/examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx — same atoms,
 // same sendMail floor (patterns/system/cfc/prompt-injection/schemas.ts),
 // same logEmail / readRawBriefing handler shapes — driven through the REAL
 // llmDialog loop with a conversation fixture playing the model:

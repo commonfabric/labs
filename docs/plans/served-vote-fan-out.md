@@ -104,17 +104,17 @@ answers them for the poll, and a change is measured against its answer again:
 Candidate changes, each a hypothesis until a question above says it is the
 one:
 
-- **Share the space-pure part of an identity-keyed walk.** An evaluation that
-  touched one scoped instance is keyed to its identity whole, so five sessions
-  of the poll re-walk the same space-scoped documents five times when only the
-  scoped tail differs between them. Splitting the evaluation so the
-  space-pure reach is shared across identities under the existing rule and
-  only the scoped tail is evaluated per identity would keep the identity-bound
-  invariant (no cross-identity reuse of anything that resolved a scoped
-  instance, and nothing recipient-shaped inside the shared part) while taking
-  the shared part out of the per-session cost. Verified by question 2's
-  counts and a space-scoped traversal count that stops growing with the
-  session count.
+- **Share the space-pure part of a walk that reaches a scoped instance.** An
+  evaluation that touched one scoped instance is shared with no other
+  identity, so five sessions of the poll re-walk the same space-scoped
+  documents five times when only the scoped tail differs between them.
+  Splitting the evaluation so the space-pure reach is shared across identities
+  under the existing rule and only the scoped tail is evaluated per identity
+  would keep the identity-bound invariant (no cross-identity reuse of anything
+  that resolved a scoped instance, and nothing recipient-shaped inside the
+  shared part) while taking the shared part out of the per-session cost.
+  Verified by question 2's counts and a space-scoped traversal count that
+  stops growing with the session count.
 - **Narrow the re-walk to the commit.** Make the incremental path the only
   path for a commit that touched a bounded set of documents. Verified by
   question 3 and by `traverseSchema` per pass falling with the size of the
@@ -226,8 +226,9 @@ reading a sibling's seal, are in the served-vote record.
 A change to the cycle, the finish or the park is run both ways before it is
 pushed. Run these suites with `--preload=test/clock-preload.ts` from
 `runtime/runner`, as the package's `deno-test` task does. A bare
-`deno test` leaves the global `clock` undefined in the executor and
-parked-runtime tests; that failure does not establish a container defect.
+`deno test` installs no fake clock, so the executor and parked-runtime tests
+that use `clock` fail with "clock is only available inside a test running under
+the fake clock"; that failure does not establish a container defect.
 
 Before a push: repo-wide `deno fmt --check`, `deno lint`, `deno task check`,
 `deno task check-docs-history-index` and `deno task check-skill-facts`, the

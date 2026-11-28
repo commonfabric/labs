@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
@@ -7,6 +6,7 @@ import {
   externalized,
   isEmbeddedCfcSchemaRef,
 } from "../src/embedded-schemas.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("embedded-schemas", () => {
   describe("externalized", () => {

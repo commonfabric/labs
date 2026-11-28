@@ -1,10 +1,10 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import { classifyCallbackBoundary } from "../../src/policy/callback-boundary.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function createProgramWithFiles(
   files: Record<string, string>,
@@ -90,7 +90,7 @@ export type SqliteTableFunction = <T>(
 export declare const table: SqliteTableFunction;
 `;
 
-Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned supported boundary", () => {
+test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned supported boundary", () => {
   const { sourceFile, checker } = createProgramWithFiles({
     "/commonfabric.d.ts": SQLITE_TYPINGS,
     "/test.tsx": `
@@ -114,7 +114,7 @@ Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned 
   });
 });
 
-Deno.test("classifyCallbackBoundary: a user-defined table alias does not match the SQLite rule", () => {
+test("classifyCallbackBoundary: a user-defined table alias does not match the SQLite rule", () => {
   // A local alias must not match, whether its name resembles the framework's
   // alias or belongs to an unrelated API.
   for (const alias of ["SqliteTableFunction", "UserTableFunction"]) {

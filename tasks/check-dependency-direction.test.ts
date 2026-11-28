@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { join } from "@std/path";
 
 import { findViolations, main } from "./check-dependency-direction.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A workspace holding a `base/low` package, a `runtime/high` package, and the

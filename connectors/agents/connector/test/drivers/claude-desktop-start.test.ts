@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   ClaudeAgentSdkDriver,
   type ClaudeDesktopDeps,
   type ClaudeSdkAdapter,
 } from "../../src/drivers/claude-agent-sdk.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type SessionInfo = Awaited<
   ReturnType<ClaudeSdkAdapter["listSessions"]>

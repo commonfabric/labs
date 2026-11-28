@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { DOC_DEMOS } from "../check-verb-session-sync.ts";
 import { namedBenchmarkFiles } from "../check-bench-workflow.ts";
 import { CAUSE_ASSIGNMENT_PARTS } from "../check-cause-assignments.ts";
@@ -19,6 +18,7 @@ import {
   WORKING_TREE_GATES,
 } from "./gates.ts";
 import { entryNames, type Suite } from "./suite.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const gates: readonly Gate[] = [...WORKING_TREE_GATES, ...HISTORY_GATES];
 

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { shapableWakeGroupKey } from "../src/scheduler/invalidation.ts";
 import { shaperInstanceGroupKey } from "../src/scheduler/wake-shaping.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // deno-lint-ignore no-explicit-any
 const anyOf = <T>(v: unknown) => v as T;

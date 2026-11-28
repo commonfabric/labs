@@ -11,7 +11,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
@@ -42,6 +41,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { seedHomeAgentQueue } from "../../runner/test/support/agent-queue.ts";
 import { createTrustedBuilder } from "../../runner/test/support/trusted-builder.ts";
@@ -1688,6 +1693,21 @@ describe("agent runner", () => {
           (value) => value?.sequence === sequence,
         );
         await visible.sync();
+        // The reader is a client of its own, so the record's new pointer
+        // reaches it on its own schedule. Wait until its copy points at this
+        // report, reading the pointer alone: the report's content is what
+        // the ceiling may withhold, and a read of it would throw here.
+        const milestoneId = milestone.getAsNormalizedFullLink().id;
+        await waitForCellValue<{ progress?: Cell<unknown> }>(
+          reader,
+          visible.asSchema({
+            type: "object",
+            properties: { progress: { asCell: ["cell"] } },
+          }),
+          (record) =>
+            record?.progress?.resolveAsCell().getAsNormalizedFullLink().id ===
+              milestoneId,
+        );
         if (readable) {
           expect(await message.pull()).toBe(text);
           expect(message.get()).toBe(text);

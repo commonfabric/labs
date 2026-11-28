@@ -2,7 +2,6 @@
 
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import type { ClientCommit, EntityDocument } from "../v2.ts";
 import {
@@ -14,6 +13,7 @@ import {
   type OpenOptions,
   read,
 } from "../v2/engine.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const withEngine = async (
   run: (engine: Engine) => void,

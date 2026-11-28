@@ -2,10 +2,10 @@
 // graph reaches @commonfabric/ui, whose components extend a bare HTMLElement as
 // they load, so it can only load once the test has installed one.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 import { stub } from "@std/testing/mock";
 
 import { installBrowserGlobals } from "./browser-globals.ts";

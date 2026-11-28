@@ -21,7 +21,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { idStringForEntityAddress } from "@commonfabric/runner";
@@ -30,6 +29,7 @@ import {
   createLLMFriendlyLink,
   linkPathSegmentToCellPathSegment,
 } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { SlugSummary, SpaceConfig } from "../lib/piece.ts";
 import { HeldConnection } from "../lib/shuttle/connection.ts";

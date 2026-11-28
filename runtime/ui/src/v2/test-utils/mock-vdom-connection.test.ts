@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { createRenderableCellHandle } from "./mock-vdom-connection.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("createRenderableCellHandle()", () => {
   it("returns a handle on the asked ref, holding the value given", () => {

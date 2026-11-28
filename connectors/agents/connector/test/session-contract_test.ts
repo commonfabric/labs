@@ -5,8 +5,9 @@ import {
   sessionKey,
   sessionManifestCause,
 } from "../src/session-contract.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("sessionKey is stable and cannot collide across source boundaries", () => {
+test("sessionKey is stable and cannot collide across source boundaries", () => {
   assertEquals(
     sessionKey("claude-code:default", "abc/123"),
     "claude-code%3Adefault/abc%2F123",
@@ -18,13 +19,13 @@ Deno.test("sessionKey is stable and cannot collide across source boundaries", ()
   assertEquals(normalizeSourceId("  Codex:Default  "), "codex:default");
 });
 
-Deno.test("session identity rejects empty and control-character values", () => {
+test("session identity rejects empty and control-character values", () => {
   assertThrows(() => sessionKey("", "session"), Error, "sourceId");
   assertThrows(() => sessionKey("codex", ""), Error, "nativeSessionId");
   assertThrows(() => sessionKey("codex\nother", "session"), Error, "control");
 });
 
-Deno.test("session chunk identity includes its content hash", () => {
+test("session chunk identity includes its content hash", () => {
   const first = sessionChunkCause(
     "did:key:space",
     "did:key:owner",
@@ -68,7 +69,7 @@ Deno.test("session chunk identity includes its content hash", () => {
   }
 });
 
-Deno.test("session manifest identity includes its manifest hash", () => {
+test("session manifest identity includes its manifest hash", () => {
   const first = sessionManifestCause(
     "did:key:space",
     "did:key:owner",

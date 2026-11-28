@@ -1,9 +1,10 @@
 import type { CellHandle, RuntimeClient } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 
 import { CFOwnerView } from "./index.ts";
 
-Deno.test("cf-owner-view updates its native owner decision when the acting principal changes", async () => {
+test("cf-owner-view updates its native owner decision when the acting principal changes", async () => {
   const ownerDecision = Promise.withResolvers<void>();
   const visitorDecision = Promise.withResolvers<void>();
   const writes: (boolean | null)[] = [];

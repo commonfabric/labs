@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Database } from "@db/sqlite";
 
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { HarnessCfcModelContext } from "../src/contracts/cfc-model-context.ts";
 import type { HarnessResearchRunSummary } from "../src/contracts/research.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";

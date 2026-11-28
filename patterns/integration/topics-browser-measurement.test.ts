@@ -5,12 +5,17 @@
  * plain `deno test` runs.
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { DID, Identity } from "@commonfabric/identity";
 import { env, type Page } from "@commonfabric/integration";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   seedIdentity,
@@ -100,16 +105,6 @@ describe("topics-browser-measurement", () => {
       throw error;
     }
   }
-
-  /**
-   * The refusal `measureTopicsReads()` gives a sample declared to run nothing
-   * on a served board, whose page runs no lift's module. The declaration
-   * waives the one failure of completing no authored run, which an undeclared
-   * sample on such a board is refused for first, and reaches no further.
-   */
-  const SERVED_BOARD_REFUSAL =
-    "`crossrefTable`'s module `/apps/topics/main.tsx` is not running, but a " +
-    "sample is taken on a page showing the board";
 
   /** Tokens of the samples `page` still holds. */
   async function samplesLeftInPage(
@@ -267,16 +262,18 @@ describe("topics-browser-measurement", () => {
             lift.implementation?.split(" =>")[0],
           ]),
         ).toEqual([
-          ["crossrefTable", "({ sources })"],
-          ["crossrefIndexOf", "({ rows })"],
-          ["backlinksOf", "({ table, index, self, shortName })"],
+          ["cardRowsByActivity", "({ rows })"],
+          ["createdByOf", "({ createdBy })"],
         ]);
+        // Opening a topic derives who filed it. The board's cards are a
+        // query's rows, which opening a topic and coming back leaves as
+        // they were, so their derivation may complete no run here.
         expect(
           sample.lifts.filter((lift) =>
             lift.runs === 0 || lift.proxyAccesses === 0
           )
             .map((lift) => lift.name),
-        ).toEqual([]);
+        ).not.toContain("createdByOf");
         expect(sample.graph.before.nodes).toBeGreaterThan(0);
         expect(sample.graph.before.edges).toBeGreaterThan(0);
         expect(sample.graph.after.nodes).toBeGreaterThan(0);
@@ -316,11 +313,6 @@ describe("topics-browser-measurement", () => {
           operation: () => Promise.resolve(),
           mayRunNothing: true,
         });
-      if (servedViews) {
-        await expect(measure()).rejects.toThrow(SERVED_BOARD_REFUSAL);
-        expect(await samplesLeftInPage()).toEqual([]);
-        return;
-      }
       const sample = await measure();
 
       checkSample(sample, () => {
@@ -353,20 +345,27 @@ describe("topics-browser-measurement", () => {
             },
             mayRunNothing: true,
           });
+        const sample = await measure();
         if (servedViews) {
-          await expect(measure()).rejects.toThrow(SERVED_BOARD_REFUSAL);
-          expect(await samplesLeftInPage(fresh.page)).toEqual([]);
+          // A served page holds the board's card derivation and completes no
+          // run of it, so the declared sample is taken and records none.
+          checkSample(sample, () => {
+            expect(sample.mayRunNothing).toBe(true);
+            expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+              program.lifts.map(() => 0),
+            );
+          });
           return;
         }
-        const sample = await measure();
 
         checkSample(sample, () => {
           expect(sample.mayRunNothing).toBe(true);
+          // As above: the topic's derivation runs, and the board's may not.
           expect(
             sample.lifts.filter((lift) => lift.runs === 0).map((lift) =>
               lift.name
             ),
-          ).toEqual([]);
+          ).not.toContain("createdByOf");
         });
       } finally {
         await fresh.close();
@@ -411,21 +410,16 @@ describe("topics-browser-measurement", () => {
           operation: () => deliverRun(undefined),
           mayRunNothing: true,
         });
-      if (servedViews) {
-        await expect(measureDeclared()).rejects.toThrow(SERVED_BOARD_REFUSAL);
-        expect(await samplesLeftInPage()).toEqual([]);
-      } else {
-        const sample = await measureDeclared();
-        checkSample(sample, () => {
-          expect(sample.runsWithoutSource).toBe(1);
-          // Counted apart for reporting, and still part of `remaining`, which
-          // is every run the sample could not place against a named lift.
-          expect(sample.remaining.runs).toBe(1);
-          expect(sample.lifts.map((lift) => lift.runs)).toEqual(
-            program.lifts.map(() => 0),
-          );
-        });
-      }
+      const sample = await measureDeclared();
+      checkSample(sample, () => {
+        expect(sample.runsWithoutSource).toBe(1);
+        // Counted apart for reporting, and still part of `remaining`, which
+        // is every run the sample could not place against a named lift.
+        expect(sample.remaining.runs).toBe(1);
+        expect(sample.lifts.map((lift) => lift.runs)).toEqual(
+          program.lifts.map(() => 0),
+        );
+      });
 
       // The same run undeclared: the waiver is what admits it.
       await expect(
@@ -667,7 +661,7 @@ describe("topics-browser-measurement", () => {
       }
     });
 
-    it("throws for an operation that runs nothing in the worker", async () => {
+    it("returns a zero-run sample only when the operation declares it may run nothing", async () => {
       // The counts are held still, so the operation reads as running nothing.
       // A worker whose views the server serves may have timed no run yet in
       // this session, which would leave its timing without the key the
@@ -721,6 +715,16 @@ describe("topics-browser-measurement", () => {
           "idle: the timed operation ran nothing in the worker",
         );
         expect(await samplesLeftInPage()).toEqual([]);
+
+        const sample = await timeTopicsOperation(session.page, {
+          label: "idle, declared",
+          posture,
+          operation: () => Promise.resolve(),
+          mayRunNothing: true,
+        });
+        expect(sample.mayRunNothing).toBe(true);
+        expect(sample.workerRuns).toBe(0);
+        expect(await samplesLeftInPage()).toEqual([]);
       } finally {
         await session.page.evaluate(() => {
           const scope: ReplacementGlobal = globalThis;
@@ -761,17 +765,6 @@ describe("topics-browser-measurement", () => {
         await restoreRuntimeClient();
       }
       expect(await samplesLeftInPage()).toEqual([]);
-    });
-
-    it("returns a sample recording the declaration for an operation declared to run nothing", async () => {
-      const sample = await timeTopicsOperation(session.page, {
-        label: "idle, declared",
-        posture,
-        operation: () => Promise.resolve(),
-        mayRunNothing: true,
-      });
-
-      expect(sample.mayRunNothing).toBe(true);
     });
   });
 });

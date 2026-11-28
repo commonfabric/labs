@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import {
@@ -9,6 +8,7 @@ import {
 import { Identity } from "@commonfabric/identity";
 import { type EventIntentOutcome, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RuntimeClients } from "@/backends/client-registry.ts";
 import { ownerClient, type WorkerClient } from "@/backends/worker-client.ts";

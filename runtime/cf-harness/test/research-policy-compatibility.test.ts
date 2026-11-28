@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseCfHarnessCliArgs } from "./support/on-linux.ts";
 import {
@@ -13,6 +12,7 @@ import type {
   RunHarnessTranscriptOptions,
 } from "../src/prompt-loop.ts";
 import type { HarnessChatSessionStore } from "../src/session-store.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const nextIsoNow = () => {
   let counter = 0;

@@ -550,7 +550,12 @@ The strict-only delta is:
   The serving loop names each such path as it writes it
   (`writeProcessedClaim()` in `runtime/runner/src/executor/processed-claim.ts`)
   under the runtime-authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM`
-  marker, which the gate takes only on a stream's entries document. Every
+  marker, which the gate takes only on a stream's entries document. For the
+  same reason the claim is outside the transaction's authorship summary
+  (§8.9.3): a run whose own writes are all its handler's is attributed to the
+  handler, so they carry `TransformedBy`, while the claim, unstamped, carries
+  none. Only the claim's own value, written under no identity at a path the
+  runtime named, is left out, the write the stamp leaves out too. Every
   other write the transaction makes, an entry it appends or a field it writes
   beside the mark included, is measured and stamped as above, so a handler
   over another space's labeled value still cannot carry it into the stream's
@@ -723,13 +728,10 @@ The strict-only delta is:
     ceilings until the gate that should own them exists. `sqliteQuery` has
     that gate now. Its request stages under a `sqliteQuery` sink, which
     releases ungated under the max-enforcement posture for a reason of its
-    own: the bound a read wants is the database's own SPACE, and a per-sink
-    ceiling holds a clause list and nothing else. That bound is also what the
-    store's own ceiling was refusing, and it was worth exactly one case — a
-    database in another space receiving a request that carries a label —
-    so the builtin applies it before staging, where which space the database
-    is in is a thing it can see, measuring the transaction's flow join rather
-    than the transaction-global consumed set the sink ceilings read. The
+    own: the server a query reaches, in its own space or another, is an
+    attested runtime applying the same access rules, and the rows' labels
+    decide what each reader is shown
+    (`sqlite-builtin/06-cfc.md`). The
     control state takes the route, because a request hash is a function of
     parameters no author can foresee, while `/result`'s per-column entries
     stay the author's: the route declines at a declared path, and the

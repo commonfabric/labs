@@ -1,5 +1,4 @@
 import { join, resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   createTestSpace,
@@ -16,6 +15,7 @@ import "../src/globals.ts";
 import { expect } from "@std/expect";
 
 import { PieceController, PiecesController } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { clickPierce } from "./shadow-dom.ts";
 
@@ -219,7 +219,7 @@ describe("shell piece tests", () => {
         "patterns",
         "examples",
         "counter",
-        "counter.tsx",
+        "main.tsx",
       );
       const slug = `compile-cache-${crypto.randomUUID()}`;
       const pieceId = await runCfPieceNewWithSlug({

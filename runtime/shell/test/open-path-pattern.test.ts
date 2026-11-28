@@ -7,7 +7,6 @@
  * cases a stand-in connection cannot speak for.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   fabricFromRealmValue,
@@ -22,6 +21,12 @@ import {
   CellHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ensureCompilerStack } from "../../runner/src/harness/deferred-compiler-stack.ts";
 import type { RuntimeProcessor } from "../../runtime-client/src/backends/runtime-processor.ts";

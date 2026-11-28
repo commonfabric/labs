@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { entityRefFromString } from "@commonfabric/data-model/cell-rep";
 import {
@@ -27,6 +26,7 @@ import {
   type RuntimeTelemetrySink,
   type RuntimeTrustSnapshot,
   SpaceFork,
+  type SpaceHistoryStep,
 } from "@commonfabric/lib-shell";
 import {
   type CellHandle,
@@ -34,9 +34,12 @@ import {
   type ErrorNotification,
   EventEmitter,
   FavoritesManager,
+  type HistoryStep,
   NotificationType,
   type PieceHandle,
+  type PieceSourceRevisionView,
   type PieceSourceView,
+  type PieceUpdateSourceResponse,
   type RuntimeClient,
   type RuntimeClientEvents,
   type RuntimeTelemetryMarkerResult,
@@ -44,6 +47,8 @@ import {
   type SlugRefusal,
   TransportNotificationType,
 } from "@commonfabric/runtime-client";
+import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import { readBuildHash } from "../src/build-hash.ts";
 
 /** Fails to compile unless `Bound` satisfies `Declared`. */
@@ -2033,7 +2038,12 @@ describe("RuntimeInternals", () => {
           await runtime.restoreSpace(space, 3).catch(() => {});
 
           expect(transport.sent.slice(1)).toEqual([
+            // A history is listed together with the space's pieces, whose
+            // source revisions it is joined with, and the reading of those
+            // begins first.
+            { type: "piece:synced", space },
             { type: "space:history:list", space, before: 7 },
+            { type: "piece:getAll", space },
             { type: "space:restore", space, seq: 3 },
           ]);
         } finally {
@@ -2563,6 +2573,931 @@ describe("RuntimeInternals", () => {
           expect(log).toEqual([deletion, "fork dispose"]);
         });
       });
+    });
+  });
+
+  describe("spaceHistory()", () => {
+    const space = "did:key:z6Mk-lib-shell-space-history" as DID;
+
+    /** The time the step and the revisions of these cases share. */
+    const at = "2026-03-01T12:00:00.000Z";
+
+    const step: HistoryStep = {
+      seq: 4,
+      startSeq: 4,
+      at,
+      kind: "write",
+      events: 0,
+      writes: 1,
+      settled: true,
+    };
+
+    /** A revision named `revisionId`, made as the step began. */
+    function revision(revisionId: string): PieceSourceRevisionView {
+      return {
+        revisionId,
+        timestamp: Date.parse(at),
+        pattern: { identity: `identity-of-${revisionId}`, symbol: "default" },
+        operation: "edit",
+      };
+    }
+
+    /**
+     * A client whose history holds `step`, and whose pieces list holds
+     * `entries`. Each piece's source has one revision, named for the piece.
+     * `fails` settles what the client refuses: a named request, or the source
+     * of a named piece.
+     */
+    function historyClient(
+      entries: unknown[] | undefined,
+      fails: { request?: string; sourceOf?: string } = {},
+    ) {
+      const calls: Array<[string, unknown[]]> = [];
+      const asked = <T>(name: string, args: unknown[], answer: T) => {
+        calls.push([name, args]);
+        return fails.request === name
+          ? Promise.reject(new Error(`${name} failed`))
+          : Promise.resolve(answer);
+      };
+      const client = Object.assign(new MockRuntimeClient(), {
+        spaceHistory: (options: { space: DID; before?: number }) =>
+          asked("spaceHistory", [options], { steps: [step], next: 2 }),
+        synced: (of: DID) => asked("synced", [of], undefined),
+        getPiecesListCell: <T>(of: DID) =>
+          asked(
+            "getPiecesListCell",
+            [of],
+            // What a pieces list is asked here is to sync and for its value.
+            {
+              sync: () => asked("sync", [], undefined),
+              get: () => entries,
+            } as unknown as CellHandle<T[]>,
+          ),
+        getPieceSource: (pieceId: string, of: DID, scope?: string) => {
+          calls.push(["getPieceSource", [pieceId, of, scope]]);
+          return fails.sourceOf === pieceId
+            ? Promise.reject(new Error(`no source for ${pieceId}`))
+            : Promise.resolve<PieceSourceView>({
+              space: of,
+              pieceId,
+              files: [],
+              history: [revision(`revision-of-${pieceId}`)],
+            });
+        },
+      });
+      return {
+        calls,
+        runtime: new RuntimeInternals(asRuntimeClient(client)),
+      };
+    }
+
+    it("returns the client's steps and `next`, each step with the source revisions the space's pieces recorded during it", async () => {
+      const { calls, runtime } = historyClient([
+        pieceHandle("fid1:a"),
+        pieceHandle("fid1:b"),
+      ]);
+      try {
+        const page = await runtime.spaceHistory(space);
+
+        expect(page.next).toBe(2);
+        expect(page.steps).toHaveLength(1);
+        expect(page.steps[0]).toMatchObject(step);
+        expect(page.steps[0].patternChanges).toEqual([
+          {
+            pieceId: "fid1:a",
+            revisionId: "revision-of-fid1:a",
+            madeAt: Date.parse(at),
+            operation: "edit",
+            label: "Direct source edit",
+            pattern: {
+              identity: "identity-of-revision-of-fid1:a",
+              symbol: "default",
+            },
+            originLabel: "Detached",
+            current: false,
+          },
+          {
+            pieceId: "fid1:b",
+            revisionId: "revision-of-fid1:b",
+            madeAt: Date.parse(at),
+            operation: "edit",
+            label: "Direct source edit",
+            pattern: {
+              identity: "identity-of-revision-of-fid1:b",
+              symbol: "default",
+            },
+            originLabel: "Detached",
+            current: false,
+          },
+        ]);
+        // The list is synced before it is read, and each source is asked for
+        // by piece and then space.
+        expect(calls).toEqual([
+          ["synced", [space]],
+          ["spaceHistory", [{ space }]],
+          ["getPiecesListCell", [space]],
+          ["sync", []],
+          ["getPieceSource", ["fid1:a", space, undefined]],
+          ["getPieceSource", ["fid1:b", space, undefined]],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the client for the stretch below `before`, where given one", async () => {
+      const { calls, runtime } = historyClient([]);
+      try {
+        await runtime.spaceHistory(space, 7);
+
+        expect(calls.find(([name]) => name === "spaceHistory")).toEqual([
+          "spaceHistory",
+          [{ space, before: 7 }],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("reads a piece's id from its `id()` or from its `$ID`, and asks for no source for an entry with neither", async () => {
+      const { calls, runtime } = historyClient([
+        pieceHandle("fid1:handle"),
+        { $ID: "fid1:plain" },
+        { name: "an entry with no id" },
+        { id: () => 12 },
+        { $ID: 12 },
+        null,
+        "fid1:bare-string",
+      ]);
+      try {
+        const { steps } = await runtime.spaceHistory(space);
+
+        expect(steps[0].patternChanges.map((change) => change.pieceId))
+          .toEqual(["fid1:handle", "fid1:plain"]);
+        expect(calls.filter(([name]) => name === "getPieceSource")).toEqual([
+          ["getPieceSource", ["fid1:handle", space, undefined]],
+          ["getPieceSource", ["fid1:plain", space, undefined]],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("reads a piece's scope from its `ref()`, asks for its source in that scope, and returns its changes with it", async () => {
+      const { calls, runtime } = historyClient([
+        { id: () => "fid1:scoped", ref: () => ({ scope: "user" }) },
+        { $ID: "fid1:plain-scoped", ref: () => ({ scope: "session" }) },
+        { id: () => "fid1:scopeless-ref", ref: () => ({}) },
+        { id: () => "fid1:no-ref" },
+        // A `ref` that is not a function is not asked for a scope.
+        { id: () => "fid1:ref-value", ref: { scope: "user" } },
+      ]);
+      try {
+        const { steps } = await runtime.spaceHistory(space);
+
+        expect(calls.filter(([name]) => name === "getPieceSource")).toEqual([
+          ["getPieceSource", ["fid1:scoped", space, "user"]],
+          ["getPieceSource", ["fid1:plain-scoped", space, "session"]],
+          ["getPieceSource", ["fid1:scopeless-ref", space, undefined]],
+          ["getPieceSource", ["fid1:no-ref", space, undefined]],
+          ["getPieceSource", ["fid1:ref-value", space, undefined]],
+        ]);
+        // `toStrictEqual` tells an absent `scope` from one holding
+        // `undefined`.
+        expect(
+          steps[0].patternChanges.map((change) =>
+            Object.fromEntries(
+              Object.entries(change).filter(([name]) =>
+                name === "pieceId" || name === "scope"
+              ),
+            )
+          ),
+        ).toStrictEqual([
+          { pieceId: "fid1:scoped", scope: "user" },
+          { pieceId: "fid1:plain-scoped", scope: "session" },
+          { pieceId: "fid1:scopeless-ref" },
+          { pieceId: "fid1:no-ref" },
+          { pieceId: "fid1:ref-value" },
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("keeps each scope with its own piece when a piece between them has no readable source", async () => {
+      const { runtime } = historyClient(
+        [
+          { id: () => "fid1:a", ref: () => ({ scope: "user" }) },
+          { id: () => "fid1:gone", ref: () => ({ scope: "session" }) },
+          { id: () => "fid1:c" },
+        ],
+        { sourceOf: "fid1:gone" },
+      );
+      try {
+        const { steps } = await runtime.spaceHistory(space);
+
+        expect(
+          steps[0].patternChanges.map((change) => [
+            change.pieceId,
+            change.scope,
+          ]),
+        ).toEqual([["fid1:a", "user"], ["fid1:c", undefined]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    describe("given pieces to read beside the listed ones", () => {
+      /** The id and scope of each source `calls` asked for, in order. */
+      const sourcesAsked = (calls: Array<[string, unknown[]]>) =>
+        calls.filter(([name]) => name === "getPieceSource").map(([, args]) => [
+          args[0],
+          args[2],
+        ]);
+
+      it("reads the source of a piece the space does not list, after the listed ones, and returns its changes", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("of:fid1:a")]);
+        try {
+          const { steps } = await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:extra" },
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["of:fid1:a", undefined],
+            ["fid1:extra", undefined],
+          ]);
+          expect(steps[0].patternChanges.map((change) => change.pieceId))
+            .toEqual(["of:fid1:a", "fid1:extra"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a named piece's source in the scope it is named with, and returns its changes with that scope", async () => {
+        const { calls, runtime } = historyClient([]);
+        try {
+          const { steps } = await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:mine", scope: "user" },
+            { id: "fid1:plain" },
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["fid1:mine", "user"],
+            ["fid1:plain", undefined],
+          ]);
+          // `toStrictEqual` tells an absent `scope` from one holding
+          // `undefined`.
+          expect(
+            steps[0].patternChanges.map((change) =>
+              Object.fromEntries(
+                Object.entries(change).filter(([name]) =>
+                  name === "pieceId" || name === "scope"
+                ),
+              )
+            ),
+          ).toStrictEqual([
+            { pieceId: "fid1:mine", scope: "user" },
+            { pieceId: "fid1:plain" },
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a listed piece once, by the id the list gives, whether the two ids differ by a leading `of:` either way or not at all", async () => {
+        const { calls, runtime } = historyClient([
+          { id: () => "of:fid1:a", ref: () => ({ scope: "user" }) },
+          pieceHandle("fid1:b"),
+          pieceHandle("of:fid1:c"),
+        ]);
+        try {
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:a", scope: "user" },
+            { id: "of:fid1:b" },
+            { id: "of:fid1:c" },
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["of:fid1:a", "user"],
+            ["fid1:b", undefined],
+            ["of:fid1:c", undefined],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a piece named in another scope than the one it is listed in separately, in each scope", async () => {
+        const { calls, runtime } = historyClient([
+          { id: () => "fid1:a", ref: () => ({ scope: "user" }) },
+          pieceHandle("fid1:b"),
+        ]);
+        try {
+          const { steps } = await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:a" },
+            { id: "fid1:a", scope: "session" },
+            { id: "fid1:b", scope: "user" },
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["fid1:a", "user"],
+            ["fid1:b", undefined],
+            ["fid1:a", undefined],
+            ["fid1:a", "session"],
+            ["fid1:b", "user"],
+          ]);
+          expect(
+            steps[0].patternChanges.map((change) => [
+              change.pieceId,
+              change.scope,
+            ]),
+          ).toEqual([
+            ["fid1:a", "user"],
+            ["fid1:b", undefined],
+            ["fid1:a", undefined],
+            ["fid1:a", "session"],
+            ["fid1:b", "user"],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a piece once whether its scope is given as `space` or left out, on the list or among the named", async () => {
+        const { calls, runtime } = historyClient([
+          { id: () => "fid1:listed-space", ref: () => ({ scope: "space" }) },
+          pieceHandle("fid1:listed-plain"),
+        ]);
+        try {
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:listed-space" },
+            { id: "fid1:listed-plain", scope: "space" },
+            { id: "fid1:named", scope: "space" },
+            { id: "fid1:named" },
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["fid1:listed-space", "space"],
+            ["fid1:listed-plain", undefined],
+            ["fid1:named", "space"],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a piece named more than once in one scope a single time, as it was first named", async () => {
+        const { calls, runtime } = historyClient([]);
+        try {
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:extra" },
+            { id: "fid1:extra" },
+            { id: "of:fid1:extra" },
+            { id: "fid1:other", scope: "user" },
+            { id: "of:fid1:other", scope: "user" },
+          ]);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["fid1:extra", undefined],
+            ["fid1:other", "user"],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("returns the other pieces' changes when the source of a named piece cannot be read", async () => {
+        const { runtime } = historyClient([pieceHandle("fid1:a")], {
+          sourceOf: "fid1:extra",
+        });
+        try {
+          const { steps } = await runtime.spaceHistory(space, 9, [
+            { id: "fid1:extra" },
+          ]);
+
+          expect(steps[0].patternChanges.map((change) => change.pieceId))
+            .toEqual(["fid1:a"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      for (const request of ["synced", "getPiecesListCell", "sync"]) {
+        it(`reads the named piece's source in its scope and returns its changes, and no listed piece's, when \`${request}\` rejects`, async () => {
+          const { calls, runtime } = historyClient(
+            [pieceHandle("fid1:a")],
+            { request },
+          );
+          try {
+            const { steps } = await runtime.spaceHistory(space, undefined, [
+              { id: "fid1:extra", scope: "user" },
+            ]);
+
+            expect(sourcesAsked(calls)).toEqual([["fid1:extra", "user"]]);
+            expect(
+              steps[0].patternChanges.map((change) => [
+                change.revisionId,
+                change.scope,
+              ]),
+            ).toEqual([["revision-of-fid1:extra", "user"]]);
+          } finally {
+            await runtime.dispose();
+          }
+        });
+      }
+    });
+
+    it("returns the steps with no pattern changes for a pieces list that holds no value", async () => {
+      const { calls, runtime } = historyClient(undefined);
+      try {
+        const { steps } = await runtime.spaceHistory(space);
+
+        expect(steps).toEqual([{ ...step, patternChanges: [] }]);
+        expect(calls.map(([name]) => name)).toEqual([
+          "synced",
+          "spaceHistory",
+          "getPiecesListCell",
+          "sync",
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("leaves out the changes of a piece whose source cannot be read, and keeps the others'", async () => {
+      const { runtime } = historyClient(
+        [
+          pieceHandle("fid1:a"),
+          pieceHandle("fid1:gone"),
+          pieceHandle("fid1:c"),
+        ],
+        { sourceOf: "fid1:gone" },
+      );
+      try {
+        const { steps } = await runtime.spaceHistory(space);
+
+        expect(steps[0].patternChanges.map((change) => change.pieceId))
+          .toEqual(["fid1:a", "fid1:c"]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    describe("when the space's pieces cannot be listed", () => {
+      for (const request of ["synced", "getPiecesListCell", "sync"]) {
+        it(`returns the steps with no pattern changes, asking for no source, when \`${request}\` rejects`, async () => {
+          const { calls, runtime } = historyClient(
+            [pieceHandle("fid1:a")],
+            { request },
+          );
+          try {
+            const page = await runtime.spaceHistory(space);
+
+            expect(page).toEqual({
+              steps: [{ ...step, patternChanges: [] }],
+              next: 2,
+            });
+            expect(calls.map(([name]) => name)).not.toContain(
+              "getPieceSource",
+            );
+          } finally {
+            await runtime.dispose();
+          }
+        });
+      }
+
+      it("warns with the space and the failure, on a logger that is switched on", async () => {
+        const { runtime } = historyClient([], { request: "sync" });
+        // The module's logger is off unless a developer switches it on, and
+        // a message it is given is composed only then.
+        const logger = getLogger("lib-shell.runtime");
+        const { disabled, level } = logger;
+        logger.disabled = false;
+        logger.level = "warn";
+        using warn = stub(console, "warn");
+        try {
+          await runtime.spaceHistory(space);
+
+          expect(warn.calls).toHaveLength(1);
+          const printed = warn.calls[0].args.map(String).join(" ");
+          expect(printed).toContain(`listing the pieces of ${space}:`);
+          expect(printed).toContain("sync failed");
+        } finally {
+          logger.disabled = disabled;
+          logger.level = level;
+          await runtime.dispose();
+        }
+      });
+    });
+
+    describe("with `reuseSources`", () => {
+      /** The id and scope of each source `calls` asked for, in order. */
+      const sourcesAsked = (calls: Array<[string, unknown[]]>) =>
+        calls.filter(([name]) => name === "getPieceSource").map(([, args]) => [
+          args[0],
+          args[2],
+        ]);
+
+      /** The pieces whose changes the first of `steps` returns. */
+      const changed = (steps: SpaceHistoryStep[]) =>
+        steps[0].patternChanges.map((change) => change.pieceId);
+
+      it("reuses the source the previous listing of the space read for each piece, listing the pieces again", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space, undefined, [{ id: "fid1:extra" }]);
+          const read = calls.length;
+
+          const { steps } = await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:extra" },
+          ], { reuseSources: true });
+
+          expect(calls.slice(read).map(([name]) => name)).toEqual([
+            "synced",
+            "spaceHistory",
+            "getPiecesListCell",
+            "sync",
+          ]);
+          expect(changed(steps)).toEqual(["fid1:a", "fid1:extra"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads the sources when no listing of the space read them before", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space, undefined, [], {
+            reuseSources: true,
+          });
+
+          expect(sourcesAsked(calls)).toEqual([["fid1:a", undefined]]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads the source of a piece listed since, and leaves out one no longer listed", async () => {
+        const entries: unknown[] = [pieceHandle("fid1:a")];
+        const { calls, runtime } = historyClient(entries);
+        try {
+          await runtime.spaceHistory(space);
+          entries.splice(0, 1, pieceHandle("fid1:b"));
+          calls.length = 0;
+
+          const { steps } = await runtime.spaceHistory(space, undefined, [], {
+            reuseSources: true,
+          });
+
+          expect(sourcesAsked(calls)).toEqual([["fid1:b", undefined]]);
+          expect(changed(steps)).toEqual(["fid1:b"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads again a source the previous listing could not read", async () => {
+        const fails: { sourceOf?: string } = { sourceOf: "fid1:a" };
+        const { calls, runtime } = historyClient(
+          [pieceHandle("fid1:a")],
+          fails,
+        );
+        try {
+          const before = await runtime.spaceHistory(space);
+          delete fails.sourceOf;
+          calls.length = 0;
+
+          const { steps } = await runtime.spaceHistory(space, undefined, [], {
+            reuseSources: true,
+          });
+
+          expect(changed(before.steps)).toEqual([]);
+          expect(sourcesAsked(calls)).toEqual([["fid1:a", undefined]]);
+          expect(changed(steps)).toEqual(["fid1:a"]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads a named piece's source in a scope the previous listing did not read it in, and reuses what that read", async () => {
+        const { calls, runtime } = historyClient([]);
+        try {
+          await runtime.spaceHistory(space, undefined, [{ id: "fid1:y" }]);
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:y", scope: "user" },
+          ], { reuseSources: true });
+          const read = sourcesAsked(calls);
+
+          await runtime.spaceHistory(space, undefined, [
+            { id: "fid1:y", scope: "user" },
+          ], { reuseSources: true });
+
+          expect(read).toEqual([["fid1:y", undefined], ["fid1:y", "user"]]);
+          expect(sourcesAsked(calls)).toEqual(read);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+
+      it("reads the sources again without it", async () => {
+        const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+        try {
+          await runtime.spaceHistory(space);
+
+          await runtime.spaceHistory(space);
+
+          expect(sourcesAsked(calls)).toEqual([
+            ["fid1:a", undefined],
+            ["fid1:a", undefined],
+          ]);
+        } finally {
+          await runtime.dispose();
+        }
+      });
+    });
+
+    it("rejects with the client's failure to list the history", async () => {
+      const { runtime } = historyClient([], { request: "spaceHistory" });
+      try {
+        await expect(runtime.spaceHistory(space)).rejects.toThrow(
+          "spaceHistory failed",
+        );
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("rejects once disposed, asking the client nothing", async () => {
+      const { calls, runtime } = historyClient([pieceHandle("fid1:a")]);
+      await runtime.dispose();
+
+      await expect(runtime.spaceHistory(space)).rejects.toThrow(
+        "RuntimeInternals disposed.",
+      );
+      expect(calls).toEqual([]);
+    });
+  });
+
+  describe("watchSpaceHistory()", () => {
+    const space = "did:key:z6Mk-lib-shell-watch-history" as DID;
+    const otherSpace = "did:key:z6Mk-lib-shell-watch-other" as DID;
+
+    /**
+     * A client that records each watch the runtime asks of it, and refuses
+     * every one when `refuse` is given.
+     */
+    function watchClient(refuse?: Error) {
+      const asked: Array<[DID, boolean]> = [];
+      const client = Object.assign(new MockRuntimeClient(), {
+        watchSpaceHistory: (of: DID, watch: boolean) => {
+          asked.push([of, watch]);
+          return refuse === undefined
+            ? Promise.resolve()
+            : Promise.reject(refuse);
+        },
+      });
+      return {
+        asked,
+        client,
+        runtime: new RuntimeInternals(asRuntimeClient(client)),
+      };
+    }
+
+    it("asks the worker to watch a space on the first watch of it, and to stop on the last stop", async () => {
+      const { asked, runtime } = watchClient();
+      try {
+        const first = runtime.watchSpaceHistory(space, () => {});
+        const second = runtime.watchSpaceHistory(space, () => {});
+        expect(asked).toEqual([[space, true]]);
+
+        first();
+        expect(asked).toEqual([[space, true]]);
+
+        second();
+        expect(asked).toEqual([[space, true], [space, false]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the worker to watch each space watched", async () => {
+      const { asked, runtime } = watchClient();
+      try {
+        runtime.watchSpaceHistory(space, () => {});
+        runtime.watchSpaceHistory(otherSpace, () => {});
+
+        expect(asked).toEqual([[space, true], [otherSpace, true]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("calls back with each seq reported for the watched space, and not for another", async () => {
+      const { client, runtime } = watchClient();
+      try {
+        const seen: number[] = [];
+        runtime.watchSpaceHistory(space, (seq) => seen.push(seq));
+
+        client.emit("spaceseqadvanced", { space, seq: 3 });
+        client.emit("spaceseqadvanced", { space: otherSpace, seq: 4 });
+        client.emit("spaceseqadvanced", { space, seq: 5 });
+
+        expect(seen).toEqual([3, 5]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns a stop that ends the calls back, and that a repeat leaves the other watches of the space alone", async () => {
+      const { asked, client, runtime } = watchClient();
+      try {
+        const stopped: number[] = [];
+        const kept: number[] = [];
+        const stop = runtime.watchSpaceHistory(
+          space,
+          (seq) => stopped.push(seq),
+        );
+        runtime.watchSpaceHistory(space, (seq) => kept.push(seq));
+
+        stop();
+        stop();
+        client.emit("spaceseqadvanced", { space, seq: 6 });
+
+        expect(stopped).toEqual([]);
+        expect(kept).toEqual([6]);
+        expect(asked).toEqual([[space, true]]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("asks the worker nothing for a stop after the runtime is disposed", async () => {
+      const { asked, runtime } = watchClient();
+      const stop = runtime.watchSpaceHistory(space, () => {});
+      await runtime.dispose();
+
+      stop();
+
+      expect(asked).toEqual([[space, true]]);
+    });
+
+    it("throws once disposed, asking the worker nothing", async () => {
+      const { asked, runtime } = watchClient();
+      await runtime.dispose();
+
+      expect(() => runtime.watchSpaceHistory(space, () => {})).toThrow(
+        "RuntimeInternals disposed.",
+      );
+      expect(asked).toEqual([]);
+    });
+
+    it("warns with the space and the failure when the worker refuses, on a logger that is switched on", async () => {
+      const refusal = new Error("the space's storage serves no history");
+      const { asked, runtime } = watchClient(refusal);
+      // The module's logger is off unless a developer switches it on, and a
+      // message it is given is composed only then.
+      const logger = getLogger("lib-shell.runtime");
+      const { disabled, level } = logger;
+      logger.disabled = false;
+      logger.level = "warn";
+      const warned = Promise.withResolvers<void>();
+      let warnings = 0;
+      using warn = stub(console, "warn", () => {
+        if (++warnings === 2) warned.resolve();
+      });
+      try {
+        const stop = runtime.watchSpaceHistory(space, () => {});
+        stop();
+        await warned.promise;
+
+        expect(asked).toEqual([[space, true], [space, false]]);
+        const printed = warn.calls.map((call) =>
+          call.args.map(String).join(" ")
+        );
+        expect(printed).toHaveLength(2);
+        expect(printed[0]).toContain(`following the history of ${space}:`);
+        expect(printed[1]).toContain(`unfollowing the history of ${space}:`);
+        expect(printed[0]).toContain(refusal.message);
+      } finally {
+        logger.disabled = disabled;
+        logger.level = level;
+        await runtime.dispose();
+      }
+    });
+  });
+
+  describe("restorePiecePattern()", () => {
+    const space = "did:key:z6Mk-lib-shell-restore-pattern" as DID;
+
+    /** A client recording each source update, and answering `answer`. */
+    function restoringClient(answer: Partial<PieceUpdateSourceResponse> = {}) {
+      const updates: unknown[][] = [];
+      const response: PieceUpdateSourceResponse = {
+        source: { space, pieceId: "fid1:a", files: [], history: [] },
+        ...answer,
+      };
+      const client = Object.assign(new MockRuntimeClient(), {
+        updatePieceSource: (...args: unknown[]) => {
+          updates.push(args);
+          return Promise.resolve(response);
+        },
+      });
+      return {
+        updates,
+        response,
+        runtime: new RuntimeInternals(asRuntimeClient(client)),
+      };
+    }
+
+    it("asks the client to restore the piece to the revision, with no options, given neither a token nor a scope", async () => {
+      const { updates, runtime } = restoringClient();
+      try {
+        await runtime.restorePiecePattern(space, {
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        });
+
+        // `toStrictEqual` tells an absent option from one holding
+        // `undefined`.
+        expect(updates).toStrictEqual([
+          ["fid1:a", space, { kind: "restore", revisionId: "r1" }, {}],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("passes on the confirmation token and the change's scope, where given", async () => {
+      const { updates, runtime } = restoringClient();
+      try {
+        await runtime.restorePiecePattern(
+          space,
+          { pieceId: "fid1:a", revisionId: "r1", scope: "user" },
+          "token-1",
+        );
+        await runtime.restorePiecePattern(
+          space,
+          { pieceId: "fid1:a", revisionId: "r2" },
+          "token-2",
+        );
+        await runtime.restorePiecePattern(
+          space,
+          { pieceId: "fid1:a", revisionId: "r3", scope: "session" },
+        );
+
+        expect(updates).toStrictEqual([
+          [
+            "fid1:a",
+            space,
+            { kind: "restore", revisionId: "r1" },
+            { confirmationToken: "token-1", scope: "user" },
+          ],
+          [
+            "fid1:a",
+            space,
+            { kind: "restore", revisionId: "r2" },
+            { confirmationToken: "token-2" },
+          ],
+          [
+            "fid1:a",
+            space,
+            { kind: "restore", revisionId: "r3" },
+            { scope: "session" },
+          ],
+        ]);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("returns the client's answer, its warning and token included", async () => {
+      const { response, runtime } = restoringClient({
+        compatibilityWarning: "The source does not fit the data.",
+        confirmationToken: "token-1",
+      });
+      try {
+        expect(
+          await runtime.restorePiecePattern(space, {
+            pieceId: "fid1:a",
+            revisionId: "r1",
+          }),
+        ).toBe(response);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
+    it("rejects once disposed, asking the client nothing", async () => {
+      const { updates, runtime } = restoringClient();
+      await runtime.dispose();
+
+      await expect(
+        runtime.restorePiecePattern(space, {
+          pieceId: "fid1:a",
+          revisionId: "r1",
+        }),
+      ).rejects.toThrow("RuntimeInternals disposed.");
+      expect(updates).toEqual([]);
     });
   });
 

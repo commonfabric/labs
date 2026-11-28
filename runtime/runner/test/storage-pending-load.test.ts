@@ -1,7 +1,12 @@
 import { deepFreeze, type FabricValue } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import type { NormalizedLink } from "../src/link-types.ts";
 import {
   type MemorySpace,

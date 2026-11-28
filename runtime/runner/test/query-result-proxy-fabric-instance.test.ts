@@ -16,7 +16,6 @@
  * and it is the state-heaviest of the concrete classes.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   resetModernCellRepConfig,
@@ -28,6 +27,12 @@ import {
 } from "@commonfabric/data-model/fabric-instances";
 import { IS_DEEP_FROZEN } from "@commonfabric/data-model/fabric-bases";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   createQueryResultProxy,
   isFabricInstanceOrView,

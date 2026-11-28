@@ -1,5 +1,6 @@
 import { assertEquals } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -7,7 +8,7 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 const signer = await Identity.fromPassphrase("undefined values");
 const space = signer.did();
 
-Deno.test("explicit undefined object properties are preserved", async () => {
+test("explicit undefined object properties are preserved", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -39,7 +40,7 @@ Deno.test("explicit undefined object properties are preserved", async () => {
   }
 });
 
-Deno.test("removed keys are deleted, not left as undefined", async () => {
+test("removed keys are deleted, not left as undefined", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -74,7 +75,7 @@ Deno.test("removed keys are deleted, not left as undefined", async () => {
   }
 });
 
-Deno.test("overwriting a value with undefined keeps the key present", async () => {
+test("overwriting a value with undefined keeps the key present", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -109,7 +110,7 @@ Deno.test("overwriting a value with undefined keeps the key present", async () =
   }
 });
 
-Deno.test("array elements set to undefined stay present-but-undefined", async () => {
+test("array elements set to undefined stay present-but-undefined", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),

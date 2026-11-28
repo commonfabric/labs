@@ -10,10 +10,11 @@
  *
  * The catalog exposes data cells (`status`, `entries`), a `page` stream whose
  * requests carry a cell the caller owns for the answer, and the requests to
- * get a pattern. Only `GetItButton` can add one of those: the list's type
- * declares its one trusted writer.
+ * get a pattern. Only `GetItButton` can add one of those: each request's type
+ * declares its one trusted writer, and labels it with who tapped.
  */
 import {
+  AuthoredByCurrentUser,
   type Cell,
   computed,
   eventKey,
@@ -92,6 +93,14 @@ export interface CatalogEntry {
   title: string;
   /** What the pattern does: the index's description. */
   blurb?: string;
+  /**
+   * Whether its author offers it to a person choosing what to place, on its
+   * own at the top of a loom. Every pattern is also a part other patterns
+   * may build from; one that is not standalone is only that. A host copies
+   * the index's answer onto every entry and never fills in its own; a caller
+   * reads an entry without it as not offered on its own.
+   */
+  standalone?: boolean;
   tags?: string[];
   quality?: CatalogQuality;
   /** When the version was published (ISO 8601). */
@@ -185,11 +194,14 @@ export interface GetItAnswer {
   placed?: string;
 }
 
-/** Appends one request to get `patternId` at `destination`. */
+/**
+ * Appends one request to get `patternId` at `destination`, as a document of
+ * its own labelled with who tapped (`GetItRequests`).
+ */
 export const requestGetIt = handler<
   void,
   {
-    getItRequests: Writable<GetItRequest[]>;
+    getItRequests: Writable<GetItRequests>;
     getItAnswers: Record<string, GetItAnswer>;
     status: CatalogStatus;
     host: string | undefined;
@@ -217,13 +229,16 @@ export const requestGetIt = handler<
   // admits again derives the same key, and finds its request already there.
   const requestId = eventKey();
   if (requests.some((request) => request?.requestId === requestId)) return;
+  // The new request is a `GetItEntry`, so it is stored as a document of its
+  // own with its own `authored-by` and writer; the requests already there
+  // stay the documents they are.
   getItRequests.set([...requests, {
     requestId,
     patternId,
     destination,
     requestedAt: Date.now(),
     host,
-  }]);
+  } as GetItEntry]);
 });
 
 /** The id of `GetItButton`'s surface, as its trusted writes name it. */
@@ -232,13 +247,24 @@ export const GET_IT_SURFACE = "PatternCatalogGetIt";
 /** The id of the button's one action, as its trusted writes name it. */
 export const GET_IT_ACTION = "PatternCatalogRequestGetIt";
 
-/** The catalog's requests to get a pattern: written only by `GetItButton`. */
-export type GetItRequests = TrustedActionWrite<
-  GetItRequest[],
-  typeof requestGetIt,
-  typeof GET_IT_ACTION,
-  typeof GET_IT_SURFACE
+/**
+ * One stored request to get a pattern: written only by `requestGetIt`, on a
+ * trusted tap on `GetItButton`, and labelled `authored-by` the principal who
+ * tapped. The policy sits on each request rather than on the list, so each is
+ * a document of its own carrying both, and a host checks the request it acts
+ * on: who asked, and that the button's handler wrote it.
+ */
+export type GetItEntry = AuthoredByCurrentUser<
+  TrustedActionWrite<
+    GetItRequest,
+    typeof requestGetIt,
+    typeof GET_IT_ACTION,
+    typeof GET_IT_SURFACE
+  >
 >;
+
+/** The catalog's requests to get a pattern, oldest first. */
+export type GetItRequests = GetItEntry[];
 
 /** What `#patternCatalog` resolves to. */
 export interface PatternCatalog {

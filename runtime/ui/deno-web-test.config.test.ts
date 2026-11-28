@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import config from "./deno-web-test.config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("deno-web-test.config", () => {
   it("passes the browser one `--blink-settings` flag and nothing else", () => {

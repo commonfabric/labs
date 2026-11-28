@@ -3,12 +3,13 @@
  * a client rendering Home's view, which shows the manager, or a room's view,
  * which shows its add panel's picker, runs no reader of another room's roster
  * until the session asks for the people, as opening a picker of them does,
- * and Home's runs one per listed room once it has.
+ * and Home's runs one per listed room once it has. An add naming its member
+ * by principal alone reads the roster of the room it adds them to, and of no
+ * other room.
  */
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { createSession, Identity } from "@commonfabric/identity";
 import { WorkerReconciler } from "@commonfabric/html/worker";
@@ -23,6 +24,12 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const owner = await Identity.fromPassphrase("FabriChat lazy people owner");
@@ -237,6 +244,49 @@ describe("fabrichat-lazy-people", () => {
         readers: GROUPS,
         runs: 2 * GROUPS,
       });
+    });
+  });
+
+  describe("an add naming no profile", () => {
+    it("offers the room through the profile the room's roster lists, reading no other room", async () => {
+      // A client of the owner's of its own, which renders nothing, has the
+      // manager offer the first room to the member, named by principal alone,
+      // as a room's add does once it has admitted them.
+
+      const adder = await homeOf(server, apiUrl, owner, {
+        serverExecution: false,
+      });
+      try {
+        const requestId = "add-member-by-principal";
+        await send(adder.runtime, adder.home, ["chatManager", "offerRoom"], {
+          requestId,
+          room: adder.runtime.getCellFromLink(
+            rooms[0].getAsNormalizedFullLink(),
+          ),
+          member: member.did(),
+        });
+        await adder.runtime.idle();
+        const outcome = await adder.home.key("chatManager").key("requests")
+          .key(requestId).asSchema(
+            {
+              type: "object",
+              properties: {
+                status: { type: "string" },
+                delivery: { type: "string" },
+              },
+            } as const,
+          ).pull();
+        const others = rooms.slice(1).map((room) => room.space);
+        const held = (adder.runtime.getSizes().storage?.bySpace ?? [])
+          .filter((entry) => others.includes(entry.space))
+          .reduce((sum, entry) => sum + entry.documents, 0);
+
+        expect(outcome).toEqual({ status: "done", delivery: "offered" });
+        expect(held).toBe(0);
+      } finally {
+        await adder.runtime.dispose();
+        await adder.storage.close();
+      }
     });
   });
 

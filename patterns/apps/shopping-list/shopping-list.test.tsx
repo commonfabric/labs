@@ -25,7 +25,7 @@ import {
   TESTS,
   Writable,
 } from "commonfabric";
-import ShoppingList, { removeItem, selectAisle } from "./shopping-list.tsx";
+import ShoppingList, { removeItem, selectAisle } from "./main.tsx";
 
 // With server execution on, the serving loop asks the model to categorize the
 // items once a store layout is set; the test states that every such request

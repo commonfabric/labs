@@ -10,6 +10,7 @@
     "./membership": "./src/membership.ts",
     "./privacy": "./src/privacy.ts",
     "./publish": "./src/publish.ts",
+    "./standalone": "./src/standalone.ts",
     "./store": "./src/store.ts",
     "./access": "./src/access.ts",
     "./join": "./src/join.ts"

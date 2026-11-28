@@ -9,7 +9,7 @@ const MISSING_URL = "https://example.test/missing.tsx";
 // not compile and one the server does not have.
 export const fetchMocks = [
   {
-    urlIncludes: "/patterns/examples/counter/counter.tsx",
+    urlIncludes: "/patterns/examples/counter/main.tsx",
     contentType: "text/plain",
     body: `import { NAME, pattern } from "commonfabric";
 

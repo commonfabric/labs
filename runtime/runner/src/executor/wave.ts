@@ -44,6 +44,7 @@ import {
   STREAM_ENTRIES_DOC_PREFIX,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
+import type { SessionOverwrite } from "@commonfabric/memory/v2/engine";
 import type { OutboxAppendRow } from "@commonfabric/memory/v2/execution-outbox";
 import type {
   ServedAclChange,
@@ -73,6 +74,7 @@ import {
   pathsOverlap,
 } from "../../../memory/v2/path.ts";
 import { getLogger } from "@commonfabric/logger";
+import { isArrayIndexPropertyName } from "@commonfabric/js-values/arrays";
 import {
   isObjectNotArray,
   isObjectOrArray,
@@ -85,7 +87,10 @@ import {
   getTransactionReadActivities,
   hasPendingWriteElision,
 } from "../storage/transaction-inspection.ts";
-import { markServedDerivationTx } from "../storage/reactivity-log.ts";
+import {
+  markServedDerivationTx,
+  markServedWaveRunTx,
+} from "../storage/reactivity-log.ts";
 import { waveClaimIsWithheld } from "./processed-claim.ts";
 
 const logger = getLogger("wave-accumulator", {
@@ -111,9 +116,11 @@ const logger = getLogger("wave-accumulator", {
  *   the watermark-doc advance today; the acked-effect retirement write
  *   when Phase 4 lands the client-effect channel, protocol.md §5 —
  *   declare this kind; stage G's outbox-ROW retirement is an unstamped
- *   engine-table delete on plane (c), never a commit). Conflict class:
- *   non-re-derivable, so a raced bookkeeping PATCH rebases when it
- *   commutes with the concurrent commit (the loop's steady-state
+ *   engine-table delete on plane (c), never a commit). A bookkeeping write
+ *   conflicts with commits past the wave's basis. A scoped-default seed also
+ *   checks for writes its replica had yet to see at seal (`conflictsFor`).
+ *   Conflict class: non-re-derivable, so a raced bookkeeping PATCH rebases
+ *   when it commutes with the concurrent commit (the loop's steady-state
  *   watermark advance is a key-path patch); a write that cannot rebase
  *   — a whole-doc set (the first-ever watermark write materializing
  *   the doc), or a semantic conflict such as a whole-doc authored
@@ -337,6 +344,7 @@ export function stampWaveRunContext(
 ): void {
   waveRunContexts.set(tx, context);
   if (context.kind === "derivation") markServedDerivationTx(tx);
+  markServedWaveRunTx(tx);
   // The tx→replica identity seam (server-execution v2 stage A, OW17): the
   // run's demand-supplied identity rides the STORAGE transaction too, so
   // its scoped reads resolve against ITS instance in the replica (one
@@ -425,8 +433,9 @@ type WaveSettlement = Result<
     /** This run read a contribution whose optimistic state was withdrawn. */
     readDependencyWithdrawn?: true;
 
-    /** The documents this derivation's writes were dropped from as
-     * superseded. */
+    /** The documents the wave dropped this run's writes to: a derivation's
+     * superseded writes, or every write of a bookkeeping contribution dropped
+     * whole over a concurrent write it cannot rebase over. */
     supersededOutputs?: readonly SupersededOutput[];
 
     /** Why the wave withdrew this transaction's contribution. */
@@ -435,12 +444,16 @@ type WaveSettlement = Result<
 >;
 
 /**
- * A document instance a derivation's write to it was dropped from as
- * superseded (serving-loop.md §3d). Nothing wakes the derivation for the
+ * A document instance the wave dropped a write to (serving-loop.md §3d),
+ * with the store's head for it at the drop: a derivation's write superseded
+ * by a concurrent commit, or any write of a bookkeeping contribution dropped
+ * whole over a concurrent write it cannot rebase over. Nothing wakes the derivation for the
  * superseding commit unless it read the document, and a computed never reads
  * its own output. That commit can leave the document with no value, as a
  * client's piece start does, and then the run can be owed again:
- * `scheduler/superseded-output.ts`.
+ * `scheduler/superseded-output.ts`. A retry of a dropped bookkeeping write
+ * waits for the replica to take each such commit
+ * (`Runtime.awaitCommitRetryReadiness`).
  */
 export interface SupersededOutput {
   space: MemorySpace;
@@ -458,6 +471,13 @@ const waveSettlements = new WeakMap<
   IExtendedStorageTransaction,
   Promise<WaveSettlement>
 >();
+
+const scopedDefaultSeeds = new WeakSet<IStorageTransaction>();
+
+/** Marks a seed whose writes depend on what its replica saw in the viewer's instance. */
+export function markScopedDefaultSeed(tx: IExtendedStorageTransaction): void {
+  scopedDefaultSeeds.add(tx.tx);
+}
 
 const requiresWaveAcceptance = new WeakSet<IStorageTransaction>();
 
@@ -506,8 +526,9 @@ export function waveSettlementOf(
 }
 
 /**
- * The addressing/attribution pair on one batched write is the wire-shape
- * module's `DerivedWriteAnnotation` (protocol.md §1, §7): one shared
+ * The addressing/attribution pair on one batched write, with the action
+ * whose run made it, is the wire-shape module's `DerivedWriteAnnotation`
+ * (protocol.md §1, §7): one shared
  * shape for the runner attaching it at seal time and the engine consuming
  * the addressing half at admission — the LD3 direction of one definition,
  * imported by engine and runner alike.
@@ -816,19 +837,20 @@ export interface WaveCommitSink {
   ): Promise<ReadonlyArray<{ read: WaveReadQuery; seq: number }>>;
 
   /**
-   * The value paths that the authored commits of `session` overwrote in a
-   * doc-instance after `sinceSeq` — §3d's supersession of an event
-   * consequence by a later write of the session that fired the event.
-   * Writes that merge into existing content (appends, splices, increments)
-   * overwrite nothing and are not reported. A sink that cannot answer omits
-   * it, and no consequence is superseded.
+   * Where the authored commits of `session` overwrote a doc-instance after
+   * `sinceSeq` — §3d's supersession of an event consequence by a later write
+   * of the session that fired the event. Splices overwrite the indices whose
+   * value they changed, as ranges of an array (`SessionOverwrite`). Writes
+   * that merge into existing content (appends, increments) overwrite nothing
+   * and are not reported. A sink that cannot answer omits it, and no
+   * consequence is superseded.
    */
   sessionOverwritePathsSince?(
     space: MemorySpace,
     doc: { id: string; scope?: CellScope; scopeKey: string },
     sinceSeq: number,
     session: { principal: string; sessionId: string },
-  ): Promise<ReadonlyArray<readonly string[]>>;
+  ): Promise<ReadonlyArray<SessionOverwrite>>;
 
   commitWave(
     batch: WaveSpaceCommit,
@@ -878,8 +900,9 @@ interface WaveContribution {
    * to name the cause when the run's withdrawal is reported. */
   withdrawnRead?: WithdrawnRead;
 
-  /** Per doc-instance key, what this derivation's dropped writes lost to.
-   * Set only where the commit step drops such a write. */
+  /** Per doc-instance key, what this run's dropped writes lost to. Set only
+   * where the commit step drops a derivation's write as superseded, or a
+   * bookkeeping contribution whole. */
   supersededOutputs?: Map<string, SupersededOutput>;
   index: number;
   context: WaveRunContext;
@@ -935,8 +958,8 @@ interface WaveContribution {
   /** Per home doc-instance key: the seq the replica's CONFIRMED view
    * stood at for that instance when this run sealed — the view its
    * writes rest on, which the wave's own basis can be ahead of
-   * (#viewSeqsAtSeal). */
-  viewSeqs: ReadonlyMap<string, number>;
+   * (#viewSeqsAtSeal). Derivations and scoped-default seeds need this view. */
+  viewSeqs: ReadonlyMap<string, number> | undefined;
 }
 
 interface SealedSpaceContribution {
@@ -1124,6 +1147,22 @@ export const warmWritesOf = (
     if (!writes.has(key)) writes.set(key, { id: op.id, scopeKey });
   }
   return [...writes.values()];
+};
+
+/** Whether the value path `path` lies where `overwrite` overwrote: at or
+ * beneath its value path, or at or beneath an element of its array at an
+ * index from its `fromIndex` up to its `toIndex` (`SessionOverwrite`). */
+const overwriteCovers = (
+  overwrite: SessionOverwrite,
+  path: readonly string[],
+): boolean => {
+  if (!("fromIndex" in overwrite)) return isPrefixPath(overwrite, path);
+  const { array, fromIndex, toIndex = Infinity } = overwrite;
+  if (path.length <= array.length || !isPrefixPath(array, path)) return false;
+  const segment = path[array.length]!;
+  if (!isArrayIndexPropertyName(segment)) return false;
+  const index = Number(segment);
+  return index >= fromIndex && index < toIndex;
 };
 
 /** The eventIds of the seq-LESS stream entries one sealed op appends —
@@ -1791,7 +1830,9 @@ export class WaveAccumulator
         outboundAppends: [...pendingAppends],
         spaceAccessChanges: servedAclChanges,
         discoveredScope: assembly.discoveredScope,
-        viewSeqs: this.#viewSeqsAtSeal(assembly.spaces, context),
+        viewSeqs: context.kind === "derivation" || scopedDefaultSeeds.has(tx.tx)
+          ? this.#viewSeqsAtSeal(assembly.spaces, context)
+          : undefined,
         ...(waveClaimIsWithheld(tx) ? { claimWithheld: true as const } : {}),
       };
       this.#contributions.push(contribution);
@@ -2465,8 +2506,9 @@ export class WaveAccumulator
     }
 
     /** Whether `key` conflicts FOR this contribution: the doc moved past
-     * the wave's basis, or — for a pure derivation — past the view its own
-     * seal stood on, with an INTRUSION accounting for the difference.
+     * the wave's basis, or — for a pure derivation or a scoped-default
+     * seed — past the view its own seal stood on, with an INTRUSION
+     * accounting for the difference.
      *
      * The basis and that view differ because the basis is the serverSeq
      * the wave OPENED at, while the runs sealing into it read the
@@ -2490,20 +2532,29 @@ export class WaveAccumulator
      * that read the doc carries it in its basis rows, so the arrival of
      * the commit it missed re-runs it through the ordinary dependency
      * path. One that did not read the doc runs again only if the commits
-     * it lost to left every doc with no value (SupersededOutput). A
-     * non-re-derivable
-     * consequence takes no view check here: its
-     * reads are held to the store ahead of this loop, and one with a stale
-     * read is requeued whole before any doc of its reaches this, so what
-     * arrives here rests on current reads and conflicts on its written
-     * docs against the wave's basis alone. */
+     * it lost to left every doc with no value (SupersededOutput).
+     *
+     * A scoped-default seed also reads the lagging view. It probes a viewer's
+     * instance, finds it absent because the replica has not taken the
+     * viewer's first write, and creates it. Without the check that create
+     * lands over the write. A bookkeeping write is not re-derivable, so a
+     * conflict here goes to the rebase below, and one that cannot rebase,
+     * such as that whole-document create, is dropped and reported to its
+     * writer as a withdrawal it can retry. Other bookkeeping, including
+     * piece starts and compile-cache writes, checks the wave's basis.
+     *
+     * An event-handler consequence takes no view check here: its reads are
+     * held to the store ahead of this loop, and one with a stale read is
+     * requeued whole before any doc of its reaches this, so what arrives
+     * here rests on current reads and conflicts on its written docs against
+     * the wave's basis alone. */
     const conflictsFor = async (
       contribution: WaveContribution,
       key: string,
       doc: { id: string; scope?: CellScope; scopeKey: string },
     ): Promise<boolean> => {
       if (conflicted.has(key)) return true;
-      if (contribution.context.kind !== "derivation") return false;
+      if (contribution.viewSeqs === undefined) return false;
       const held = contribution.viewSeqs.get(key) ?? 0;
       if ((heads.get(key) ?? 0) <= held) return false;
       return await sink.intrusionSince?.(
@@ -2592,7 +2643,9 @@ export class WaveAccumulator
       if (overwritten.length === 0) return undefined;
       const covered = (path: string): boolean => {
         const parsed = parsePointer(path);
-        return overwritten.some((prefix) => isPrefixPath(prefix, parsed));
+        return overwritten.some((overwrite) =>
+          overwriteCovers(overwrite, parsed)
+        );
       };
       const patches = new Set<PatchOp>();
       let whole = true;
@@ -2623,6 +2676,24 @@ export class WaveAccumulator
       }
       if (whole) return "doc";
       return patches.size === 0 ? undefined : patches;
+    };
+
+    /** Records the store's head for `doc` as what `contribution`'s dropped
+     * write to it lost to ({@link SupersededOutput}). */
+    const noteSuperseded = (
+      contribution: WaveContribution,
+      key: string,
+      doc: { id: string; scope?: CellScope },
+    ): void => {
+      const identity = contribution.context.scopeKeyIdentity ??
+        this.#scopeKeyIdentity;
+      (contribution.supersededOutputs ??= new Map()).set(key, {
+        space: this.#space,
+        id: doc.id,
+        ...(doc.scope === undefined ? {} : { scope: doc.scope }),
+        ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
+        seq: heads.get(key) ?? 0,
+      });
     };
 
     const resolveConflicts = async (): Promise<void> => {
@@ -2677,15 +2748,7 @@ export class WaveAccumulator
               contribution,
               doc,
             );
-            const identity = contribution.context.scopeKeyIdentity ??
-              this.#scopeKeyIdentity;
-            (contribution.supersededOutputs ??= new Map()).set(key, {
-              space: this.#space,
-              id: doc.id,
-              ...(doc.scope === undefined ? {} : { scope: doc.scope }),
-              ...(identity === undefined ? {} : { scopeKeyIdentity: identity }),
-              seq: heads.get(key) ?? 0,
-            });
+            noteSuperseded(contribution, key, doc);
           } else {
             // Non-re-derivable consequence (event-handler and the loop's
             // bookkeeping alike): rebase against the new head —
@@ -2695,10 +2758,15 @@ export class WaveAccumulator
             // event to requeue and DROPS whole instead — what lands it
             // again depends on which bookkeeping write it was (WaveRunKind
             // doc).
+            // A seed can race a write its replica missed before the wave opened.
+            const since = Math.min(
+              this.#basisSeq,
+              contribution.viewSeqs?.get(key) ?? this.#basisSeq,
+            );
             const concurrent = await sink.concurrentWritePaths(
               this.#space,
               doc,
-              this.#basisSeq,
+              since,
             );
             if (
               this.#rebases(
@@ -2719,6 +2787,12 @@ export class WaveAccumulator
               outcome.dependencyDroppedWrites += this.#homeOpCount(
                 contribution,
               );
+              // The runner retries a dropped piece start in place, and the
+              // retry writes every one of these docs again over what its
+              // replica holds of them.
+              for (const [written, writtenDoc] of docs) {
+                noteSuperseded(contribution, written, writtenDoc);
+              }
               break;
             }
           }
@@ -3876,22 +3950,23 @@ export class WaveAccumulator
         if (operation.op !== "sqlite") {
           const scoped = operation.scope !== undefined &&
             operation.scope !== "space";
-          if (scoped || context.acting !== undefined) {
-            annotations.push({
-              op: opIndex,
-              ...(scoped
-                ? { scopeKey: this.#scopeKeyFor(operation.scope, context) }
-                : {}),
-              ...(context.acting !== undefined
-                ? {
-                  actingUser: context.acting.user,
-                  ...(context.acting.session !== undefined
-                    ? { actingSession: context.acting.session }
-                    : {}),
-                }
-                : {}),
-            });
-          }
+          // Every write names the action whose run made it, a space-scoped
+          // write of a run that acts as nobody included (protocol.md §1).
+          annotations.push({
+            op: opIndex,
+            ...(scoped
+              ? { scopeKey: this.#scopeKeyFor(operation.scope, context) }
+              : {}),
+            ...(context.acting !== undefined
+              ? {
+                actingUser: context.acting.user,
+                ...(context.acting.session !== undefined
+                  ? { actingSession: context.acting.session }
+                  : {}),
+              }
+              : {}),
+            action: context.actionId,
+          });
         }
       }
       for (const precondition of home.sealed.commit.preconditions ?? []) {

@@ -27,6 +27,13 @@ export type TableSchema = {
   type: "object";
   properties: Record<string, ColumnSchema>;
   required: string[];
+
+  /**
+   * Secondary indexes, each a list of the table's column names in key order.
+   * Created alongside the table, additively.
+   */
+  indexes?: string[][];
+
   [key: string]: FabricValue;
 };
 
@@ -63,8 +70,8 @@ export function assertSafeColumn(name: string, sqlType: string): void {
   }
 }
 
-// Map the leading SQL type word to a JSON Schema `type`.
-function jsonTypeForSql(sqlType: string): JSONSchemaTypes {
+/** Maps the leading word of a SQL column type to a JSON Schema `type`. */
+export function jsonTypeForSql(sqlType: string): JSONSchemaTypes {
   const head = sqlType.trim().toLowerCase().split(/\s+/)[0] ?? "";
   switch (head) {
     case "integer":
@@ -124,6 +131,9 @@ function normalizeColumn(name: string, spec: ColumnSpec): ColumnSchema {
  * definition time — and serializes onto the schema as `rowLabel` (see
  * `row-label.ts` and docs/specs/sqlite-builtin/06-cfc.md).
  *
+ * `opts.indexes` declares secondary indexes, each a list of column names in
+ * key order; the database creates them with the table.
+ *
  * `opts.allowReadClearance` opts the table into CFC Phase 3.b read-time
  * clearance: a `readClearance` query may then filter rows to those the acting
  * reader can read (a declared existence release). It needs a `rowLabel` rule —
@@ -132,7 +142,10 @@ function normalizeColumn(name: string, spec: ColumnSpec): ColumnSchema {
 export function table<C extends Record<string, ColumnSpec>>(
   columns: C,
   rule?: RowLabelRule<C>,
-  opts?: { allowReadClearance?: boolean },
+  opts?: {
+    allowReadClearance?: boolean;
+    indexes?: ReadonlyArray<ReadonlyArray<keyof C & string>>;
+  },
 ): TableSchema {
   const properties: Record<string, ColumnSchema> = {};
   const required: string[] = [];
@@ -156,6 +169,12 @@ export function table<C extends Record<string, ColumnSpec>>(
       );
     }
     schema.rowLabelReadClearance = true;
+  }
+  if (opts?.indexes !== undefined && opts.indexes.length > 0) {
+    schema.indexes = opts.indexes.map((columns) => [...columns]);
+    // Validated here as well as where the DDL is generated, so a bad
+    // declaration fails where it is written.
+    createIndexSQL("t", schema);
   }
   return schema;
 }
@@ -209,4 +228,88 @@ export function createTableSQL(
     ? `${quoteIdent(schema)}.${quoteIdent(name)}`
     : quoteIdent(name);
   return `CREATE TABLE IF NOT EXISTS ${target} (\n${cols.join(",\n")}\n)`;
+}
+
+/** Per-table cap on declared indexes, a bound on wire-supplied DDL work. */
+const MAX_TABLE_INDEXES = 32;
+
+/**
+ * Additive DDL for a table's declared secondary indexes: one
+ * `CREATE INDEX IF NOT EXISTS` per entry of `t.indexes`, named after the
+ * table and the indexed columns. With `schema` (an attach alias) the index is
+ * created in that attached database. Throws on an index that names no column,
+ * a column the table does not declare, or an unsafe identifier; `t` may be
+ * wire-supplied, so every name is validated at this interpolation site.
+ */
+export function createIndexSQL(
+  name: string,
+  t: TableSchema,
+  schema?: string,
+): string[] {
+  const indexes = t.indexes;
+  if (indexes === undefined) return [];
+  if (!Array.isArray(indexes) || indexes.length > MAX_TABLE_INDEXES) {
+    throw new TypeError(
+      `table "${name}" declares too many indexes (limit ${MAX_TABLE_INDEXES})`,
+    );
+  }
+  return indexes.map((columns) => {
+    if (!Array.isArray(columns) || columns.length === 0) {
+      throw new TypeError(`an index of table "${name}" names no column`);
+    }
+    for (const column of columns) {
+      if (
+        typeof column !== "string" || !Object.hasOwn(t.properties, column)
+      ) {
+        throw new TypeError(
+          `an index of table "${name}" names undeclared column "${column}"`,
+        );
+      }
+      assertSafeColumn(column, "");
+    }
+    // No identifier holds a parenthesis or a comma, so two indexes share a
+    // name only when they share a table and a column list.
+    const indexName = quoteIdent(`${name}__idx(${columns.join(",")})`);
+    const qualified = schema ? `${quoteIdent(schema)}.${indexName}` : indexName;
+    return `CREATE INDEX IF NOT EXISTS ${qualified} ON ${quoteIdent(name)} (${
+      columns.map(quoteIdent).join(", ")
+    })`;
+  });
+}
+
+/**
+ * Additive DDL bringing an existing table up to the columns `t` declares:
+ * one `ALTER TABLE … ADD COLUMN` per declared column that `existing` lacks.
+ * With `schema` (an attach alias) the table is the one in that attached
+ * database. Throws on a column SQLite cannot add to a table that holds rows:
+ * a primary key, a unique column, or one declared `not null` with no default.
+ */
+export function addColumnSQL(
+  name: string,
+  t: TableSchema,
+  existing: ReadonlySet<string>,
+  schema?: string,
+): string[] {
+  const target = schema
+    ? `${quoteIdent(schema)}.${quoteIdent(name)}`
+    : quoteIdent(name);
+  const statements: string[] = [];
+  for (const [column, columnSchema] of Object.entries(t.properties ?? {})) {
+    if (existing.has(column)) continue;
+    const sqlType = columnSchema.sqlType ?? "text";
+    assertSafeColumn(column, sqlType);
+    if (
+      /\b(primary\s+key|unique)\b/i.test(sqlType) ||
+      (/\bnot\s+null\b/i.test(sqlType) && !/\bdefault\b/i.test(sqlType))
+    ) {
+      throw new TypeError(
+        `column "${column}" cannot be added to the existing table "${name}": ` +
+          `its type is \`${sqlType}\``,
+      );
+    }
+    statements.push(
+      `ALTER TABLE ${target} ADD COLUMN ${quoteIdent(column)} ${sqlType}`,
+    );
+  }
+  return statements;
 }

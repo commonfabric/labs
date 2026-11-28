@@ -6,6 +6,7 @@ import {
   runBundleWithRetry,
   sleepForRetry,
 } from "../utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const encoder = new TextEncoder();
 
@@ -31,7 +32,7 @@ async function withInstantTimers(
   }
 }
 
-Deno.test("isRetryableBundleFailure detects the ETXTBSY race marker", () => {
+test("isRetryableBundleFailure detects the ETXTBSY race marker", () => {
   assert(
     isRetryableBundleFailure(
       `error: ${BUNDLE_RETRYABLE_ETXTBSY} while spawning esbuild`,
@@ -39,7 +40,7 @@ Deno.test("isRetryableBundleFailure detects the ETXTBSY race marker", () => {
   );
 });
 
-Deno.test("isRetryableBundleFailure detects the esbuild copy marker", () => {
+test("isRetryableBundleFailure detects the esbuild copy marker", () => {
   assert(
     isRetryableBundleFailure(
       `deno: ${BUNDLE_RETRYABLE_ESBUILD_COPY} to the cache dir`,
@@ -47,14 +48,14 @@ Deno.test("isRetryableBundleFailure detects the esbuild copy marker", () => {
   );
 });
 
-Deno.test("isRetryableBundleFailure rejects unrelated bundle errors", () => {
+test("isRetryableBundleFailure rejects unrelated bundle errors", () => {
   assertEquals(
     isRetryableBundleFailure("error: Module not found 'jsr:@foo/bar'"),
     false,
   );
 });
 
-Deno.test("sleepForRetry resolves and backs off exponentially", async () => {
+test("sleepForRetry resolves and backs off exponentially", async () => {
   await withInstantTimers(async (delays) => {
     await sleepForRetry(1);
     await sleepForRetry(2);
@@ -63,7 +64,7 @@ Deno.test("sleepForRetry resolves and backs off exponentially", async () => {
   });
 });
 
-Deno.test(
+test(
   "runBundleWithRetry retries a retryable failure then succeeds",
   async () => {
     await withInstantTimers(async (delays) => {
@@ -91,7 +92,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "runBundleWithRetry throws immediately on a non-retryable failure",
   async () => {
     await withInstantTimers(async (delays) => {
@@ -118,7 +119,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "runBundleWithRetry gives up after the retry budget is exhausted",
   async () => {
     await withInstantTimers(async (delays) => {

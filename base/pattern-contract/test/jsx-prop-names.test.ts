@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -7,6 +6,7 @@ import {
   isEventPropName,
   isMisnamedPropName,
 } from "../src/jsx-prop-names.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("jsx-prop-names", () => {
   it("calls a hyphenated name that is neither an event nor data-* nor aria-* misnamed", () => {

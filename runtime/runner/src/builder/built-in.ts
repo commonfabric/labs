@@ -17,10 +17,12 @@ import type {
   FetchBinaryResult,
   FetchOptions,
   FieldAnchors,
+  IndexedCollectionsFunction,
   InspectConfLabelResult,
   PatternToolFunction,
   PatternToolResult,
   SqliteDatabaseFunction,
+  SqliteDb,
   SqliteQueryFunction,
   UIVariantKind,
   VNode,
@@ -28,6 +30,11 @@ import type {
   WishState,
 } from "commonfabric";
 
+import {
+  defineIndexedCollections,
+  type IndexedCollectionDefinition,
+  type IndexedCollectionOptions,
+} from "../builtins/indexed-collection/definition.ts";
 import { wishStateSchemaForResult } from "../builtins/wish-schema.ts";
 import { LLMDialogResultSchema } from "../builtins/llm-schemas.ts";
 import { sqliteQueryNodeFactory } from "../builtins/sqlite/query-node.ts";
@@ -229,6 +236,29 @@ export const sqliteDatabase = createNodeFactory({
   type: "ref",
   implementation: "sqliteDatabase",
 }) as SqliteDatabaseFunction;
+
+/**
+ * Declares an indexed collection: a database whose tables are derived from
+ * the declaration of each kind of member, and whose handle carries the
+ * descriptor the runtime maintains them by. The declaration is read when the
+ * pattern is built.
+ */
+export const indexedCollections: IndexedCollectionsFunction = (
+  kinds,
+  options,
+) => {
+  // The node's input is the database built-in's, which the descriptor and
+  // the guard ride beside `tables`.
+  const node = sqliteDatabase as (
+    definition: IndexedCollectionDefinition & { guard?: unknown },
+  ) => Reactive<SqliteDb>;
+  return node({
+    ...defineIndexedCollections(
+      kinds as Record<string, IndexedCollectionOptions>,
+    ),
+    ...(options?.guard !== undefined && { guard: options.guard }),
+  }) as ReturnType<IndexedCollectionsFunction>;
+};
 
 // Shares the single `sqliteQuery` node factory with `db.query` (cell.ts) — see
 // builtins/sqlite/query-node.ts — so both construct the same node.

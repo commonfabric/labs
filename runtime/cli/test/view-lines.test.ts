@@ -3,17 +3,32 @@
  * offset is on, and the code-point column of an offset.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { cpLen } from "../lib/view/ansi.ts";
 import {
   codePointColumns,
   computeLineStarts,
+  firstIndexAtLeast,
   lineIndexOf,
 } from "../lib/view/lines.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("lines", () => {
+  describe("firstIndexAtLeast()", () => {
+    it("returns the index of the first value at least the bound", () => {
+      const values = [2, 4, 4, 9];
+
+      expect(firstIndexAtLeast(values, 0)).toBe(0);
+      expect(firstIndexAtLeast(values, 2)).toBe(0);
+      expect(firstIndexAtLeast(values, 3)).toBe(1);
+      expect(firstIndexAtLeast(values, 4)).toBe(1);
+      expect(firstIndexAtLeast(values, 9)).toBe(3);
+      expect(firstIndexAtLeast(values, 10)).toBe(4);
+      expect(firstIndexAtLeast([], 1)).toBe(0);
+    });
+  });
+
   describe("codePointColumns()", () => {
     it("returns what `cpLen()` counts from the start of the offset's line", () => {
       // A surrogate pair, a lone high surrogate, a lone low surrogate, and a

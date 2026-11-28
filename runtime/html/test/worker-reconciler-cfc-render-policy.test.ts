@@ -20,6 +20,8 @@ import {
 } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -48,7 +50,7 @@ function createOpsCollector() {
   };
 }
 
-Deno.test("worker reconciler CFC render policy", async (t) => {
+test("worker reconciler CFC render policy", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler cfc render policy",
   );
@@ -508,7 +510,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -542,7 +544,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -582,7 +584,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -621,7 +623,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -659,7 +661,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -722,7 +724,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -769,7 +771,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
 
           rootCell.set(
             {
@@ -788,7 +790,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               }],
             } satisfies WorkerVNode,
           );
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -833,14 +835,14 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           propsCell.set({
             maxConfidentiality: [],
             declassifyConfidentiality: [healthRecordAtom],
             $value: confidential,
           });
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -873,7 +875,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -906,7 +908,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -942,7 +944,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -996,7 +998,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1051,7 +1053,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1090,7 +1092,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1131,7 +1133,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           collector.clear();
 
           rootCell.set(
@@ -1151,7 +1153,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               }],
             } satisfies WorkerVNode,
           );
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1187,7 +1189,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           let renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -1204,7 +1206,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               children: [confidential as never],
             } satisfies WorkerVNode,
           );
-          await t.settle();
+          await clock.settle();
 
           renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1244,7 +1246,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
           collector.clear();
 
           propsCell.set({
@@ -1252,7 +1254,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             declassifyConfidentiality: [healthRecordAtom],
             $value: confidential,
           });
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1295,11 +1297,11 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
           collector.clear();
 
           propsCell.flushInitial();
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1342,7 +1344,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1376,7 +1378,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1416,7 +1418,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1450,7 +1452,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1480,7 +1482,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1514,7 +1516,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1549,7 +1551,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1608,7 +1610,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1642,7 +1644,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1677,7 +1679,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -1735,7 +1737,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           // Authorship boundaries emit create-element in document order, so the
           // first is the outer (enclosing) boundary and the second is the inner.
@@ -1806,7 +1808,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const authorshipIds = collector.getOpsOfType("create-element")
             .filter((op) => op.tagName === "cf-cfc-authorship")
@@ -1881,12 +1883,12 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const rootCell = new MockCell(nestedAuthorshipTree(verifiedText));
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           collector.clear();
 
           // Reactively swap to content that fails the requirement.
           rootCell.set(nestedAuthorshipTree(unsignedReleaseText));
-          await t.settle();
+          await clock.settle();
 
           // The failing text is hidden behind the integrity placeholder.
           const renderedText = collector.getOpsOfType("create-text")
@@ -1923,7 +1925,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         );
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
               op.key === "textIntegrityState" && op.value === "blocked"
@@ -1934,7 +1936,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
           // Reactively swap to content that satisfies the requirement.
           rootCell.set(nestedAuthorshipTree(verifiedText));
-          await t.settle();
+          await clock.settle();
 
           // The verified text renders and no enclosing boundary is left blocked.
           const renderedText = collector.getOpsOfType("create-text")
@@ -2003,7 +2005,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const rootCell = new MockCell(tree(true));
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
               op.key === "textIntegrityState" && op.value === "blocked"
@@ -2016,7 +2018,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           // (its enclosing-boundary set shrinks {outer,inner} -> {outer}). The
           // outer still gates the failing text, so it stays hidden.
           rootCell.set(tree(false));
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -2066,7 +2068,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const setPropOps = collector.getOpsOfType("set-prop");
           assertEquals(
@@ -2121,7 +2123,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const setPropOps = collector.getOpsOfType("set-prop");
           assertEquals(
@@ -2178,7 +2180,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const setPropOps = collector.getOpsOfType("set-prop");
           assertEquals(
@@ -2290,7 +2292,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootVDOMCell as never);
         try {
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -2411,7 +2413,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootVDOMCell as never);
         try {
-          await t.settle();
+          await clock.settle();
 
           const setPropOps = collector.getOpsOfType("set-prop");
           assertEquals(
@@ -2522,7 +2524,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootVDOMCell as never);
         try {
-          await t.settle();
+          await clock.settle();
 
           const setPropOps = collector.getOpsOfType("set-prop");
           assertEquals(
@@ -2579,7 +2581,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
           collector.clear();
 
           const updateTx = runtime.edit();
@@ -2587,7 +2589,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           runtime.prepareTxForCommit(updateTx);
           const updateResult = await updateTx.commit().settled;
           assertEquals(updateResult.ok !== undefined, true);
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -2608,7 +2610,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           runtime.prepareTxForCommit(relaxTx);
           const relaxResult = await relaxTx.commit().settled;
           assertEquals(relaxResult.ok !== undefined, true);
-          await t.settle();
+          await clock.settle();
 
           const relaxedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -2645,7 +2647,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
               op.key === "textIntegrityState" && op.value === "blocked"
@@ -2664,7 +2666,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
             children: [verifiedText as never],
           });
-          await t.settle();
+          await clock.settle();
 
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
@@ -2697,7 +2699,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
               op.key === "textIntegrityState" && op.value === "blocked"
@@ -2715,7 +2717,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             },
             children: [verifiedText as never, "sibling-after"],
           });
-          await t.settle();
+          await clock.settle();
 
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
@@ -2754,7 +2756,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
               op.key === "textIntegrityState" && op.value === "blocked"
@@ -2769,7 +2771,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
             props: {},
             children: [verifiedText as never],
           });
-          await t.settle();
+          await clock.settle();
 
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
@@ -2811,7 +2813,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(rootCell as never);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
               op.key === "textIntegrityState" && op.value === "blocked"
@@ -2835,7 +2837,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
               children: [verifiedText as never],
             }],
           });
-          await t.settle();
+          await clock.settle();
 
           assertEquals(
             collector.getOpsOfType("set-prop").some((op) =>
@@ -2879,7 +2881,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
 
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
 
           const setPropOps = collector.getOpsOfType("set-prop");
           assertEquals(
@@ -2965,7 +2967,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancel = reconciler.mount(plainRoot(confidential));
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -2992,7 +2994,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancel = reconciler.mount(plainRoot(confidential));
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3018,7 +3020,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancelAllowed = allowedReconciler.mount(plainRoot(influenced));
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = allowed.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(renderedText.includes("Influenced draft text"), true);
@@ -3033,7 +3035,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancelBlocked = blockedReconciler.mount(plainRoot(influenced));
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = blocked.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(renderedText.includes("Influenced draft text"), false);
@@ -3063,7 +3065,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         };
         const cancel = reconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3098,7 +3100,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancelBlocked = blockedReconciler.mount(confidential);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = blocked.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3120,7 +3122,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancelAdmitted = admittedReconciler.mount(confidential);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = admitted.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3140,7 +3142,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         const reconciler = new WorkerReconciler({ onOps: collector.onOps });
         const cancel = reconciler.mount(confidential);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3229,7 +3231,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [ownContent as never, otherContent as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(renderedText.includes("Acting user's own note"), true);
@@ -3339,7 +3341,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           ],
         });
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3453,7 +3455,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           ],
         });
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(renderedText.includes("User-scoped note"), true);
@@ -3562,7 +3564,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [markerCell as never, caveatCell as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           const text = rootCollector.getOpsOfType("create-text").map((op) =>
             op.text
           );
@@ -3594,7 +3596,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [declassCell as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           const text = declassCollector.getOpsOfType("create-text").map((op) =>
             op.text
           );
@@ -3624,7 +3626,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [declassOrCell as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           const text = orCollector.getOpsOfType("create-text").map((op) =>
             op.text
           );
@@ -3688,7 +3690,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancelCeiling = ceilingReconciler.mount(markerLabeled);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = ceiling.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3715,7 +3717,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         };
         const cancelDeclassify = declassifyReconciler.mount(root);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = declassify.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3746,7 +3748,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         });
         const cancel = reconciler.mount(confidential);
         try {
-          await t.settle();
+          await clock.settle();
           const renderedText = collector.getOpsOfType("create-text")
             .map((op) => op.text);
           assertEquals(
@@ -3871,7 +3873,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [teamLabeled as never, plainCell as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           // Before the ACL grants READ, the Space(team) label fails closed.
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
@@ -3898,7 +3900,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           granted = true;
           collector.clear();
           fireAcl(teamSpace);
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Team note"),
@@ -3913,7 +3915,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           granted = false;
           collector.clear();
           fireAcl(teamSpace);
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Team note"),
@@ -3975,7 +3977,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [unreadable as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Content hidden by policy"),
@@ -4114,7 +4116,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           collector.getOpsOfType("create-text").map((op) => op.text)
             .includes("Direct release");
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(rendered(), false);
           // Watched where the label is stored, the space its manifest lives.
           assertEquals(
@@ -4125,7 +4127,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           installed = true;
           collector.clear();
           for (const listener of [...listeners]) listener.onChange();
-          await t.settle();
+          await clock.settle();
           assertEquals(rendered(), true);
         } finally {
           cancel();
@@ -4161,7 +4163,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           children: [sealed as never],
         });
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(errors, []);
           assertEquals(
             throwingCollector.getOpsOfType("create-text").map((op) => op.text)
@@ -4298,7 +4300,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           collector.getOpsOfType("create-text").map((op) => op.text)
             .includes("Sealed ballot");
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(rendered(), false);
           assertEquals(
             listeners.map((listener) => listener.space),
@@ -4308,7 +4310,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           granted = true;
           collector.clear();
           for (const listener of [...listeners]) listener.onChange();
-          await t.settle();
+          await clock.settle();
           assertEquals(rendered(), true);
         } finally {
           cancel();
@@ -4398,7 +4400,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
         // Mount the labeled cell AS the root.
         const cancel = reconciler.mount(teamLabeled);
         try {
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Root team note"),
@@ -4412,7 +4414,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           granted = true;
           collector.clear();
           fireAcl(teamSpace);
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Root team note"),
@@ -4423,7 +4425,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
           granted = false;
           collector.clear();
           fireAcl(teamSpace);
-          await t.settle();
+          await clock.settle();
           assertEquals(
             collector.getOpsOfType("create-text").map((op) => op.text)
               .includes("Root team note"),
@@ -4445,7 +4447,7 @@ Deno.test("worker reconciler CFC render policy", async (t) => {
   }
 });
 
-Deno.test("normalizeRenderDeclassificationPolicy", async (t) => {
+test("normalizeRenderDeclassificationPolicy", async (t) => {
   await t.step("absent value keeps the documented 'allow' default", () => {
     assertEquals(normalizeRenderDeclassificationPolicy(undefined), "allow");
   });

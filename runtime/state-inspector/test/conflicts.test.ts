@@ -21,6 +21,7 @@ import {
   isHollowedPayload,
 } from "@commonfabric/memory/v2/compact";
 import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { contendedEntities, entityConflicts } from "../conflicts.ts";
@@ -108,7 +109,7 @@ function open(path: string) {
   return { db, commit, setRev, patchRev };
 }
 
-Deno.test("conflicts: contention + anomalous stale-read detection", async (t) => {
+test("conflicts: contention + anomalous stale-read detection", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-conf-" });
   const dbPath = `${dir}/space.sqlite`;
   try {
@@ -155,7 +156,7 @@ Deno.test("conflicts: contention + anomalous stale-read detection", async (t) =>
   }
 });
 
-Deno.test("conflicts: engine-faithful checks do NOT over-report", async (t) => {
+test("conflicts: engine-faithful checks do NOT over-report", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-conf2-" });
 
   await t.step("a write in a DIFFERENT scope is not a conflict", () => {
@@ -363,7 +364,7 @@ Deno.test("conflicts: engine-faithful checks do NOT over-report", async (t) => {
   await Deno.remove(dir, { recursive: true });
 });
 
-Deno.test("conflicts: counts the later commits whose reads it could not check", async () => {
+test("conflicts: counts the later commits whose reads it could not check", async () => {
   // An engine storing digests: a read before of:x is first written, and one
   // after. Only the later one could have read of:x stale.
   const path = await Deno.makeTempFile({ suffix: ".sqlite" });
@@ -426,7 +427,7 @@ Deno.test("conflicts: counts the later commits whose reads it could not check", 
   }
 });
 
-Deno.test("conflicts: counts an unchecked read of a write outside the selected scope", async () => {
+test("conflicts: counts an unchecked read of a write outside the selected scope", async () => {
   // 1 Alice (s1) writes X in her user scope. 2 Alice (s9) commits a read of
   // X in that scope at seq 0, missing write 1. 3 Bob writes X in the space
   // scope, which the inspector selects by default.
@@ -472,7 +473,7 @@ Deno.test("conflicts: counts an unchecked read of a write outside the selected s
   }
 });
 
-Deno.test("conflicts: counts commits compaction hollowed as unchecked", async () => {
+test("conflicts: counts commits compaction hollowed as unchecked", async () => {
   // As above: a read before of:x is first written, and one after, each
   // stored with a digest; then compaction hollows every payload but seq 1's.
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-conf-" });
@@ -545,7 +546,7 @@ Deno.test("conflicts: counts commits compaction hollowed as unchecked", async ()
   }
 });
 
-Deno.test("conflicts: keeps the ACL document's first write when compaction only appends its audit revision", async () => {
+test("conflicts: keeps the ACL document's first write when compaction only appends its audit revision", async () => {
   // A digest-storing engine: of:y written at 1, read at 2 (stored with a
   // digest), the ACL document first written at 3. A compaction run that
   // truncates nothing still writes the ACL document's audit revision, at 4.

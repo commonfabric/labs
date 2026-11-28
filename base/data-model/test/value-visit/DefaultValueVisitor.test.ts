@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -18,6 +17,7 @@ import {
 } from "@/value-visit";
 
 import { mainResult } from "./Recorder.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** One recorded call: the method's name, then its arguments. */
 type Call = [name: string, ...args: unknown[]];

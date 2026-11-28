@@ -10,6 +10,10 @@
  * new pattern with no structural check at all, so nothing but CI stands between
  * an incompatible schema and every running piece. See `pattern-compat-lib.ts`.
  *
+ * It also holds each `main.tsx` under `patterns/` to the standalone floor: a
+ * `main.tsx` entry is offered to people to place alone, so one that requires
+ * an input with no default fails.
+ *
  *   deno task pattern-compat             # check (what CI runs)
  *   deno task pattern-compat --update    # record contracts that have no baseline
  *   deno task pattern-compat --only home # restrict to matching paths
@@ -30,15 +34,18 @@
  * the run prints, so a test can state the facts and read the verdict.
  */
 
+import { basename } from "@std/path/basename";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
+  baselineKeysByPattern,
   BASELINES_DIR,
   collectAllPatternFiles,
   collectCompatibilityPaths,
   patternKey,
+  PATTERNS_DIR,
   REPO_ROOT,
 } from "./pattern-files.ts";
 import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
@@ -51,6 +58,7 @@ import { type CommandOutput, emit } from "./command-output.ts";
 import {
   acceptedBreakKey,
   checkPattern,
+  checkRunsAlone,
   type Finding,
   parseArgs,
   partitionAcceptedBreaks,
@@ -119,6 +127,7 @@ export async function judgeCompatibility(
     ),
     input.only,
   );
+  const recordedUnder = await baselineKeysByPattern(input.baselinesDir);
   // An item with no file is a pattern that is gone. It has no contract, and
   // is judged below on its baselines and accepted breaks alone.
   const present = new Set(input.files);
@@ -211,9 +220,20 @@ export async function judgeCompatibility(
     // A file with no contract goes through the same check, so a file that
     // USED to export a pattern, or is gone, has its baselines reported.
     const current = contracts.get(key);
-    const baselines = await readBaselines(input.baselinesDir, key);
+    const baselines = await readBaselines(
+      input.baselinesDir,
+      key,
+      recordedUnder.get(key) ?? [key],
+    );
     const checkStarted = performance.now();
-    const allFindings = checkPattern(key, current, baselines);
+    const allFindings = [
+      ...checkPattern(key, current, baselines),
+      ...checkRunsAlone(
+        key,
+        item.startsWith(`${PATTERNS_DIR}/`) && basename(item) === "main.tsx",
+        current,
+      ),
+    ];
     const checkMs = performance.now() - checkStarted;
     const ms = Math.round(checkMs);
     // A slow check means validating an unrecorded contract, or proving the
@@ -353,6 +373,15 @@ export async function judgeCompatibility(
         err.push(
           `\n${finding.pattern}\n  contract ${finding.hash} is not recorded.` +
             `\n  Run: deno task pattern-compat --update`,
+        );
+      } else if (finding.kind === "not-standalone") {
+        err.push(
+          `\n${finding.pattern}\n  is a main.tsx entry, which is offered as ` +
+            `standalone, but requires ${finding.inputs.join(", ")} with no ` +
+            `default, so it cannot run alone.` +
+            `\n  Give each a default (an input a host fills in is optional), ` +
+            `or rename the file: main.tsx is kept for a pattern that stands ` +
+            `alone.`,
         );
       } else if (finding.kind === "invalid-schema") {
         err.push(

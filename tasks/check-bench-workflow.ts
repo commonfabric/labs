@@ -4,7 +4,7 @@
  * uploads.
  *
  * Two of the dashboard's numbers rest on a benchmark named outright -- the
- * machine factor it divides out of every trend, and the two series the key
+ * machine factor it divides out of every trend, and the series the key
  * benchmarks tile trends -- and what catches a name that has stopped reaching
  * one is the check over the report. A workflow that runs neither the
  * benchmark nor the check says nothing at all, and the run that would have

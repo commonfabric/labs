@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
@@ -12,6 +11,12 @@ import {
   MalformedSchemaMetaError,
   parseExternalSchemaRef,
 } from "@commonfabric/data-model-schema/schema-refs";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   EmulatedStorageManager,
   newLoopbackServer,

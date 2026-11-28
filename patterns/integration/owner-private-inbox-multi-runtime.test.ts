@@ -15,7 +15,6 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import {
@@ -24,6 +23,12 @@ import {
   type PieceAddress,
   resolveServerExecution,
 } from "./multi-runtime-harness.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const PROGRAM_PATH = join(
   import.meta.dirname!,
@@ -169,19 +174,12 @@ describe("owner-private inbox across runtimes", () => {
       }).value.copiedOffers;
       expect(rows).toHaveLength(notes.length);
       for (const row of rows) {
-        const document = await stranger.rawRead({
+        const entries = await stranger.storedLabelEntries({
           id: row["/"]["link@1"].id,
           space: container.space,
         });
-        const { cfc } = document.value as {
-          cfc: {
-            labelMap: {
-              entries: { origin: string; path: string[]; label: unknown }[];
-            };
-          };
-        };
         expect(
-          cfc.labelMap.entries.filter((entry) => entry.origin === "declared"),
+          entries.filter((entry) => entry.origin === "declared"),
         ).toMatchObject([{
           path: [],
           label: {

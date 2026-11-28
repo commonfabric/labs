@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import {
   createAgentStatusCommand,
   readRunnerHealth,
 } from "../commands/agent-status.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("agent-status", () => {
   it("prints the full health response without hiding routes, reasons or provenance", async () => {

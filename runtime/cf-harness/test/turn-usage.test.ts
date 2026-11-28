@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join, toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { ConsoleServer } from "../console/server.ts";
 import { resolveConsoleConfig } from "./support/on-linux.ts";
@@ -17,6 +16,7 @@ import {
 import type { SandboxRuntime } from "../src/sandbox/types.ts";
 import { openSqliteHarnessChatSessionStore } from "../src/sqlite-session-store.ts";
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The usage fixture reads a file without launching a sandbox process. */
 const sandbox: SandboxRuntime = {

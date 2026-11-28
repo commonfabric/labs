@@ -15,7 +15,6 @@
  * it could reach.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import ts from "typescript";
 
@@ -23,6 +22,7 @@ import { analyzeFunctionCapabilities } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { callSchemas, parseModule } from "../transformed-ast.ts";
 import { transformSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PRELUDE = `import { type Cell } from "commonfabric";
 type Entry = { space: string; size: number };

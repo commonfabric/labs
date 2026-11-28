@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import {
   normalizePatternSource,
   resolveSystemPatternSource,
   systemPatternSource,
 } from "../src/pattern-source-scheme.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HOST = "http://toolshed.test";
 

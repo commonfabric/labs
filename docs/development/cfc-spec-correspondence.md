@@ -348,6 +348,19 @@ that authorization does not establish specification conformance or amend this
 procedure. The conformance statement records the gap until a ruling and a
 reconciled pin address it.
 
+The display's committed-subject membership candidate is a nonconforming
+semantic gap pending
+[specs#110](https://github.com/commonfabric/specs/pull/110), stacked on
+[specs#49](https://github.com/commonfabric/specs/pull/49). A module-policy
+subject held in commitment form nominates each space the render read from
+whose digest it is, which #49's §4.9.3 refuses. It admits more at the strict
+default: its `cfcCommittedSubjectCandidates` dial defaults to on, and off
+restores #49's text. Its deciding site carries a `SPEC-PENDING` marker naming
+#110. This does not satisfy step 4 above. Berni directed building the simpler
+rule ahead of the ruling and revising it after; that direction does not
+supply a ruling. The conformance statement records the gap until #110 merges
+and a reconciled pin addresses it.
+
 An owner release (§8.12.7 route 2c) whose path holds a `*` segment is a
 nonconforming semantic gap pending
 [specs#86](https://github.com/commonfabric/specs/pull/86). The pinned route
@@ -546,6 +559,21 @@ computation of what to write and the transaction method that writes it, carry
 the `SPEC-PENDING` marker. @danfuzz authorized landing it ahead of the ruling,
 without a flag, on 2026-11-14 and 2026-11-15. The conformance statement's §11
 records it.
+
+A module-policy manifest consultation that adds no commit precondition
+implements [specs#109](https://github.com/commonfabric/specs/pull/109) ahead of
+its ruling. The pinned §4.4.1 makes a consultation a commit dependency, and the
+pin it replaced made a read of another space's manifest a write to that space,
+which a serving derivation holds no grant for. It admits commits the pinned text
+refuses, at strict, with no default-off dial, so it does not satisfy step 4
+above. Its two deciding sites, `Runtime.#readCfcPolicyManifest` and the
+sink-request gate's origin lookup in `cfc/prepare.ts`, carry the
+`SPEC-PENDING` marker. The same change makes the write gate, the sink gate and
+the flow join fail closed on a manifest that does not resolve, which refuses
+more and needs no marker. @danfuzz's authorization of regular labs pull
+requests ahead of unresolved specs dependencies covers landing it; that
+authorization does not establish specification conformance or amend this
+procedure. The conformance statement's §2 records the gap.
 
 The header a kernel function carries is one `@spec` tag in its doc comment,
 `@spec <chapter-file> §<section> <name> sha256:<hash>`, parsed by

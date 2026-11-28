@@ -1,6 +1,5 @@
 import { encodeHex } from "@std/encoding/hex";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type {
   PatternIndexPattern,
   PatternIndexSearchResponse,
@@ -11,6 +10,7 @@ import {
   computeEntryIdentity,
   ensureCompilerStack,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type HarnessDocsCorpusSection,

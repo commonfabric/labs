@@ -1,6 +1,7 @@
 // Scheduler debounce and throttle tests.
 
 import { BoundedKeyMap } from "@commonfabric/collections/cache";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { getActionStats, recordActionTime } from "../src/scheduler/timing.ts";
 import type { ActionStats } from "../src/telemetry.ts";

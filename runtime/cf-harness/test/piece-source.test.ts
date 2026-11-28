@@ -4,8 +4,6 @@
  * contract that keeps what the reading child saw out of its parent.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -21,6 +19,12 @@ import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { validateStructuredResultValue } from "@commonfabric/runner/cfc";
 import { decodeDataFile } from "@commonfabric/text/data-file";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
   PATTERN_AUTHOR_RETURN_SCHEMA,

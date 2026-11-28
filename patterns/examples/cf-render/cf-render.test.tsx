@@ -4,7 +4,7 @@ import {
   findNodeById,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Counters, { Counter } from "./cf-render.tsx";
+import Counters, { Counter } from "./main.tsx";
 
 export default pattern(() => {
   const counters = Counters({ value: 0 });

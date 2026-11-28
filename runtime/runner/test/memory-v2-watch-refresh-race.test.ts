@@ -8,6 +8,7 @@ import type {
   SessionSyncUpsert,
 } from "@commonfabric/memory/v2";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 import type { IStorageProvider } from "../src/storage/interface.ts";
 import {
   ScriptedSessionTransport,
@@ -221,7 +222,7 @@ const getObjectValue = (
   return isObjectNotArray(value) ? value as Record<string, unknown> : undefined;
 };
 
-Deno.test("memory v2 runner batches concurrent watch refreshes", async () => {
+test("memory v2 runner batches concurrent watch refreshes", async () => {
   const docA = `of:watch-batch-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-batch-b-${crypto.randomUUID()}` as URI;
   const docC = `of:watch-batch-c-${crypto.randomUUID()}` as URI;
@@ -251,7 +252,7 @@ Deno.test("memory v2 runner batches concurrent watch refreshes", async () => {
   }
 });
 
-Deno.test("memory v2 runner compacts redundant selectors for the same doc", async () => {
+test("memory v2 runner compacts redundant selectors for the same doc", async () => {
   const docA = `of:watch-compact-a-${crypto.randomUUID()}` as URI;
   const transport = new CountingWatchSetTransport();
   const sessionFactory = new SingleSessionFactory(transport);
@@ -292,7 +293,7 @@ Deno.test("memory v2 runner compacts redundant selectors for the same doc", asyn
   }
 });
 
-Deno.test("memory v2 runner deduplicates semantically identical selectors with reordered schema keys", async () => {
+test("memory v2 runner deduplicates semantically identical selectors with reordered schema keys", async () => {
   const docA = `of:watch-compact-order-${crypto.randomUUID()}` as URI;
   const transport = new CountingWatchSetTransport();
   const sessionFactory = new SingleSessionFactory(transport);
@@ -335,7 +336,7 @@ Deno.test("memory v2 runner deduplicates semantically identical selectors with r
   }
 });
 
-Deno.test("memory v2 runner incrementally adds later watches after the initial set", async () => {
+test("memory v2 runner incrementally adds later watches after the initial set", async () => {
   const docA = `of:watch-add-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-add-b-${crypto.randomUUID()}` as URI;
   const transport = new CountingWatchSetTransport();
@@ -360,7 +361,7 @@ Deno.test("memory v2 runner incrementally adds later watches after the initial s
   }
 });
 
-Deno.test("memory v2 runner does not resend prior pending watches in later batches", async () => {
+test("memory v2 runner does not resend prior pending watches in later batches", async () => {
   const docA = `of:watch-delta-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-delta-b-${crypto.randomUUID()}` as URI;
   const transport = new DelayedWatchAddTransport();
@@ -389,7 +390,7 @@ Deno.test("memory v2 runner does not resend prior pending watches in later batch
   }
 });
 
-Deno.test("memory v2 runner coalesces refreshes queued during an in-flight watch add", async () => {
+test("memory v2 runner coalesces refreshes queued during an in-flight watch add", async () => {
   const docA = `of:watch-next-batch-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-next-batch-b-${crypto.randomUUID()}` as URI;
   const docC = `of:watch-next-batch-c-${crypto.randomUUID()}` as URI;
@@ -434,7 +435,7 @@ Deno.test("memory v2 runner coalesces refreshes queued during an in-flight watch
   }
 });
 
-Deno.test("memory v2 runner cancels a retained watch-refresh batch on close", async () => {
+test("memory v2 runner cancels a retained watch-refresh batch on close", async () => {
   const docA = `of:watch-close-batch-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-close-batch-b-${crypto.randomUUID()}` as URI;
   const docC = `of:watch-close-batch-c-${crypto.randomUUID()}` as URI;
@@ -470,7 +471,7 @@ Deno.test("memory v2 runner cancels a retained watch-refresh batch on close", as
   assertEquals(transport.rootCounts, [1]);
 });
 
-Deno.test("memory v2 runner resolves synced on a microtask when idle", async () => {
+test("memory v2 runner resolves synced on a microtask when idle", async () => {
   const transport = new CountingWatchSetTransport();
   const sessionFactory = new SingleSessionFactory(transport);
   const storageManager = TestStorageManager.create({
@@ -493,7 +494,7 @@ Deno.test("memory v2 runner resolves synced on a microtask when idle", async () 
   }
 });
 
-Deno.test(
+test(
   "memory v2 runner waits for cross-space syncs registered later in the same turn",
   async () => {
     const transport = new CountingWatchSetTransport();
@@ -534,7 +535,7 @@ Deno.test(
   },
 );
 
-Deno.test("memory v2 runner integrates watch deltas without re-diffing cold watched docs", async () => {
+test("memory v2 runner integrates watch deltas without re-diffing cold watched docs", async () => {
   const docA = `of:watch-delta-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-delta-b-${crypto.randomUUID()}` as URI;
   const docC = `of:watch-delta-c-${crypto.randomUUID()}` as URI;
@@ -604,7 +605,7 @@ Deno.test("memory v2 runner integrates watch deltas without re-diffing cold watc
   }
 });
 
-Deno.test("memory v2 runner never moves a confirmed doc backwards on a stale watch refresh", async () => {
+test("memory v2 runner never moves a confirmed doc backwards on a stale watch refresh", async () => {
   // Watch refreshes can arrive after local confirmations; an upsert whose
   // seq is below the confirmed base must be skipped (pending replay depends
   // on monotonic bases). Pins the `SpaceReplica.#applySessionSync()` guard
@@ -676,7 +677,7 @@ Deno.test("memory v2 runner never moves a confirmed doc backwards on a stale wat
   }
 });
 
-Deno.test("memory v2 runner applies watch remove syncs to confirmed docs", async () => {
+test("memory v2 runner applies watch remove syncs to confirmed docs", async () => {
   const docA = `of:watch-remove-a-${crypto.randomUUID()}` as URI;
   const docB = `of:watch-remove-b-${crypto.randomUUID()}` as URI;
   const transport = new IncrementalEffectTransport(

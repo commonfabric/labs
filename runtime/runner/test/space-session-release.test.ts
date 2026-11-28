@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
@@ -6,6 +5,12 @@ import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server, SessionRegistry } from "@commonfabric/memory/v2/server";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -414,6 +419,19 @@ describe("space-session-release", () => {
 
       expect(isOpen(space)).toBe(true);
       await membership.leave();
+      await releaseTwice();
+      expect(isOpen(space)).toBe(false);
+    });
+
+    it("keeps a space whose history a seq observer follows", async () => {
+      const { space, id } = await spaceWith(1);
+      await load(space, id);
+      const stop = readerStorage.open(space).subscribeServerSeq!(() => {});
+
+      await releaseTwice();
+
+      expect(isOpen(space)).toBe(true);
+      stop();
       await releaseTwice();
       expect(isOpen(space)).toBe(false);
     });

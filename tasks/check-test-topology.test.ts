@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   candidateSurfaces,
   check,
@@ -16,6 +15,7 @@ import {
   workflowRecords,
 } from "./check-test-topology.ts";
 import { AliasResolver } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { Suite } from "./test-topology/suite.ts";
 import { loadTopology } from "./test-topology.ts";
 import { coverageGateSuite } from "./test-topology/coverage-gates.ts";

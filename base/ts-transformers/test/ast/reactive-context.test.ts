@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -7,6 +6,7 @@ import {
   isStandaloneFunctionDefinition,
   type ReactiveContextLookup,
 } from "../../src/ast/reactive-context.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;

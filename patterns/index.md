@@ -96,29 +96,26 @@ benefited (see the contract doc's "Lessons" section).
 
 `dev/catalog/` (type-checked component catalog + `dev/catalog/stories/`),
 `examples/counter/`, `examples/do-list/`, `examples/fair-share/`,
-`examples/form-demo/form-demo.tsx`, `system/notes/`, `examples/reading-list/`
+`examples/form-demo/main.tsx`, `system/notes/`, `examples/reading-list/`
 (canonical list-detail example), `examples/simple-list/`, `examples/todo-list/`.
 
 ## demo
 
 Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
-`apps/annotation-manager/annotation-manager.tsx`, `examples/aside/aside.tsx`,
-`apps/bookmarks/bookmarks.tsx`, `system/chatbot/chatbot.tsx`,
-`apps/cheeseboard/cheeseboard.tsx`, `examples/compiler/compiler.tsx`,
-`apps/deep-research/deep-research.tsx`, `showcase/dice/dice.tsx` (+
-`showcase/dice/dice-handlers.ts`),
-`examples/group-chat-lobby/group-chat-lobby.tsx`,
-`examples/group-chat-room/group-chat-room.tsx`, `examples/image/image.tsx`,
-`apps/image-analysis/image-analysis.tsx`,
-`examples/link-preview/link-preview.tsx`, `examples/map-demo/map-demo.tsx`,
-`examples/mobile-app-demo/mobile-app-demo.tsx`,
-`examples/pattern-index/pattern-index.tsx`,
+`apps/annotation-manager/main.tsx`, `examples/aside/main.tsx`,
+`apps/bookmarks/main.tsx`, `system/chatbot/chatbot.tsx`,
+`apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
+`apps/deep-research/main.tsx`, `showcase/dice/dice.tsx` (+
+`showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
+`examples/group-chat-room/group-chat-room.tsx`, `examples/image/main.tsx`,
+`apps/image-analysis/main.tsx`, `examples/link-preview/main.tsx`,
+`examples/map-demo/main.tsx`, `examples/mobile-app-demo/main.tsx`,
+`examples/pattern-index/main.tsx`,
 `examples/profile-roster-live-demo/profile-roster-live-demo.tsx` (demo: live
 multi-user profile roster — every participant's cross-space profile badge),
-`system/self/self.tsx`,
-`apps/self-improving-classifier/self-improving-classifier.tsx`,
-`apps/shopping-list/shopping-list.tsx`, `apps/store-mapper/store-mapper.tsx`,
-`examples/text-swapper/text-swapper.tsx`.
+`system/self/self.tsx`, `apps/self-improving-classifier/main.tsx`,
+`apps/shopping-list/main.tsx`, `apps/store-mapper/main.tsx`,
+`examples/text-swapper/main.tsx`.
 
 App and integration directories: `apps/activity-log/`, `apps/agent/`,
 `apps/base/`, `showcase/battleship/`, `apps/book-recommendations/`,
@@ -167,8 +164,11 @@ shelf and private visitor recommendations), `examples/router/`,
 `showcase/scrabble/`, `apps/shared-note/` (a shared Markdown document whose live
 cursors carry each viewer's profile name), `examples/shared-profile-demo/`,
 `examples/shared-profile-roster/`, `examples/suggestable/`,
-`apps/weekly-calendar/`, `showcase/wordsearch/` (a word search maker: form,
-puzzle, a PDF of the puzzle and its answer key, and a Play tab).
+`examples/indexed-topics/` (topics that mention one another, held in an indexed
+collection: the board's listing and each topic's "mentioned by" are SQL queries,
+and no list of topics exists), `apps/weekly-calendar/`, `showcase/wordsearch/`
+(a word search maker: form, puzzle, a PDF of the puzzle and its answer key, and
+a Play tab).
 
 Connector-owned patterns live with their connector families: the
 [agent debug view](../connectors/agents/debug-view/README.md) and
@@ -291,63 +291,65 @@ addPiece.send({ piece: ann });
 **Topics — a multi-user tracker over #topic pieces** (durable units of shared
 attention; CT-1878): title, living body document, flat chronological comment
 thread, typed links out. Deliberately minimal — no statuses, labels, or
-assignees. The board publishes a bounded discovery index — the topics
-themselves, declared through a narrow row schema of summary scalars, so a row's
-address IS its topic's and a survey and the follow-up read name one document.
-`addTopic` returns the piece it created, so a caller addresses a new topic
-straight from the create. The board owns a member namespace through
+assignees. The board holds its topics in an
+[indexed collection](../docs/features/indexed-collections.md) rather than a
+list: `addTopic` adds the topic it creates, the runtime mirrors each topic's
+title, body, number, activity and author into a SQLite table, and every listing
+is a query over it — the cards, the count, the mention universe, and the
+`topics` and `index` outputs, whose rows are the topics themselves as
+references. `addTopic` returns the piece it created, so a caller addresses a new
+topic straight from the create. The board owns a member namespace through
 `product/collection-naming/naming.ts`: `addTopic` allocates the next decimal
 number and passes it into the topic it creates, in the same transaction as the
-append; each topic stores that number and publishes it as `shortName`, reading
-nothing of its board to report it; and `backfillNames` numbers what the board
-held before it numbered anything, asking each such topic to store its number
-through the topic's own `recordName`. Every surface that shows a number reads
-the one a topic publishes — the header badge, the card, the survey row, and the
-mention universe row a `#42` query matches. Topics reference each other by CELL:
-the board derives the whole graph once by scanning what each topic points at
-with `equals`, and each topic reads its own inbound edges out of that pivot.
-Demonstrates: reading-list-style piece-in-list composition, profile-native
+add; each topic stores that number and publishes it as `shortName`, reading
+nothing of its board to report it; and `backfillNames` numbers any topic of the
+collection the namespace lacks. Topics reference each other by CELL: the
+collection mirrors what each topic points at into two relation tables, and each
+topic asks them which topics mention it. Demonstrates: an indexed collection as
+a board's only membership, queries that return members as references, a join
+over a relation table by the asking piece's own reference, profile-native
 browser authorship on a shared piece, mergeable comment appends, session-scoped
-drafts, bounding a whole-list derivation with a narrow declared `lift`
-parameter, passing topics through a sort so an activity-ordered list keeps the
-identity its elements already have, `multiUserTest` coverage.
+drafts, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
-profile, mergeable, index, discovery, bounded read, row identity, references,
-backlinks, cell identity, equals, mentions, member names, shortName, namespace,
-backfill
+profile, mergeable, index, discovery, indexed collection, SQLite, query,
+references, backlinks, cell identity, mentions, member names, shortName,
+namespace, backfill
 
 ### Input Schema
 
 ```ts
 interface TopicsInput {
-  topics?: Writable<TopicDemand[] | Default<[]>>;
   // The member namespace: each decimal name to the topic it names, held as an
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the three wirings addTopic gives a child —
-// mentionable (the @-mention universe for the body editor), boardCrossrefs
-// (the reference pivot), and boardCrossrefIndex (that pivot's positions by
-// topic number, which lets a topic read its own row alone) — plus shortName,
-// the number the create allocated, which the topic stores and reports.
+// TopicInput additionally takes the two wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor) and board (the
+// board's collection, which a topic asks for the topics that mention it) —
+// plus shortName, the number the create allocated, which the topic stores and
+// reports.
 ```
 
 ### Output Schema
 
 ```ts
 interface TopicsOutput {
+  // The topics as references, in filing order, read out of the collection
   topics: TopicDemand[];
-  // { [NAME], title, shortName, piece } per topic — one document of copies
+  // The board's topics as an indexed collection: the table `topics`, and the
+  // relation tables `topics_mentioned` and `topics_mentions`
+  board: TopicBoard;
+  // { [NAME], title, shortName, piece } per topic, read out of the collection
   mentionable: MentionableRow[];
   topicCount: number;
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy, name? } per topic — the reference graph, derived
-  // once here; a row carries its topic's number when the topic has one
+  // { topic, mentionedBy, name? } per topic — the reference graph, read out
+  // of the collection; a row carries its topic's number when it has one
   crossrefs: TopicCrossrefNamedRow[];
-  // { source, byName } — the pivot's positions grouped by topic number
+  // { byName } — those rows grouped by topic number
   crossrefIndex: TopicCrossrefIndex;
   // The namespace, the reverse lookup a caller reads a topic's number out of
   // by identity, and the policy the numbers are held to
@@ -356,8 +358,9 @@ interface TopicsOutput {
   naming: NamingDeclaration;
   // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Numbers every member the namespace lacks and asks each unnumbered topic to
-  // store its number; returns { assigned, named, pending }; idempotent
+  // Numbers every topic of the collection the namespace lacks and asks each
+  // unnumbered topic to store its number; returns
+  // { assigned, named, pending }; idempotent
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
   submitTopic: Stream<void>;
 }
@@ -365,21 +368,21 @@ interface TopicsOutput {
 
 ## `apps/topics/topic.tsx`
 
-A single #topic piece: the durable object the tracker's list holds. Body edits
-go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
-the concurrent-edit window small); comments and links are mergeable appends.
-Stores the number its board calls it by as its own input and publishes it as
-`shortName`, rendering it as a badge beside the title. A topic nobody has
-numbered stores none and publishes none. `recordName` is how a number reaches a
-topic the board did not pass one to at create. Use from `apps/topics/main.tsx`
-via `navigateTo()`, or standalone.
+A single #topic piece, a member of its board's indexed collection, which it asks
+for the topics that mention it. Body edits go through an explicit Edit→Save
+toggle (one whole-value `set` per save keeps the concurrent-edit window small);
+comments and links are mergeable appends. Stores the number its board calls it
+by as its own input and publishes it as `shortName`, rendering it as a badge
+beside the title. A topic nobody has numbered stores none and publishes none.
+`recordName` is how a number reaches a topic the board did not pass one to at
+create. Use from `apps/topics/main.tsx` via `navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge
 
 ---
 
-## `apps/agent/agent.tsx`
+## `apps/agent/main.tsx`
 
 An agent piece — autonomous worker with directive, learned state, and run
 status. Consolidates agent configuration (directive, enable/disable), memory
@@ -454,7 +457,7 @@ self.markIdle.send({
 
 ---
 
-## `examples/counter/counter.tsx`
+## `examples/counter/main.tsx`
 
 A simple counter demo.
 
@@ -476,7 +479,7 @@ interface CounterOutput {
 }
 ```
 
-## `examples/do-list/do-list.tsx`
+## `examples/do-list/main.tsx`
 
 A task list pattern with AI suggestions per item, indent-based subtasks, and
 LLM-friendly title-based handlers.
@@ -520,7 +523,7 @@ interface DoListOutput {
 }
 ```
 
-## `examples/todo-list/todo-list.tsx`
+## `examples/todo-list/main.tsx`
 
 A todo list with AI suggestions.
 
@@ -548,7 +551,7 @@ interface TodoListOutput {
 }
 ```
 
-## `examples/simple-list/simple-list.tsx`
+## `examples/simple-list/main.tsx`
 
 A checklist with indent support. Runs standalone, and embeds in another pattern
 as a JSX tag.
@@ -580,10 +583,10 @@ interface SimpleListOutput {
 }
 ```
 
-## `apps/shopping-list/shopping-list.tsx`
+## `apps/shopping-list/main.tsx`
 
 Shopping list with AI-powered aisle sorting. Pair with
-`apps/store-mapper/store-mapper.tsx` for store-specific layouts.
+`apps/store-mapper/main.tsx` for store-specific layouts.
 
 **Keywords:** shopping, groceries, AI-sorting, generateObject
 
@@ -722,7 +725,7 @@ type Output = {
 };
 ```
 
-## `apps/calendar/calendar.tsx`
+## `apps/calendar/main.tsx`
 
 Calendar for managing events with date and time. Events are sorted by date with
 today highlighted.
@@ -749,7 +752,7 @@ interface CalendarOutput {
 }
 ```
 
-## `apps/weekly-calendar/weekly-calendar.tsx`
+## `apps/weekly-calendar/main.tsx`
 
 Weekly calendar with drag-and-drop event creation and resizing. Manages
 `apps/weekly-calendar/event.tsx` pieces.
@@ -882,7 +885,7 @@ interface WordSearchOutput {
 }
 ```
 
-## `apps/contacts/contact-book.tsx`
+## `apps/contacts/main.tsx`
 
 Manage contacts with search, notes, and relationships between contacts. Contacts
 can be linked together with labels (friend, spouse, colleague, etc.).
@@ -924,7 +927,7 @@ interface ContactBookOutput {
 }
 ```
 
-## `apps/habit-tracker/habit-tracker.tsx`
+## `apps/habit-tracker/main.tsx`
 
 Track daily habits with streak counting and 7-day history visualization. Mark
 habits complete for today and see your progress over time.
@@ -965,7 +968,7 @@ interface HabitTrackerOutput {
 }
 ```
 
-## `apps/star-chart/star-chart.tsx`
+## `apps/star-chart/main.tsx`
 
 A reward calendar for a child learning one daily habit: tap the big star to earn
 today's sticker, watch the streak grow, and celebrate at 3, 7, 14 and 30 days.
@@ -1013,7 +1016,7 @@ interface StarChartOutput {
 }
 ```
 
-## `apps/reward-spinner/reward-spinner.tsx`
+## `apps/reward-spinner/main.tsx`
 
 A slot-machine prize spinner for kids: tap the reel and it whirs through prizes
 for six seconds before landing on three jelly beans, one jelly bean or a big
@@ -1057,7 +1060,7 @@ interface RewardSpinnerOutput {
 }
 ```
 
-## `apps/assumption-surfacer/assumption-surfacer.tsx`
+## `apps/assumption-surfacer/main.tsx`
 
 A chat that shows, beside the conversation, the assumptions the assistant is
 making about you. Before each reply the assistant records its few most
@@ -1128,13 +1131,13 @@ interface AssumptionSurfacerOutput {
 
 Ask a language model about something personal without sending it anything
 personal. Names, emails, phone numbers, SSNs, card numbers and addresses in a
-draft, from the embedded PII vault (`vault.tsx`) or found by format, are swapped
-for realistic stand-ins; only that redacted draft may be sent to the model, and
-the reply comes back with the originals restored for the owner. CFC enforces the
-boundary: the draft and vault are `Confidential` under `policy.tsx`, whose one
-exchange rule releases only what the `redactDraft` lift computes, and the
-model's prompt is a `MaxConfidentiality` store. See the README's CFC design and
-CFC debt sections.
+draft, from the embedded PII vault (`apps/redactor/main.tsx`) or found by
+format, are swapped for realistic stand-ins; only that redacted draft may be
+sent to the model, and the reply comes back with the originals restored for the
+owner. CFC enforces the boundary: the draft and vault are `Confidential` under
+`policy.tsx`, whose one exchange rule releases only what the `redactDraft` lift
+computes, and the model's prompt is a `MaxConfidentiality` store. See the
+README's CFC design and CFC debt sections.
 
 **Keywords:** privacy, PII, redaction, pseudonymization, llm, CFC, exchangeRule,
 TransformedBy, MaxConfidentiality
@@ -1166,7 +1169,7 @@ interface RedactorOutput {
 }
 ```
 
-## `apps/story-weaver/story-weaver.tsx`
+## `apps/story-weaver/main.tsx`
 
 Grow a story with AI, one level at a time. Commit a synopsis (or ask for ideas
 with Inspire me), and each spindle on the next level asks the model for four
@@ -1230,7 +1233,7 @@ interface StoryWeaverOutput {
 }
 ```
 
-## `apps/smart-rubric/smart-rubric.tsx`
+## `apps/smart-rubric/main.tsx`
 
 Weigh options against a weighted rubric. Define categorical dimensions (scored
 Excellent / Good / Fair / Poor) and numeric ones (an editable range mapped onto
@@ -1308,7 +1311,7 @@ interface RubricOutput {
 }
 ```
 
-## `apps/codenames-helper/codenames-helper.tsx`
+## `apps/codenames-helper/main.tsx`
 
 A spymaster's companion for playing the word game Codenames in person with the
 physical cards. Setup: type the 25 board words into the grid and give each card
@@ -1365,7 +1368,7 @@ interface CodenamesHelperOutput {
 }
 ```
 
-## `apps/food-recipe/food-recipe.tsx`
+## `apps/food-recipe/main.tsx`
 
 One recipe with what a cook and a meal planner need from it: ingredients, steps
 grouped into phases timed against serving (nights before, or minutes before)
@@ -1510,7 +1513,7 @@ interface PreparedFoodOutput {
 }
 ```
 
-## `apps/meal-orchestrator/meal-orchestrator.tsx`
+## `apps/meal-orchestrator/main.tsx`
 
 Plan a meal of several dishes: the event (name, date, serving time, guests),
 equipment (ovens with rack positions and racks owned, stovetop burners), each
@@ -1641,7 +1644,7 @@ interface MealOrchestratorOutput {
 }
 ```
 
-## `examples/reading-list/reading-list.tsx`
+## `examples/reading-list/main.tsx`
 
 **Canonical list-detail example.** Track books, articles, papers, and videos.
 Demonstrates: footer forms, `navigateTo()` for details, `lift()` for filtering.
@@ -1838,7 +1841,7 @@ interface SharedNoteOutput {
 }
 ```
 
-## `examples/cfc-agent-prompt-injection-demo/main.tsx`
+## `examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx`
 
 Interactive side-by-side chatbot demo for the new observation ceiling and
 subagent behavior. One chat reads a hostile prompt-influencing briefing directly
@@ -1910,7 +1913,7 @@ type ChatOutput = {
 };
 ```
 
-## `examples/group-chat-lobby/group-chat-lobby.tsx`
+## `examples/group-chat-lobby/main.tsx`
 
 Multiplayer group chat lobby where users join with their shared profile
 (`wish({ query: "#profile" })` — the wish UI covers profile create/pick) and
@@ -1997,11 +2000,11 @@ interface LobbyOutput {
 }
 ```
 
-## `apps/store-mapper/store-mapper.tsx`
+## `apps/store-mapper/main.tsx`
 
 Capture grocery store layouts through manual aisle entry, perimeter department
 positioning, and item location corrections. Generates layout data used by
-`apps/shopping-list/shopping-list.tsx` for AI-powered aisle sorting.
+`apps/shopping-list/main.tsx` for AI-powered aisle sorting.
 
 **Keywords:** store-layout, grocery, aisles, generateObject
 
@@ -2053,7 +2056,7 @@ interface Output {
 }
 ```
 
-## `examples/image/image.tsx`
+## `examples/image/main.tsx`
 
 Display an image from a URL or data URI with optional caption. Useful for
 rendering images when an LLM has a URL to display.
@@ -2082,7 +2085,7 @@ interface ImageOutput {
 
 # AI & Capability Demos
 
-## `apps/deep-research/deep-research.tsx`
+## `apps/deep-research/main.tsx`
 
 Deep research agent that uses llmDialog to search the web and synthesize
 findings. Shows live progress via cf-message-beads and renders a structured
@@ -2118,7 +2121,7 @@ type Output = {
 };
 ```
 
-## `apps/image-analysis/image-analysis.tsx`
+## `apps/image-analysis/main.tsx`
 
 Upload images and get AI-powered analysis and descriptions. Supports multiple
 images with customizable prompts.
@@ -2145,7 +2148,7 @@ type ImageChatOutput = {
 };
 ```
 
-## `examples/clock/clock.tsx`
+## `examples/clock/main.tsx`
 
 Example pattern: a live wall clock driven by the reactive `#now` wish
 (`wish({ query: "#now/1" })`, ticking once per second). Shows the sanctioned way
@@ -2156,7 +2159,7 @@ formatting.
 
 **Keywords:** now, wish, clock, time, reactive, capability-gate, timing
 
-## `examples/reactive-now/reactive-now.tsx`
+## `examples/reactive-now/main.tsx`
 
 Example pattern demonstrating both pattern-facing surfaces of the timing
 side-channel mitigations. Reading time: a one-shot `#now` snapshot (the piece's
@@ -2170,7 +2173,7 @@ mashing/typing is throttled, and nothing is dropped.
 **Keywords:** now, wish, time, elapsed, relative-time, reactive,
 capability-gate, timing, delivery-shaping, token-bucket, input
 
-## `examples/profile-aware-writer/profile-aware-writer.tsx`
+## `examples/profile-aware-writer/main.tsx`
 
 Example pattern demonstrating how to use the `#profile` wish to personalize LLM
 output. Fetches the user's profile summary and injects it into the system prompt
@@ -2345,8 +2348,8 @@ interface EventDetailOutput {
 
 ## `apps/contacts/contact-detail.tsx`
 
-Detail/edit view for a single contact. Use with `navigateTo()` from contact-book
-or as a standalone contact editor.
+Detail/edit view for a single contact. Use with `navigateTo()` from
+`apps/contacts/main.tsx` or as a standalone contact editor.
 
 **Keywords:** contact, detail, edit, form, navigateTo
 
@@ -2711,7 +2714,7 @@ type Input = {
 // Returns a 3-column grid view of pieces with live previews
 ```
 
-## `apps/bookmarks/bookmarks.tsx`
+## `apps/bookmarks/main.tsx`
 
 A pattern for collecting and browsing URLs/bookmarks. Users can add URLs to a
 collection, view them in a searchable grid with rich link previews (via
@@ -2744,7 +2747,7 @@ interface BookmarksOutput {
 }
 ```
 
-## `examples/link-preview/link-preview.tsx`
+## `examples/link-preview/main.tsx`
 
 A simple pattern that renders a rich link preview for a single URL. Uses
 cf-input for URL entry and cf-link-preview to display the preview card with
@@ -2772,7 +2775,7 @@ interface LinkPreviewOutput {
 
 ---
 
-## `examples/cfc-row-label-mailbox/main.tsx`
+## `examples/cfc-row-label-mailbox/cfc-row-label-mailbox.tsx`
 
 Demo of CFC Phase 3 per-row, data-derived SQLite labels: each email row's
 confidentiality is computed from the row's own columns (sender ∧ regex-split
@@ -2807,7 +2810,7 @@ interface MailboxOutput {
 
 ---
 
-## `examples/cfc-row-label-records/main.tsx`
+## `examples/cfc-row-label-records/cfc-row-label-records.tsx`
 
 Demo of per-row (Phase 3) and per-column (Phase 2) CFC labels COMPOSING on one
 row entity: a patient-records table whose row rule derives the patient from the

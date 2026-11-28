@@ -3,13 +3,14 @@
  * manifest, and what it says when there is not one.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type Manifest,
+  type ManifestEntry,
   sampleEntry,
   sampleManifest,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   FLAKY_SECTION_ID,
@@ -23,6 +24,7 @@ import {
   LANE_BUDGET_FALLBACK_SECONDS,
 } from "./test-selection-manifest.ts";
 import { livePage } from "./live-page.ts";
+import { REPO } from "./config.ts";
 
 const NOW = Date.parse("2026-08-20T04:00:00.000Z");
 
@@ -57,6 +59,12 @@ describe("test-selection-page", () => {
       expect(page).toContain("space &gt; writes");
       expect(page).toContain("42.0%");
       expect(page).toContain(`id="${FLAKY_SECTION_ID}"`);
+    });
+
+    it("links to the flaky tests as JSON", () => {
+      expect(pageHtml(heldBack(), NOW)).toContain(
+        '<a href="/test-selection/flaky.json">',
+      );
     });
 
     it("shows the counts a rate was taken from beside it", () => {
@@ -135,6 +143,107 @@ describe("test-selection-page", () => {
       expect(worstAt).toBeGreaterThan(-1);
       expect(mildAt).toBeGreaterThan(-1);
       expect(worstAt).toBeLessThan(mildAt);
+    });
+
+    describe("how lately a flaky test failed", () => {
+      /** The flaky table's row for a test held back with `fields`. */
+      const row = (fields: Partial<ManifestEntry>): string => {
+        const entry = sampleEntry({ k: "unit", s: "memory", n: "recent" }, {
+          flakeRate: 0.42,
+          ...fields,
+        });
+        const page = pageHtml(
+          sampleManifest({
+            entries: [entry],
+            withheld: [{
+              test: entry.test,
+              suite: entry.suite,
+              reason: "flaky",
+            }],
+          }),
+          NOW,
+        );
+        const found = page.match(/<tr><td class="measure">42\.0%.*?<\/tr>/s);
+        if (found === null) throw new Error("the page has no row for it");
+        return found[0];
+      };
+
+      /** The text of a row's leading cells, in order. */
+      const cells = (html: string): string[] =>
+        [...html.matchAll(/<td class="measure">(.*?)<\/td>/g)].map((m) =>
+          m[1]!
+        );
+
+      it("heads the table with what each column measures", () => {
+        expect(pageHtml(heldBack(), NOW)).toContain(
+          "<th>flake share</th><th>last failed</th><th>last ran</th>" +
+            "<th>newest flake</th><th>kind</th>",
+        );
+      });
+
+      it("says how many days ago the test last failed and last ran", () => {
+        expect(cells(row({
+          lastFailure: "2026-08-13",
+          lastRun: "2026-08-20",
+        })).slice(1, 3)).toEqual(["7 days ago", "today"]);
+        expect(cells(row({
+          lastFailure: "2026-08-19",
+          lastRun: "2026-06-21",
+        })).slice(1, 3)).toEqual(["yesterday", "60 days ago"]);
+      });
+
+      it("shows a dash rather than a day where the manifest carries none", () => {
+        // A manifest written before the publisher counted failures says
+        // nothing about when the test last failed, which is not "never".
+        expect(cells(row({})).slice(1)).toEqual(["—", "—", "—"]);
+      });
+
+      it("links the newest flake's failing run to its attempt on GitHub", () => {
+        const html = row({
+          disagreements: [
+            { day: "2026-08-12", commit: "c1", failed: { place: "local" } },
+            {
+              day: "2026-08-18",
+              commit: "c2",
+              failed: {
+                place: "pr",
+                ci: { runId: "1001", runAttempt: 2, job: "Test (3/8)" },
+              },
+            },
+          ],
+        });
+        expect(cells(html)[3]).toBe(
+          `2 days ago · <a href="https://github.com/${REPO}/actions/runs/` +
+            `1001/attempts/2">Test (3/8)</a>`,
+        );
+      });
+
+      it("escapes a job name carrying markup", () => {
+        const html = row({
+          disagreements: [{
+            day: "2026-08-20",
+            commit: "c1",
+            failed: {
+              place: "main",
+              ci: { runId: "7", runAttempt: 1, job: "Test <b>&" },
+            },
+          }],
+        });
+        expect(html).toContain(">Test &lt;b&gt;&amp;</a>");
+        expect(html).not.toContain("<b>");
+      });
+
+      it("names where the newest flake ran when it has no page to link to", () => {
+        const html = row({
+          disagreements: [{
+            day: "2026-08-20",
+            commit: "c1",
+            failed: { place: "local" },
+          }],
+        });
+        expect(cells(html)[3]).toBe("today · workstation");
+        expect(html).not.toContain("<a ");
+      });
     });
 
     it("leaves out a section with nothing to list", () => {
@@ -389,9 +498,13 @@ describe("test-selection-page", () => {
         NOW,
       );
       expect(page).toContain(
-        `<tr><td class="measure">50.0%</td><td>unit</td>`,
+        `<tr><td class="measure">50.0%</td>${
+          `<td class="measure">—</td>`.repeat(3)
+        }<td>unit</td>`,
       );
-      expect(page).toContain(`<tr><td class="measure">—</td><td>browser</td>`);
+      expect(page).toContain(
+        `<tr>${`<td class="measure">—</td>`.repeat(4)}<td>browser</td>`,
+      );
     });
 
     it("escapes a test name carrying markup", () => {

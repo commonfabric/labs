@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 
@@ -12,6 +11,12 @@ import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import type { Cell } from "../src/cell.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // A `writeAuthorizedBy` claim is a property of the field's schema, not of
 // its value (normative CFC §8.15.3): the write-authority set exists from the

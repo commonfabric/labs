@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { fromFileUrl, toFileUrl } from "@std/path";
 import { defer } from "@commonfabric/async/defer";
 import type { FabricPlainObject } from "@commonfabric/data-model";
@@ -23,6 +22,12 @@ import {
   withServerExecutionDefault,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The passphrase a toolshed derives its service identity from. */
 type PassphraseOf = (name: ToolshedName) => string;
@@ -55,14 +60,6 @@ type ToolshedName = "A" | "B";
 const ownerOf = (space: string): ToolshedName =>
   space.charCodeAt(space.length - 1) % 2 === 0 ? "A" : "B";
 
-/** A port the system had free at the time of asking. */
-function freePort(): number {
-  const listener = Deno.listen({ hostname: "127.0.0.1", port: 0 });
-  const { port } = listener.addr as Deno.NetAddr;
-  listener.close();
-  return port;
-}
-
 /** A toolshed process and the address it listens on. */
 type Toolshed = {
   process: Deno.ChildProcess;
@@ -72,7 +69,7 @@ type Toolshed = {
 };
 
 /**
- * Start one toolshed from source on a free port, serving under server
+ * Starts one toolshed from source on a system-assigned port, serving under server
  * execution with owner routing on, over `memoryDir`, reaching other spaces
  * through `memoryUrl`. Resolves once the process reports its listener,
  * which is the readiness event `scripts/start-local-dev.sh` waits for too.
@@ -84,17 +81,15 @@ async function startToolshed(
   passphrase: string,
   environment: Record<string, string> = {},
 ): Promise<Toolshed> {
-  // The process's own address is in its environment before it starts, as
-  // the first-party authority its signed routes check against, so its port
-  // is chosen here: one the system had free a moment ago.
-  const port = freePort();
+  // Both toolsheds use the proxy's bound public origin as their authority.
+  // Their own listeners receive ports when they bind.
   const process = new Deno.Command(Deno.execPath(), {
-    args: ["run", "--unstable-otel", "-A", TOOLSHED_ENTRY, `--port=${port}`],
+    args: ["run", "--unstable-otel", "-A", TOOLSHED_ENTRY, "--port=0"],
     cwd: fromFileUrl(new URL("../../toolshed/", import.meta.url)),
     env: {
       HOST: "127.0.0.1",
-      PORT: String(port),
-      API_URL: `http://127.0.0.1:${port}`,
+      PORT: "0",
+      API_URL: memoryUrl.href,
       MEMORY_DIR: memoryDir.href,
       MEMORY_URL: memoryUrl.href,
       IDENTITY_PASSPHRASE: passphrase,
@@ -418,7 +413,7 @@ async function writeRouterConfiguration(
         version: 1,
         deployment,
         hostname: "127.0.0.1",
-        port: freePort(),
+        port: 0,
         certificate: fromFileUrl(new URL("localhost.crt", ROUTED_TLS)),
         key: fromFileUrl(new URL("localhost.key", ROUTED_TLS)),
         directory,
@@ -520,7 +515,7 @@ async function expectForwardedEventServedOnOwner(
     memoryHost: deployment.proxy.url,
   });
   const runtime = new Runtime({
-    apiUrl: deployment.toolsheds.A.url,
+    apiUrl: deployment.proxy.url,
     // The toolsheds serve whatever lane this process runs in, so the
     // client runs the served posture outright: its event goes to the
     // piece's owner rather than running here.
@@ -537,7 +532,7 @@ async function expectForwardedEventServedOnOwner(
     memoryHost: deployment.proxy.url,
   });
   const reader = new Runtime({
-    apiUrl: deployment.toolsheds.A.url,
+    apiUrl: deployment.proxy.url,
     experimental: {
       ...withServerExecutionDefault(experimentalOptionsFromEnv(Deno.env.get)),
       serverExecution: false,
@@ -651,7 +646,7 @@ async function expectReadOfSpaceCreatedLater(
     memoryHost: deployment.proxy.url,
   });
   const runtime = new Runtime({
-    apiUrl: deployment.toolsheds.A.url,
+    apiUrl: deployment.proxy.url,
     experimental: experimental(true),
     storageManager: manager,
   });
@@ -660,7 +655,7 @@ async function expectReadOfSpaceCreatedLater(
     memoryHost: deployment.proxy.url,
   });
   const reader = new Runtime({
-    apiUrl: deployment.toolsheds.A.url,
+    apiUrl: deployment.proxy.url,
     experimental: experimental(false),
     storageManager: readerManager,
   });
@@ -669,7 +664,7 @@ async function expectReadOfSpaceCreatedLater(
     memoryHost: deployment.proxy.url,
   });
   const voterRuntime = new Runtime({
-    apiUrl: deployment.toolsheds.B.url,
+    apiUrl: deployment.proxy.url,
     experimental: experimental(false),
     storageManager: voterManager,
   });

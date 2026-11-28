@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { TranscriptionClient } from "./voice.handlers.ts";
 import { createVoiceRouter } from "./voice.index.ts";
 import { createTestApp } from "@/lib/create-app.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const AUDIO = new Uint8Array([0x52, 0x49, 0x46, 0x46, 9, 8, 7]);
 const AUDIO_URL = "https://fal.example/audio.wav";

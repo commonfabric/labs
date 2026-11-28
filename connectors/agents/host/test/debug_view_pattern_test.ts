@@ -9,6 +9,7 @@ import { AgentFabricTarget } from "@commonfabric/agents-connector/fabric";
 import {
   AGENT_CONNECTOR_WRITER_ID,
   agentOwnerSchema,
+  cellHasOwnerConfidentiality,
 } from "@commonfabric/agents-connector/fabric-graph";
 import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -47,8 +48,9 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("debug pattern accepts empty target cells before collection", async () => {
+test("debug pattern accepts empty target cells before collection", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -130,7 +132,7 @@ Deno.test("debug pattern accepts empty target cells before collection", async ()
   }
 });
 
-Deno.test("debug pattern renders sessions published after deployment", async () => {
+test("debug pattern renders sessions published after deployment", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -191,7 +193,7 @@ Deno.test("debug pattern renders sessions published after deployment", async () 
   }
 });
 
-Deno.test("debug pattern submits commands and links row data to separate views", async () => {
+test("debug pattern submits commands and links row data to separate views", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -267,22 +269,14 @@ Deno.test("debug pattern submits commands and links row data to separate views",
     const piece = await deployDebugPiece(manager, target);
     await runtime.settled();
     const resultCell = await piece.result.getCell();
-    const resultLink = resultCell.getAsNormalizedFullLink();
-    const resultInspect = runtime.edit();
-    const storedResult = resultInspect.readOrThrow({
-      space: resultLink.space,
-      id: resultLink.id,
-      path: [],
-      ...(resultLink.scope !== undefined && { scope: resultLink.scope }),
-    }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
     assertEquals(
-      storedResult.cfc?.labelMap?.entries?.some((entry) =>
-        JSON.stringify(entry).includes("confidentiality") &&
-        JSON.stringify(entry).includes(session.as.did())
+      cellHasOwnerConfidentiality(
+        runtime.readTx(),
+        resultCell,
+        session.as.did(),
       ),
       true,
     );
-    resultInspect.abort();
     const resultAttack = runtime.edit();
     setCfcTrustSnapshot(resultAttack, {
       id: "principal:did:key:other-debug-owner",
@@ -371,25 +365,16 @@ Deno.test("debug pattern submits commands and links row data to separate views",
       { text: "Continue from the deployed debug view" },
     );
     const commandLink = target.cells.commands.getAsNormalizedFullLink();
-    const protectedCommandLink = target.cells.commands.resolveAsCell()
-      .getAsNormalizedFullLink();
-    const inspect = runtime.edit();
-    const stored = inspect.readOrThrow({
-      space: protectedCommandLink.space,
-      id: protectedCommandLink.id,
-      path: [],
-      ...(protectedCommandLink.scope !== undefined && {
-        scope: protectedCommandLink.scope,
-      }),
-    }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
+    const protectedCommand = target.cells.commands.resolveAsCell();
+    const protectedCommandLink = protectedCommand.getAsNormalizedFullLink();
     assertEquals(
-      stored.cfc?.labelMap?.entries?.some((entry) =>
-        JSON.stringify(entry).includes("confidentiality") &&
-        JSON.stringify(entry).includes(session.as.did())
+      cellHasOwnerConfidentiality(
+        runtime.readTx(),
+        protectedCommand,
+        session.as.did(),
       ),
       true,
     );
-    inspect.abort();
 
     await target.publishReceipt({
       schema: "commonfabric.agent-connector.command-receipt",
@@ -803,7 +788,7 @@ Deno.test("debug pattern submits commands and links row data to separate views",
   }
 });
 
-Deno.test("debug pattern bounds raw-data links to one session page", async () => {
+test("debug pattern bounds raw-data links to one session page", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -1147,7 +1132,7 @@ Deno.test("debug pattern bounds raw-data links to one session page", async () =>
   }
 });
 
-Deno.test("debug pattern resumes sessions published while it was stopped", async () => {
+test("debug pattern resumes sessions published while it was stopped", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   let debugPieceId = "";
@@ -1236,7 +1221,7 @@ Deno.test("debug pattern resumes sessions published while it was stopped", async
   }
 });
 
-Deno.test("debug pattern loads connector child cells on a cold replica", async () => {
+test("debug pattern loads connector child cells on a cold replica", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   const sessionCount = SESSION_PAGE_SIZE + 1;

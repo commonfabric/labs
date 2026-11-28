@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   TransactionAborted,
   transactionFailureMessage,
 } from "../../src/storage/transaction-errors.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("transaction-errors", () => {
   describe("transactionFailureMessage()", () => {

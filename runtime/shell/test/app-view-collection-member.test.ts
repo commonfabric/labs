@@ -19,10 +19,10 @@
  * assert what the view made of it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { DID } from "@commonfabric/identity";
 import { type AppView, urlToAppView } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The reader `cf cell get` takes an address through, which is what a citation
 // the view offers has to satisfy. The CLI's package exports only its command

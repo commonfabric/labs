@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { ValidationError } from "@cliffy/command";
@@ -10,6 +9,12 @@ import {
 } from "@commonfabric/pattern-index/membership";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
 import type { JoinResult } from "@commonfabric/pattern-index/join";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   admit,
   type IndexDeps,
@@ -195,6 +200,24 @@ describe("pattern-index", () => {
       const text = String(rendered[0].value);
       expect(text).toContain("Joined the pattern index as p-elsewhere.");
       expect(text).toContain("not the root itself");
+      expect((await store.membership())?.root).toBe(root.did());
+    });
+
+    it("reads the chain from stdin for --chain -", async () => {
+      const root = await Identity.generate();
+      index.admit(root.did(), "p-piped");
+      const text = encodeDelegationChains([
+        await issueIndexChain({ issuer: root, to: signer.did(), held: [] }),
+      ]);
+
+      await joinIndex(options({ chain: "-" }), undefined, {
+        ...deps,
+        stdin: new Blob([text]).stream(),
+      });
+
+      expect(String(rendered[0].value)).toContain(
+        "Joined the pattern index as p-piped.",
+      );
       expect((await store.membership())?.root).toBe(root.did());
     });
 

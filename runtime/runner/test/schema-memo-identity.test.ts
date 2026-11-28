@@ -7,9 +7,9 @@
 // collision here is precisely the cross-identity memo sharing the guard
 // exists to make loud.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertSchemaMemoIdentity, createSchemaMemo } from "../src/traverse.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("schema memo identity binding", () => {
   it("binds a memo to its first identity and refuses a different one", () => {

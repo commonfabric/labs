@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
 import { basename, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { readHarnessRunArtifacts } from "@commonfabric/cf-harness/artifacts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { HarnessJobOptions, HarnessJobSpec } from "../src/harness-job.ts";
 import { runHarnessJob } from "../src/harness-job.ts";
 import {
@@ -107,6 +112,41 @@ describe("harness-job continuation", () => {
     });
   }
 
+  it("continues a file-delivered opening task with an inline follow-up", async () => {
+    const workspace = join(root, "conversation");
+    const job = { ...spec, taskDelivery: "file" as const };
+    const first = await run(
+      job,
+      scriptedJob(() => answerReply("first")),
+      "first",
+      { workspace },
+    );
+    expect(first.outcome).toBe("completed");
+    const script = scriptedJob(() => answerReply("next"));
+
+    const next = await run(
+      {
+        ...job,
+        task: "Use the previous edits",
+        continueFrom: { runRoot: first.report!.runRef! },
+      },
+      script,
+      "second",
+      { workspace },
+    );
+
+    expect(next.outcome).toBe("completed");
+    expect(await Deno.readTextFile(join(workspace, ".job-task"))).toBe(
+      spec.task,
+    );
+    expect(script.requests[0].transcript).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: "user",
+        content: "Use the previous edits",
+      }),
+    ]));
+  });
+
   for (const replace of [false, true]) {
     it(`continues history with its own result file and ${replace ? "replaced" : "inherited"} instructions`, async () => {
       const firstScript = scriptedJob(() => answerReply("first"));
@@ -172,6 +212,59 @@ describe("harness-job continuation", () => {
       )
         .toBe(JSON.stringify({ answer: "next" }, null, 2) + "\n");
     });
+  }
+
+  for (
+    const [pinned, outcome] of [
+      ["openai-compatible-gateway", "completed"],
+      ["openai-codex", "failed"],
+    ] as const
+  ) {
+    it(
+      `${
+        outcome === "completed" ? "continues" : "refuses before any model call"
+      } a follow-up naming ${pinned} after a run recorded on openai-compatible-gateway`,
+      async () => {
+        const first = await run(spec, scriptedJob(() => answerReply("first")));
+        expect(first.outcome).toBe("completed");
+        const script = scriptedJob(() => answerReply("next"));
+        // A gateway setting would refuse `openai-codex` before the recorded
+        // run is read.
+        const { CF_HARNESS_GATEWAY_AUTH_MODE: _authMode, ...env } = script.deps
+          .env!;
+        const next = await run(
+          {
+            ...spec,
+            task: "Follow-up task",
+            continueFrom: { runRoot: first.report!.runRef! },
+            modelProvider: pinned,
+          },
+          script,
+          "second",
+          {
+            harnessDeps: {
+              ...script.deps,
+              env: pinned === "openai-codex"
+                ? env
+                : { ...env, CF_HARNESS_GATEWAY_AUTH_MODE: "none" },
+            },
+          },
+        );
+        if (outcome === "completed") {
+          expect(next).toMatchObject({ outcome, recordedRun: true });
+          expect(script.requests).toHaveLength(1);
+        } else {
+          expect(next).toEqual({
+            outcome,
+            recordedRun: false,
+            errorCode: "PROVIDER_FAILURE",
+            errorDetail:
+              "continue provider mismatch: run uses openai-compatible-gateway, requested openai-codex",
+          });
+          expect(script.requests).toHaveLength(0);
+        }
+      },
+    );
   }
 
   it("reports a completed run as recorded", async () => {

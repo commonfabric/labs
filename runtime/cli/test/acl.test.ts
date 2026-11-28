@@ -5,11 +5,11 @@
  * socket, or reaches a server.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { ACL } from "@commonfabric/memory/acl";
 import type { PiecesController } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { getAcl, leaveAcl, removeAclEntry, setAclEntry } from "../lib/acl.ts";
 import type { SpaceConfig } from "../lib/piece.ts";

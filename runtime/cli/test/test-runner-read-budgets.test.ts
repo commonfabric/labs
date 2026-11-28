@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { resolve } from "@std/path";
 import { stub } from "@std/testing/mock";
 import { Runtime, RuntimeTelemetryEvent } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { runTests } from "../lib/test-runner.ts";
 

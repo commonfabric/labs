@@ -4,7 +4,6 @@
  * through `Deno.stdout`, which each case captures, so this file runs serially.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 
@@ -14,6 +13,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { ACLManager, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { decode } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { aclCommand } from "../commands/acl.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";

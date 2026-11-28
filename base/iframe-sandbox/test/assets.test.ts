@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   assetUrlParts,
@@ -8,6 +7,7 @@ import {
   substituteAssets,
   toAssetRecord,
 } from "../src/assets.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
 const MENU = "data:font/woff2;base64,d09GMg==";

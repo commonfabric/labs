@@ -23,9 +23,11 @@ import {
 import { faviconHref, faviconLink, type FaviconStatus } from "./favicon.ts";
 import { GREEN_STAR_RULES } from "./green-star.ts";
 import { paintStatusFavicon } from "./favicon-client.ts";
+import { RUNNERS_PATH } from "./runners-paths.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import { paintDashboardMessageInput } from "./dashboard-message-client.ts";
 import { reconcileTiles } from "./tiles-client.ts";
+import { receivedText } from "./sent-text.ts";
 import { DASHBOARD_HEADER_RULES, dashboardHeader } from "./dashboard-header.ts";
 import {
   DASHBOARD_MESSAGE_FADE_MS,
@@ -54,6 +56,7 @@ const FOLLOW_UPDATES = followUpdates.toString();
 const DASHBOARD_MESSAGE_OPACITY = dashboardMessageOpacity.toString();
 const PAINT_DASHBOARD_MESSAGE_INPUT = paintDashboardMessageInput.toString();
 const RECONCILE_TILES = reconcileTiles.toString();
+const RECEIVED_TEXT = receivedText.toString();
 
 // How long past the refresh interval the freshness indicator stays orange before
 // it turns red. The page treats the same span of silence from the server as a
@@ -250,14 +253,14 @@ ${TILE_RULES}
   .evarrow:hover{color:var(--text-subtle)}
   .note{font-size:11px;color:var(--text-faint);margin-top:14px}
   code{background:var(--surface-code);padding:1px 5px;border-radius:4px}
-  /* The way to the repository pages sits at the foot of the page, across from
-     the theme switch. */
+  /* The ways to the repository pages and the runners page sit at the foot of
+     the page, across from the theme switch. */
   .foot{display:flex;align-items:flex-end;gap:12px}
 </style></head><body>
   ${dashboardHeader(message.text, DASHBOARD_MESSAGE_MAX_LENGTH, ago)}
   <div class="grid" id="dashboard-grid">${gridHtml}</div>
   <div id="dashboard-wide">${wideHtml}</div>
-  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a>${dashboardThemeToggle()}</div>
+  <div class="foot"><a class="pill" href="${REPOS_PATH}">▤ Repositories</a><a class="pill" href="${RUNNERS_PATH}">● Runners</a>${dashboardThemeToggle()}</div>
 ${DASHBOARD_THEME_CLIENT}
 <script>
   const REFRESH = ${refreshMs};
@@ -283,6 +286,7 @@ ${DASHBOARD_THEME_CLIENT}
   const dashboardMessageOpacity = ${DASHBOARD_MESSAGE_OPACITY};
   const paintDashboardMessageInput = ${PAINT_DASHBOARD_MESSAGE_INPUT};
   const reconcileTiles = ${RECONCILE_TILES};
+  const receivedText = ${RECEIVED_TEXT};
   const liveUpdateStream = ${LIVE_UPDATE_STREAM};
   const followUpdates = ${FOLLOW_UPDATES};
   const badge = document.getElementById('livebadge');
@@ -399,6 +403,9 @@ ${DASHBOARD_THEME_CLIENT}
     );
     paintDashboardMessage(now);
   }
+  // The markup of each of the two lists of tiles as the stream last sent it,
+  // which each update's edits apply to.
+  let markup = { grid: '', wide: '' };
   function updateTiles(container, html) {
     const template = document.createElement('template');
     template.innerHTML = html;
@@ -409,8 +416,13 @@ ${DASHBOARD_THEME_CLIENT}
     update: (data) => {
       const update = JSON.parse(data);
       if (update.shellVersion !== SHELL_VERSION) { location.reload(); return; }
-      updateTiles(grid, update.gridHtml);
-      updateTiles(wide, update.wideHtml);
+      // Edits that cannot be applied to either list leave both as they were.
+      markup = {
+        grid: receivedText(markup.grid, update.gridHtml),
+        wide: receivedText(markup.wide, update.wideHtml),
+      };
+      updateTiles(grid, markup.grid);
+      updateTiles(wide, markup.wide);
       base = update.ageSeconds;
       t0 = Date.now();
       faviconServerRedSince = update.faviconRedSince;

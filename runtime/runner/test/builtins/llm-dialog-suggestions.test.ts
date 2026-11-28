@@ -4,7 +4,6 @@
  * default pattern exports.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { BuiltInLLMMessage, JSONSchema } from "@commonfabric/api";
@@ -14,6 +13,12 @@ import {
   enableMockMode,
   loadConversationFixture,
 } from "@commonfabric/llm/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { createBuilder } from "../../src/builder/factory.ts";
 import { LLMMessageSchema } from "../../src/builtins/llm-schemas.ts";

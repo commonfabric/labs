@@ -14,13 +14,13 @@
  */
 
 import { expect } from "@std/expect";
-import { beforeEach, describe, it } from "@std/testing/bdd";
 
 import { loadPieces } from "../lib/piece.ts";
 import {
   claimProcessDeployment,
   resetProcessDeployment,
 } from "../lib/process-deployment.ts";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("process-deployment", () => {
   beforeEach(() => {

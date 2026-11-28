@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -6,6 +5,12 @@ import { Identity, legacySpaceDid } from "@commonfabric/identity";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { ROUTED_HOLDINGS_LIMIT } from "@commonfabric/memory/v2/routed-limits";
 import { cfcLabelDocumentHash } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { MirrorData } from "./mirror.ts";
 import {
   applyDocs,

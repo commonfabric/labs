@@ -1,4 +1,3 @@
-import { beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -16,6 +15,7 @@ import {
   RuntimeTelemetryEvent,
   type RuntimeTelemetryMarkerResult,
 } from "../src/telemetry.ts";
+import { beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 // Hand-rolled recording fakes for the OTel API interfaces. The bridge only
 // depends on `@opentelemetry/api` (interfaces), so tests don't need the SDK:

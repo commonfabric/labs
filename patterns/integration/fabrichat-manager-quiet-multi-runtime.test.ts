@@ -21,12 +21,17 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { scopeOfScopeKey } from "@commonfabric/memory/v2";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

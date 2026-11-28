@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { defer } from "@commonfabric/async/defer";
+import { test } from "@commonfabric/test-support/test";
 import { Server } from "../v2/server.ts";
 import { connect, type Transport } from "../v2/client.ts";
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
@@ -154,7 +155,7 @@ const waitFor = async (
   }
 };
 
-Deno.test(
+test(
   "commits enqueued during restore are eventually flushed",
   async () => {
     const server = new Server({
@@ -290,7 +291,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "closing a session during restore does not replay queued commits after close begins",
   async () => {
     const server = new Server({

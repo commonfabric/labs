@@ -6,9 +6,9 @@
  * genuine record at that point, and a failed record has to render its operands.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { AssertRecord } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   asAssertRecord,
   assertionOutcome,

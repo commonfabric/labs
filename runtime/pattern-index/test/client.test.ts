@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -12,6 +11,7 @@ import {
 } from "@commonfabric/pattern-index/client";
 import type { PatternIndexFetch } from "@commonfabric/pattern-index/http-fetch";
 import { MAX_PROOF_CHAIN_LENGTH } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("cf-harness pattern-index client");
 
@@ -214,6 +214,28 @@ describe("PatternIndexClient", () => {
     const pattern = await client.getPattern({ patternId: "pat-1" });
     expect(JSON.parse(requests[0].body)).toEqual({ patternId: "pat-1" });
     expect(pattern.program).toBeUndefined();
+  });
+
+  it("asks getPattern by a pattern link with the ref alone, and answers what it names", async () => {
+    const link = {
+      ref: "a-xyz@beta",
+      channel: "beta",
+      number: 3,
+      stable: false,
+    };
+    const { client, requests } = createClient([
+      jsonResponse({
+        patternId: "pat-3",
+        createdAt: "2026-08-01T00:00:00.000Z",
+        description: "Totals an expense list",
+        hashtags: [],
+        dependencies: [],
+        link,
+      }),
+    ]);
+    const pattern = await client.getPattern({ ref: "a-xyz@beta" });
+    expect(JSON.parse(requests[0].body)).toEqual({ ref: "a-xyz@beta" });
+    expect(pattern.link).toEqual(link);
   });
 
   it("posts listPatterns with no fields and answers with the scored listing", async () => {
@@ -638,6 +660,30 @@ describe("PatternIndexClient", () => {
     expect(body.remixedFrom).toBe("pat-other");
   });
 
+  it("sends `standalone` as stated, and omits it when unstated", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ patternId: "pat-6", created: true }),
+      jsonResponse({ patternId: "pat-7", created: true }),
+      jsonResponse({ patternId: "pat-8", created: true }),
+    ]);
+    const request = {
+      patternId: "pat-6",
+      description: "Doubles a number",
+      hashtags: [],
+      program: {
+        main: "/main.tsx",
+        files: [{ name: "/main.tsx", contents: "export default 2;" }],
+      },
+    };
+    await client.publishPattern({ ...request, standalone: false });
+    await client.publishPattern({ ...request, standalone: true });
+    await client.publishPattern(request);
+    const bodies = requests.map((sent) => JSON.parse(sent.body));
+    expect(bodies[0].standalone).toBe(false);
+    expect(bodies[1].standalone).toBe(true);
+    expect(Object.hasOwn(bodies[2], "standalone")).toBe(false);
+  });
+
   it("sends a version's lineage, slot, origin and privacy, and omits each when unset", async () => {
     const { client, requests } = createClient([
       jsonResponse({
@@ -760,6 +806,11 @@ describe("PatternIndexClient", () => {
         fn: "shareVersion",
         call: (c) => c.shareVersion({ versionId: "ver-1" }),
         body: { versionId: "ver-1" },
+      },
+      {
+        fn: "shareVersion",
+        call: (c) => c.shareVersion({ versionId: "ver-1", channel: "beta" }),
+        body: { versionId: "ver-1", channel: "beta" },
       },
       {
         fn: "publishLineage",

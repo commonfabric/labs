@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -71,7 +76,12 @@ describe("cold start of a piece with trusted sub-pieces", () => {
     const program = await resolveLocalProgram(
       (resolver) => runtime.harness.resolve(resolver),
       {
-        main: join(patternsRoot, "examples", "cfc-staged-publish", "main.tsx"),
+        main: join(
+          patternsRoot,
+          "examples",
+          "cfc-staged-publish",
+          "cfc-staged-publish.tsx",
+        ),
         root: patternsRoot,
       },
     );

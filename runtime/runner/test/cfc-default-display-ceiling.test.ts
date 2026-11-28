@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CFC_CONCEPT_KIND, cfcAtom } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { defaultDisplayCeiling } from "../src/cfc/default-display-ceiling.ts";
 import { PROMPT_CAVEAT_FAMILY_KINDS } from "../src/cfc/prompt-caveat-kinds.ts";

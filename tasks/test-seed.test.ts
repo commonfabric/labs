@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { main, requestedSeed } from "./test-seed.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Runs `body` with the seed variable as `value`, restoring it after. */
 function withSeedVariable(value: string, body: () => void): void {

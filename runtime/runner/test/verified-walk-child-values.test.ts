@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { verifiedWalkChildValues } from "../src/harness/executable-registry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The verified-value walks (recordVerifiedFunctions / annotateVerifiedPatterns /
 // collectAssociatedFunctions) recurse through `verifiedWalkChildValues`, which

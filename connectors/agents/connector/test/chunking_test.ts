@@ -4,8 +4,9 @@ import {
   encodedJsonBytes,
   iterateEventChunks,
 } from "../src/chunking.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("event chunking rejects invalid byte targets", () => {
+test("event chunking rejects invalid byte targets", () => {
   for (const targetBytes of [0, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     assertThrows(
       () => chunkEvents([], targetBytes),
@@ -15,7 +16,7 @@ Deno.test("event chunking rejects invalid byte targets", () => {
   }
 });
 
-Deno.test("chunkEvents keeps provider events whole and deterministic", () => {
+test("chunkEvents keeps provider events whole and deterministic", () => {
   const events = [
     { id: "a", text: "12345678" },
     { id: "b", text: "abcdefgh" },
@@ -33,7 +34,7 @@ Deno.test("chunkEvents keeps provider events whole and deterministic", () => {
   assertEquals(chunkEvents(events, targetBytes), chunks);
 });
 
-Deno.test("chunkEvents returns one empty chunk for an empty complete snapshot", () => {
+test("chunkEvents returns one empty chunk for an empty complete snapshot", () => {
   assertEquals(chunkEvents([], 512), [{
     part: 0,
     events: [],
@@ -41,7 +42,7 @@ Deno.test("chunkEvents returns one empty chunk for an empty complete snapshot", 
   }]);
 });
 
-Deno.test("chunkEvents reports the exact size of multi-event chunks", () => {
+test("chunkEvents reports the exact size of multi-event chunks", () => {
   const events = [{ value: 1 }, { value: 2 }, { value: 3 }];
   assertEquals(chunkEvents(events, 1024), [{
     part: 0,
@@ -50,7 +51,7 @@ Deno.test("chunkEvents reports the exact size of multi-event chunks", () => {
   }]);
 });
 
-Deno.test("chunkEvents serializes each provider event once", () => {
+test("chunkEvents serializes each provider event once", () => {
   let serializations = 0;
   const events = [
     {
@@ -79,7 +80,7 @@ Deno.test("chunkEvents serializes each provider event once", () => {
   ]);
 });
 
-Deno.test("event chunk iteration does not inspect the whole session", () => {
+test("event chunk iteration does not inspect the whole session", () => {
   let captures = 0;
   const events = ["a", "b", "c"].map((id) => ({
     toJSON() {
@@ -97,7 +98,7 @@ Deno.test("event chunk iteration does not inspect the whole session", () => {
   assertEquals(chunks.next().done, true);
 });
 
-Deno.test("chunkEvents measures bigint using the Fabric JSON encoding", () => {
+test("chunkEvents measures bigint using the Fabric JSON encoding", () => {
   const events = [
     { id: "positive", value: 1n },
     { id: "negative", value: -1n },

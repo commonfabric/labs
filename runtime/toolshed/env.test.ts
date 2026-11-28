@@ -11,12 +11,12 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { MAX_UNTRUSTED_MESSAGE_SLOTS } from "@commonfabric/memory/v2";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { EnvSchema, loadEnv } from "@/env.ts";
 import { Exited } from "@/test/support/exited.ts";
 
-Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const admits = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_ACL_DELEGATIONS: v })
       .MEMORY_ACL_DELEGATIONS;
@@ -31,7 +31,7 @@ Deno.test("MEMORY_ACL_DELEGATIONS parses strictly: on by default, off only for '
   expect(() => admits("off")).toThrow();
 });
 
-Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const enabled = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_SYNC_CID_REFERENCES: v })
       .MEMORY_SYNC_CID_REFERENCES;
@@ -46,7 +46,31 @@ Deno.test("MEMORY_SYNC_CID_REFERENCES parses strictly: on by default, off only f
   expect(() => enabled("on")).toThrow();
 });
 
-Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+test("a leftover MEMORY_MARKED_SPLICES is ignored, whatever its spelling", () => {
+  // The setting is gone: a deployment that still sets it, as an override
+  // file written while it existed does, starts as one that does not.
+  for (const value of ["true", "false", "on"]) {
+    const parsed = EnvSchema.parse({ MEMORY_MARKED_SPLICES: value });
+    assertEquals("MEMORY_MARKED_SPLICES" in parsed, false);
+  }
+});
+
+test("MEMORY_RETIRE_BARE_DID_LABELS parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
+  const enabled = (v: string | undefined) =>
+    EnvSchema.parse(
+      v === undefined ? {} : { MEMORY_RETIRE_BARE_DID_LABELS: v },
+    ).MEMORY_RETIRE_BARE_DID_LABELS;
+
+  assertEquals(enabled(undefined), true);
+  assertEquals(enabled("false"), false);
+  assertEquals(enabled("0"), false);
+  assertEquals(enabled("true"), true);
+  assertEquals(enabled("1"), true);
+  expect(() => enabled("TRUE")).toThrow();
+  expect(() => enabled("on")).toThrow();
+});
+
+test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only for 'false'/'0', and any other spelling refuses", () => {
   const enabled = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_STORE_READS_DIGEST: v })
       .MEMORY_STORE_READS_DIGEST;
@@ -61,7 +85,7 @@ Deno.test("MEMORY_STORE_READS_DIGEST parses strictly: on by default, off only fo
   expect(() => enabled("on")).toThrow();
 });
 
-Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
+test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () => {
   // Regression guard for the z.coerce.boolean() footgun: Boolean("false") ===
   // true, which would silently enable telemetry (and, with the all-span
   // exporter, ship every HTTP request span) when an operator set
@@ -82,7 +106,7 @@ Deno.test("OTEL_ENABLED parses strictly: only 'true'/'1' enable telemetry", () =
   assertEquals(otel(undefined), false);
 });
 
-Deno.test("DISABLE_LOG_REQ_RES / PLAID_SYNC_ALL_TRANSACTIONS parse strictly", () => {
+test("DISABLE_LOG_REQ_RES / PLAID_SYNC_ALL_TRANSACTIONS parse strictly", () => {
   // The sibling boolean flags use the strict boolFlag() parse rather than
   // z.coerce.boolean(), which reads "false" as true. Guard them so they
   // can't silently regress.
@@ -102,7 +126,7 @@ Deno.test("DISABLE_LOG_REQ_RES / PLAID_SYNC_ALL_TRANSACTIONS parse strictly", ()
   }
 });
 
-Deno.test("MEMORY_MINIMUM_CLIENT_GENERATION only accepts disabled configuration", () => {
+test("MEMORY_MINIMUM_CLIENT_GENERATION only accepts disabled configuration", () => {
   expect(EnvSchema.parse({}).MEMORY_MINIMUM_CLIENT_GENERATION).toBe(0);
   expect(
     EnvSchema.parse({ MEMORY_MINIMUM_CLIENT_GENERATION: "0" })
@@ -139,7 +163,7 @@ Deno.test("MEMORY_MINIMUM_CLIENT_GENERATION only accepts disabled configuration"
   }
 });
 
-Deno.test("MEMORY_ACL_MODE defaults to enforce and accepts rollout overrides", () => {
+test("MEMORY_ACL_MODE defaults to enforce and accepts rollout overrides", () => {
   const aclMode = (value: string | undefined) =>
     EnvSchema.parse(
       value === undefined ? {} : { MEMORY_ACL_MODE: value },
@@ -151,7 +175,7 @@ Deno.test("MEMORY_ACL_MODE defaults to enforce and accepts rollout overrides", (
   assertEquals(aclMode("enforce"), "enforce");
 });
 
-Deno.test("MEMORY_PUBLIC_URL is an HTTP or HTTPS origin, or nothing", () => {
+test("MEMORY_PUBLIC_URL is an HTTP or HTTPS origin, or nothing", () => {
   const parse = (value: string | undefined) =>
     EnvSchema.safeParse(
       value === undefined ? {} : { MEMORY_PUBLIC_URL: value },
@@ -190,7 +214,7 @@ Deno.test("MEMORY_PUBLIC_URL is an HTTP or HTTPS origin, or nothing", () => {
   }
 });
 
-Deno.test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
+test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
   const warned: unknown[][] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => warned.push(args);
@@ -216,7 +240,7 @@ Deno.test("MEMORY_PUBLIC_URL warns about plain http off loopback", () => {
   }
 });
 
-Deno.test("API_INTERNAL_URL is `self`, an HTTP or HTTPS origin, or nothing, beside API_URL", () => {
+test("API_INTERNAL_URL is `self`, an HTTP or HTTPS origin, or nothing, beside API_URL", () => {
   const parse = (
     value: string | undefined,
     rest: Record<string, string> = {},
@@ -298,7 +322,7 @@ Deno.test("API_INTERNAL_URL is `self`, an HTTP or HTTPS origin, or nothing, besi
   }
 });
 
-Deno.test("TOOLSHED_RELEASED_AT is an RFC 3339 date-time, or nothing", () => {
+test("TOOLSHED_RELEASED_AT is an RFC 3339 date-time, or nothing", () => {
   const parse = (value: string | undefined) =>
     EnvSchema.safeParse(
       value === undefined ? {} : { TOOLSHED_RELEASED_AT: value },
@@ -331,7 +355,7 @@ Deno.test("TOOLSHED_RELEASED_AT is an RFC 3339 date-time, or nothing", () => {
   }
 });
 
-Deno.test("TOOLSHED_RELEASED_AT refuses a time ahead of the host's clock", () => {
+test("TOOLSHED_RELEASED_AT refuses a time ahead of the host's clock", () => {
   const parse = (offset: number) => {
     const value = new Date(Date.now() + offset).toISOString();
     return {
@@ -360,7 +384,7 @@ Deno.test("TOOLSHED_RELEASED_AT refuses a time ahead of the host's clock", () =>
   );
 });
 
-Deno.test("EXPOSE_GC parses strictly, and only on a development or test server", () => {
+test("EXPOSE_GC parses strictly, and only on a development or test server", () => {
   const expose = (env: Record<string, string>) =>
     EnvSchema.parse(env).EXPOSE_GC;
 
@@ -376,7 +400,7 @@ Deno.test("EXPOSE_GC parses strictly, and only on a development or test server",
   }
 });
 
-Deno.test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
+test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
   const sample = (env: Record<string, string>) =>
     EnvSchema.parse(env).HEAP_PROFILE_MAIN_THREAD;
 
@@ -385,7 +409,7 @@ Deno.test("HEAP_PROFILE_MAIN_THREAD is off unless set", () => {
   assertEquals(sample({ HEAP_PROFILE_MAIN_THREAD: "true" }), true);
 });
 
-Deno.test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {
+test("MEMORY_DUMP_ENABLED is on, off, or left to the default", () => {
   const dump = (v: string | undefined) =>
     EnvSchema.parse(v === undefined ? {} : { MEMORY_DUMP_ENABLED: v })
       .MEMORY_DUMP_ENABLED;
@@ -450,7 +474,7 @@ describe("PLAID_ENV", () => {
   });
 });
 
-Deno.test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and only raises the default", () => {
+test("MEMORY_UNTRUSTED_MESSAGE_SLOTS is unset by default and only raises the default", () => {
   expect(EnvSchema.parse({}).MEMORY_UNTRUSTED_MESSAGE_SLOTS).toBe(undefined);
   for (const accepted of [MAX_UNTRUSTED_MESSAGE_SLOTS, 10_000_000]) {
     expect(

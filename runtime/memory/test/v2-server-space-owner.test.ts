@@ -27,6 +27,7 @@ import {
   type SessionOpenResult,
   type SessionSync,
 } from "../v2.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const HELLO = {
   type: "hello",
@@ -141,7 +142,7 @@ const initializeSpaceAcl = async (
   assertExists(written.ok, "space identity should initialize the ACL");
 };
 
-Deno.test("resolveSpaceOwner: a self-owned space resolves to the space DID (the home-space predicate)", async () => {
+test("resolveSpaceOwner: a self-owned space resolves to the space DID (the home-space predicate)", async () => {
   const server = createServer("memory://space-owner-self");
   const space = "did:key:z6Mk-owner-space-self";
   try {
@@ -153,7 +154,7 @@ Deno.test("resolveSpaceOwner: a self-owned space resolves to the space DID (the 
   }
 });
 
-Deno.test("resolveSpaceOwner: a self-owned space declaring a kind resolves to the space DID", async () => {
+test("resolveSpaceOwner: a self-owned space declaring a kind resolves to the space DID", async () => {
   // A profile owns itself (docs/specs/profile-delegation.md). The acting-as
   // binding refuses to stand for its DID, but its owner is still its DID,
   // which the serving root ensure needs for the space's trust snapshot.
@@ -168,7 +169,7 @@ Deno.test("resolveSpaceOwner: a self-owned space declaring a kind resolves to th
   }
 });
 
-Deno.test("resolveSpaceOwner: several concrete OWNERs resolve deterministically to the lexicographically first", async () => {
+test("resolveSpaceOwner: several concrete OWNERs resolve deterministically to the lexicographically first", async () => {
   const server = createServer("memory://space-owner-multi");
   const space = "did:key:z6Mk-owner-space-multi";
   try {
@@ -184,7 +185,7 @@ Deno.test("resolveSpaceOwner: several concrete OWNERs resolve deterministically 
   }
 });
 
-Deno.test("resolveSpaceOwner: no ACL resolves to undefined (the ensure's fail-closed arm)", async () => {
+test("resolveSpaceOwner: no ACL resolves to undefined (the ensure's fail-closed arm)", async () => {
   const server = createServer("memory://space-owner-missing");
   const space = "did:key:z6Mk-owner-space-missing";
   try {
@@ -195,7 +196,7 @@ Deno.test("resolveSpaceOwner: no ACL resolves to undefined (the ensure's fail-cl
   }
 });
 
-Deno.test("resolveSpaceOwner: an owner-granted non-self space names that owner, never the service", async () => {
+test("resolveSpaceOwner: an owner-granted non-self space names that owner, never the service", async () => {
   const server = createServer("memory://space-owner-granted");
   const space = "did:key:z6Mk-owner-space-granted";
   try {

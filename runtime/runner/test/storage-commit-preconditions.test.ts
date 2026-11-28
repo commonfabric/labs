@@ -4,6 +4,7 @@ import {
   resetCommitPreconditionsConfig,
   setCommitPreconditionsConfig,
 } from "@commonfabric/memory/v2";
+import { test } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { ExtendedStorageTransaction } from "../src/storage/extended-storage-transaction.ts";
 import type {
@@ -40,7 +41,7 @@ const captureNativeDrafts = () => {
   return { storage, drafts };
 };
 
-Deno.test("precondition-only transactions send and validate their commit", async () => {
+test("precondition-only transactions send and validate their commit", async () => {
   setCommitPreconditionsConfig(true);
   const { storage, drafts } = captureNativeDrafts();
 
@@ -69,7 +70,7 @@ Deno.test("precondition-only transactions send and validate their commit", async
   }
 });
 
-Deno.test("extended transaction refuses preconditions the storage cannot enforce", () => {
+test("extended transaction refuses preconditions the storage cannot enforce", () => {
   // The wrapper must fail closed: silently ignoring a gating precondition
   // because the inner transaction does not support it would let a
   // descendant of an unconfirmed origin commit ungated.
@@ -86,7 +87,7 @@ Deno.test("extended transaction refuses preconditions the storage cannot enforce
   );
 });
 
-Deno.test("extended transaction refuses create-only marks the storage cannot enforce", () => {
+test("extended transaction refuses create-only marks the storage cannot enforce", () => {
   // Same fail-closed posture as addCommitPrecondition above: a create-only
   // mark is a commit gate — the exactly-once witness for event receipts and
   // single-use grant consumption — so a wrapper that swallowed it over an

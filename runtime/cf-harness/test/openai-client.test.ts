@@ -1,12 +1,12 @@
 import { assert, assertEquals, assertRejects } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type OpenAIChatCompletionAttemptDiagnostic,
   OpenAICompatibleGatewayClient,
 } from "../src/gateway/openai-client.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("OpenAICompatibleGatewayClient resolves endpoint URLs against the base URL", () => {
+test("OpenAICompatibleGatewayClient resolves endpoint URLs against the base URL", () => {
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
   });
@@ -21,7 +21,7 @@ Deno.test("OpenAICompatibleGatewayClient resolves endpoint URLs against the base
   );
 });
 
-Deno.test("OpenAICompatibleGatewayClient forwards requests through the injected fetch implementation", async () => {
+test("OpenAICompatibleGatewayClient forwards requests through the injected fetch implementation", async () => {
   const calls: Array<{ input: URL | RequestInfo; init?: RequestInit }> = [];
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
@@ -54,7 +54,7 @@ Deno.test("OpenAICompatibleGatewayClient forwards requests through the injected 
   );
 });
 
-Deno.test("OpenAICompatibleGatewayClient forwards abort signals to chat completion fetch", async () => {
+test("OpenAICompatibleGatewayClient forwards abort signals to chat completion fetch", async () => {
   const controller = new AbortController();
   let seenSignal: AbortSignal | null | undefined;
   const client = new OpenAICompatibleGatewayClient({
@@ -86,7 +86,7 @@ Deno.test("OpenAICompatibleGatewayClient forwards abort signals to chat completi
   assertEquals(seenSignal, controller.signal);
 });
 
-Deno.test("OpenAICompatibleGatewayClient omits authorization headers in no-auth mode", async () => {
+test("OpenAICompatibleGatewayClient omits authorization headers in no-auth mode", async () => {
   const calls: Array<{ input: URL | RequestInfo; init?: RequestInit }> = [];
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
@@ -107,7 +107,7 @@ Deno.test("OpenAICompatibleGatewayClient omits authorization headers in no-auth 
   );
 });
 
-Deno.test("OpenAICompatibleGatewayClient forwards native model tools and summarizes them in diagnostics", async () => {
+test("OpenAICompatibleGatewayClient forwards native model tools and summarizes them in diagnostics", async () => {
   const attempts: OpenAIChatCompletionAttemptDiagnostic[] = [];
   let requestBody: unknown;
   const client = new OpenAICompatibleGatewayClient({
@@ -148,7 +148,7 @@ Deno.test("OpenAICompatibleGatewayClient forwards native model tools and summari
   assertEquals(attempts[0].request.nativeModelToolCount, 1);
 });
 
-Deno.test("OpenAICompatibleGatewayClient parses successful chat completion JSON responses", async () => {
+test("OpenAICompatibleGatewayClient parses successful chat completion JSON responses", async () => {
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
     apiKey: "test-key",
@@ -174,7 +174,7 @@ Deno.test("OpenAICompatibleGatewayClient parses successful chat completion JSON 
   assertEquals(response.choices[0]?.message.content, "ok");
 });
 
-Deno.test("OpenAICompatibleGatewayClient retries a chat completion transport failure by default", async () => {
+test("OpenAICompatibleGatewayClient retries a chat completion transport failure by default", async () => {
   let calls = 0;
   const attempts: OpenAIChatCompletionAttemptDiagnostic[] = [];
   const client = new OpenAICompatibleGatewayClient({
@@ -220,7 +220,7 @@ Deno.test("OpenAICompatibleGatewayClient retries a chat completion transport fai
   assertEquals(attempts[1].httpStatus, 200);
 });
 
-Deno.test("OpenAICompatibleGatewayClient does not retry aborted chat completion requests", async () => {
+test("OpenAICompatibleGatewayClient does not retry aborted chat completion requests", async () => {
   let calls = 0;
   const attempts: OpenAIChatCompletionAttemptDiagnostic[] = [];
   const controller = new AbortController();
@@ -260,7 +260,7 @@ Deno.test("OpenAICompatibleGatewayClient does not retry aborted chat completion 
   assertEquals(attempts[0].outcome, "transport_error");
 });
 
-Deno.test("OpenAICompatibleGatewayClient surfaces exhausted chat completion transport retries", async () => {
+test("OpenAICompatibleGatewayClient surfaces exhausted chat completion transport retries", async () => {
   let calls = 0;
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
@@ -284,7 +284,7 @@ Deno.test("OpenAICompatibleGatewayClient surfaces exhausted chat completion tran
   assertEquals(calls, 4);
 });
 
-Deno.test("OpenAICompatibleGatewayClient surfaces chat completion errors with response text", async () => {
+test("OpenAICompatibleGatewayClient surfaces chat completion errors with response text", async () => {
   const attempts: OpenAIChatCompletionAttemptDiagnostic[] = [];
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
@@ -343,7 +343,7 @@ Deno.test("OpenAICompatibleGatewayClient surfaces chat completion errors with re
   assert(new Date(attempt.endedAt).toString() !== "Invalid Date");
 });
 
-Deno.test("OpenAICompatibleGatewayClient fails clearly when no API key is configured", async () => {
+test("OpenAICompatibleGatewayClient fails clearly when no API key is configured", async () => {
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
     fetchFn: () =>
@@ -365,7 +365,7 @@ Deno.test("OpenAICompatibleGatewayClient fails clearly when no API key is config
   );
 });
 
-Deno.test("OpenAICompatibleGatewayClient fails clearly on placeholder API keys", async () => {
+test("OpenAICompatibleGatewayClient fails clearly on placeholder API keys", async () => {
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
     apiKey: "...",
@@ -389,7 +389,7 @@ Deno.test("OpenAICompatibleGatewayClient fails clearly on placeholder API keys",
   );
 });
 
-Deno.test("OpenAICompatibleGatewayClient surfaces 401s with API key source context", async () => {
+test("OpenAICompatibleGatewayClient surfaces 401s with API key source context", async () => {
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
     apiKey: "test-key",
@@ -414,7 +414,7 @@ Deno.test("OpenAICompatibleGatewayClient surfaces 401s with API key source conte
   );
 });
 
-Deno.test("OpenAICompatibleGatewayClient surfaces 401s in no-auth mode without implying caller auth", async () => {
+test("OpenAICompatibleGatewayClient surfaces 401s in no-auth mode without implying caller auth", async () => {
   const client = new OpenAICompatibleGatewayClient({
     baseUrl: "https://llm.stage.commontools.dev/",
     authMode: "none",

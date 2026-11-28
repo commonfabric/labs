@@ -6,7 +6,7 @@ import {
   type HarnessImageMediaType,
 } from "./contracts/image.ts";
 
-const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+export const MAX_IMAGE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 const IMAGE_MEDIA_TYPES = new Set<HarnessImageMediaType>([
   "image/gif",
   "image/jpeg",
@@ -203,6 +203,8 @@ export const createHarnessImageAttachment = async (
      * attachment stays locked to the source file's bytes and digest.
      */
     snapshotDir?: string;
+    /** Exact bytes the sandbox released for this path. */
+    observedBase64?: string;
   },
 ): Promise<HarnessImageAttachment> => {
   const workspaceHostPath = await Deno.realPath(options.workspaceHostPath);
@@ -212,7 +214,22 @@ export const createHarnessImageAttachment = async (
   if (!stat.isFile) {
     throw new Error(`--image path is not a file: ${options.path}`);
   }
-  const bytes = await Deno.readFile(hostPath);
+  if (
+    options.observedBase64 !== undefined &&
+    options.observedBase64.length >
+      Math.ceil(MAX_IMAGE_ATTACHMENT_BYTES / 3) * 4
+  ) {
+    throw new Error("image path is too large");
+  }
+  const bytes = options.observedBase64 === undefined
+    ? await Deno.readFile(hostPath)
+    : decodeBase64(options.observedBase64);
+  if (
+    options.observedBase64 !== undefined &&
+    encodeBase64(bytes) !== options.observedBase64
+  ) {
+    throw new Error("invalid observed image bytes");
+  }
   if (bytes.byteLength === 0) {
     throw new Error(`--image path is empty: ${options.path}`);
   }

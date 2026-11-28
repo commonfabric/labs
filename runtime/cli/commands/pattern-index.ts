@@ -113,8 +113,12 @@ export async function join(
         "Join with an invite link or with --chain, not both.",
       );
     }
+    // `-` is stdin, so a chain fetched from the service the identity's
+    // membership is kept on pipes straight in, with no file to clean up.
     const chains = decodeDelegationChains(
-      await Deno.readTextFile(options.chain),
+      options.chain === "-"
+        ? await new Response(stdin ?? Deno.stdin.readable).text()
+        : await Deno.readTextFile(options.chain),
     );
     if (chains.length !== 1) {
       throw new ValidationError(
@@ -304,7 +308,8 @@ export const index = new Command()
         .option(
           "--chain <path:string>",
           "A chain file your root issued to this identity " +
-            "(cf delegation issue --index on the machine holding the root).",
+            "(cf delegation issue --index on the machine holding the root), " +
+            "or - to read it from stdin.",
         )
         .example(
           cliText("pbpaste | cf index join -i ~/.cf/me.key"),

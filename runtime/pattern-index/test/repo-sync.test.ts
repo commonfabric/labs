@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   PatternIndexError,
   type PatternIndexPublishRequest,
@@ -8,6 +8,7 @@ import {
 } from "../src/client.ts";
 import {
   findEntries,
+  formerPathsIn,
   type PlanDeps,
   planRepo,
   type RepoEntryOptions,
@@ -118,7 +119,14 @@ const fakeIndex = (heads: PatternIndexRepoHead[] = []) => {
     listRepoHeads: () => Promise.resolve({ heads }),
     publishPattern: (request) => {
       published.push(request);
-      return Promise.resolve({ patternId: request.patternId, created: true });
+      return Promise.resolve({
+        patternId: request.patternId,
+        created: true,
+        // A move the index made names the old path back.
+        ...(request.source?.movedFrom === undefined
+          ? {}
+          : { movedFrom: request.source.movedFrom }),
+      });
     },
     withdrawRepoPaths: (request) => {
       withdrawals.push(request.paths);
@@ -234,6 +242,27 @@ describe("repo-sync", () => {
       expect(entry.request.description).toBe("Doubles a number.");
       expect(entry.request.hashtags).toEqual(["math"]);
       expect(entry.request.keywords).toEqual(["double"]);
+    });
+
+    it("returns a `main.tsx` entry as standalone and any other entry as a part", async () => {
+      const plan = await planRepo(
+        OPTIONS,
+        planDeps({
+          "patterns/a/main.tsx": DESCRIBED,
+          "patterns/a/card.tsx": DESCRIBED,
+          "patterns/b.tsx": DESCRIBED,
+        }),
+      );
+      expect(
+        plan.entries.map((entry) => [
+          entry.path,
+          entry.status === "compiled" ? entry.request.standalone : undefined,
+        ]),
+      ).toEqual([
+        ["patterns/a/card.tsx", false],
+        ["patterns/a/main.tsx", true],
+        ["patterns/b.tsx", false],
+      ]);
     });
 
     it("returns an entry with no description as undescribed", async () => {
@@ -352,6 +381,132 @@ describe("repo-sync", () => {
       expect(
         planProblem(plan({ path: "a", status: "compiled", sourceHash: "h" })),
       ).toBe("entries[0] has no publish request");
+      expect(
+        planProblem(plan({
+          path: "a",
+          status: "compiled",
+          sourceHash: "h",
+          request: { patternId: "id" },
+          formerPaths: "b",
+        })),
+      ).toBe("entries[0] has former paths that are not a list of paths");
+    });
+  });
+
+  describe("formerPathsIn()", () => {
+    // Former path to current path. The notes moved twice, and the table
+    // keeps every old path pointing straight at the newest one.
+    const moves = {
+      "notes.tsx": "apps/notes/main.tsx",
+      "apps/notes/notes.tsx": "apps/notes/main.tsx",
+    };
+
+    it("returns every path that moved to a file, not only the first", () => {
+      expect(
+        formerPathsIn("patterns", moves)("patterns/apps/notes/main.tsx"),
+      ).toEqual(["patterns/notes.tsx", "patterns/apps/notes/notes.tsx"]);
+    });
+
+    it("returns both paths of a category-sorted file later renamed to `main.tsx`, as Labs records it", () => {
+      // The directory moved when patterns were sorted into categories, and
+      // then its entry was renamed.
+      const labs = {
+        "annotation/": "apps/annotation/",
+        "apps/annotation/annotation.tsx": "apps/annotation/main.tsx",
+      };
+      expect(
+        formerPathsIn("patterns", labs)("patterns/apps/annotation/main.tsx"),
+      ).toEqual([
+        "patterns/apps/annotation/annotation.tsx",
+        "patterns/annotation/annotation.tsx",
+      ]);
+    });
+
+    it("follows a chain of moves back, nearest first", () => {
+      const chain = { "a.tsx": "b.tsx", "b.tsx": "c/main.tsx" };
+      expect(formerPathsIn("p", chain)("p/c/main.tsx")).toEqual([
+        "p/b.tsx",
+        "p/a.tsx",
+      ]);
+    });
+
+    it("returns none for a file that never moved or lies outside the program root", () => {
+      const former = formerPathsIn("patterns/", moves);
+      expect(former("patterns/apps/other/main.tsx")).toEqual([]);
+      expect(former("elsewhere/apps/notes/main.tsx")).toEqual([]);
+    });
+
+    it("reads paths from the repository root when that is the program root", () => {
+      const loom = {
+        "src/patterns/cf-calendar.tsx": "src/patterns/cf-calendar/main.tsx",
+      };
+      for (const root of [".", "./"]) {
+        expect(
+          formerPathsIn(root, loom)("src/patterns/cf-calendar/main.tsx"),
+        ).toEqual(["src/patterns/cf-calendar.tsx"]);
+      }
+    });
+
+    it("stops at a path it already passed", () => {
+      const cycle = { "a.tsx": "b.tsx", "b.tsx": "a.tsx" };
+      expect(formerPathsIn("p", cycle)("p/a.tsx")).toEqual(["p/b.tsx"]);
+    });
+
+    it("applies each move once, so a cycle of directory moves ends", () => {
+      const cycle = { "a/": "b/", "b/sub/": "a/" };
+      expect(formerPathsIn("p", cycle)("p/a/x.tsx")).toEqual([
+        "p/b/sub/x.tsx",
+        "p/a/sub/x.tsx",
+      ]);
+    });
+
+    it("follows a path reached again with other moves used, which can reach further", () => {
+      const table = { "a/": "b/", "b/": "a/x/", "a/x/": "b/x/" };
+      expect(formerPathsIn("p", table)("p/b/x/file.tsx")).toEqual([
+        "p/a/x/file.tsx",
+        "p/b/file.tsx",
+        "p/a/file.tsx",
+      ]);
+    });
+
+    it("walks a path reached twice with the same moves used only once", () => {
+      // `a/c.tsx` reaches `b/a/c.tsx` both by `b/a/` then `a/` then `b/`, and
+      // by `b/` then `a/` then `b/a/`, having spent the same three moves.
+      const table = { "b/a/": "a/", "b/": "a/", "a/": "b/" };
+      expect(formerPathsIn("p", table)("p/a/c.tsx")).toEqual([
+        "p/b/a/c.tsx",
+        "p/b/c.tsx",
+        "p/a/a/c.tsx",
+      ]);
+    });
+
+    it("is what the plan records for each entry, compiled or not", async () => {
+      const plan = await planRepo(
+        {
+          ...OPTIONS,
+          formerPaths: formerPathsIn("patterns", {
+            ...moves,
+            "c.tsx": "c/main.tsx",
+          }),
+        },
+        planDeps({
+          "patterns/apps/notes/main.tsx": DESCRIBED,
+          "patterns/b.tsx": DESCRIBED,
+          "patterns/c/main.tsx": UNDESCRIBED,
+        }),
+      );
+      expect(plan.entries.map((entry) => [
+        entry.path,
+        entry.status,
+        entry.formerPaths,
+      ])).toEqual([
+        ["patterns/apps/notes/main.tsx", "compiled", [
+          "patterns/notes.tsx",
+          "patterns/apps/notes/notes.tsx",
+        ]],
+        ["patterns/b.tsx", "compiled", undefined],
+        ["patterns/c/main.tsx", "undescribed", ["patterns/c.tsx"]],
+      ]);
     });
   });
 
@@ -375,6 +530,173 @@ describe("repo-sync", () => {
         sourceHash: "hash:p/a.tsx",
       });
       expect(published[0].priorPatternId).toBeUndefined();
+    });
+
+    it("names the head of the path a new entry moved from as its predecessor", async () => {
+      const { client, published, withdrawals } = fakeIndex([
+        head("p/old.tsx"),
+        head("p/deleted.tsx"),
+      ]);
+      const report = await publishPlan(
+        {
+          entries: [{
+            ...compiled("p/new/main.tsx"),
+            formerPaths: ["p/gone.tsx", "p/old.tsx"],
+          }],
+          selected: ["p/new/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(published[0].source?.path).toBe("p/new/main.tsx");
+      expect(published[0].source?.movedFrom).toBe("p/old.tsx");
+      expect(published[0].priorPatternId).toBeUndefined();
+      // The moved lineage is at its new path now; only the deleted file's
+      // is withdrawn.
+      expect(withdrawals).toEqual([["p/deleted.tsx"]]);
+      expect(report.kept).toEqual([]);
+    });
+
+    it("returns a move the index does not confirm as failed", async () => {
+      const { client, withdrawals } = fakeIndex([head("p/old.tsx")]);
+      // An index that predates moves drops `source.movedFrom` silently.
+      client.publishPattern = (request) =>
+        Promise.resolve({ patternId: request.patternId, created: true });
+      const report = await publishPlan(
+        {
+          entries: [{
+            ...compiled("p/new/main.tsx"),
+            formerPaths: ["p/old.tsx"],
+          }],
+          selected: ["p/new/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries).toEqual([{
+        path: "p/new/main.tsx",
+        status: "failed",
+        reason: "the index did not say it moved the lineage of p/old.tsx here",
+      }]);
+      expect(withdrawals).toEqual([]);
+      expect(report.kept).toEqual(["p/old.tsx"]);
+    });
+
+    it("keeps, rather than withdraws, the former path of an entry that cannot take its lineage", async () => {
+      // A move the index did not confirm left a lineage at the new path; the
+      // other two entries failed to compile or have no description.
+      const { client, published, withdrawals } = fakeIndex([
+        head("p/new/main.tsx"),
+        head("p/old.tsx"),
+        head("p/broken-old.tsx"),
+        head("p/bare-old.tsx"),
+        head("p/deleted.tsx"),
+      ]);
+      const report = await publishPlan(
+        {
+          entries: [
+            { ...compiled("p/new/main.tsx"), formerPaths: ["p/old.tsx"] },
+            {
+              path: "p/broken/main.tsx",
+              status: "failed",
+              reason: "does not compile",
+              formerPaths: ["p/broken-old.tsx"],
+            },
+            {
+              path: "p/bare/main.tsx",
+              status: "undescribed",
+              formerPaths: ["p/bare-old.tsx"],
+            },
+          ],
+          selected: ["p/new/main.tsx", "p/broken/main.tsx", "p/bare/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(published[0].source?.movedFrom).toBeUndefined();
+      expect(withdrawals).toEqual([["p/deleted.tsx"]]);
+      expect(report.kept).toEqual([
+        "p/bare-old.tsx",
+        "p/broken-old.tsx",
+        "p/old.tsx",
+      ]);
+      expect(report.entries.slice(1)).toEqual([
+        {
+          path: "p/broken/main.tsx",
+          status: "failed",
+          reason: "does not compile",
+        },
+        { path: "p/bare/main.tsx", status: "undescribed" },
+      ]);
+    });
+
+    it("returns a move the index refuses as failed", async () => {
+      const { client, withdrawals } = fakeIndex([head("p/old.tsx")]);
+      client.publishPattern = () =>
+        Promise.reject(
+          new PatternIndexError(
+            "publishPattern",
+            409,
+            "a live pattern is already at p/new/main.tsx",
+          ),
+        );
+      const report = await publishPlan(
+        {
+          entries: [{
+            ...compiled("p/new/main.tsx"),
+            formerPaths: ["p/old.tsx"],
+          }],
+          selected: ["p/new/main.tsx"],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(report.entries[0]).toMatchObject({
+        path: "p/new/main.tsx",
+        status: "failed",
+      });
+      expect(syncFailed(report)).toBe(true);
+      // Kept for the next sync to move.
+      expect(withdrawals).toEqual([]);
+      expect(report.kept).toEqual(["p/old.tsx"]);
+    });
+
+    it("names no predecessor for an entry with its own head, or whose former path is still selected or already claimed", async () => {
+      const { client, published } = fakeIndex([
+        head("p/own.tsx"),
+        head("p/kept.tsx"),
+        head("p/old.tsx"),
+      ]);
+      await publishPlan(
+        {
+          entries: [
+            { ...compiled("p/own.tsx"), formerPaths: ["p/old.tsx"] },
+            { ...compiled("p/a/main.tsx"), formerPaths: ["p/kept.tsx"] },
+            { ...compiled("p/b/main.tsx"), formerPaths: ["p/old.tsx"] },
+            { ...compiled("p/c/main.tsx"), formerPaths: ["p/old.tsx"] },
+          ],
+          selected: [
+            "p/own.tsx",
+            "p/kept.tsx",
+            "p/a/main.tsx",
+            "p/b/main.tsx",
+            "p/c/main.tsx",
+          ],
+        },
+        PUBLISH_OPTIONS,
+        client,
+      );
+      expect(
+        published.map((request) => [
+          request.source?.path,
+          request.source?.movedFrom,
+        ]),
+      ).toEqual([
+        ["p/own.tsx", undefined],
+        ["p/a/main.tsx", undefined],
+        ["p/b/main.tsx", "p/old.tsx"],
+        ["p/c/main.tsx", undefined],
+      ]);
     });
 
     it("publishes nothing for an entry whose hash and id match its head", async () => {
@@ -748,6 +1070,7 @@ describe("repo-sync", () => {
           { path: "p/g.tsx", status: "oversize", limit: "819200" },
         ],
         withdrawn: ["p/e.tsx"],
+        kept: ["p/old.tsx"],
         dormant: ["p/f.tsx"],
         gardeners: [{
           path: "p/b.tsx",
@@ -768,6 +1091,7 @@ describe("repo-sync", () => {
       expect(markdown).toContain("- `p/e.tsx`");
       expect(markdown).toContain("- `p/f.tsx`");
       expect(markdown).toContain("- `p/g.tsx`");
+      expect(markdown).toContain("- `p/old.tsx`");
     });
   });
 });

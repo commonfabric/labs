@@ -1,10 +1,15 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   parseRecordLine,
   RECORDS_DIR_VARIABLE,
 } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
   cfcheck,
@@ -73,7 +78,7 @@ describe("cfcheck", () => {
     it("returns the repository's own corpus, relative to its root", async () => {
       const context = checkoutContext();
       const corpus = await context.corpus();
-      expect(corpus).toContain("patterns/examples/counter/counter.tsx");
+      expect(corpus).toContain("patterns/examples/counter/main.tsx");
       expect(corpus).not.toContain(
         "patterns/examples/counter/counter.test.tsx",
       );

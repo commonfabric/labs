@@ -1,8 +1,13 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import { hasExecutableCode } from "./executable-source.ts";
 import { parseLcov } from "./coverage-metrics.ts";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A fixture module, and whether its content compiles to code that can run. */
 interface Fixture {

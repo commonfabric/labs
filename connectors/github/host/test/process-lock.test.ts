@@ -1,12 +1,12 @@
 import { basename, join, resolve } from "@std/path";
 import { assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   defaultGithubHostLockDirectory,
   GithubHostProcessLock,
   githubTargetProcessLockPath,
 } from "../src/process-lock.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 describe("GitHub host process-lock paths", () => {
   it("uses configured and platform-specific private directories", () => {
@@ -116,7 +116,7 @@ describe("GitHub host process-lock paths", () => {
   });
 });
 
-Deno.test("GitHub process locks exclude peers and release cleanly", async () => {
+test("GitHub process locks exclude peers and release cleanly", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "github.lock");
   const child = new Deno.Command(Deno.execPath(), {
@@ -164,7 +164,7 @@ Deno.test("GitHub process locks exclude peers and release cleanly", async () => 
   }
 });
 
-Deno.test("GitHub process locks reject symbolic links", async () => {
+test("GitHub process locks reject symbolic links", async () => {
   if (Deno.build.os === "windows") return;
   const directory = await Deno.makeTempDir();
   const target = join(directory, "target");
@@ -183,7 +183,7 @@ Deno.test("GitHub process locks reject symbolic links", async () => {
   }
 });
 
-Deno.test("GitHub process locks reject shared lock files", async () => {
+test("GitHub process locks reject shared lock files", async () => {
   if (Deno.build.os === "windows") return;
   const directory = await Deno.makeTempDir();
   const path = join(directory, "github.lock");

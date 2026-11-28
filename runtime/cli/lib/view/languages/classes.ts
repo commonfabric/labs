@@ -47,8 +47,7 @@ export function linesFromClasses(
       }
       const segment = text.slice(offset, next);
       if (cls === "bracket") {
-        const opening = segment === "(" || segment === "[" || segment === "{";
-        const bracketDepth = opening
+        const bracketDepth = OPENING_BRACKETS.has(segment)
           ? depth++
           : (depth = Math.max(0, depth - 1));
         spans.push({ col: column, text: segment, cls, bracketDepth });
@@ -61,6 +60,19 @@ export function linesFromClasses(
     lines.push({ text: text.slice(start, end), spans });
   }
   return lines;
+}
+
+/** The token class of every character of the source that `lines` color, the
+ * line break after each line included. A language that colors part of its
+ * source with another language's lines reads that part's classes here. */
+export function classesFromLines(lines: readonly Line[]): TokenClass[] {
+  return lines.flatMap((line, index) => {
+    const classes = line.spans.flatMap((span) =>
+      new Array<TokenClass>(span.text.length).fill(span.cls)
+    );
+    if (index < lines.length - 1) classes.push("whitespace");
+    return classes;
+  });
 }
 
 /** A highlighter that colors the whole text again on each update. */
@@ -82,6 +94,19 @@ export function createRecoloringHighlighter(
     },
   };
 }
+
+/**
+ * Brackets that open a nesting level: the ASCII ones, and the mathematical
+ * angle, white, and double brackets. Every other bracket closes one.
+ */
+export const OPENING_BRACKETS: ReadonlySet<string> = new Set([
+  "(",
+  "[",
+  "{",
+  "⟨",
+  "⦃",
+  "⟦",
+]);
 
 const WHITESPACE = /\s/;
 

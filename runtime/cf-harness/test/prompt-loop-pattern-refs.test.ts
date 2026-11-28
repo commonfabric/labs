@@ -5,7 +5,6 @@
  * the run resolved before its first model turn.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import type { FabricValue } from "@commonfabric/data-model";
 import { expect } from "@std/expect";
@@ -16,6 +15,7 @@ import {
   computeEntryIdentity,
   ensureCompilerStack,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessModelTurnRequest } from "../src/model/client.ts";

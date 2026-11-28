@@ -2,12 +2,15 @@
  * The JSON, JSONC, and JSON Lines languages for the pager. Coloring and
  * structure live in {@link ./json.ts}; this module adapts them to the
  * {@link Language} contract. JSON Lines uses the same tokenizer with fresh
- * lexical state for each record.
+ * lexical state for each record. JSONC is the JSON adapter for the files whose
+ * readers accept comments, where a line holding only a comment changes
+ * nothing; in strict JSON that line is a syntax error.
  *
  * The JSON language also claims the surveyed JSON-shaped names that no `.json`
- * suffix announces: web manifests, TLDraw documents, Deno lock files, editor
- * workspace files, Swift package resolutions, and the `.cfg` files whose
- * source shows a JSON object.
+ * suffix announces: web manifests, TLDraw documents, Deno lock files, Swift
+ * package resolutions and their per-platform copies, Xcode string catalogs, CPU
+ * profiles, Firebase project aliases, and the `.cfg`, `.conf`, `.config`, and
+ * `.lock` files whose source shows a JSON object.
  *
  * JSON has no semantic layer (no types or cross-file definitions to resolve),
  * so it omits `createSemantics`/`createDiffSemantics`. A single JSON or JSONC
@@ -30,32 +33,41 @@ import {
 } from "./json.ts";
 
 /**
- * The evidence a `.cfg` file gives for JSON. TLC configuration opens with a
- * directive or a `\*` comment, and an INI section header opens with `[`, so
- * only an opening brace selects JSON.
+ * Whether `text` opens a JSON object, which is the evidence a `.cfg`, `.conf`,
+ * `.config`, or `.lock` file gives for JSON. TLC configuration opens with a
+ * directive or a `\*` comment, an INI section header opens with `[`, XML opens
+ * with `<`, and a lock record with no syntax of its own is often empty, so only
+ * an opening brace selects JSON.
  */
-const JSON_SHAPED_CONFIGURATION = /^\s*\{/;
+function opensWithObject(text: string): boolean {
+  return /^\s*\{/.test(text);
+}
 
 export const jsonLanguage: Language = {
   id: "json",
+
+  literalValues: true,
 
   input: { kind: "text", decoder: utf8Decoder },
 
   metadata: {
     extensions: [
       ".json",
-      ".jsonc",
       ".webmanifest",
       ".tldr",
-      ".code-workspace",
+      ".xcstrings",
+      ".cpuprofile",
     ],
-    filenames: ["deno.lock", "Package.resolved"],
-    filenamePatterns: [/\.jsonc?\.example$/i],
-    aliases: ["jsonc"],
+    filenames: ["deno.lock", "Package.resolved", ".firebaserc"],
+    filenamePatterns: [/\.json\.example$/i, /^Package\.resolved\.[\w-]+$/],
+    aliases: [],
     interpreters: [],
     signatures: [],
     sharedExtensions: [
-      { extension: ".cfg", content: JSON_SHAPED_CONFIGURATION },
+      { extension: ".cfg", content: opensWithObject },
+      { extension: ".config", content: opensWithObject },
+      { extension: ".conf", content: opensWithObject },
+      { extension: ".lock", content: opensWithObject },
     ],
   },
 
@@ -70,9 +82,39 @@ export const jsonLanguage: Language = {
   hunkStructure: (ctx) => remapStructure(ctx),
 };
 
+/**
+ * JSON with comments, for the files whose readers accept comments: `.jsonc`
+ * files, editor workspace files, and the Deno, TypeScript, and JavaScript
+ * project configurations and their `.example` templates, which their `.json`
+ * suffix would otherwise claim for JSON. A line holding only a comment leaves
+ * the value as it was.
+ */
+export const jsoncLanguage: Language = {
+  ...jsonLanguage,
+
+  id: "jsonc",
+
+  commentLinesAreInert: true,
+
+  metadata: {
+    extensions: [".jsonc", ".code-workspace"],
+    filenames: ["deno.json", "tsconfig.json", "jsconfig.json"],
+    filenamePatterns: [
+      /\.jsonc\.example$/i,
+      /^(?:deno|tsconfig|jsconfig)\.json\.example$/,
+    ],
+    aliases: [],
+    interpreters: [],
+    signatures: [],
+    sharedExtensions: [],
+  },
+};
+
 /** JSON Lines and NDJSON with lexical state isolated to each record. */
 export const jsonLinesLanguage: Language = {
   id: "json-lines",
+
+  literalValues: true,
 
   input: { kind: "text", decoder: utf8Decoder },
 

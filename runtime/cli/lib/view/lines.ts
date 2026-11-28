@@ -17,13 +17,27 @@ export function computeLineStarts(text: string): number[] {
 }
 
 /** Index of the line containing `offset` (binary search over line starts). */
-export function lineIndexOf(lineStarts: number[], offset: number): number {
+export function lineIndexOf(
+  lineStarts: readonly number[],
+  offset: number,
+): number {
+  return Math.max(0, firstIndexAtLeast(lineStarts, offset + 1) - 1);
+}
+
+/**
+ * Returns the index of the first of the ascending `values` that is at least
+ * `bound`, or the length of `values` when none is.
+ */
+export function firstIndexAtLeast(
+  values: readonly number[],
+  bound: number,
+): number {
   let lo = 0;
-  let hi = lineStarts.length - 1;
+  let hi = values.length;
   while (lo < hi) {
-    const mid = (lo + hi + 1) >> 1;
-    if (lineStarts[mid] <= offset) lo = mid;
-    else hi = mid - 1;
+    const mid = (lo + hi) >> 1;
+    if (values[mid] < bound) lo = mid + 1;
+    else hi = mid;
   }
   return lo;
 }
@@ -40,7 +54,7 @@ export type ColumnOf = (line: number, offset: number) => number;
  */
 export function codePointColumns(
   text: string,
-  lineStarts: number[],
+  lineStarts: readonly number[],
 ): ColumnOf {
   // `cpLen()` counts every UTF-16 unit except a low surrogate that completes a
   // pair, so a column is the distance in units less those in between.
@@ -48,16 +62,8 @@ export function codePointColumns(
   for (let i = 1; i < text.length; i++) {
     if (isSurrogatePairEnd(text, i)) pairEnds.push(i);
   }
-  const before = (offset: number): number => {
-    let lo = 0;
-    let hi = pairEnds.length;
-    while (lo < hi) {
-      const mid = (lo + hi) >> 1;
-      if (pairEnds[mid] < offset) lo = mid + 1;
-      else hi = mid;
-    }
-    return lo;
-  };
+  const before = (offset: number): number =>
+    firstIndexAtLeast(pairEnds, offset);
   return (line, offset) => {
     const start = lineStarts[line];
     return offset - start - (before(offset) - before(start));

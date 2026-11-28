@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseSessionReport, SessionReportLog } from "../v2/session-reports.ts";
 import { SESSION_REPORT_TEXT_MAX, type SessionReport } from "../v2.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const trip: SessionReport = {
   kind: "echo-breaker",

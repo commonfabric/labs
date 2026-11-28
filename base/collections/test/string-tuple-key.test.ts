@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { stringTupleKey } from "../src/string-tuple-key.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("stringTupleKey()", () => {
   it("preserves tuple boundaries through empty strings and embedded separators", () => {

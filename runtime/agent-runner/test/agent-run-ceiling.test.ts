@@ -1,7 +1,6 @@
 /** The agent runner's host-owned observation ceiling for an invitation. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { ACL } from "@commonfabric/memory/acl";
@@ -9,6 +8,7 @@ import {
   cfcObservationFitsCeiling,
   type CfcObservationMaxConfidentiality,
 } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { agentRunObservationCeiling } from "../src/agent-run-harness.ts";
 

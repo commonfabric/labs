@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   fileSuffix,
   fileToDataUrl,

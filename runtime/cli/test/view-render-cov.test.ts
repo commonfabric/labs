@@ -23,6 +23,7 @@ import {
 import { stripAnsi, term } from "../lib/view/ansi.ts";
 import { columns } from "../lib/view/width.ts";
 import type { StructureKind, StructureNode } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function baseView(over: Partial<ViewState> = {}): ViewState {
   return {
@@ -69,12 +70,12 @@ function node(
 // cursorScreenPos / layout
 //
 
-Deno.test("cursorScreenPos: null when there is no cursor", () => {
+test("cursorScreenPos: null when there is no cursor", () => {
   const doc = parseDocument(SAMPLE);
   assertEquals(cursorScreenPos(doc, baseView()), null);
 });
 
-Deno.test("cursorScreenPos: null when an overlay covers the content", () => {
+test("cursorScreenPos: null when an overlay covers the content", () => {
   const doc = parseDocument(SAMPLE);
   const overlay: OverlayState = {
     title: "x",
@@ -86,7 +87,7 @@ Deno.test("cursorScreenPos: null when an overlay covers the content", () => {
   assertEquals(cursorScreenPos(doc, view), null);
 });
 
-Deno.test("cursorScreenPos: maps document coords to 1-based screen coords", () => {
+test("cursorScreenPos: maps document coords to 1-based screen coords", () => {
   const doc = parseDocument(SAMPLE);
   // cursor on line 2 (index 2), column 4; no gutter, no guide.
   const view = baseView({ cursor: { line: 2, col: 4 }, top: 0 });
@@ -95,7 +96,7 @@ Deno.test("cursorScreenPos: maps document coords to 1-based screen coords", () =
   assertEquals(pos, { row: 3, col: 5 });
 });
 
-Deno.test("cursorScreenPos: maps a wrapped continuation to its screen row", () => {
+test("cursorScreenPos: maps a wrapped continuation to its screen row", () => {
   const doc = parseDocument("abcdefghij");
   const view = baseView({
     cursor: { line: 0, col: 7 },
@@ -106,7 +107,7 @@ Deno.test("cursorScreenPos: maps a wrapped continuation to its screen row", () =
   assertEquals(cursorScreenPos(doc, view), { row: 2, col: 4 });
 });
 
-Deno.test("cursorScreenPos: rejects a cursor outside the document", () => {
+test("cursorScreenPos: rejects a cursor outside the document", () => {
   const doc = parseDocument("one line");
   assertEquals(
     cursorScreenPos(doc, baseView({ cursor: { line: 4, col: 0 } })),
@@ -114,7 +115,7 @@ Deno.test("cursorScreenPos: rejects a cursor outside the document", () => {
   );
 });
 
-Deno.test("cursorScreenPos: accounts for the line-number gutter and guide bar", () => {
+test("cursorScreenPos: accounts for the line-number gutter and guide bar", () => {
   const doc = parseDocument(SAMPLE);
   const sel = node("pattern", { startLine: 0, endLine: 5 });
   const view = baseView({
@@ -130,35 +131,35 @@ Deno.test("cursorScreenPos: accounts for the line-number gutter and guide bar", 
   assertEquals(pos, { row: 2, col: gutterWidth + guideWidth + 0 + 1 });
 });
 
-Deno.test("cursorScreenPos: null when the cursor row is scrolled above the top", () => {
+test("cursorScreenPos: null when the cursor row is scrolled above the top", () => {
   const doc = parseDocument(SAMPLE);
   const view = baseView({ cursor: { line: 0, col: 0 }, top: 3 });
   // r = 0 - 3 = -3 < 0
   assertEquals(cursorScreenPos(doc, view), null);
 });
 
-Deno.test("cursorScreenPos: null when the cursor row is below the content area", () => {
+test("cursorScreenPos: null when the cursor row is below the content area", () => {
   const doc = parseDocument(SAMPLE);
   // contentHeight = height - 1 = 4; r must be < 4. line - top = 5 -> off screen.
   const view = baseView({ cursor: { line: 5, col: 0 }, top: 0, height: 5 });
   assertEquals(cursorScreenPos(doc, view), null);
 });
 
-Deno.test("cursorScreenPos: null when the cursor column is scrolled off to the left", () => {
+test("cursorScreenPos: null when the cursor column is scrolled off to the left", () => {
   const doc = parseDocument(SAMPLE);
   const view = baseView({ cursor: { line: 1, col: 2 }, left: 5 });
   // contentCol = 2 - 5 = -3 < 0
   assertEquals(cursorScreenPos(doc, view), null);
 });
 
-Deno.test("cursorScreenPos: null when the cursor column is past the content width", () => {
+test("cursorScreenPos: null when the cursor column is past the content width", () => {
   const doc = parseDocument(SAMPLE);
   const view = baseView({ cursor: { line: 1, col: 100 }, width: 20 });
   // contentCol = 100 >= contentWidth
   assertEquals(cursorScreenPos(doc, view), null);
 });
 
-Deno.test("cursorScreenPos: null when a dialog covers the content", () => {
+test("cursorScreenPos: null when a dialog covers the content", () => {
   const doc = parseDocument(SAMPLE);
   const view = baseView({
     cursor: { line: 1, col: 2 },
@@ -171,7 +172,7 @@ Deno.test("cursorScreenPos: null when a dialog covers the content", () => {
 // notice rows
 //
 
-Deno.test("renderFrame: notice overwrites the bottom content rows", () => {
+test("renderFrame: notice overwrites the bottom content rows", () => {
   const doc = parseDocument(SAMPLE);
   const view = baseView({
     height: 6,
@@ -186,7 +187,7 @@ Deno.test("renderFrame: notice overwrites the bottom content rows", () => {
   assert(text[5].includes("/"), "status row preserved");
 });
 
-Deno.test("renderFrame: a notice taller than the content clamps to the top row", () => {
+test("renderFrame: a notice taller than the content clamps to the top row", () => {
   const doc = parseDocument(SAMPLE);
   const view = baseView({
     height: 4,
@@ -202,7 +203,7 @@ Deno.test("renderFrame: a notice taller than the content clamps to the top row",
   assertEquals(text[2].trimEnd(), "three");
 });
 
-Deno.test("renderFrame: an empty notice array leaves content untouched", () => {
+test("renderFrame: an empty notice array leaves content untouched", () => {
   const doc = parseDocument(SAMPLE);
   const withNotice = renderFrame(doc, baseView({ notice: [] }));
   const without = renderFrame(doc, baseView({ notice: null }));
@@ -213,7 +214,7 @@ Deno.test("renderFrame: an empty notice array leaves content untouched", () => {
 // selectionSpan: schema / closure / selection backgrounds
 //
 
-Deno.test("renderFrame: a schema node tints its line", () => {
+test("renderFrame: a schema node tints its line", () => {
   const doc = parseDocument("const x = 1;\n");
   const sel = node("schema", {
     startLine: 0,
@@ -226,7 +227,7 @@ Deno.test("renderFrame: a schema node tints its line", () => {
   assert(/48;2;/.test(rows[0]), "schema region tinted");
 });
 
-Deno.test("renderFrame: a closure node tints its line", () => {
+test("renderFrame: a closure node tints its line", () => {
   const doc = parseDocument("const x = 1;\n");
   const sel = node("closure", {
     startLine: 0,
@@ -238,7 +239,7 @@ Deno.test("renderFrame: a closure node tints its line", () => {
   assert(/48;2;/.test(rows[0]), "closure region tinted");
 });
 
-Deno.test("renderFrame: a plain node uses the selection background", () => {
+test("renderFrame: a plain node uses the selection background", () => {
   const doc = parseDocument("const x = 1;\n");
   const sel = node("variable", {
     startLine: 0,
@@ -254,7 +255,7 @@ Deno.test("renderFrame: a plain node uses the selection background", () => {
 // search-match column clamping
 //
 
-Deno.test("renderFrame: search matches off the left edge are clipped", () => {
+test("renderFrame: search matches off the left edge are clipped", () => {
   const doc = parseDocument("hello world\n");
   // Match spans columns 0..5 but the view is scrolled right by 3, so the first
   // three match columns fall before the visible area (idx < 0 -> continue).
@@ -264,7 +265,7 @@ Deno.test("renderFrame: search matches off the left edge are clipped", () => {
   assert(/48;2;/.test(rows[0]), "visible part of the match still highlighted");
 });
 
-Deno.test("renderFrame: search matches off the right edge are clipped", () => {
+test("renderFrame: search matches off the right edge are clipped", () => {
   const doc = parseDocument("hello world\n");
   const matches: Match[] = [{ line: 0, start: 0, end: 11 }];
   // width 4 -> contentWidth small; match columns past it (idx >= width) skip.
@@ -276,7 +277,7 @@ Deno.test("renderFrame: search matches off the right edge are clipped", () => {
 // renderStatus branches
 //
 
-Deno.test("renderStatus: the input line replaces the status bar", () => {
+test("renderStatus: the input line replaces the status bar", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -288,7 +289,7 @@ Deno.test("renderStatus: the input line replaces the status bar", () => {
   assert(!status.includes("help"), "navigation help suppressed in input mode");
 });
 
-Deno.test("renderStatus: a message takes priority on the status bar", () => {
+test("renderStatus: a message takes priority on the status bar", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -297,7 +298,7 @@ Deno.test("renderStatus: a message takes priority on the status bar", () => {
   assert(stripAnsi(rows[rows.length - 1]).includes("Pattern not found"));
 });
 
-Deno.test("renderStatus: an edit hint shows when there is no message", () => {
+test("renderStatus: an edit hint shows when there is no message", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -310,7 +311,7 @@ Deno.test("renderStatus: an edit hint shows when there is no message", () => {
   assert(status.includes("Esc Done"), `edit hint shown: "${status}"`);
 });
 
-Deno.test("renderStatus: key hints are highlighted in color", () => {
+test("renderStatus: key hints are highlighted in color", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -322,7 +323,7 @@ Deno.test("renderStatus: key hints are highlighted in color", () => {
   assert(status.includes(bgCode(ui.statusBar.bg!)), "on the status bar");
 });
 
-Deno.test("renderStatus: a selected node shows its glyph and label", () => {
+test("renderStatus: a selected node shows its glyph and label", () => {
   const doc = parseDocument(SAMPLE);
   const sel = node("pattern", { label: "pattern myPattern" });
   const rows = renderFrame(doc, baseView({ selected: sel, color: false }));
@@ -331,7 +332,7 @@ Deno.test("renderStatus: a selected node shows its glyph and label", () => {
   assert(status.includes("pattern myPattern"), "label present");
 });
 
-Deno.test("renderStatus: the default help line advertises expand when allowed", () => {
+test("renderStatus: the default help line advertises expand when allowed", () => {
   const doc = parseDocument(SAMPLE);
   // Wide enough that every hint fits (the bar drops trailing hints when narrow).
   const rows = renderFrame(
@@ -343,7 +344,7 @@ Deno.test("renderStatus: the default help line advertises expand when allowed", 
   assert(status.includes("^L Expand"), "expand hint advertised");
 });
 
-Deno.test("renderStatus: the default help line omits expand when not allowed", () => {
+test("renderStatus: the default help line omits expand when not allowed", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -354,7 +355,7 @@ Deno.test("renderStatus: the default help line omits expand when not allowed", (
   assert(!status.includes("^L Expand"), "expand hint absent");
 });
 
-Deno.test("renderStatus: the view hint names the alternate representation", () => {
+test("renderStatus: the view hint names the alternate representation", () => {
   const doc = parseDocument(SAMPLE);
   const line = (viewMode: "source" | "rendered") =>
     stripAnsi(
@@ -374,7 +375,7 @@ Deno.test("renderStatus: the view hint names the alternate representation", () =
   assert(rendered.includes("V Source"), rendered);
 });
 
-Deno.test("renderStatus: e / c / # hints appear only where they apply", () => {
+test("renderStatus: e / c / # hints appear only where they apply", () => {
   const doc = parseDocument(SAMPLE);
   const line = (over: Partial<ViewState>) =>
     stripAnsi(
@@ -398,7 +399,7 @@ Deno.test("renderStatus: e / c / # hints appear only where they apply", () => {
   assert(wordWrapped.includes("\\ Unwrap"), wordWrapped);
 });
 
-Deno.test("renderStatus: a narrow bar drops the lowest-priority hints first", () => {
+test("renderStatus: a narrow bar drops the lowest-priority hints first", () => {
   const doc = parseDocument(SAMPLE);
   const all = { canExpand: true, canEdit: true, hasNonPrintables: true };
   const line = (width: number) =>
@@ -420,7 +421,7 @@ Deno.test("renderStatus: a narrow bar drops the lowest-priority hints first", ()
 // kindGlyph: every branch
 //
 
-Deno.test("renderStatus: kindGlyph maps every node kind to a glyph", () => {
+test("renderStatus: kindGlyph maps every node kind to a glyph", () => {
   const doc = parseDocument("x\n");
   const cases: Array<[StructureKind, string]> = [
     ["section", "▸"],
@@ -455,7 +456,7 @@ Deno.test("renderStatus: kindGlyph maps every node kind to a glyph", () => {
 // display modes: tabs and control characters
 //
 
-Deno.test("renderFrame: a tab renders as its Control Pictures glyph", () => {
+test("renderFrame: a tab renders as its Control Pictures glyph", () => {
   const doc = parseDocument("a\tb\n");
   const rows = renderFrame(doc, baseView({ color: false }));
   // The default "pictures" mode shows the tab as ␉ (U+2409), one column wide.
@@ -463,7 +464,7 @@ Deno.test("renderFrame: a tab renders as its Control Pictures glyph", () => {
   assert(!rows[0].includes("\t"), "no raw tab in output");
 });
 
-Deno.test("renderFrame: a control character renders as its Control Pictures glyph", () => {
+test("renderFrame: a control character renders as its Control Pictures glyph", () => {
   // The line text carries a control char (\x01) between "a" and "b".
   const doc = parseDocument("a\x01b\n");
   const rows = renderFrame(doc, baseView({ color: false }));
@@ -477,7 +478,7 @@ Deno.test("renderFrame: a control character renders as its Control Pictures glyp
 // overlay: span past the inner width / truncCenter truncation
 //
 
-Deno.test("overlay: a span wider than the box is clipped at the inner edge", () => {
+test("overlay: a span wider than the box is clipped at the inner edge", () => {
   const doc = parseDocument(SAMPLE);
   const wide = "X".repeat(200);
   const rows = renderFrame(
@@ -508,7 +509,7 @@ Deno.test("overlay: a span wider than the box is clipped at the inner edge", () 
   assert(runLen < 50, `wide span clipped to the box, run length ${runLen}`);
 });
 
-Deno.test("overlay: a title longer than the box is truncated to fit", () => {
+test("overlay: a title longer than the box is truncated to fit", () => {
   const doc = parseDocument(SAMPLE);
   const box = overlayBox(50, 16);
   // A title far wider than the inner box width forces truncCenter's truncation
@@ -534,7 +535,7 @@ Deno.test("overlay: a title longer than the box is truncated to fit", () => {
   assert(stripAnsi(topRow).includes("TTT"), "title sits on the top border");
 });
 
-Deno.test("overlay: a selected reference line is tinted differently", () => {
+test("overlay: a selected reference line is tinted differently", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -558,7 +559,7 @@ Deno.test("overlay: a selected reference line is tinted differently", () => {
   assert(joined.includes("two"), "selected ref line rendered");
 });
 
-Deno.test("overlay: content sits one column inside each border", () => {
+test("overlay: content sits one column inside each border", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -594,7 +595,7 @@ const SAVE_DIALOG: DialogState = {
   ],
 };
 
-Deno.test("dialog: frames a centered title, body and button row", () => {
+test("dialog: frames a centered title, body and button row", () => {
   const rows = renderFrame(
     parseDocument(SAMPLE),
     baseView({ width: 60, height: 18, color: false, dialog: SAVE_DIALOG }),
@@ -612,7 +613,7 @@ Deno.test("dialog: frames a centered title, body and button row", () => {
   assert(!status.includes("WASD"), "no navigation hints while a dialog is up");
 });
 
-Deno.test("dialog: the default button is brighter and the shortcuts are yellow", () => {
+test("dialog: the default button is brighter and the shortcuts are yellow", () => {
   const rows = renderFrame(
     parseDocument("x\n"),
     baseView({ width: 60, height: 18, color: true, dialog: SAVE_DIALOG }),
@@ -633,7 +634,7 @@ Deno.test("dialog: the default button is brighter and the shortcuts are yellow",
   assert(plain.includes("▄") && plain.includes("▀"), "half-block shadows");
 });
 
-Deno.test("dialog: a button-less dialog still frames its body", () => {
+test("dialog: a button-less dialog still frames its body", () => {
   const rows = renderFrame(
     parseDocument("x\n"),
     baseView({
@@ -648,7 +649,7 @@ Deno.test("dialog: a button-less dialog still frames its body", () => {
   assert(joined.includes("Nothing to do."), "body");
 });
 
-Deno.test("dialog: a button is hit exactly where it is drawn, at rest or pushed", () => {
+test("dialog: a button is hit exactly where it is drawn, at rest or pushed", () => {
   const view = baseView({ width: 60, height: 18, color: false });
   const drawn = (pushed: number) =>
     renderFrame(parseDocument("x\n"), {
@@ -683,7 +684,7 @@ Deno.test("dialog: a button is hit exactly where it is drawn, at rest or pushed"
   }
 });
 
-Deno.test("dialog: no button is hit where the box has no room to draw it", () => {
+test("dialog: no button is hit where the box has no room to draw it", () => {
   // Too short for the body and the buttons both: the body is drawn instead.
   const short = baseView({ width: 60, height: 8, color: false });
   const dialog = { ...SAVE_DIALOG, body: ["one", "two", "three"] };
@@ -713,7 +714,7 @@ Deno.test("dialog: no button is hit where the box has no room to draw it", () =>
   assertEquals(dialogControlAt(narrow, SAVE_DIALOG, border, y), -1);
 });
 
-Deno.test("dialog: collapses on a terminal too narrow to frame", () => {
+test("dialog: collapses on a terminal too narrow to frame", () => {
   const dlg: DialogState = {
     title: "T",
     body: ["hi"],
@@ -734,7 +735,7 @@ Deno.test("dialog: collapses on a terminal too narrow to frame", () => {
   );
 });
 
-Deno.test("dialog: body sits two columns inside each border", () => {
+test("dialog: body sits two columns inside each border", () => {
   const rows = renderFrame(
     parseDocument("x\n"),
     baseView({
@@ -771,7 +772,7 @@ function lastColumnOf(row: string, char: string): number {
   return columns(plain.slice(0, plain.lastIndexOf(char)));
 }
 
-Deno.test("dialog: wide characters, emoji, and combining marks keep the borders and content aligned", () => {
+test("dialog: wide characters, emoji, and combining marks keep the borders and content aligned", () => {
   // Han and kana characters and an emoji with a skin tone take two columns
   // each, and a letter with a combining accent takes one.
   const body = ["漢字のファイル名", "👍🏽 approve", "e\u0301te\u0301", "plain"];
@@ -799,7 +800,7 @@ Deno.test("dialog: wide characters, emoji, and combining marks keep the borders 
   }
 });
 
-Deno.test("dialog: a wide character that would reach into the margin is left blank", () => {
+test("dialog: a wide character that would reach into the margin is left blank", () => {
   // The body is wider than the box's stated width, and its second Han
   // character would take the column next to the border.
   const dialog: DialogState = {
@@ -821,7 +822,7 @@ Deno.test("dialog: a wide character that would reach into the margin is left bla
   assertEquals(lastColumnOf(row, "║"), box.x + box.boxW - 1);
 });
 
-Deno.test("dialog: a wide character of the text under a dialog that its edge cuts is left blank", () => {
+test("dialog: a wide character of the text under a dialog that its edge cuts is left blank", () => {
   // Han characters take two columns each, and the box's edges fall on odd
   // columns, inside one each side.
   const dialog: DialogState = { title: "TT", body: ["ab"], buttons: [] };
@@ -837,7 +838,7 @@ Deno.test("dialog: a wide character of the text under a dialog that its edge cut
   assertEquals(lastColumnOf(row, "║"), box.x + box.boxW - 1);
 });
 
-Deno.test("dialog: a combining mark with no letter before it is drawn on a space of its own", () => {
+test("dialog: a combining mark with no letter before it is drawn on a space of its own", () => {
   const dialog: DialogState = { title: "T", body: ["\u0301x"], buttons: [] };
   const view = baseView({ width: 40, height: 12, color: false, dialog });
   const rows = renderFrame(parseDocument("x\n"), view).map(stripAnsi);
@@ -853,7 +854,7 @@ Deno.test("dialog: a combining mark with no letter before it is drawn on a space
   );
 });
 
-Deno.test("sliceVisible: keeps whole characters, blanking the columns of a wide one it cuts and keeping a mark with the letter before it", () => {
+test("sliceVisible: keeps whole characters, blanking the columns of a wide one it cuts and keeping a mark with the letter before it", () => {
   const { sliceVisible } = _internal;
   const marked = "ab\x1b[1m\u0301cd";
 
@@ -865,7 +866,7 @@ Deno.test("sliceVisible: keeps whole characters, blanking the columns of a wide 
   assertEquals(sliceVisible("1\x1b[1m\u20E3", 0, 1), "\x1b[1m ");
 });
 
-Deno.test("sliceVisible: keeps a change of style inside a character where it is", () => {
+test("sliceVisible: keeps a change of style inside a character where it is", () => {
   // A search match colors the "e" of an accented letter written with a
   // combining mark, at each end of a row.
   const { sliceVisible } = _internal;
@@ -879,7 +880,7 @@ Deno.test("sliceVisible: keeps a change of style inside a character where it is"
   assertEquals(sliceVisible(row, 1, 3), `${styles}xx${styles}`);
 });
 
-Deno.test("dialog: an input line in a box too narrow to show it draws nothing of it", () => {
+test("dialog: an input line in a box too narrow to show it draws nothing of it", () => {
   const field = {
     kind: "inputLine",
     label: "N",
@@ -907,7 +908,7 @@ Deno.test("dialog: an input line in a box too narrow to show it draws nothing of
   }
 });
 
-Deno.test("dialog: control characters in a title are drawn as their pictures", () => {
+test("dialog: control characters in a title are drawn as their pictures", () => {
   const dialog: DialogState = { title: "a\x1b[2Jb", body: [], buttons: [] };
   const view = baseView({ width: 40, height: 12, color: false, dialog });
   const top =
@@ -917,7 +918,7 @@ Deno.test("dialog: control characters in a title are drawn as their pictures", (
   assert(!top.includes("\x1b[2J"), "no escape reaches the terminal");
 });
 
-Deno.test("dialog: a title wider than the box shows what fits, leaving blank a wide character the corner would cut", () => {
+test("dialog: a title wider than the box shows what fits, leaving blank a wide character the corner would cut", () => {
   // The box is as wide as the view allows, thirty-eight columns, and the
   // title's eighteenth Han character would take its last inner column and
   // the corner.
@@ -938,7 +939,7 @@ Deno.test("dialog: a title wider than the box shows what fits, leaving blank a w
   assertEquals(lastColumnOf(top, "╗"), box.x + box.boxW - 1);
 });
 
-Deno.test("dialog: an input line draws its text and cursor, and maps clicks, by the columns its characters take", () => {
+test("dialog: an input line draws its text and cursor, and maps clicks, by the columns its characters take", () => {
   const field = {
     kind: "inputLine",
     label: "Name of the thing",
@@ -973,7 +974,7 @@ Deno.test("dialog: an input line draws its text and cursor, and maps clicks, by 
   assertEquals(lastColumnOf(rows[y], "║"), lastColumnOf(rows[y - 1], "║"));
 });
 
-Deno.test("dialog: an input line scrolls by columns, leaving blank a wide character its arrow would cut", () => {
+test("dialog: an input line scrolls by columns, leaving blank a wide character its arrow would cut", () => {
   const han = "漢".repeat(10);
   const drawn = (cursor: number) => {
     const field = {
@@ -1005,7 +1006,7 @@ Deno.test("dialog: an input line scrolls by columns, leaving blank a wide charac
   assertEquals(lastColumnOf(drawn(10), "║"), lastColumnOf(drawn(0), "║"));
 });
 
-Deno.test("dialog: program output starts two columns inside a box as wide as its stated width", () => {
+test("dialog: program output starts two columns inside a box as wide as its stated width", () => {
   const widest = "x".repeat(20);
   const rows = renderFrame(
     parseDocument("x\n"),
@@ -1032,7 +1033,7 @@ Deno.test("dialog: program output starts two columns inside a box as wide as its
   assertEquals(widestRow.slice(left, left + 26), `║  ${widest}  ║`);
 });
 
-Deno.test("dialog: the focused button — not just the default — is highlighted", () => {
+test("dialog: the focused button — not just the default — is highlighted", () => {
   const dlg: DialogState = {
     title: "Pick",
     body: ["Which one?"],
@@ -1077,7 +1078,7 @@ Deno.test("dialog: the focused button — not just the default — is highlighte
   }
 });
 
-Deno.test("dialog: a pushed button loses its shadow and shifts one column right", () => {
+test("dialog: a pushed button loses its shadow and shifts one column right", () => {
   const dlg: DialogState = {
     title: "T",
     body: ["Go?"],
@@ -1123,7 +1124,7 @@ Deno.test("dialog: a pushed button loses its shadow and shifts one column right"
   );
 });
 
-Deno.test("renderFrame: the guide rail is blank on lines outside the selected node", () => {
+test("renderFrame: the guide rail is blank on lines outside the selected node", () => {
   const ln = (text: string) => ({
     text,
     spans: [{ col: 0, text, cls: "plain" as const }],
@@ -1160,7 +1161,7 @@ Deno.test("renderFrame: the guide rail is blank on lines outside the selected no
 // SGR encoding helpers (rich modifiers and background merge)
 //
 
-Deno.test("cellsToAnsi: encodes rich text attributes", () => {
+test("cellsToAnsi: encodes rich text attributes", () => {
   const cells = [
     { ch: "a", style: { dim: true } },
     { ch: "b", style: { italic: true } },
@@ -1174,7 +1175,7 @@ Deno.test("cellsToAnsi: encodes rich text attributes", () => {
   assert(out.includes("\x1b[9m"), "strikethrough → SGR 9");
 });
 
-Deno.test("cellsToAnsi: wraps each run of linked cells in a terminal link, ending one that reaches the last cell", () => {
+test("cellsToAnsi: wraps each run of linked cells in a terminal link, ending one that reaches the last cell", () => {
   const url = "https://example.test/";
   const cells = [
     { ch: "a", style: {} },
@@ -1188,7 +1189,7 @@ Deno.test("cellsToAnsi: wraps each run of linked cells in a terminal link, endin
   assertEquals(_internal.cellsToAnsi(cells, false), "abc");
 });
 
-Deno.test("mergeBg: overlays a background, or leaves the style when there is none", () => {
+test("mergeBg: overlays a background, or leaves the style when there is none", () => {
   const style = { fg: [1, 2, 3] as const, bold: true };
   // No background on the second argument: the style is returned unchanged.
   assertEquals(_internal.mergeBg(style, {}), style);
@@ -1199,7 +1200,7 @@ Deno.test("mergeBg: overlays a background, or leaves the style when there is non
   );
 });
 
-Deno.test("darkenSpan: repaints a shadow span and clips out-of-bounds cells", () => {
+test("darkenSpan: repaints a shadow span and clips out-of-bounds cells", () => {
   const view = baseView({ width: 11 });
   const rows = ["hello world"];
   const before = [...rows];
@@ -1213,7 +1214,7 @@ Deno.test("darkenSpan: repaints a shadow span and clips out-of-bounds cells", ()
   assertEquals(stripAnsi(rows[0]), "hello world", "the characters are kept");
 });
 
-Deno.test("darkenSpan: shades a wide character the span cuts as blank columns, and one an escape splits as one character", () => {
+test("darkenSpan: shades a wide character the span cuts as blank columns, and one an escape splits as one character", () => {
   // A keycap is a digit and a combining mark that together take two
   // columns, even with a change of style between them.
   const view = baseView({ width: 6 });
@@ -1229,7 +1230,7 @@ Deno.test("darkenSpan: shades a wide character the span cuts as blank columns, a
 // status-bar fitting (file, and left truncation)
 //
 
-Deno.test("renderStatus: a long current file is tail-truncated with a leading ellipsis", () => {
+test("renderStatus: a long current file is tail-truncated with a leading ellipsis", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -1244,7 +1245,7 @@ Deno.test("renderStatus: a long current file is tail-truncated with a leading el
   assert(status.includes("render.ts"), "the file name (tail) is kept");
 });
 
-Deno.test("renderStatus: a long left label is head-truncated to fit", () => {
+test("renderStatus: a long left label is head-truncated to fit", () => {
   const doc = parseDocument(SAMPLE);
   const sel = node("pattern", {
     label: "pattern " + "aVeryLongIdentifierName".repeat(4),
@@ -1258,7 +1259,7 @@ Deno.test("renderStatus: a long left label is head-truncated to fit", () => {
   assert(status.includes("…"), `the label is truncated: "${status}"`);
 });
 
-Deno.test("renderStatus: control characters in the current file are shown as glyphs", () => {
+test("renderStatus: control characters in the current file are shown as glyphs", () => {
   const doc = parseDocument(SAMPLE);
   const rows = renderFrame(
     doc,
@@ -1271,7 +1272,71 @@ Deno.test("renderStatus: control characters in the current file are shown as gly
   assertEquals(status.length, 60, "the bar is exactly the terminal width");
 });
 
-Deno.test("dialog: control characters in the body are shown as glyphs", () => {
+test("renderStatus: highlighting progress shows a spinner, a label, and a gauge", () => {
+  const doc = parseDocument(SAMPLE);
+  const rows = renderFrame(
+    doc,
+    baseView({
+      width: 100,
+      color: false,
+      currentFile: "x.ts",
+      highlighting: { fraction: 0.35, frame: 1 },
+    }),
+  );
+  const status = rows[rows.length - 1];
+  assert(
+    status.includes("◓ Highlighting ███░░░░░░░  x.ts"),
+    `the progress precedes the file: "${status}"`,
+  );
+  assertEquals(columns(status), 100, "the bar is exactly the terminal width");
+});
+
+test("renderStatus: highlighting progress leaves out its label when only the gauge fits", () => {
+  const doc = parseDocument(SAMPLE);
+  const rows = renderFrame(
+    doc,
+    baseView({
+      width: 60,
+      currentFile: "runtime/runner/src/storage/v2.ts",
+      highlighting: { fraction: 1, frame: 4 },
+    }),
+  );
+  const status = stripAnsi(rows[rows.length - 1]);
+  assert(status.includes("◐ ██████████"), `spinner and full gauge: ${status}`);
+  assertEquals(status.includes("Highlighting"), false, "no label");
+  assert(status.startsWith("? Help  Q Quit"), "the first two hints stay");
+  assertEquals(columns(status), 60, "the bar is exactly the terminal width");
+  assert(
+    rows[rows.length - 1].includes(fgCode(ui.statusBusy.fg!)),
+    "the gauge is drawn in the busy color",
+  );
+});
+
+test("renderStatus: highlighting progress gives way to the first two hints on a narrow screen", () => {
+  const doc = parseDocument(SAMPLE);
+  for (const width of [30, 40]) {
+    const status = stripAnsi(
+      renderFrame(
+        doc,
+        baseView({
+          width,
+          currentFile: "runtime/runner/src/storage/v2.ts",
+          highlighting: { fraction: 0.5, frame: 0 },
+        }),
+      ).at(-1)!,
+    );
+    assertEquals(status.includes("░"), false, `no gauge at ${width}`);
+    assertEquals(columns(status), width, `exactly ${width} columns`);
+  }
+});
+
+test("renderStatus: no highlighting progress shows no gauge", () => {
+  const doc = parseDocument(SAMPLE);
+  const rows = renderFrame(doc, baseView({ width: 100, color: false }));
+  assertEquals(rows[rows.length - 1].includes("░"), false);
+});
+
+test("dialog: control characters in the body are shown as glyphs", () => {
   const rows = renderFrame(
     parseDocument("x\n"),
     baseView({
@@ -1293,14 +1358,14 @@ Deno.test("dialog: control characters in the body are shown as glyphs", () => {
   assert(joined.includes("Save a␛[31mb␇.ts?"), `control pictures: ${joined}`);
 });
 
-Deno.test("renderStatus: an over-wide input line is returned as-is", () => {
+test("renderStatus: an over-wide input line is returned as-is", () => {
   const doc = parseDocument(SAMPLE);
   const long = "/" + "x".repeat(60);
   const rows = renderFrame(doc, baseView({ width: 20, inputLine: long }));
   assertEquals(stripAnsi(rows[rows.length - 1]), long);
 });
 
-Deno.test("renderStatus: on a tiny terminal the left collapses to an ellipsis", () => {
+test("renderStatus: on a tiny terminal the left collapses to an ellipsis", () => {
   const doc = parseDocument(SAMPLE);
   const sel = node("pattern", { label: "pattern longName" });
   const rows = renderFrame(
@@ -1319,7 +1384,7 @@ Deno.test("renderStatus: on a tiny terminal the left collapses to an ellipsis", 
 // wide characters in the main view
 //
 
-Deno.test("renderFrame: rows of wide characters, emoji, and combining marks are as wide as the terminal", () => {
+test("renderFrame: rows of wide characters, emoji, and combining marks are as wide as the terminal", () => {
   // Han characters and emoji with a skin tone take two columns each, and a
   // letter with a combining accent takes one.
   const lines = [
@@ -1338,7 +1403,7 @@ Deno.test("renderFrame: rows of wide characters, emoji, and combining marks are 
   }
 });
 
-Deno.test("renderFrame: a wide character that the left or right edge cuts is left blank", () => {
+test("renderFrame: a wide character that the left or right edge cuts is left blank", () => {
   const view = baseView({ width: 5, height: 3, color: false });
   const scrolled = renderFrame(parseDocument("漢字漢字\n"), {
     ...view,
@@ -1350,7 +1415,7 @@ Deno.test("renderFrame: a wide character that the left or right edge cuts is lef
   assertEquals(cut[0], "abcd ");
 });
 
-Deno.test("renderFrame: wrapped rows hold whole wide characters", () => {
+test("renderFrame: wrapped rows hold whole wide characters", () => {
   const view = baseView({
     width: 4,
     height: 4,
@@ -1362,7 +1427,7 @@ Deno.test("renderFrame: wrapped rows hold whole wide characters", () => {
   assertEquals(rows.slice(0, 3), ["ab \\", "漢 \\", "字cd"]);
 });
 
-Deno.test("renderFrame: the status bar shortens a file name of wide characters to fit", () => {
+test("renderFrame: the status bar shortens a file name of wide characters to fit", () => {
   const view = baseView({
     width: 40,
     height: 3,
@@ -1376,7 +1441,7 @@ Deno.test("renderFrame: the status bar shortens a file name of wide characters t
   assert(status.includes("漢.ts"), status);
 });
 
-Deno.test("renderFrame: an overlay of source lines with wide characters keeps its right border", () => {
+test("renderFrame: an overlay of source lines with wide characters keeps its right border", () => {
   const wide = "漢".repeat(50);
   const view = baseView({
     width: 40,
@@ -1398,7 +1463,7 @@ Deno.test("renderFrame: an overlay of source lines with wide characters keeps it
   assertEquals(columns(row), 40);
 });
 
-Deno.test("cursorScreenPos: the edit cursor sits after the columns of the wide characters before it", () => {
+test("cursorScreenPos: the edit cursor sits after the columns of the wide characters before it", () => {
   const doc = parseDocument("漢字ab\n");
   const view = baseView({ cursor: { line: 0, col: 2 }, color: false });
 
@@ -1409,7 +1474,7 @@ Deno.test("cursorScreenPos: the edit cursor sits after the columns of the wide c
   );
 });
 
-Deno.test("renderFrame: a search match that starts on a combining mark highlights the accented letter", () => {
+test("renderFrame: a search match that starts on a combining mark highlights the accented letter", () => {
   // The letter and its mark share the first cell.
   const doc = parseDocument("e\u0301x\n");
   const match = renderFrame(
@@ -1427,7 +1492,7 @@ Deno.test("renderFrame: a search match that starts on a combining mark highlight
   assert(!beforeLetter(elsewhere).includes(current), JSON.stringify(elsewhere));
 });
 
-Deno.test("dialog: a mark after a control character is drawn with the control's picture, as the main view draws it", () => {
+test("dialog: a mark after a control character is drawn with the control's picture, as the main view draws it", () => {
   const text = "\x01\u0301";
   const dialog: DialogState = { title: "T", body: [text], buttons: [] };
   const view = baseView({ width: 40, height: 12, color: false, dialog });
@@ -1448,7 +1513,7 @@ Deno.test("dialog: a mark after a control character is drawn with the control's 
   );
 });
 
-Deno.test("renderFrame: a wrapped row too narrow for its wide character draws it over the marker's column", () => {
+test("renderFrame: a wrapped row too narrow for its wide character draws it over the marker's column", () => {
   // Each row is two columns wide: one for text and one for the marker, until
   // a Han character needs both.
   const view = baseView({

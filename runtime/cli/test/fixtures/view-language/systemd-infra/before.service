@@ -1,0 +1,12 @@
+[Unit]
+Description=Drop IPv4 TCP packets with options until the kernel fixes CVE-2026-98432
+After=local-fs.target
+Before=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/nftables.d/cve-2026-98432.nft
+
+[Install]
+WantedBy=multi-user.target

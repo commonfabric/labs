@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -7,6 +6,7 @@ import {
   whenMatches,
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   checkSqliteRowLabelWrite,

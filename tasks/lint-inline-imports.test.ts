@@ -5,9 +5,9 @@
  * if either, reports.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import plugin from "./lint-inline-imports.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function diagnose(source: string, fileName = "sample.ts"): string[] {
   return Deno.lint.runPlugin(plugin, fileName, source).map((d) => d.id);

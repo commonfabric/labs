@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { commitFailure } from "../src/ops/utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("commitFailure", () => {
   it("throws the reason when the commit carried an Error one", () => {

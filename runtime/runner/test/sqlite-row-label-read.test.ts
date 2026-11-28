@@ -6,7 +6,6 @@
 // attach, ceiling"; "Fail-closed rules").
 
 import { assert, assertEquals, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   all,
@@ -19,6 +18,7 @@ import {
   whenMatches,
 } from "@commonfabric/memory/sqlite/row-label";
 import { table } from "@commonfabric/memory/sqlite/schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   computeRowLabelRead,
@@ -27,6 +27,12 @@ import {
 
 const ADDR = /[^\s<>,;"]+@[^\s<>,;"]+/g;
 const OWNER = "did:key:zOwner";
+// A reader as `dbOwner()`/`principal()` name it: the CFC `User{subject}` atom
+// (spec §15.2), never the bare DID.
+const user = (subject: string) => ({
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject,
+});
 
 const emailTables = {
   emails: table(
@@ -117,9 +123,9 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
     assertEquals(res.labels, [
       {
         confidentiality: [
-          "did:mailto:alice@a.example",
-          "did:mailto:bob@example.com",
-          OWNER,
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+          user(OWNER),
         ],
         integrity: [
           {
@@ -130,10 +136,10 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       },
       {
         confidentiality: [
-          "did:mailto:carol@c.example",
-          "did:mailto:dave@d.example",
-          "did:mailto:erin@e.example",
-          OWNER,
+          user("did:mailto:carol@c.example"),
+          user("did:mailto:dave@d.example"),
+          user("did:mailto:erin@e.example"),
+          user(OWNER),
         ],
       },
     ]);
@@ -215,7 +221,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       rows: [{ cnt: 2 }],
       owner: OWNER,
     }));
-    assertEquals(res.labels, [{ confidentiality: [OWNER] }]);
+    assertEquals(res.labels, [{ confidentiality: [user(OWNER)] }]);
 
     // ...and it fits a ceiling naming the owner, but not one that omits it.
     const kept = expectOk(computeRowLabelRead({
@@ -223,7 +229,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       columns: [col("cnt", null, null)],
       rows: [{ cnt: 2 }],
       owner: OWNER,
-      ceiling: [OWNER],
+      ceiling: [user(OWNER)],
     }));
     assertEquals(kept.keep, [true]);
 
@@ -232,7 +238,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       columns: [col("cnt", null, null)],
       rows: [{ cnt: 2 }],
       owner: OWNER,
-      ceiling: ["did:key:someone-else"],
+      ceiling: [user("did:key:someone-else")],
     });
     expectError(missed, "ceiling");
   });
@@ -320,7 +326,7 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       owner: OWNER,
     }));
     assertEquals(res.labels, [
-      { confidentiality: [{ anyOf: [OWNER, "did:key:public"] }] },
+      { confidentiality: [{ anyOf: [user(OWNER), "did:key:public"] }] },
     ]);
     // Fits a ceiling naming the public reader alone (subsumption).
     const kept = expectOk(computeRowLabelRead({
@@ -485,20 +491,20 @@ describe("computeRowLabelRead — per-row labels from origins", () => {
       owner: OWNER,
     }));
     assertEquals(res.labels, [
-      { confidentiality: ["did:mailbox:seven", OWNER] },
-      { confidentiality: ["did:mailbox:eight", OWNER] },
+      { confidentiality: ["did:mailbox:seven", user(OWNER)] },
+      { confidentiality: ["did:mailbox:eight", user(OWNER)] },
     ]);
   });
 });
 
 describe("computeRowLabelRead — output ceiling + onExceed", () => {
   const CEILING_ALL = [
-    "did:mailto:alice@a.example",
-    "did:mailto:bob@example.com",
-    "did:mailto:carol@c.example",
-    "did:mailto:dave@d.example",
-    "did:mailto:erin@e.example",
-    OWNER,
+    user("did:mailto:alice@a.example"),
+    user("did:mailto:bob@example.com"),
+    user("did:mailto:carol@c.example"),
+    user("did:mailto:dave@d.example"),
+    user("did:mailto:erin@e.example"),
+    user(OWNER),
   ];
 
   it("fail (default): one row exceeding the ceiling refuses the query", () => {
@@ -508,9 +514,9 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: ROWS,
       owner: OWNER,
       ceiling: [
-        "did:mailto:alice@a.example",
-        "did:mailto:bob@example.com",
-        OWNER,
+        user("did:mailto:alice@a.example"),
+        user("did:mailto:bob@example.com"),
+        user(OWNER),
       ],
     });
     expectError(res, "ceiling");
@@ -523,9 +529,9 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: ROWS,
       owner: OWNER,
       ceiling: [
-        "did:mailto:alice@a.example",
-        "did:mailto:bob@example.com",
-        OWNER,
+        user("did:mailto:alice@a.example"),
+        user("did:mailto:bob@example.com"),
+        user(OWNER),
       ],
       onExceed: "skip",
     }));
@@ -562,7 +568,7 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: [{ cnt: 2 }],
       owner: OWNER,
       staticConfidentiality: ["secret"],
-      ceiling: [OWNER],
+      ceiling: [user(OWNER)],
       onExceed: "skip",
     });
     expectError(res, "aggregate");
@@ -575,7 +581,7 @@ describe("computeRowLabelRead — output ceiling + onExceed", () => {
       rows: [{ body: "x" }],
       owner: OWNER,
       staticConfidentiality: ["secret"],
-      ceiling: [OWNER], // "secret" not allowed
+      ceiling: [user(OWNER)], // "secret" not allowed
     });
     expectError(res, "ceiling");
   });
@@ -600,7 +606,14 @@ describe("resolveCeilingPlaceholders", () => {
       { actingPrincipal: "did:key:zMe", owner: OWNER },
     );
     if ("error" in res) throw new Error(res.error);
-    assertEquals(res.atoms, ["did:key:zMe", OWNER, "pii"]);
+    assertEquals(res.atoms, [
+      {
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: "did:key:zMe",
+      },
+      { type: "https://commonfabric.org/cfc/atom/User", subject: OWNER },
+      "pii",
+    ]);
   });
 
   it("resolves a placeholder inside an `anyOf` alternative", () => {
@@ -609,7 +622,43 @@ describe("resolveCeilingPlaceholders", () => {
       { actingPrincipal: "did:key:zMe", owner: OWNER },
     );
     if ("error" in res) throw new Error(res.error);
-    assertEquals(res.atoms, [{ anyOf: ["did:key:zMe", OWNER] }]);
+    assertEquals(res.atoms, [{
+      anyOf: [
+        {
+          type: "https://commonfabric.org/cfc/atom/User",
+          subject: "did:key:zMe",
+        },
+        { type: "https://commonfabric.org/cfc/atom/User", subject: OWNER },
+      ],
+    }]);
+  });
+
+  it("resolves the cell-schema spelling, a placeholder as a User's subject", () => {
+    const U = "https://commonfabric.org/cfc/atom/User";
+    const res = resolveCeilingPlaceholders(
+      [
+        { type: U, subject: { __ctCurrentPrincipal: true } },
+        { anyOf: [{ type: U, subject: { __ctDbOwner: true } }] },
+        // Not the canonical two-field User: left as written, and so unresolved.
+        { type: U, subject: { __ctDbOwner: true }, scope: "x" },
+        // A one-key subject that is not a placeholder (a committed subject):
+        // a real atom, kept whole rather than stripped of its User type.
+        { type: U, subject: { digestOf: "sha256:abc" } },
+      ],
+      { actingPrincipal: "did:key:zMe", owner: OWNER },
+    );
+    if ("error" in res) throw new Error(res.error);
+    assertEquals(res.atoms, [
+      { type: U, subject: "did:key:zMe" },
+      { anyOf: [{ type: U, subject: OWNER }] },
+      { type: U, subject: { __ctDbOwner: true }, scope: "x" },
+      { type: U, subject: { digestOf: "sha256:abc" } },
+    ]);
+    const noActing = resolveCeilingPlaceholders(
+      [{ type: U, subject: { __ctCurrentPrincipal: true } }],
+      { owner: OWNER },
+    );
+    assert("error" in noActing);
   });
 
   it("an unresolvable placeholder inside an `anyOf` fails closed", () => {
@@ -631,6 +680,54 @@ describe("resolveCeilingPlaceholders", () => {
       { actingPrincipal: "did:key:zMe" },
     );
     assert("error" in noOwner);
+  });
+});
+
+// CFC spec §15.2: the reader principal is `User{subject}`. An owner agent
+// run's read ceiling is `[User(owner)]`, and the fit test compares atoms
+// exactly, so a `dbOwner()` row fits it only when the row names the owner in
+// that same form — a bare DID string never does.
+describe("computeRowLabelRead — dbOwner() rows meet a User(owner) ceiling", () => {
+  const ownedTables = {
+    notes: table(
+      { id: "integer", body: "text" },
+      () => ({ confidentiality: dbOwner() }),
+    ),
+  };
+  const COLS = [col("id", "notes", "id"), col("body", "notes", "body")];
+  const ROWS_1 = [{ id: 1, body: "x" }];
+
+  it("a row labelled by dbOwner() fits the owner run's [User(owner)] ceiling", () => {
+    const res = expectOk(computeRowLabelRead({
+      tables: ownedTables,
+      columns: COLS,
+      rows: ROWS_1,
+      owner: OWNER,
+      ceiling: [user(OWNER)],
+    }));
+    assertEquals(res.labels[0]?.confidentiality, [user(OWNER)]);
+  });
+
+  it("a bare-DID ceiling is no reader atom and admits nothing", () => {
+    const res = computeRowLabelRead({
+      tables: ownedTables,
+      columns: COLS,
+      rows: ROWS_1,
+      owner: OWNER,
+      ceiling: [OWNER],
+    });
+    assert("error" in res);
+  });
+
+  it("another user's ceiling does not admit the owner's row", () => {
+    const res = computeRowLabelRead({
+      tables: ownedTables,
+      columns: COLS,
+      rows: ROWS_1,
+      owner: OWNER,
+      ceiling: [user("did:key:zSomeoneElse")],
+    });
+    assert("error" in res);
   });
 });
 
@@ -699,12 +796,34 @@ describe("computeRowLabelRead — read-time clearance (Phase 3.b, Epic E3)", () 
       columns: MB_COLS,
       rows: MB_ROWS,
       owner: OWNER,
-      ceiling: [OWNER],
+      ceiling: [{
+        type: "https://commonfabric.org/cfc/atom/User",
+        subject: OWNER,
+      }],
       onExceed: "skip",
       readClearance: { reader: BOB },
     }));
     assertEquals(res.keep, [true, false, true]);
     assertEquals(res.withheld, 1);
+  });
+
+  it("a bare-DID alternative admits nobody — only the User atom names a reader", () => {
+    const bareTables = {
+      msgs: table(
+        { id: "integer", from: "text", to: "text", body: "text" },
+        () => ({ confidentiality: any(constant(OWNER)) }),
+        { allowReadClearance: true },
+      ),
+    };
+    const res = expectOk(computeRowLabelRead({
+      tables: bareTables,
+      columns: MB_COLS,
+      rows: MB_ROWS,
+      owner: OWNER,
+      readClearance: { reader: OWNER },
+    }));
+    assertEquals(res.keep, [false, false, false]);
+    assertEquals(res.withheld, 3);
   });
 
   it("refuses when the table's policy does not opt into clearance", () => {

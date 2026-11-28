@@ -11,12 +11,12 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { unicodeWidth } from "@std/cli/unicode-width";
 
 import { type FrameCursor, ValueLens } from "../lib/shuttle/lens.ts";
 import type { Key } from "../lib/view/keys.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** How tall and wide a frame is where a case is not asking about the size. */
 const ROWS = 8;

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
@@ -14,6 +13,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { type DID, Identity } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { AUTHOR_CLAIM_SCHEMA, observeAuthorship } from "@/authorship.ts";
 import { CellHandle } from "@/cell-handle.ts";
@@ -282,6 +282,23 @@ describe("connection", () => {
         failureCount: 1,
         recovery: "explicit-retry",
       },
+    } as const;
+
+    transport.emit("message", notification);
+
+    expect(messages).toEqual([notification]);
+    await connection.dispose();
+  });
+
+  it("routes a space's seq advancing", async () => {
+    const transport = new FakeTransport();
+    const connection = await initializedConnection(transport);
+    const messages: unknown[] = [];
+    connection.on("spaceseqadvanced", (message) => messages.push(message));
+    const notification = {
+      type: NotificationType.SpaceSeqAdvanced,
+      space: "did:key:z6Mk-connection-seq",
+      seq: 12,
     } as const;
 
     transport.emit("message", notification);

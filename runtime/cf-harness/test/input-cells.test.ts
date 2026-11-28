@@ -5,10 +5,9 @@
  * never the address behind a token.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import type { MemorySpace } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   ADDRESS_HANDLE_TOKEN_PREFIX,
   HANDLE_TOKEN_PATTERN,

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -7,6 +6,7 @@ import { aclDocId } from "@commonfabric/memory/acl";
 import { Server } from "@commonfabric/memory/v2/server";
 import { verifySessionOpenAuthorization } from "@commonfabric/memory/v2/session-open-auth";
 import { resolveSpaceStoreUrl } from "@commonfabric/memory/v2/storage-path";
+import { describe, it } from "@commonfabric/test-support/test";
 import env from "@/env.ts";
 import { lifecycleRequestHandler } from "@/lib/pattern-lifecycle-handler.ts";
 import {

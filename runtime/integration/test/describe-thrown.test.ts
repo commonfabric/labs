@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { describeThrown } from "../describe-thrown.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("describe-thrown", () => {
   describe("describeThrown()", () => {

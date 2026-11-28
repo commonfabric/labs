@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import type { CfcConfClause } from "@commonfabric/memory/v2/cfc-release-authority";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { SinkMaxConfidentiality } from "../src/cfc/mod.ts";

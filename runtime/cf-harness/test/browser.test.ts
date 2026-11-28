@@ -5,8 +5,6 @@
  * and stays out of everything the model reads afterwards.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -14,6 +12,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { CfHarnessEngine } from "../src/engine.ts";
 import {

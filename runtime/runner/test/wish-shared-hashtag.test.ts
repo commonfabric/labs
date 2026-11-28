@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getTimingStatsBreakdown } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { type JSONSchema, NAME } from "../src/builder/types.ts";
 import { wish } from "../src/builtins/wish.ts";
@@ -64,7 +65,7 @@ function rawLinkSchema(value: unknown): unknown {
   return (value as Record<string, any>)?.["/"]?.[LINK_V1_TAG]?.schema;
 }
 
-Deno.test(
+test(
   "shared hashtag wish node scans mentionables once for repeated identical wishes",
   async () => {
     const storageManager = StorageManager.emulate({ as: signer });
@@ -142,7 +143,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "shared hashtag wish node scans once across schema-bearing wishes",
   async () => {
     const storageManager = StorageManager.emulate({ as: signer });
@@ -248,7 +249,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "shared hashtag wish node keeps its resolver across a second run for the same query",
   async () => {
     // A node's resolver is keyed by space, query, and scope. A second run

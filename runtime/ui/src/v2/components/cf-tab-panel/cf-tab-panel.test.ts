@@ -2,11 +2,11 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import "../cf-tab/index.ts";
 import "../cf-tabs/index.ts";
 import { CFTabPanel } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Mounts `html` and resolves with its panel once every element rendered. */
 async function panelIn(html: string) {

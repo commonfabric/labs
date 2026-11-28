@@ -6,7 +6,6 @@
  * and no case reads the store of the machine it runs on.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -61,6 +60,12 @@ import {
 import { directPromptSlotBindingFor } from "./support/prompt-slot-binding.ts";
 import { readsDespiteMode } from "./support/reads-despite-mode.ts";
 import { responsesBodyFromChatFixture } from "./support/responses-fixture.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The pieces an installed native store holds, as paths relative to it. */
 const SHIM = join("bin", "runsc");

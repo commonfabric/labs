@@ -33,9 +33,10 @@ import {
   sourceDescriptor,
 } from "./debug_view_support.ts";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../../../../runtime/runner/src/storage/commit-receipt.ts";
 
-Deno.test("debug deployment replaces a view when its pattern identity changes", async () => {
+test("debug deployment replaces a view when its pattern identity changes", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -120,7 +121,7 @@ Deno.test("debug deployment replaces a view when its pattern identity changes", 
   }
 });
 
-Deno.test("debug deployment starts and restarts its registered view", async () => {
+test("debug deployment starts and restarts its registered view", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -173,7 +174,7 @@ Deno.test("debug deployment starts and restarts its registered view", async () =
   }
 });
 
-Deno.test("debug deployment removes a view that fails to start", async () => {
+test("debug deployment removes a view that fails to start", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -217,7 +218,7 @@ Deno.test("debug deployment removes a view that fails to start", async () => {
   }
 });
 
-Deno.test("debug deployment preserves a view when its replacement fails", async () => {
+test("debug deployment preserves a view when its replacement fails", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -281,7 +282,7 @@ Deno.test("debug deployment preserves a view when its replacement fails", async 
   }
 });
 
-Deno.test("debug deployment rolls back an aborted registration", async () => {
+test("debug deployment rolls back an aborted registration", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -467,7 +468,7 @@ Deno.test("debug deployment rolls back an aborted registration", async () => {
   }
 });
 
-Deno.test("debug deployment rejects stale registration across runtimes", async () => {
+test("debug deployment rejects stale registration across runtimes", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   const readerSession = createSession({ identity, spaceDid });

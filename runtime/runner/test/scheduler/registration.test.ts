@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { updateSchedulerActionChangeGroup } from "../../src/scheduler/registration.ts";
 import type { Action } from "../../src/scheduler/types.ts";
@@ -12,6 +11,12 @@ import {
   space,
   toMemorySpaceAddress,
 } from "../scheduler-test-utils.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** Change-group state for one action, `action`. */
 function changeGroupState(

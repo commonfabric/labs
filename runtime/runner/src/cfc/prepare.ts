@@ -5,6 +5,7 @@ import {
   CFC_SYSTEM_STRING_ATOMS,
   type CfcAtom,
   cfcAtom,
+  type CfcModulePolicyRefAtom,
 } from "@commonfabric/api/cfc";
 import {
   emptySchemaObject,
@@ -29,7 +30,9 @@ import {
   fabricAwareEqual,
   FabricInstance,
   FabricPrimitive,
+  hashStringOf,
   isFabricObjectOrArray,
+  isFabricPlainContainer,
   isKeyableObjectOrArray,
   isWalkableObjectOrArray,
   refuseFabricInstance,
@@ -64,7 +67,7 @@ import {
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
-import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import type { JSONSchema, JSONSchemaObj, JSONValue } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { areLinksSame } from "../link-equality.ts";
 import { literalMemberMatches } from "../schema-literal-match.ts";
@@ -109,6 +112,7 @@ import {
 import { getValueAtPath, setValueAtPath } from "../path-utils.ts";
 import { isRuntimeSecretId } from "../runtime-secret-id.ts";
 import { arrayMatchesPositionally } from "../schema-match.ts";
+import { keptElementIndices } from "../storage/array-edit-script.ts";
 import { normalizeCellScope } from "../scope.ts";
 import type {
   IExtendedStorageTransaction,
@@ -178,6 +182,7 @@ import {
   admitsRulesOfKind,
   type CfcGrantConsumptionContext,
   evaluateExchangeRules,
+  isValueIntrinsicExchangeRule,
 } from "./exchange-eval.ts";
 import { externalIngestStamp } from "./external-ingest.ts";
 import {
@@ -236,6 +241,7 @@ import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import {
   type CfcDeclaringSchema,
   cfcSchemaEntries,
+  type CfcSchemaEntry,
 } from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
 import {
@@ -941,9 +947,17 @@ const consumedLocations = (
   entries: readonly LabelMapEntry[],
   path: readonly string[],
   nonRecursive: boolean | undefined,
+  evidence?: readonly LabelMapEntry[],
 ): ConsumedLocation[] =>
   Array.from(
-    resolvedLocations(entries, path, nonRecursive, "labeled", "evidence"),
+    resolvedLocations(
+      entries,
+      path,
+      nonRecursive,
+      "labeled",
+      "evidence",
+      evidence,
+    ),
     ({ path: location, label, evidence, integrity }) => ({
       key: stringTupleKey([document, pathKey(probedSlotPath(location))]),
       confidentiality: label.confidentiality ?? [],
@@ -1556,12 +1570,27 @@ const structuralProvenanceForPath = (
 };
 
 /**
+ * Whether `value` at `path` of the document `id` is what a served event's
+ * processed claim writes. Only a stream's entries document holds one, and
+ * only while the path holds what the claim writes: `true` for the mark and
+ * for `withheld`, nothing for a cleared delivery deferral. It says nothing of
+ * whether the runtime named the path a claim; `isProcessedClaimPath()` and
+ * the transaction's write-identity summary each also require that.
+ */
+export const isProcessedClaimValue = (
+  id: string,
+  path: readonly string[],
+  value: unknown,
+): boolean =>
+  id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
+  value === (path.at(-1) === "deliveryDeferral" ? undefined : true);
+
+/**
  * Whether `path` of `target` is a served event's processed claim, as an
  * authorized `CFC_STRUCTURAL_PROVENANCE_PROCESSED_CLAIM` marker on `tx` names
- * it, holding `value`, the value the transaction wrote there. Only a stream's
- * entries document holds one, and only while the path holds what the claim
- * writes: `true` for the mark and for `withheld`, nothing for a cleared
- * delivery deferral. Anything else written there is measured as any write is.
+ * it, holding `value`, the value the transaction wrote there
+ * (`isProcessedClaimValue()`). Anything else written there is measured as any
+ * write is.
  */
 const isProcessedClaimPath = (
   tx: IExtendedStorageTransaction,
@@ -1573,8 +1602,7 @@ const isProcessedClaimPath = (
   path: readonly string[],
   value: unknown,
 ): boolean =>
-  target.id.startsWith(STREAM_ENTRIES_DOC_PREFIX) &&
-  value === (path.at(-1) === "deliveryDeferral" ? undefined : true) &&
+  isProcessedClaimValue(target.id, path, value) &&
   structuralProvenanceForPath(
       tx,
       target,
@@ -1928,6 +1956,105 @@ const writePolicyInputIndexes = new WeakMap<
 >();
 
 /**
+ * The inputs of one document's list by the paths they name in that document,
+ * each with its position in the list.
+ */
+type WritePolicyInputPathNode = {
+  children: Map<string, WritePolicyInputPathNode>;
+  inputs: { position: number; input: WritePolicyInput }[];
+};
+
+/**
+ * The path index of each document's list that
+ * `writePolicyInputsForDocument()` built.
+ */
+const writePolicyInputPathIndexes = new WeakMap<
+  readonly WritePolicyInput[],
+  WritePolicyInputPathNode
+>();
+
+/**
+ * The write-policy inputs about `target`'s document that name a path in it at
+ * or above `path`, in the order they were recorded: an input whose target, or
+ * for a structural-provenance claim any of whose sources, is in the document
+ * at a concrete prefix of `path` (`concretePathHasPrefix`). Every other input
+ * of the document names no place that covers `path`, so a check that asks
+ * only about covering inputs reads these and decides as it would over all of
+ * `writePolicyInputsForDocument()`.
+ *
+ * A transaction that writes many slots of one document records an input for
+ * each, and a check at each slot that scanned them all would make the
+ * preparation quadratic in the slots written. The index is by path segment,
+ * so a query costs the length of `path` and the inputs it returns.
+ */
+const writePolicyInputsCoveringPath = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  path: readonly string[],
+): readonly WritePolicyInput[] => {
+  const inputs = writePolicyInputsForDocument(tx, target);
+  if (inputs.length === 0) return inputs;
+  let root = writePolicyInputPathIndexes.get(inputs);
+  if (root === undefined) {
+    root = { children: new Map(), inputs: [] };
+    const key = cfcDocumentKey(target);
+    const add = (
+      address: CfcDocumentAddress & { path: readonly string[] },
+      position: number,
+      input: WritePolicyInput,
+    ) => {
+      if (cfcDocumentKey(address) !== key) return;
+      let node = root!;
+      for (const segment of address.path) {
+        let next = node.children.get(segment);
+        if (next === undefined) {
+          next = { children: new Map(), inputs: [] };
+          node.children.set(segment, next);
+        }
+        node = next;
+      }
+      // An input that names one path twice is listed there once.
+      if (node.inputs[node.inputs.length - 1]?.input !== input) {
+        node.inputs.push({ position, input });
+      }
+    };
+    inputs.forEach((input, position) => {
+      if ("target" in input && input.target !== undefined) {
+        add(input.target, position, input);
+      }
+      if (input.kind === "structural-provenance") {
+        for (const source of input.sources) add(source, position, input);
+      }
+    });
+    writePolicyInputPathIndexes.set(inputs, root);
+  }
+  const covering: { position: number; input: WritePolicyInput }[] = [];
+  let nodes = 0;
+  let node: WritePolicyInputPathNode | undefined = root;
+  for (let depth = 0; node !== undefined; depth++) {
+    if (node.inputs.length > 0) {
+      nodes++;
+      for (const entry of node.inputs) covering.push(entry);
+    }
+    if (depth === path.length) break;
+    node = node.children.get(path[depth]);
+  }
+  // One node's inputs are in recorded order already. Inputs from several
+  // nodes are put back in it, and an input that names two covering paths is
+  // returned once.
+  if (nodes > 1) covering.sort((a, b) => a.position - b.position);
+  const result: WritePolicyInput[] = [];
+  for (const { input } of covering) {
+    if (result[result.length - 1] !== input) result.push(input);
+  }
+  return result;
+};
+
+/**
  * Whether `path` lies at or under a capture or binding the runtime staged in
  * this transaction, with the slot still holding it. Staging writes nothing
  * the referenced value holds, so the integrity the receiving slot's schema
@@ -1945,7 +2072,7 @@ const pathHoldsStagedReference = (
 ): boolean => {
   const logicalPath = canonicalizeLogicalPath(path);
   const scope = normalizeCellScope(target.scope);
-  return writePolicyInputsForDocument(tx, target).some((input) =>
+  return writePolicyInputsCoveringPath(tx, target, logicalPath).some((input) =>
     input.kind === "initialization" &&
     (input.mode === "capture" || input.mode === "binding") &&
     tx.isRuntimeWritePolicyInput(input) &&
@@ -2081,10 +2208,18 @@ const pathHoldsUnattributedInitialization = (
     address.space === target.space && address.id === target.id &&
     normalizeCellScope(address.scope) === normalizeCellScope(target.scope) &&
     concretePathHasPrefix(logicalPath, canonicalizeLogicalPath(address.path));
-  const inputs = writePolicyInputsForDocument(tx, target);
+  // Every test below holds only of an input that covers the path, so each
+  // reads the covering inputs. Whether the transaction attributes what it
+  // initializes is a question about the document, and reads all of its
+  // inputs.
+  const covering = writePolicyInputsCoveringPath(tx, target, logicalPath);
   if (
-    !attributesInitializationAt(tx, target, inputs) &&
-    inputs.some((input) => {
+    !attributesInitializationAt(
+      tx,
+      target,
+      writePolicyInputsForDocument(tx, target),
+    ) &&
+    covering.some((input) => {
       if (input.kind === "structural-provenance") {
         if (!tx.isRuntimeWritePolicyInput(input)) return false;
         // A setup projection names the result field it projects and the
@@ -2113,7 +2248,7 @@ const pathHoldsUnattributedInitialization = (
     return true;
   }
   const unchangedTarget = { ...target, id: target.id as URI };
-  return inputs.some((input) =>
+  return covering.some((input) =>
     tx.isRuntimeWritePolicyInput(input) &&
     ((input.kind === "preserved-output" && covers(input.target) &&
       writePreservesRuntimeOutput(tx, unchangedTarget)) ||
@@ -3841,6 +3976,247 @@ type ValueWriteTarget = ReturnType<typeof valueWriteTargets> extends
   Map<string, infer Target> ? Target : never;
 
 /**
+ * Where a stored per-element entry of a rewritten array goes: it stays where
+ * it is, it moves to `path` with the element it labels, or it is dropped with
+ * an element the write removed.
+ */
+type ElementEntryPlacement =
+  | { kind: "kept" }
+  | { kind: "moved"; path: readonly string[] }
+  | { kind: "dropped" };
+
+/**
+ * The most removals and additions the alignment of an array's old and new
+ * elements searches for a shortest edit script within, between their common
+ * prefix and suffix (`keptElementIndices()`). It is the bound the commit's
+ * array diff uses.
+ */
+const ELEMENT_ALIGNMENT_MAX_EDITS = 64;
+
+/** What a stored entry is, for {@link elementEntryPlacements}. */
+const isPerValueElementEntry = (entry: LabelMapEntry): boolean =>
+  (entry.origin === "derived" || entry.origin === "structure") &&
+  entry.observes !== "shape" &&
+  !isRuntimeMintedTemplate({
+    origin: entry.origin,
+    path: canonicalizeLogicalPath(entry.path),
+  });
+
+/**
+ * Sets the slot at `rel` beneath `root` to `slot`, or empties it where
+ * `present` is false. `root` and every container in `owned` are copies this
+ * caller may change; any other container on the way down is copied once,
+ * put in its parent's place, and added to `owned`, so a later call for a
+ * path through it copies nothing. Returns false where a container on the way
+ * is not a plain array or record.
+ */
+const setSlotIn = (
+  root: unknown[],
+  owned: Set<unknown>,
+  rel: readonly string[],
+  slot: unknown,
+  present: boolean,
+): boolean => {
+  let container = root as unknown as Record<string, unknown>;
+  for (let depth = 0; depth < rel.length - 1; depth++) {
+    const key = rel[depth]!;
+    let child = container[key];
+    if (!isFabricPlainContainer(child as FabricValue)) return false;
+    if (!owned.has(child)) {
+      child = Array.isArray(child)
+        ? child.slice()
+        : { ...(child as Record<string, unknown>) };
+      owned.add(child);
+      container[key] = child;
+    }
+    container = child as Record<string, unknown>;
+  }
+  const key = rel[rel.length - 1]!;
+  if (present) container[key] = slot;
+  else delete container[key];
+  return true;
+};
+
+/**
+ * Where each stored per-value entry beneath an element of an array this
+ * transaction rewrote goes, so that an entry follows the element it labels.
+ *
+ * The value diff (`normalizeAndDiff()`) writes an array index by index, and
+ * writes nothing at an index whose value did not change. An element that
+ * moves onto an index holding an equal value is therefore not written there,
+ * and the clear of entries beneath written paths leaves that index the
+ * entries of the element that stood there before. So the old and new arrays
+ * are aligned by a shortest edit script (`keptElementIndices()`), and an
+ * entry beneath an old element the script keeps at another index moves there
+ * with it. A script keeps a subsequence, so an element that changes places
+ * with others, such as the first of three moved to the end, is one it
+ * removes at the old index and adds at the new one. Each old element the
+ * script removes is therefore paired, in order, with the first new element
+ * it adds that is equal to it and not yet paired, and its entries move there.
+ * An entry beneath an old element left unpaired is dropped, except where the
+ * new element at the same index is one the script adds and nothing is paired
+ * with: an element edited in place pairs with itself there, and its entries
+ * are cleared beneath the paths the diff wrote and kept elsewhere, as before.
+ *
+ * Only `derived` and `structure` entries move, existence entries excepted:
+ * those are frozen at their path's creation (§8.12.8) and stay where they
+ * are. Declared entries are policy for a position, and link entries follow
+ * the reference their slot holds (`linkEntrySuperseded`).
+ *
+ * An array is aligned where the transaction wrote beneath one of its indices
+ * or its length and wrote neither it nor any path above it, and where no
+ * array above it is aligned: an element that moves is equal to what it was,
+ * so nothing beneath it moves within it. The old array is the new one with
+ * each written path's value before the transaction put back, deepest first.
+ * Returns `undefined` where no stored entry is beneath such an array.
+ */
+const elementEntryPlacements = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: URI;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  written: ValueWriteTarget,
+  writtenPrefixes: PathPrefixIndex,
+  storedEntries: readonly LabelMapEntry[],
+): ((entryPath: readonly string[]) => ElementEntryPlacement) | undefined => {
+  const entryPaths = storedEntries.filter(isPerValueElementEntry)
+    .map((entry) => canonicalizeLogicalPath(entry.path));
+  if (entryPaths.length === 0) return undefined;
+  const candidates = new Map<string, readonly string[]>();
+  for (const path of written.paths) {
+    for (let depth = 0; depth < path.length; depth++) {
+      const segment = path[depth]!;
+      if (segment !== "length" && !isArrayIndexPropertyName(segment)) continue;
+      const array = path.slice(0, depth);
+      const key = pathKey(array);
+      if (candidates.has(key) || writtenPrefixes.hasPrefixOf(array)) continue;
+      if (
+        !entryPaths.some((entryPath) =>
+          entryPath.length > depth && isPrefix(array, entryPath) &&
+          isArrayIndexPropertyName(entryPath[depth]!)
+        )
+      ) {
+        continue;
+      }
+      candidates.set(key, array);
+    }
+  }
+  const arrays = [...candidates.values()].filter((array) =>
+    ![...candidates.values()].some((outer) =>
+      outer.length < array.length && isPrefix(outer, array)
+    )
+  );
+  const alignments: {
+    array: readonly string[];
+    kept: Int32Array;
+    added: Uint8Array;
+    afterLength: number;
+  }[] = [];
+  for (const array of arrays) {
+    const after = tx.readValueOrThrow({ ...target, path: [...array] }, {
+      meta: INTERNAL_VERIFIER_META,
+    });
+    if (!Array.isArray(after)) continue;
+    const beneath = written.paths
+      .filter((path) => path.length > array.length && isPrefix(array, path))
+      .sort((left, right) => right.length - left.length);
+    const beforeArray: unknown[] = after.slice();
+    const owned = new Set<unknown>([beforeArray]);
+    let beforeLength: number | undefined;
+    let rebuilt = true;
+    for (const path of beneath) {
+      const key = pathKey(path);
+      const rel = path.slice(array.length);
+      const previous = written.previousValuesByPath.get(key);
+      if (rel.length === 1 && rel[0] === "length") {
+        if (typeof previous === "number") beforeLength = previous;
+        continue;
+      }
+      rebuilt = setSlotIn(
+        beforeArray,
+        owned,
+        rel,
+        previous,
+        written.previousPresentByPath.get(key) ?? previous !== undefined,
+      );
+      if (!rebuilt) break;
+    }
+    if (!rebuilt) continue;
+    if (beforeLength !== undefined) beforeArray.length = beforeLength;
+    const beforeKeys: (string | undefined)[] = [];
+    const afterKeys: (string | undefined)[] = [];
+    const keyOf = (
+      values: readonly unknown[],
+      keys: (string | undefined)[],
+      index: number,
+    ): string =>
+      keys[index] ??= index in values
+        ? `=${hashStringOf(values[index] as FabricValue)}`
+        : "hole";
+    const kept = keptElementIndices(
+      beforeArray.length,
+      after.length,
+      (beforeIndex, afterIndex) =>
+        (beforeIndex in beforeArray) === (afterIndex in after) &&
+        (Object.is(beforeArray[beforeIndex], after[afterIndex]) ||
+          keyOf(beforeArray, beforeKeys, beforeIndex) ===
+            keyOf(after, afterKeys, afterIndex)),
+      ELEMENT_ALIGNMENT_MAX_EDITS,
+    );
+    const added = new Uint8Array(after.length).fill(1);
+    for (const afterIndex of kept) if (afterIndex >= 0) added[afterIndex] = 0;
+    const addedByKey = new Map<string, number[]>();
+    for (let afterIndex = after.length - 1; afterIndex >= 0; afterIndex--) {
+      if (added[afterIndex] === 0) continue;
+      const key = keyOf(after, afterKeys, afterIndex);
+      const queue = addedByKey.get(key);
+      if (queue === undefined) addedByKey.set(key, [afterIndex]);
+      else queue.push(afterIndex);
+    }
+    for (let beforeIndex = 0; beforeIndex < kept.length; beforeIndex++) {
+      if (kept[beforeIndex]! >= 0) continue;
+      const afterIndex = addedByKey.get(
+        keyOf(beforeArray, beforeKeys, beforeIndex),
+      )?.pop();
+      if (afterIndex === undefined) continue;
+      kept[beforeIndex] = afterIndex;
+      added[afterIndex] = 0;
+    }
+    alignments.push({ array, kept, added, afterLength: after.length });
+  }
+  if (alignments.length === 0) return undefined;
+  return (entryPath) => {
+    for (const { array, kept, added, afterLength } of alignments) {
+      if (entryPath.length <= array.length || !isPrefix(array, entryPath)) {
+        continue;
+      }
+      const segment = entryPath[array.length]!;
+      if (!isArrayIndexPropertyName(segment)) return { kind: "kept" };
+      const index = Number(segment);
+      if (index >= kept.length) return { kind: "kept" };
+      const afterIndex = kept[index]!;
+      if (afterIndex === index) return { kind: "kept" };
+      if (afterIndex >= 0) {
+        return {
+          kind: "moved",
+          path: [
+            ...array,
+            String(afterIndex),
+            ...entryPath.slice(array.length + 1),
+          ],
+        };
+      }
+      return index < afterLength && added[index] === 1
+        ? { kind: "kept" }
+        : { kind: "dropped" };
+    }
+    return { kind: "kept" };
+  };
+};
+
+/**
  * What stands at `rel` below `value`: the first link met on the way down,
  * which the path then continues inside of and which is therefore what the
  * path resolves through, else the value at `rel`, else nothing.
@@ -5115,11 +5491,113 @@ const deriveFlowJoinImpl = (
       type,
     });
   };
+  // Exchange at observation (§5.3): "A runtime MUST evaluate exchange
+  // wherever a label is consumed: when a value is observed into a
+  // computation", and a value-intrinsic rule's result is the one that
+  // travels: "values derived from that observation carry the exchanged
+  // confidentiality". The evidence such a rule guards on is bound to the
+  // value observed, and the join below drops it, so a gate that reads what
+  // this transaction writes finds none of it.
+  const policyEvaluationMode = tx.getCfcState().policyEvaluationMode;
+  const snapshotCarriesExchange =
+    tx.getCfcState().policySnapshot?.records.some((record) =>
+      record.rules.some(isValueIntrinsicExchangeRule)
+    ) ?? false;
+  // Nothing the flow join does installs a manifest.
+  const manifestFor = passManifestLookup(tx);
+  /**
+   * Returns `clauses`, the confidentiality one observation of the document
+   * `document` in `space` consumed, as the value-intrinsic rules leave it:
+   * each rule matched at one location the observation consumed, against the
+   * evidence there about the value currently at it, as a release gate
+   * matches it (`access-integrity.ts`). `entries`, `path` and `nonRecursive`
+   * are what the observation's label was resolved from, and `evidence`
+   * returns the entries a location's evidence is resolved over where those
+   * are not `entries`. `membership` returns the further locations a read
+   * that stops at a container consumes: the container's length, whose
+   * writer the evidence at the container does not speak for.
+   *
+   * The clauses come back as read where the policy-evaluation dial is not
+   * `enforce` and where no location carries evidence.
+   *
+   * Where an evaluation runs out of fuel, or a module policy it names does not
+   * resolve, each clause that location consumed comes back split into its
+   * alternatives, one clause each. A module policy's value-intrinsic rules can
+   * fire only here, since the join drops the evidence they guard on, and a
+   * manifest consultation adds no precondition that would catch a replica that
+   * has not received it (§4.4.1, commonfabric/specs#109, pending). Keeping the
+   * clauses as read is not the strict side there, since a `dropClause` rule on
+   * a clause of several alternatives removes one, which tightens it, and §5.3.2
+   * makes exhaustion "a hard boundary failure (fail closed), not permission to
+   * continue with a partially rewritten label". The split is never looser than
+   * the clauses as read, and is stricter than any outcome that keeps one of a
+   * clause's original alternatives. It is not a bound on every outcome: a rule
+   * that adds an alternative can enable another that then drops an original
+   * one, leaving a clause the split does not imply. Exhaustion needs more than
+   * 64 firings at one location. The flow join has callers outside prepare (a
+   * query builtin's request label, the serving loop's processed claim), so it
+   * refuses through the label it returns rather than by throwing.
+   */
+  const exchangedAtObservation = (
+    document: string,
+    space: MemorySpace,
+    clauses: readonly CfcConfClause[],
+    entries: readonly LabelMapEntry[],
+    path: readonly string[],
+    nonRecursive: boolean | undefined,
+    evidence: () => readonly LabelMapEntry[] | undefined,
+    membership: () => readonly ConsumedLocation[],
+  ): readonly CfcConfClause[] => {
+    if (
+      policyEvaluationMode !== "enforce" || clauses.length === 0 ||
+      (!snapshotCarriesExchange &&
+        modulePolicyReferencesIn(clauses).length === 0)
+    ) {
+      return clauses;
+    }
+    const locations = [
+      ...consumedLocations(
+        document,
+        entries,
+        path,
+        nonRecursive,
+        evidence(),
+      ),
+      // A recursive observation's own locations already include the length.
+      ...(nonRecursive === true ? membership() : []),
+    ];
+    if (locations.every((location) => location.evidence.length === 0)) {
+      return clauses;
+    }
+    return exchangeEachObservation(
+      clauses,
+      locations,
+      (consumed, evidence) => {
+        const outcome = evaluateGatedConfidentiality(
+          tx,
+          consumed,
+          evidence,
+          [],
+          "observing",
+          space,
+          admitsRulesOfKind("value-intrinsic"),
+          manifestFor,
+        );
+        return outcome.exhausted || outcome.resolutionFailures.length > 0
+          ? consumed.flatMap((clause) => clauseAlternatives(clause))
+          : outcome.confidentiality;
+      },
+    ).confidentiality;
+  };
   // Each pass owns its snapshots: prepare can run again after metadata writes.
   const metadataByDoc = new Map<string, {
     metadata: CfcMetadata | undefined;
     indexes: Map<ReadObservationShape, ConsumedLabelIndex>;
     labels: Map<string, IFCLabel | undefined>;
+
+    // By the same key as `labels`, the confidentiality an observation joins,
+    // exchanged where it was observed (`exchangedAtObservation`).
+    exchanged: Map<string, readonly CfcConfClause[]>;
     witnesses: Map<string, () => CfcAtom[] | undefined>;
 
     // With `collectSources`, by the same key as `labels`, the entries the
@@ -5275,6 +5753,7 @@ const deriveFlowJoinImpl = (
           metadata: storedMetadataFor(tx, space, id, scope, type),
           indexes: new Map(),
           labels: new Map(),
+          exchanged: new Map(),
           witnesses: new Map(),
           joined: new Map(),
           sourced: new Set(),
@@ -5409,6 +5888,8 @@ const deriveFlowJoinImpl = (
           observation.nonRecursive,
         );
         document.labels.set(labelKey, label);
+        // For a read declared onward, the entries it consumed at the slots.
+        let slotEntries: readonly LabelMapEntry[] | undefined;
         if (sourceSteps !== undefined && entries !== undefined) {
           document.joined.set(labelKey, entries);
         }
@@ -5446,6 +5927,7 @@ const deriveFlowJoinImpl = (
           if (sourceSteps !== undefined) {
             document.joined.set(labelKey, below);
           }
+          slotEntries = below;
         }
         // A shallow content read's locations are resolved over what a value
         // read of them would consume; see `observationInputWitnesses`. So are
@@ -5471,6 +5953,87 @@ const deriveFlowJoinImpl = (
             indexFor("value"),
           );
         };
+        // A read that stops at a container observes its membership: for a
+        // list, how long it is. The length is a value of its own, stamped by
+        // whoever last changed it, and nothing else the read consumes says
+        // who that was. Its value stamps are a location of the read, both
+        // for the input witnesses and for exchange, so that neither a
+        // witness nor a release survives a list other code truncated. A
+        // record's key named `length` is read the same way, which can only
+        // withhold. Resolved on first use.
+        let lengthEntriesMemo: readonly LabelMapEntry[] | undefined;
+        const lengthPath = [...logicalPath, "length"];
+        const lengthEntries = (): readonly LabelMapEntry[] => {
+          if (lengthEntriesMemo !== undefined) return lengthEntriesMemo;
+          // A recursive read consumed the length's entries already; what
+          // reaches its declared target is its node alone, so they are a
+          // location of that node too.
+          lengthEntriesMemo = (document.metadata === undefined ||
+              observation.shape === "followRef"
+            ? []
+            : observation.nonRecursive === true
+            ? consumedEntriesForRead(
+              document.metadata,
+              lengthPath,
+              { nonRecursive: true, consumes: "value", ...exclusion },
+              indexFor("value"),
+            )
+            : entries ?? []).filter((entry) =>
+              pathKey(entry.path) === pathKey(lengthPath)
+            );
+          return lengthEntriesMemo;
+        };
+        const membership = (): readonly ConsumedLocation[] =>
+          lengthEntries().length === 0
+            ? []
+            : consumedLocations(key, lengthEntries(), lengthPath, true);
+        // What joins of this observation, exchanged where it was observed.
+        // A read declared onward joins what it consumed at the slots; what
+        // it consumed at its own path lands on the target it names, and is
+        // exchanged the same way, as a shallow read there. The evidence is
+        // the input witnesses': a shallow read observes a function of the
+        // value stored at its node, and the shape class it consumes holds
+        // no integrity of its own.
+        const joinedEntries = entries === undefined
+          ? undefined
+          : observation.declaredOnward !== undefined
+          ? slotEntries
+          : entries;
+        const joinedClauses = (observation.declaredOnward !== undefined
+          ? document.labels.get(`${labelKey}#below`)
+          : label)?.confidentiality ?? [];
+        if (joinedEntries !== undefined && joinedClauses.length > 0) {
+          document.exchanged.set(
+            labelKey,
+            exchangedAtObservation(
+              key,
+              space,
+              joinedClauses,
+              joinedEntries,
+              logicalPath,
+              observation.nonRecursive,
+              observationEvidence,
+              membership,
+            ),
+          );
+        }
+        const nodeClauses = document.labels.get(`${labelKey}#node`)
+          ?.confidentiality ?? [];
+        if (entries !== undefined && nodeClauses.length > 0) {
+          document.exchanged.set(
+            `${labelKey}#node`,
+            exchangedAtObservation(
+              key,
+              space,
+              nodeClauses,
+              entries,
+              logicalPath,
+              true,
+              observationEvidence,
+              membership,
+            ),
+          );
+        }
         // Computed on first use, since a followed slot's probe never uses it
         // and resolving a probe's evidence may read the slot's value.
         let computed: { witnesses: CfcAtom[] | undefined } | undefined;
@@ -5493,34 +6056,15 @@ const deriveFlowJoinImpl = (
           };
           return computed.witnesses;
         });
-        // A read that stops at a container observes its membership: for a
-        // list, how long it is. The length is a value of its own, stamped by
-        // whoever last changed it, and nothing else the read consumes says
-        // who that was, so a list other code truncated would otherwise keep
-        // every surviving member's witness. Its value stamps are a location
-        // of the read. A record's key named `length` is read the same way,
-        // which can only withhold a witness.
-        const lengthWitnesses = document.metadata === undefined ||
-            observation.nonRecursive !== true ||
-            observation.shape === "followRef" || identity === undefined ||
-            inputWitnesses?.length === 0
+        // The membership a read that stops at a container observes is a
+        // location of its input witnesses (see `lengthEntries`).
+        const lengthWitnesses = observation.nonRecursive !== true ||
+            identity === undefined || inputWitnesses?.length === 0 ||
+            lengthEntries().length === 0
           ? undefined
-          : (() => {
-            const lengthPath = [...logicalPath, "length"];
-            const lengthEntries = consumedEntriesForRead(
-              document.metadata!,
-              lengthPath,
-              { nonRecursive: true, consumes: "value", ...exclusion },
-              indexFor("value"),
-            ).filter((entry) =>
-              pathKey(entry.path) ===
-                pathKey(lengthPath)
-            );
-            return lengthEntries.length === 0
-              ? undefined
-              : observationInputWitnesses(lengthEntries, lengthPath, true);
-          })();
-        document.witnesses.set(`${labelKey}#length`, () => lengthWitnesses);
+          : observationInputWitnesses(lengthEntries(), lengthPath, true);
+        document.witnesses.set(`${labelKey}#length`, () =>
+          lengthWitnesses);
       }
       // Every observation counts toward the input witnesses, `followRef`
       // included: which reference sits at a slot is information the
@@ -5576,7 +6120,10 @@ const deriveFlowJoinImpl = (
             onward = { target, atoms: [] };
             declaredAtomsAt.set(at, onward);
           }
-          for (const atom of node.confidentiality) {
+          for (
+            const atom of document.exchanged.get(`${labelKey}#node`) ??
+              node.confidentiality
+          ) {
             declaredAtoms.push(atom);
             onward.atoms.push(atom);
           }
@@ -5586,7 +6133,13 @@ const deriveFlowJoinImpl = (
         ? document.labels.get(`${labelKey}#below`)?.confidentiality
         : label?.confidentiality;
       if (joined?.length) {
-        for (const atom of joined) atoms.push(atom);
+        // What joins is the label as exchanged where it was observed. The
+        // bookkeeping below, and the input witnesses above, go by the label
+        // as read: a location whose clause a rule released is still a
+        // confidential input of this transformation.
+        for (const atom of document.exchanged.get(labelKey) ?? joined) {
+          atoms.push(atom);
+        }
         if (sourceSteps !== undefined && !document.sourced.has(labelKey)) {
           document.sourced.add(labelKey);
           const consumed = document.joined.get(labelKey) ?? [];
@@ -5846,7 +6399,9 @@ const deriveFlowJoinImpl = (
   // and the input witnesses retained beside it (`input-witness.ts`). The
   // flow join is one per-tx label stamped on every written doc, so the
   // identity must hold for the whole tx: minted only when every
-  // non-privileged write was authored under the same defined identity,
+  // non-privileged write was authored under the same defined identity (a
+  // served event's processed claim, the runtime's write and outside the
+  // stamp, is not one of them),
   // captured at write time (see `CfcTxState.writeIdentity`) — not whichever
   // identity is current at prepare, which a later run in the same tx may
   // have changed and which an unattributed write must not borrow. Ambiguity
@@ -7866,6 +8421,24 @@ type InputRead = Omit<IReadActivity, "journalIndex"> & {
   journalIndex: number;
 };
 
+/** Metadata with no marker of its own, which says what it inherits. */
+const UNMARKED_METADATA: NonNullable<IReadActivity["meta"]> = Object.freeze(
+  {},
+);
+
+/**
+ * Whether what `meta` says of its reads can no longer change: it is absent,
+ * or frozen with a prototype that is `Object.prototype` or none. What
+ * `Object.prototype` says is compared apart
+ * (`InputReadSnapshot.inheritedInternal`).
+ */
+const classificationIsFixed = (meta: IReadActivity["meta"]): boolean => {
+  if (meta === undefined) return true;
+  if (!Object.isFrozen(meta)) return false;
+  const prototype = Object.getPrototypeOf(meta);
+  return prototype === Object.prototype || prototype === null;
+};
+
 /** The reads an `InputReadView` holds, and what they were built from. */
 type InputReadSnapshot = {
   // What the reads were copied from: every record the transaction offered,
@@ -7873,9 +8446,18 @@ type InputReadSnapshot = {
   // metadata object classed its reads as the verifier's own. A record keeps
   // its place in the transaction's list while that classification changes,
   // by its metadata being replaced or changed in place.
+  // `list` is the object the transaction handed out, and `revision` what it
+  // returned on freezing the records of that list, or `undefined` where it
+  // froze none.
+  list: Iterable<IReadActivity>;
+  revision: number | undefined;
   records: readonly IReadActivity[];
   metas: readonly IReadActivity["meta"][];
-  internalByMeta: ReadonlyMap<IReadActivity["meta"], boolean>;
+  // The distinct metadata objects whose classification can change, each
+  // with how it classed its reads, and how metadata that carries no marker
+  // of its own classed its reads, which is what its prototype says.
+  openMetas: readonly (readonly [IReadActivity["meta"], boolean])[];
+  inheritedInternal: boolean;
   triggerCount: number;
   reads: readonly InputRead[];
   // The value path each read observes, or `undefined` for a read of one of
@@ -8024,7 +8606,11 @@ const buildGatedInputReads = (
  * the reads again only when the records differ, one carries another
  * metadata object, or a metadata object classes its reads otherwise than
  * it did, so a read recorded or reclassified during the pass reaches the
- * targets verified after it.
+ * targets verified after it. Each ask has the transaction freeze the
+ * records it lists (`freezeReadActivityRecords`), so a record the view has
+ * copied refuses another metadata object, and an ask of a transaction that
+ * lists the records it listed classifies each distinct metadata object
+ * again and compares no record.
  * The resolver's generation says whether a write retired an envelope the
  * view resolved. The view is deliberately class-blind (`consumes: "all"`):
  * the gate is a screen over everything the transaction consumed, and
@@ -8051,9 +8637,30 @@ export class InputReadView {
     gatedReads: ReturnType<typeof buildGatedInputReads>;
   };
 
+  #recordsCompared = 0;
+  #metadataObjectsClassified = 0;
+
   /** Binds the view to the transaction whose reads it holds. */
   constructor(tx: IExtendedStorageTransaction) {
     this.#tx = tx;
+  }
+
+  /**
+   * How many records the asks so far compared with the copy the view held:
+   * every record at each ask of a transaction that does not freeze its
+   * records or hands out another list, and none otherwise.
+   */
+  get recordsCompared(): number {
+    return this.#recordsCompared;
+  }
+
+  /**
+   * How many metadata objects the asks so far classified again: at each
+   * ask that held a copy, each distinct object of that copy that is not
+   * frozen.
+   */
+  get metadataObjectsClassified(): number {
+    return this.#metadataObjectsClassified;
   }
 
   /**
@@ -8157,13 +8764,24 @@ export class InputReadView {
     const rawList: readonly IReadActivity[] = Array.isArray(raw)
       ? raw
       : [...raw];
+    const revision = tx.freezeReadActivityRecords?.();
     const triggers = triggerReadSources(tx);
-    if (
-      this.#reads !== undefined &&
-      this.#reads.triggerCount === triggers.length &&
-      InputReadView.#stands(this.#reads, rawList)
-    ) {
-      return this.#reads;
+    const held = this.#reads;
+    if (held !== undefined && held.triggerCount === triggers.length) {
+      // The transaction says its list holds the records it held, each frozen
+      // with the metadata object it had, so only what those objects say can
+      // differ.
+      const sameRecords = revision !== undefined &&
+        revision === held.revision && raw === held.list &&
+        rawList.length === held.records.length;
+      if (!sameRecords) this.#recordsCompared += rawList.length;
+      this.#metadataObjectsClassified += held.openMetas.length;
+      if (
+        (sameRecords || InputReadView.#sameRecords(held, rawList)) &&
+        InputReadView.#classifiedAsHeld(held)
+      ) {
+        return held;
+      }
     }
     let clockLessReads = 0;
     const metas: IReadActivity["meta"][] = [];
@@ -8192,13 +8810,20 @@ export class InputReadView {
         journalIndex: -Infinity,
       });
     }
+    const openMetas: [IReadActivity["meta"], boolean][] = [];
+    for (const entry of internalByMeta) {
+      if (!classificationIsFixed(entry[0])) openMetas.push(entry);
+    }
     this.#reads = {
+      list: raw,
+      revision,
       // A copy, so the records compared at the next ask are the ones this
       // snapshot was built from even where the transaction hands out its
       // own growing list.
       records: [...rawList],
       metas,
-      internalByMeta,
+      openMetas,
+      inheritedInternal: isInternalVerifierRead(UNMARKED_METADATA),
       triggerCount: triggers.length,
       reads,
       gatePaths: reads.map((read) => canonicalizeDocumentPath(read.path)),
@@ -8218,15 +8843,11 @@ export class InputReadView {
 
   /**
    * Helper for `#current()`, which says whether `held` was built from
-   * exactly `records`, each classified as it is now. The transaction keeps a
-   * record whose classification is not sealed so that a consumer reads its
-   * metadata again, so every ask reads every record's metadata: a record
-   * carrying another metadata object ends the snapshot, and so does a
-   * metadata object that classes its reads otherwise than it did. The
-   * classification is the metadata object's, and a transaction's records
-   * share a few of them, so each distinct one is classified once per ask.
+   * exactly `records`, each carrying the metadata object it carried. It
+   * reads every record, which a record that is not frozen needs: its
+   * metadata can be replaced while it keeps its place.
    */
-  static #stands(
+  static #sameRecords(
     held: InputReadSnapshot,
     records: readonly IReadActivity[],
   ): boolean {
@@ -8237,7 +8858,23 @@ export class InputReadView {
         return false;
       }
     }
-    for (const [meta, internal] of held.internalByMeta) {
+    return true;
+  }
+
+  /**
+   * Helper for `#current()`, which says whether each metadata object of
+   * `held` classes its reads as it did. The classification is the metadata
+   * object's, which can change in place unless the object is frozen, so
+   * each distinct object that is not is classified once per ask. The count
+   * of those is what an ask costs: a site that records each read under a
+   * metadata object of its own makes that count follow the reads unless it
+   * freezes the object.
+   */
+  static #classifiedAsHeld(held: InputReadSnapshot): boolean {
+    if (isInternalVerifierRead(UNMARKED_METADATA) !== held.inheritedInternal) {
+      return false;
+    }
+    for (const [meta, internal] of held.openMetas) {
       if (isInternalVerifierRead(meta) !== internal) return false;
     }
     return true;
@@ -8297,7 +8934,10 @@ const verifyInputRequirements = (
   // while producing the current view. Refresh after that inspection so every
   // envelope resolution observes those writes.
   metadataResolver.refresh();
-  const schemaEntries = cfcSchemaEntries(schema);
+  const schemaEntries = requirementBoundEntries(
+    schema,
+    inputRequirementBindings(tx, target.space),
+  );
   // The stored envelope of each read's document is resolved here, ahead of
   // the label: `storedMetadataFor` refuses an envelope this build cannot
   // interpret, by version or by shape, and a transaction that consumed such
@@ -8350,6 +8990,13 @@ const verifyInputRequirements = (
     );
     if (disallowedClause !== undefined) {
       return { reason: disallowedClause, verdict: true };
+    }
+    const unboundRequirement = unboundInputRequirementReason(
+      entry.schema,
+      entry.path,
+    );
+    if (unboundRequirement !== undefined) {
+      return { reason: unboundRequirement, verdict: true };
     }
     const currentPrincipalFailure = currentPrincipalIntegrityReason(
       tx,
@@ -8571,13 +9218,23 @@ const verifyInputRequirements = (
           read.locations,
           [],
           mode === "enforce" ? "consuming" : "observing",
-          target.space,
+          // The space the label was read from holds its manifests (atomic
+          // persistence, spec §4.4.1). The target may receive its copy only
+          // from the commit this gate decides, so a lookup there alone
+          // would refuse a cold cross-space copy on every attempt.
+          read.space,
         );
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
           // label (spec §8.10.3 clause fit — flat ceilings keep their
-          // conjunctive meaning through atomsOutsideCeiling).
+          // conjunctive meaning through atomsOutsideCeiling). A module manifest
+          // that did not resolve fails the gate even where the unrewritten
+          // label fits (spec §5.3.2): a rule may drop an alternative, so the
+          // manifest's rules could have made the label stricter, and the
+          // consultation adds no precondition that would catch a replica that
+          // has not received it (§4.4.1, commonfabric/specs#109, pending).
           const fits = outcome.exhausted === false &&
+            outcome.resolutionFailures.length === 0 &&
             atomsOutsideCeiling(outcome.confidentiality, maxConfidentiality)
                 .length === 0;
           if (
@@ -8957,6 +9614,22 @@ const resolvePolicyOfConfidentiality = (
     resolvePolicyOfValue(tx, value, owningSpace) as CfcConfClause
   );
 
+/**
+ * Whether `value` is a `PolicyOf` reference as the compiler lowers it: a
+ * module policy whose subject is the space owning the document, written as a
+ * placeholder, with the identity of the policy it names.
+ */
+const isOwningSpacePolicyMarker = (
+  value: Record<string, unknown>,
+): boolean =>
+  value.type === CFC_ATOM_TYPE.Policy &&
+  value.policyRefKind === "module" &&
+  isObjectOrArray(value.subject) &&
+  value.subject[OWNING_SPACE_PLACEHOLDER] === true &&
+  typeof value.moduleIdentity === "string" &&
+  typeof value.symbol === "string" &&
+  typeof value.policyDigest === "string";
+
 const resolvePolicyOfValue = (
   tx: IExtendedStorageTransaction,
   value: unknown,
@@ -9019,6 +9692,174 @@ const resolvePolicyOfValue = (
   );
 };
 
+/**
+ * The schema annotations that state input requirements (spec §8.10.3): what a
+ * value must be screened by, and how confidential it may be, to land where the
+ * schema describes.
+ */
+const INPUT_REQUIREMENT_KEYS = [
+  "requiredIntegrity",
+  "maxConfidentiality",
+] as const;
+
+/**
+ * The trusted bindings an attempt's input requirements are instantiated
+ * against: the principal it acts for, and the space that owns the document
+ * being written.
+ */
+type InputRequirementBindings = {
+  readonly actingPrincipal: string | undefined;
+  readonly owningSpace: MemorySpace;
+};
+
+/**
+ * `value` with each placeholder it holds bound by `bindings`: a
+ * `CurrentPrincipal` to the acting principal, and the subject of a lowered
+ * `PolicyOf` to the owning space. A placeholder `bindings` cannot bind is left
+ * as it is, for `unboundInputRequirementReason()` to refuse.
+ */
+const bindRequirementPlaceholders = (
+  value: JSONValue,
+  bindings: InputRequirementBindings,
+): JSONValue => {
+  if (isCurrentPrincipalPlaceholder(value)) {
+    return bindings.actingPrincipal ?? value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const bound = bindRequirementPlaceholders(entry, bindings);
+      changed ||= bound !== entry;
+      return bound;
+    });
+    return changed ? next : value;
+  }
+  if (!isObjectOrArray(value)) return value;
+  if (isOwningSpacePolicyMarker(value)) {
+    return { ...value, subject: bindings.owningSpace };
+  }
+  let changed = false;
+  const next: Record<string, JSONValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const bound = bindRequirementPlaceholders(entry as JSONValue, bindings);
+    changed ||= bound !== entry;
+    next[key] = bound;
+  }
+  return changed ? next : value;
+};
+
+/**
+ * The bindings `tx`'s attempt to write a document in `owningSpace` checks its
+ * input requirements under. A snapshot naming no principal, an empty one
+ * included, binds none, and neither does a run that acts for no one
+ * (`servedRunActsForNoOne()`), whatever its snapshot names. A requirement
+ * naming the current principal then fails closed.
+ */
+const inputRequirementBindings = (
+  tx: IExtendedStorageTransaction,
+  owningSpace: MemorySpace,
+): InputRequirementBindings => {
+  const snapshot = tx.getCfcState().trustSnapshot;
+  return {
+    actingPrincipal: !snapshot?.actingPrincipal ||
+        servedRunActsForNoOne(tx, snapshot)
+      ? undefined
+      : snapshot.actingPrincipal,
+    owningSpace,
+  };
+};
+
+/**
+ * `ceiling`, a `maxConfidentiality` list, bound by `bindings`. A bare
+ * `CurrentPrincipal` where a ceiling names a reader, as a clause or as an
+ * alternative of one, names that principal as a reader, `User(<DID>)`, as a
+ * database ceiling's does (`row-label-read.ts`).
+ */
+const bindCeilingClauses = (
+  ceiling: readonly JSONValue[],
+  bindings: InputRequirementBindings,
+): JSONValue => {
+  const reader = (value: JSONValue): JSONValue =>
+    isCurrentPrincipalPlaceholder(value) &&
+      bindings.actingPrincipal !== undefined
+      ? cfcAtom.user(bindings.actingPrincipal) as JSONValue
+      : bindRequirementPlaceholders(value, bindings);
+  let changed = false;
+  const bound = ceiling.map((clause) => {
+    const next = isOrClause(clause)
+      ? { anyOf: clause.anyOf.map((alternative) => reader(alternative)) }
+      : reader(clause);
+    changed ||= !deepEqual(next, clause);
+    return next;
+  });
+  return changed ? bound : ceiling;
+};
+
+/**
+ * The entries of `schema` (`cfcSchemaEntries()`), each with the placeholders
+ * in the input requirements it declares bound by `bindings`. These are the
+ * entries every check of an input requirement walks, so a requirement is
+ * compared with what an attempt read or wrote only once it names concrete
+ * principals and spaces (spec §8.10.3).
+ *
+ * A requirement is a check on one attempt, so it binds to that attempt's
+ * principal. A declared label is persisted with the value, and binds by the
+ * creator rule `creatorBinding()` applies instead. The schema a document
+ * stores keeps its requirements symbolic, so each later attempt binds them to
+ * itself.
+ */
+const requirementBoundEntries = (
+  schema: JSONSchema,
+  bindings: InputRequirementBindings,
+): readonly CfcSchemaEntry[] =>
+  cfcSchemaEntries(schema).map((entry) => {
+    const declared = entry.schema.ifc as Record<string, JSONValue>;
+    let ifc = declared;
+    for (const key of INPUT_REQUIREMENT_KEYS) {
+      const requirement = declared[key];
+      if (requirement === undefined) continue;
+      const bound = key === "maxConfidentiality" && Array.isArray(requirement)
+        ? bindCeilingClauses(requirement, bindings)
+        : bindRequirementPlaceholders(requirement, bindings);
+      if (bound !== requirement) ifc = { ...ifc, [key]: bound };
+    }
+    return ifc === declared
+      ? entry
+      : { ...entry, schema: { ...entry.schema, ifc } as CfcDeclaringSchema };
+  });
+
+/**
+ * Why the input requirements `schema` declares at `path` cannot be checked, or
+ * `undefined` when they can: a placeholder `requirementBoundEntries()` left
+ * unbound, a `CurrentPrincipal` in an attempt no principal acts for or a
+ * malformed `PolicyOf`. Such a requirement fails closed, whether or not the
+ * attempt read anything it would apply to (spec §8.10.3).
+ */
+const unboundInputRequirementReason = (
+  schema: CfcDeclaringSchema,
+  path: readonly string[],
+): string | undefined => {
+  const ifc = schema.ifc as Record<string, unknown>;
+  for (const key of INPUT_REQUIREMENT_KEYS) {
+    if (holdsRequirementPlaceholder(ifc[key])) {
+      return `unbound placeholder in ${key} at /${path.join("/")}`;
+    }
+  }
+  return undefined;
+};
+
+const holdsRequirementPlaceholder = (value: unknown): boolean => {
+  if (Array.isArray(value)) return value.some(holdsRequirementPlaceholder);
+  if (!isObjectOrArray(value)) return false;
+  if (
+    isCurrentPrincipalPlaceholder(value) ||
+    value[OWNING_SPACE_PLACEHOLDER] === true
+  ) {
+    return true;
+  }
+  return Object.values(value).some(holdsRequirementPlaceholder);
+};
+
 const modulePolicyReferencesIn = (value: unknown): unknown[] => {
   const references: unknown[] = [];
   const visit = (candidate: unknown): void => {
@@ -9069,7 +9910,7 @@ const installCarriedPolicyManifests = (
     // space it just read. Resolve first so the runtime verifies and indexes
     // that exact artifact, then atomically install it beside the destination
     // label in this transaction.
-    tx.resolveCfcPolicyManifest(reference, undefined, false);
+    tx.resolveCfcPolicyManifest(reference);
     if (
       !tx.hasCfcPolicyManifest(destination, reference) &&
       !tx.installCfcPolicyManifest(destination, reference)
@@ -11626,6 +12467,53 @@ export const describeSinkReleaseRefusal = (
   );
 };
 
+/** Looks up the manifest of a module policy, in `space` where one is named. */
+type ManifestLookup = (
+  reference: CfcModulePolicyRefAtom,
+  space: MemorySpace | undefined,
+) => unknown;
+
+/**
+ * A manifest lookup for one pass of exchange evaluations, which resolves each
+ * module policy once per space rather than once per evaluation. A resolution
+ * reads the manifest document and adds its reads to the journal, so a pass
+ * that evaluates at every location of a long list
+ * otherwise pays that per location. Absences are kept too. Sound only while the
+ * pass installs no manifest: a pass that does must take a new lookup after it.
+ * A lookup with no space named resolves over the spaces the journal has
+ * touched so far, which the pass can widen, so it is not kept.
+ */
+const passManifestLookup = (
+  tx: IExtendedStorageTransaction,
+): ManifestLookup => {
+  const resolved = new Map<string, unknown>();
+  // A lookup is not an observation of the manifest: the manifest is bound by
+  // its digest rather than by the commit (§4.4.1, commonfabric/specs#109,
+  // pending), and like every other policy lookup it reads under
+  // `internalVerifierRead`. Read plainly, a flow join that made it would walk
+  // the manifest document as an unlabeled input, whose empty integrity ends the
+  // hereditary meet.
+  const resolve = (
+    reference: CfcModulePolicyRefAtom,
+    space: MemorySpace | undefined,
+  ): unknown =>
+    tx.runWithAmbientReadMeta(
+      internalVerifierRead,
+      () => tx.resolveCfcPolicyManifest(reference, space),
+    );
+  return (reference, space) => {
+    if (space === undefined) return resolve(reference, undefined);
+    const key = stringTupleKey([
+      space,
+      reference.policyDigest,
+      reference.moduleIdentity,
+      reference.symbol,
+    ]);
+    if (!resolved.has(key)) resolved.set(key, resolve(reference, space));
+    return resolved.get(key);
+  };
+};
+
 /**
  * Runs the exchange-rule evaluator over one gated confidentiality set under
  * the transaction's policy snapshot + trust config (Epic B5). Pure wiring:
@@ -11650,6 +12538,8 @@ export const describeSinkReleaseRefusal = (
  * consumption commits atomically with the release.
  *
  * `admitsRule`, when given, restricts the evaluation to the rules it admits.
+ * `manifestFor` looks up a module policy's manifest; a caller that evaluates
+ * many times within one pass passes one `passManifestLookup()` to them all.
  */
 const evaluateGatedConfidentiality = (
   tx: IExtendedStorageTransaction,
@@ -11661,6 +12551,7 @@ const evaluateGatedConfidentiality = (
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
   admitsRule?: (rule: ExchangeRule) => boolean,
+  manifestFor: ManifestLookup = passManifestLookup(tx),
 ): {
   confidentiality: readonly CfcConfClause[];
   exhausted: boolean;
@@ -11703,7 +12594,7 @@ const evaluateGatedConfidentiality = (
           if (typeof destinationSpace === "function" && space === undefined) {
             return undefined;
           }
-          return tx.resolveCfcPolicyManifest(reference, space);
+          return manifestFor(reference, space);
         },
       ),
     },
@@ -11763,6 +12654,7 @@ const evaluateAccessExchange = (
   const failures: ReturnType<
     typeof evaluateGatedConfidentiality
   >["resolutionFailures"][number][] = [];
+  const manifestFor = passManifestLookup(tx);
   const access = exchangeEachObservation(
     confidentiality,
     locations(),
@@ -11775,6 +12667,7 @@ const evaluateAccessExchange = (
         "observing",
         destinationSpace,
         admitsRulesOfKind("value-intrinsic"),
+        manifestFor,
       );
       exhausted ||= outcome.exhausted;
       firings += outcome.firings;
@@ -11792,6 +12685,7 @@ const evaluateAccessExchange = (
     consumption,
     destinationSpace,
     admitsRulesOfKind("not-value-intrinsic"),
+    manifestFor,
   );
   exhausted ||= joined.exhausted;
   for (const failure of joined.resolutionFailures) failures.push(failure);
@@ -11881,12 +12775,11 @@ const verifySinkRequestCeilings = (
         const spaces = [...(consumed.modulePolicySpaces.get(key) ?? [])]
           .sort();
         if (spaces.length === 0) return undefined;
-        // Every consumed label origin must carry its own exact local copy.
-        // Bind every origin into the commit, so a concurrent change in any
-        // one of them rejects the release before its post-commit effect can
-        // flush. Precondition-only origin commits are harmless to split; the
-        // effect runs only after the complete transaction succeeds.
-        tx.enableMultiSpaceWrites?.(spaces);
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
+        // Every consumed label origin must carry its own exact local copy. A
+        // copy is bound by its digest, and a missing one fails the release
+        // below, so no origin takes a precondition (§4.4.1,
+        // commonfabric/specs#109, pending).
         for (const space of spaces) {
           if (tx.resolveCfcPolicyManifest(reference, space) === undefined) {
             return undefined;
@@ -11913,9 +12806,24 @@ const verifySinkRequestCeilings = (
           );
           continue;
         }
+        if (outcome.resolutionFailures.length > 0) {
+          // A manifest that did not resolve fails the release even where the
+          // unrewritten label fits (spec §5.3.2; §4.4.1,
+          // commonfabric/specs#109, pending), as the write gate does.
+          // Retryable: the manifest may arrive.
+          noteModulePolicyResolutionFailures(
+            tx,
+            `sink-request ${sink}`,
+            outcome.resolutionFailures,
+          );
+          reasons.push(
+            `cfcPolicyManifest: module policy did not resolve for ` +
+              `sink-request ${sink}`,
+          );
+          continue;
+        }
         effective = outcome.confidentiality;
-        verdict = outcome.resolutionFailures.length === 0 &&
-          !outcome.grantResolutionUnavailable;
+        verdict = !outcome.grantResolutionUnavailable;
       } else {
         // observe: decide exactly as `off` would; diagnose what enforce
         // would have done differently.
@@ -12080,7 +12988,10 @@ const verifyWriteFloor = function* (
   // principal are tx-wide. Concept floors on the written value resolve through
   // it; plain floors ignore it (Epic D5).
   const trust = cfcFloorTrustContext(tx);
-  const entries = cfcSchemaEntries(schema);
+  const entries = requirementBoundEntries(
+    schema,
+    inputRequirementBindings(tx, target.space),
+  );
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
@@ -13611,6 +14522,18 @@ export function* prepareBoundaryCommitSteps(
     // slot beside a reference it anchored there.
     const carriedUnplacedStampPaths: (readonly string[])[] = [];
     let placesSlotStamp = false;
+    // Where the per-value entries beneath the elements of an array this
+    // transaction rewrote go: each follows the element it labels.
+    const elementPlacement = flowPersist && flowTarget !== undefined &&
+        existing !== undefined
+      ? elementEntryPlacements(
+        tx,
+        { space, id, scope },
+        flowTarget,
+        flowWrittenPrefixes,
+        existing.labelMap.entries,
+      )
+      : undefined;
     for (const entry of existing?.labelMap.entries ?? []) {
       const entryPath = canonicalizeLogicalPath(entry.path);
       const key = pathKey(entryPath);
@@ -13653,6 +14576,46 @@ export function* prepareBoundaryCommitSteps(
           });
           continue;
         }
+      }
+      // An entry beneath an element that moved goes with it, and one beneath
+      // an element the write removed goes with that (`elementEntryPlacements`).
+      // A moved entry is carried as an untouched path's is, at its new path;
+      // the index it leaves takes the entries of whichever element moved
+      // there, or the paths the diff wrote there are cleared as usual.
+      const placement = elementPlacement !== undefined &&
+          isPerValueElementEntry(entry)
+        ? elementPlacement(entryPath)
+        : { kind: "kept" as const };
+      if (placement.kind !== "kept") {
+        flowCleared = true;
+        if (placement.kind === "moved") {
+          const movedLabel = carriedStampLabel(entry, placement.path);
+          if (
+            existing?.stampPlacement !== "committed" &&
+            isWriterStamp({ ...entry, label: movedLabel })
+          ) {
+            carriedUnplacedStampPaths.push(placement.path);
+          }
+          if (hasLabelValues(movedLabel)) {
+            persistedLabelEntries.push({
+              path: [...placement.path],
+              label: cloneLabel(movedLabel),
+              ...(entry.origin !== undefined ? { origin: entry.origin } : {}),
+              ...(entry.observes !== undefined
+                ? { observes: entry.observes }
+                : {}),
+            });
+          }
+        } else if (
+          poolsExistence(entry) &&
+          (entry.label.confidentiality?.length ?? 0) > 0
+        ) {
+          clearedExistence.push({
+            path: entryPath,
+            confidentiality: entry.label.confidentiality!,
+          });
+        }
+        continue;
       }
       // A declared entry minted at a slot labels the position, not the
       // pointer the slot holds, so a link-origin entry there stays until its

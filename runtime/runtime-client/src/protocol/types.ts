@@ -510,6 +510,13 @@ export enum RequestType {
    */
   SpaceRestore = "space:restore",
 
+  /**
+   * Starts or stops reporting to the asking client each time the newest seq
+   * of a space the runtime has learned of moves forward, which
+   * {@link NotificationType.SpaceSeqAdvanced} carries.
+   */
+  SpaceHistoryWatch = "space:history:watch",
+
   // Piece operations (main -> worker)
 
   /**
@@ -657,6 +664,12 @@ export enum NotificationType {
    * lost, so a load that failed while it was down may succeed if asked again.
    */
   ConnectionRestored = "callback:connection-restored",
+
+  /**
+   * Reports that the newest seq of a space the runtime has learned of moved
+   * forward, to a client that asked with {@link RequestType.SpaceHistoryWatch}.
+   */
+  SpaceSeqAdvanced = "callback:space-seq-advanced",
 
   /** Carries one telemetry marker, sent only while telemetry is enabled. */
   Telemetry = "callback:telemetry",
@@ -1490,6 +1503,14 @@ export type CellResolveAsCellRequest = BaseRequest & {
    * The cell whose aliases to follow.
    */
   cell: CellRef;
+
+  /**
+   * Set to load first each document the links pass through that the worker's
+   * replica has no basis for, so that the answer is the address the links end
+   * at rather than the first document still to arrive. Without it the answer
+   * is what the replica resolves now.
+   */
+  loaded?: true;
 };
 
 /** The {@link RequestType.CellGetCfcLabel} request. */
@@ -2660,6 +2681,17 @@ export type SpaceRestoreRequest = BaseRequest & {
   seq?: number;
 };
 
+/** The {@link RequestType.SpaceHistoryWatch} request. */
+export type SpaceHistoryWatchRequest = BaseRequest & {
+  type: RequestType.SpaceHistoryWatch;
+
+  /** The space whose seq to report. */
+  space: DID;
+
+  /** Whether to start reporting the space's seq, or to stop. */
+  watch: boolean;
+};
+
 /** What a restore did. */
 export type SpaceRestoreResponse = {
   /**
@@ -3774,6 +3806,7 @@ export type IPCClientRequest =
   | UploadBlobRequest
   | BlobUrlRequest
   | SpaceHistoryListRequest
+  | SpaceHistoryWatchRequest
   | SpaceBranchCreateRequest
   | SpaceBranchDeleteRequest
   | SpaceRestoreRequest;
@@ -4445,6 +4478,16 @@ export type ConnectionRestoredNotification = {
 };
 
 /**
+ * The newest seq of a space the runtime has learned of: that of a commit of
+ * its own the server accepted, or of one to a document it watches.
+ */
+export type SpaceSeqAdvancedNotification = {
+  type: NotificationType.SpaceSeqAdvanced;
+  space: DID;
+  seq: number;
+};
+
+/**
  * An error with no request to fail -- a renderer error, or one a pattern
  * raised between requests. Update-required reports include write uncertainty;
  * other context is included when the raising site has it.
@@ -4754,6 +4797,7 @@ export type IPCRemoteNotification =
   | SpaceAccessLostNotification
   | SpaceAccessRestoredNotification
   | ConnectionRestoredNotification
+  | SpaceSeqAdvancedNotification
   | TelemetryNotification
   | VDomBatchNotification
   | PendingWritesNotification
@@ -5151,6 +5195,10 @@ export type Commands = {
   [RequestType.SpaceHistoryList]: {
     request: SpaceHistoryListRequest;
     response: SpaceHistoryListResponse;
+  };
+  [RequestType.SpaceHistoryWatch]: {
+    request: SpaceHistoryWatchRequest;
+    response: EmptyResponse;
   };
   [RequestType.SpaceBranchCreate]: {
     request: SpaceBranchCreateRequest;

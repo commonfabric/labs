@@ -9,13 +9,13 @@
  * process boundary needs this one to agree with itself on both sides.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   utf8ByteLength,
   utf8Compare,
   utf8SortedKeysOf,
 } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("utf8Compare()", () => {
   it("returns `0` for two equal UTF-8 strings", () => {
@@ -26,7 +26,7 @@ describe("utf8Compare()", () => {
     expect(utf8Compare("abc", "def")).toBeLessThan(0);
   });
 
-  it("returns a positive number if `first > second`", () => {
+  it("returns a positive number if `first` sorts after `second`", () => {
     expect(utf8Compare("def", "abc")).toBeGreaterThan(0);
   });
 
@@ -55,7 +55,7 @@ describe("utf8Compare()", () => {
       expect(utf8Compare("😊", "😎")).toBeLessThan(0);
     });
 
-    it("returns a positive number if `first > second`", () => {
+    it("returns a positive number if `first` sorts after `second`", () => {
       expect(utf8Compare("😎", "😊")).toBeGreaterThan(0);
     });
 
@@ -68,7 +68,7 @@ describe("utf8Compare()", () => {
         .toBeLessThan(0);
     });
 
-    it("returns a positive number if `first > second` for multi-character strings with _same_ astral-plane characters", () => {
+    it("returns a positive number if `first` sorts after `second` for multi-character strings with _same_ astral-plane characters", () => {
       expect(utf8Compare("What 😊 is a muffin?", "What 😊 is a biscuit?"))
         .toBeGreaterThan(0);
     });

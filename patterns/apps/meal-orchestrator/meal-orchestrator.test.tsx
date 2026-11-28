@@ -24,8 +24,8 @@ import {
   styleOf,
   typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
-import FoodRecipe from "../food-recipe/food-recipe.tsx";
-import MealOrchestrator from "./meal-orchestrator.tsx";
+import FoodRecipe from "../food-recipe/main.tsx";
+import MealOrchestrator from "./main.tsx";
 
 export const llmMocks = [
   {

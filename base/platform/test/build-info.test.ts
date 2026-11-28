@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   normalize,
   readBuildInfoFrom,
 } from "@commonfabric/platform/build-info";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const fixture = (name: string) =>
   new URL(`./fixtures/build-info/${name}`, import.meta.url);

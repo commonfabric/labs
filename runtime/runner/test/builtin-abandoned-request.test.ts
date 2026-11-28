@@ -22,7 +22,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   addMockObjectResponse,
@@ -49,6 +48,12 @@ import {
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { createTrustedBuilder } from "./support/trusted-builder.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const signer = await Identity.fromPassphrase("test operator");
 const space = signer.did();
@@ -93,10 +98,9 @@ describe("a builtin whose staged request is abandoned", () => {
         llmDialog: [],
         generateText: [],
         generateObject: [],
-        // The `sqliteQuery` sink is ungated under the bundle for a reason of
-        // its own — the bound a read wants is the database's space, which a
-        // clause list cannot hold — so a deployment that wants a
-        // confidentiality gate on it declares one, as this case does.
+        // The `sqliteQuery` sink is ungated under the bundle, since the
+        // server a query reaches applies the same access rules — so a deployment
+        // that wants a confidentiality gate on it declares one, as this case does.
         sqliteQuery: [],
       },
     });

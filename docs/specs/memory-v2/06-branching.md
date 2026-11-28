@@ -781,7 +781,11 @@ interface BranchRestoreResult {
 3. For each such document, in each scope instance it was written in, the
    server compares what the default branch holds now with what the source
    held at `sourceSeq`. Where they differ it emits a `set` of the source's
-   document, or a `delete` where the source holds none.
+   document, or a `delete` where the source holds none. On a store whose
+   stored bare-DID principals have been respelled as `User{subject}`
+   (`MEMORY_RETIRE_BARE_DID_LABELS` in
+   `docs/development/EXPERIMENTAL_OPTIONS.md`), the `set` carries the
+   source's labels respelled the same way.
 4. Those operations land as **one `system`-class commit** on the default
    branch, at the space's next `seq`. Its stored payload carries `merge`
    metadata naming the source branch and seq and the common base, which is how
@@ -797,6 +801,10 @@ seq brings it back.
 - **The access list.** Who may read and write a space is not part of the state
   a point of its history restores.
 - **Session-scoped instances.** The sessions they belonged to are gone.
+- **The invitation ledger's revision document** (`of:space-invites-revision`).
+  It follows the invitation service's ledger, which belongs to no branch and
+  which a restore does not touch
+  ([invitation service contract](../../../runtime/toolshed/README.md#space-invitations)).
 - **A serving loop's records** of its own progress through the branch's
   commits: the event logs (`of:stream-events:` documents), the watermark, and
   the effect and attention indexes. Those describe what has happened on the

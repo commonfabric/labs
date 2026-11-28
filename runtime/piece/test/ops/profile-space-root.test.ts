@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -28,6 +27,12 @@ import {
   repairProfileSpaceRoot,
 } from "../../src/ops/profile-space-root.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const owner = await Identity.fromPassphrase("profile root housekeeping owner");
 const stranger = await Identity.fromPassphrase(

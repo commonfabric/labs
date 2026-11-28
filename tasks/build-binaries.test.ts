@@ -43,6 +43,7 @@ import {
   unusedGrammarDirectories,
 } from "./build-binaries.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { test } from "@commonfabric/test-support/test";
 import { type Config, ResolvedConfig } from "../base/felt/interface.ts";
 import {
   compileFingerprintGlobs,
@@ -173,7 +174,7 @@ async function makeFakeRepo(): Promise<string> {
   return root;
 }
 
-Deno.test("BuildConfig resolves workspace paths against the root", async () => {
+test("BuildConfig resolves workspace paths against the root", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
@@ -235,6 +236,23 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
       join(root, "runtime", "cli", "lib", "multi-user-test-worker.ts"),
     );
     assertEquals(
+      config.cliParseWorkerPath(),
+      join(root, "runtime", "cli", "lib", "view", "parseworker.ts"),
+    );
+    assertEquals(
+      config.cliProgramWorkerPath(),
+      join(
+        root,
+        "runtime",
+        "cli",
+        "lib",
+        "view",
+        "languages",
+        "typescript",
+        "programworker.ts",
+      ),
+    );
+    assertEquals(
       config.toolshedServingWorkerPath(),
       join(root, "runtime", "toolshed", "lib", "serving-worker.ts"),
     );
@@ -247,6 +265,8 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
     assert(
       config.includePaths("toolshed").includes(config.compileWorkerPath()),
     );
+    assert(config.includePaths("cf").includes(config.cliParseWorkerPath()));
+    assert(config.includePaths("cf").includes(config.cliProgramWorkerPath()));
     assertEquals(config.fusePackagePath(), join(root, "runtime", "fuse"));
     assertEquals(config.distDir(), join(root, "dist"));
     assertEquals(config.distPath("cf"), join(root, "dist", "cf"));
@@ -266,7 +286,7 @@ Deno.test("BuildConfig resolves workspace paths against the root", async () => {
   }
 });
 
-Deno.test("the toolshed leaves out the pattern files it never serves", async () => {
+test("the toolshed leaves out the pattern files it never serves", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [] });
@@ -311,7 +331,7 @@ Deno.test("the toolshed leaves out the pattern files it never serves", async () 
   }
 });
 
-Deno.test("the cf binary leaves out every grammar package directory but its parser's", () => {
+test("the cf binary leaves out every grammar package directory but its parser's", () => {
   const excluded = unusedGrammarDirectories();
   const repo = fromFileUrl(new URL("../", import.meta.url));
   const config = new BuildConfig({ root: repo, toolshedFlags: [] });
@@ -391,7 +411,7 @@ function unreadPaths(config: BuildConfig): Set<string> {
   );
 }
 
-Deno.test("BuildConfig lists every path it reads among its sources", async () => {
+test("BuildConfig lists every path it reads among its sources", async () => {
   // A path method is one `pathsNamedBy()` returns paths for. Every path one
   // names is either unread or among `sourcePaths()`.
   const root = await makeFakeRepo();
@@ -426,7 +446,7 @@ Deno.test("BuildConfig lists every path it reads among its sources", async () =>
   }
 });
 
-Deno.test("BuildConfig reads nothing outside BINARY_SOURCES", async () => {
+test("BuildConfig reads nothing outside BINARY_SOURCES", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [] });
@@ -525,7 +545,7 @@ async function followedModules(
   );
 }
 
-Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async () => {
+test("each binary's modules and assets stay within BINARY_SOURCES", async () => {
   // `deno compile` follows the imports of each entry point, and of each module
   // in a path the build embeds, wherever they lead, so the paths the build
   // names are not the whole of what it reads. This asks Deno for the graph
@@ -585,12 +605,12 @@ Deno.test("each binary's modules and assets stay within BINARY_SOURCES", async (
   assertEquals([...outside].sort(), []);
   assert(
     roots.includes(
-      join(config.patternPaths()[0], "examples", "counter", "counter.tsx"),
+      join(config.patternPaths()[0], "examples", "counter", "main.tsx"),
     ),
   );
 });
 
-Deno.test("the toolshed's pattern trees reach no npm package of their own", async () => {
+test("the toolshed's pattern trees reach no npm package of their own", async () => {
   // Every module in a pattern tree the toolshed embeds is a root of its
   // module graph, and `deno compile` embeds each npm package that graph
   // imports, with that package's dependencies. So a pattern-tree module that
@@ -640,7 +660,7 @@ async function loadShellConfig(
   return { success, stderr: new TextDecoder().decode(stderr) };
 }
 
-Deno.test("the shell configuration reads no host variable", async () => {
+test("the shell configuration reads no host variable", async () => {
   // A lane passes the host variables through to a build it caches, and the
   // cache key does not cover them, so one baked into the shell would reach a
   // binary the key does not describe. Deno refuses a read of a denied
@@ -657,7 +677,7 @@ Deno.test("the shell configuration reads no host variable", async () => {
   );
 });
 
-Deno.test("requestedBinaries selects all binaries or named subsets", () => {
+test("requestedBinaries selects all binaries or named subsets", () => {
   assertEquals(requestedBinaries([]), ["toolshed", "cf"]);
   assertEquals(requestedBinaries(["toolshed"]), ["toolshed"]);
   assertEquals(requestedBinaries(["cf", "toolshed"]), ["toolshed", "cf"]);
@@ -665,7 +685,7 @@ Deno.test("requestedBinaries selects all binaries or named subsets", () => {
   assertEquals(requestedBinaries(["--cli-only"]), ["cf"]);
 });
 
-Deno.test("requestedBinaries rejects unknown build targets", () => {
+test("requestedBinaries rejects unknown build targets", () => {
   assertThrows(
     () => requestedBinaries(["unknown"]),
     Error,
@@ -678,7 +698,7 @@ Deno.test("requestedBinaries rejects unknown build targets", () => {
   );
 });
 
-Deno.test("runBuildBinaries preserves the legacy CLI-only entry point", async () => {
+test("runBuildBinaries preserves the legacy CLI-only entry point", async () => {
   const root = await makeFakeRepo();
   try {
     const configs: BuildConfig[] = [];
@@ -788,7 +808,7 @@ async function runInEmptyDirectory(v8Flags: readonly string[]): Promise<{
   }
 }
 
-Deno.test("toolshed V8 flags write nothing into the working directory", async () => {
+test("toolshed V8 flags write nothing into the working directory", async () => {
   const run = await runInEmptyDirectory(await toolshedV8Flags());
 
   assertEquals(run.stdout, "worker answered\n");
@@ -797,7 +817,7 @@ Deno.test("toolshed V8 flags write nothing into the working directory", async ()
   assert(/^perf-\d+\.map$/.test(run.perfMaps[0]), run.perfMaps[0]);
 });
 
-Deno.test("toolshed V8 flags without the log file flags write V8 logs into the working directory", async () => {
+test("toolshed V8 flags without the log file flags write V8 logs into the working directory", async () => {
   const flags = (await toolshedV8Flags()).filter((flag) =>
     flag !== "--no-logfile-per-isolate" && !flag.startsWith("--logfile=")
   );
@@ -810,7 +830,7 @@ Deno.test("toolshed V8 flags without the log file flags write V8 logs into the w
   }
 });
 
-Deno.test("runBuildBinaries uses the cache after dependency installation", async () => {
+test("runBuildBinaries uses the cache after dependency installation", async () => {
   const root = await makeFakeRepo();
   const original = Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED");
   try {
@@ -836,7 +856,7 @@ Deno.test("runBuildBinaries uses the cache after dependency installation", async
   }
 });
 
-Deno.test("BuildConfig selects named binaries and rejects conflicting options", async () => {
+test("BuildConfig selects named binaries and rejects conflicting options", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({
@@ -888,7 +908,7 @@ Deno.test("BuildConfig selects named binaries and rejects conflicting options", 
   }
 });
 
-Deno.test("build runs only the steps required by each binary", async () => {
+test("build runs only the steps required by each binary", async () => {
   const root = await makeFakeRepo();
   try {
     const cases = [
@@ -924,7 +944,7 @@ Deno.test("build runs only the steps required by each binary", async () => {
   }
 });
 
-Deno.test("build reverts the workspace after a build step fails", async () => {
+test("build reverts the workspace after a build step fails", async () => {
   const root = await makeFakeRepo();
   try {
     const calls: string[] = [];
@@ -951,7 +971,7 @@ Deno.test("build reverts the workspace after a build step fails", async () => {
   }
 });
 
-Deno.test("manifest() returns an independent parsed copy each call", async () => {
+test("manifest() returns an independent parsed copy each call", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
@@ -973,7 +993,7 @@ Deno.test("manifest() returns an independent parsed copy each call", async () =>
   }
 });
 
-Deno.test("BuildConfig captures the checked-in version module and its path", async () => {
+test("BuildConfig captures the checked-in version module and its path", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
@@ -994,7 +1014,7 @@ Deno.test("BuildConfig captures the checked-in version module and its path", asy
   }
 });
 
-Deno.test("prepareWorkspace writes the fingerprint; revertWorkspace restores the source version", async () => {
+test("prepareWorkspace writes the fingerprint; revertWorkspace restores the source version", async () => {
   const root = await makeFakeRepo();
   const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
   const versionPath = config.compileCacheVersionPath();
@@ -1047,7 +1067,7 @@ Deno.test("prepareWorkspace writes the fingerprint; revertWorkspace restores the
   }
 });
 
-Deno.test("prepareWorkspace refuses to build without a lockfile", async () => {
+test("prepareWorkspace refuses to build without a lockfile", async () => {
   const root = await makeFakeRepo();
   try {
     await Deno.remove(`${root}/deno.lock`);
@@ -1067,7 +1087,7 @@ Deno.test("prepareWorkspace refuses to build without a lockfile", async () => {
   }
 });
 
-Deno.test("signal cleanup restores workspace and exits once", async () => {
+test("signal cleanup restores workspace and exits once", async () => {
   const root = await makeFakeRepo();
   const fakeSignals = makeFakeSignalApi();
   try {
@@ -1112,7 +1132,7 @@ Deno.test("signal cleanup restores workspace and exits once", async () => {
   }
 });
 
-Deno.test("runBuildWithSignalCleanup removes listeners after build", async () => {
+test("runBuildWithSignalCleanup removes listeners after build", async () => {
   const root = await makeFakeRepo();
   const fakeSignals = makeFakeSignalApi();
   try {
@@ -1137,7 +1157,7 @@ Deno.test("runBuildWithSignalCleanup removes listeners after build", async () =>
   }
 });
 
-Deno.test("main build path reverts workspace when command spawn fails", async () => {
+test("main build path reverts workspace when command spawn fails", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [], cliOnly: true });
@@ -1171,7 +1191,7 @@ Deno.test("main build path reverts workspace when command spawn fails", async ()
   }
 });
 
-Deno.test("each build step throws naming its output when its command fails", async () => {
+test("each build step throws naming its output when its command fails", async () => {
   // The fake tree holds none of the entry points and no shell task, so every
   // command the steps run fails, and none of them may pass that over.
   const root = await makeFakeRepo();
@@ -1231,7 +1251,7 @@ async function logged(step: () => Promise<void>): Promise<string[]> {
   return lines;
 }
 
-Deno.test("unusedGrammarDirectories returns every directory of a grammar's package but its parser's, and throws for a grammar in no package", async () => {
+test("unusedGrammarDirectories returns every directory of a grammar's package but its parser's, and throws for a grammar in no package", async () => {
   const root = await Deno.makeTempDir({ prefix: "grammar-package-" });
   try {
     await writeFile(`${root}/pkg/package.json`, "{}");
@@ -1259,7 +1279,23 @@ Deno.test("unusedGrammarDirectories returns every directory of a grammar's packa
   }
 });
 
-Deno.test("buildShell moves each build of the shell into the frontend toolshed serves", async () => {
+test("unusedGrammarDirectories lists a package's directories once for grammars that share it", async () => {
+  const root = await Deno.makeTempDir({ prefix: "grammar-package-" });
+  try {
+    await writeFile(`${root}/pkg/package.json`, "{}");
+    await writeFile(`${root}/pkg/tree-sitter-x.wasm`, "");
+    await writeFile(`${root}/pkg/src/parser.c`, "");
+    const wasmUrl = () => toFileUrl(`${root}/pkg/tree-sitter-x.wasm`).href;
+    assertEquals(
+      unusedGrammarDirectories([{ id: "x", wasmUrl }, { id: "y", wasmUrl }]),
+      [`${root}/pkg/src`],
+    );
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+});
+
+test("buildShell moves each build of the shell into the frontend toolshed serves", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: [] });
@@ -1288,7 +1324,7 @@ Deno.test("buildShell moves each build of the shell into the frontend toolshed s
   }
 });
 
-Deno.test("buildToolshed and buildCli compile their entry points to the dist directory", async () => {
+test("buildToolshed and buildCli compile their entry points to the dist directory", async () => {
   const root = await makeFakeRepo();
   try {
     const config = new BuildConfig({ root, toolshedFlags: ["--flag"] });
@@ -1313,7 +1349,7 @@ Deno.test("buildToolshed and buildCli compile their entry points to the dist dir
   }
 });
 
-Deno.test("runBuildBinaries bakes the output-based version unless asked for the inputs one", async () => {
+test("runBuildBinaries bakes the output-based version unless asked for the inputs one", async () => {
   const root = await makeFakeRepo();
   const original = Deno.env.get("CF_COMPILE_CACHE_VERSION");
   try {
@@ -1353,7 +1389,7 @@ Deno.test("runBuildBinaries bakes the output-based version unless asked for the 
   }
 });
 
-Deno.test("build computes the compile-cache version once, for the shell build and the version module alike", async () => {
+test("build computes the compile-cache version once, for the shell build and the version module alike", async () => {
   // The shell builds before the workspace is prepared, and both bake the
   // version; a shipped build earns it by compiling the corpus, which is
   // worth doing once.

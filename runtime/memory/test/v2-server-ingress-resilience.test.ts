@@ -2,6 +2,7 @@ import { assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricValue } from "@commonfabric/api";
+import { test } from "@commonfabric/test-support/test";
 import { connect, loopback, type Transport } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import {
@@ -19,7 +20,7 @@ import {
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
 
-Deno.test("memory v2 server rejects malformed input without poisoning the connection", async () => {
+test("memory v2 server rejects malformed input without poisoning the connection", async () => {
   const messages: ServerMessage[] = [];
   const server = new Server({
     authorizeSessionOpen: () => "did:key:z6Mk-server-ingress-principal",
@@ -43,7 +44,10 @@ Deno.test("memory v2 server rejects malformed input without poisoning the connec
       protocol: MEMORY_PROTOCOL,
       flags: getMemoryProtocolFlags(),
     }));
-    assertEquals(messages.shift()?.type, "hello.ok");
+    // A server holding clients to the default limit says nothing of it.
+    const helloOk = messages.shift();
+    assertEquals(helloOk?.type, "hello.ok");
+    expect(helloOk).not.toHaveProperty("messageSlots");
     assertEquals(messages, []);
   } finally {
     connection.close();
@@ -75,7 +79,7 @@ const transactOf = (requestId: string, items: FabricValue[]) =>
     },
   });
 
-Deno.test("memory v2 server answers a message past the slot limit on its own request id", async () => {
+test("memory v2 server answers a message past the slot limit on its own request id", async () => {
   const messages: ServerMessage[] = [];
   const server = new Server({
     authorizeSessionOpen: () => "did:key:z6Mk-server-ingress-principal",
@@ -141,7 +145,7 @@ Deno.test("memory v2 server answers a message past the slot limit on its own req
   }
 });
 
-Deno.test("memory v2 server holds a client message to the slot limit it was given", async () => {
+test("memory v2 server holds a client message to the slot limit it was given", async () => {
   const limit = MAX_UNTRUSTED_MESSAGE_SLOTS * 2;
   const messages: ServerMessage[] = [];
   const server = new Server({
@@ -157,7 +161,11 @@ Deno.test("memory v2 server holds a client message to the slot limit it was give
       protocol: MEMORY_PROTOCOL,
       flags: getMemoryProtocolFlags(),
     }));
-    assertEquals(messages.shift()?.type, "hello.ok");
+    // The reply tells the client of the limit, which is not the default.
+    expect(messages.shift()).toMatchObject({
+      type: "hello.ok",
+      messageSlots: limit,
+    });
 
     // One slot past the default is read: it reaches the command, which
     // refuses it for another reason, on its own request id.
@@ -188,7 +196,7 @@ Deno.test("memory v2 server holds a client message to the slot limit it was give
   }
 });
 
-Deno.test("memory v2 server takes a slot limit only at or above the default", async () => {
+test("memory v2 server takes a slot limit only at or above the default", async () => {
   // A direct client sizes the parts it stages a watch set in by the
   // default, and nothing tells it of a lower limit.
   for (
@@ -213,7 +221,7 @@ Deno.test("memory v2 server takes a slot limit only at or above the default", as
   await server.close();
 });
 
-Deno.test("memory v2 client commit past the slot limit fails, and the session still commits", async () => {
+test("memory v2 client commit past the slot limit fails, and the session still commits", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-oversized-client-commit"),
@@ -331,7 +339,7 @@ function hostLikeTransport(
   };
 }
 
-Deno.test("memory v2 server answers a commit whose handling throws with a `TransactionError` on its own request id, and keeps the connection", async () => {
+test("memory v2 server answers a commit whose handling throws with a `TransactionError` on its own request id, and keeps the connection", async () => {
   // An unexpected failure handling a commit is the server's verdict on that
   // commit. Closing the connection instead would make the client replay the
   // commit into the same failure on every new connection.
@@ -380,7 +388,7 @@ Deno.test("memory v2 server answers a commit whose handling throws with a `Trans
   }
 });
 
-Deno.test("memory v2 server answers a query whose handling throws with a `QueryError`, and keeps the connection", async () => {
+test("memory v2 server answers a query whose handling throws with a `QueryError`, and keeps the connection", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-query-handler-throws"),
@@ -419,7 +427,7 @@ Deno.test("memory v2 server answers a query whose handling throws with a `QueryE
   }
 });
 
-Deno.test("memory v2 server answers a request whose handling throws a `ProtocolError` with that error's own name", async () => {
+test("memory v2 server answers a request whose handling throws a `ProtocolError` with that error's own name", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-handler-throws-protocol-error"),
@@ -449,7 +457,7 @@ Deno.test("memory v2 server answers a request whose handling throws a `ProtocolE
   }
 });
 
-Deno.test("memory v2 server keeps a commit it accepted when delivering the verdict fails, so the client's replay resolves from its record", async () => {
+test("memory v2 server keeps a commit it accepted when delivering the verdict fails, so the client's replay resolves from its record", async () => {
   // A failure to deliver a response is a failure of the connection, not a
   // verdict: the commit is already applied. The host closes the connection,
   // and the client's replay is answered from the server's record.
@@ -479,7 +487,7 @@ Deno.test("memory v2 server keeps a commit it accepted when delivering the verdi
   }
 });
 
-Deno.test("memory v2 server answers a presence request whose handling throws with a `QueryError`, and keeps the connection", async () => {
+test("memory v2 server answers a presence request whose handling throws with a `QueryError`, and keeps the connection", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://memory-v2-presence-handler-throws"),
@@ -512,7 +520,7 @@ Deno.test("memory v2 server answers a presence request whose handling throws wit
   }
 });
 
-Deno.test("memory v2 server answers a commit once when a step after its verdict throws, and leaves the failure to the host", async () => {
+test("memory v2 server answers a commit once when a step after its verdict throws, and leaves the failure to the host", async () => {
   // The verdict has left by the time the step throws, so the request is
   // already answered. A second response on the same request id would
   // contradict the first; the host closes the connection instead, and the

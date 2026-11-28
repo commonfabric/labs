@@ -1,7 +1,8 @@
 import { join } from "@std/path";
 import { runDenoWebTest } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("config is applied", async function () {
+test("config is applied", async function () {
   const run = await runDenoWebTest("project-with-config");
 
   run.assert(run.success, "test successfully ran, applying chrome flags");
@@ -22,7 +23,7 @@ Deno.test("config is applied", async function () {
   );
 });
 
-Deno.test("a config that throws on import fails the run", async function () {
+test("a config that throws on import fails the run", async function () {
   // The settings a config carries decide how the whole suite runs: which
   // browser flags it gets, how long a test may take, what is served next to it.
   // A run that cannot read them and continues on the defaults instead fails

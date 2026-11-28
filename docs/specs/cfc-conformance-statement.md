@@ -126,7 +126,8 @@ over its read prefix, skips write-destination reads too.
 
 **The write-destination marking sites:** `normalizeAndDiff` and the preserved
 output attempt read in `data-updating.ts`; `CellImpl.isStream` as called from
-`set()` and the append snapshot of `push` and `pushAll` in `cell.ts`;
+`set()`, the append snapshot of `push` and `pushAll`, and the add-unique
+snapshot of `addUnique` in `cell.ts`;
 `storedQueryState` and `storedRequestHash` in `builtins/sqlite-builtins.ts`;
 `storedCellsRead` in `builtins/fetch.ts`; the setup's comparison of the
 projection it builds with the stored result (`#nextResultProjection` in
@@ -200,6 +201,20 @@ class.
   the marker (it carries no `ignoreReadForCommit`) together with the digest
   invalidation `cfc-commit-preparation.md` describes; no test naming the
   property was located.
+- A module-policy manifest consultation is not a commit freshness dependency
+  (under-taint against the pinned text). `Runtime.#readCfcPolicyManifest` in
+  `runtime.ts` adds no precondition, and the sink-request gate in
+  `cfc/prepare.ts` binds no consumed origin into the commit. The pinned
+  §4.4.1 gives a consultation the grant discipline, and §18.6.2 forbids
+  exempting verification dependencies from commit freshness checks; this
+  implements [specs#109](https://github.com/commonfabric/specs/pull/109)
+  ahead of its ruling. A present manifest is verified against its digest when
+  read, and a missing one fails the write gate, the sink gate and the flow
+  join (spec §5.3.2), so neither releases more than the manifest at its
+  digest allows. In a space the transaction writes, the manifest read keeps
+  the stale-read freshness of any read there. The render ceiling still
+  decides on the label left unrewritten when a manifest is missing, which
+  predates this and is tracked as top/3726.
 
 ## 3. Reference restrictions a dereference does not yet consume (§8.2.4, §18.7)
 
@@ -329,6 +344,31 @@ statement.
   display, which `cellLabelRefusal` fits on its root's integrity, is not
   resolved location by location: a root stamp's evidence can release a clause
   a child entry carries, an under-taint.
+- The flow join (`deriveFlowJoin` in `cfc/prepare.ts`) evaluates the
+  value-intrinsic rules where a value is observed into a computation, at each
+  location the observation consumed and on the evidence there about the value
+  currently at it, and joins what they leave, so that what the computation
+  writes carries the exchanged confidentiality (§5.3). The other rules are
+  not evaluated there, since their result is never carried. Where an
+  evaluation runs out of fuel, each clause that location consumed is held
+  split into its alternatives, never looser than as read and stricter than
+  any outcome that keeps an original alternative (§5.3.2; the flow join has
+  callers outside prepare, so it refuses through the label rather than by
+  failing the transaction). It is not a bound on an outcome where an added
+  alternative enables a rule that drops an original one. A policy that cannot be resolved
+  fires none of its rules at that location, so its clause stays as read for
+  the next gate to decide, which is looser than intended where the policy
+  holds a rule that would tighten it. A read's container length is one of
+  its locations: a shallow read's, and the node a recursive read declares
+  onward. It departs from §5.3 in the over-taint direction in four
+  places. It evaluates only while `cfcPolicyEvaluation` is `enforce`. A
+  label-metadata
+  observation and the flow of external content join as read. The integrity
+  that satisfied a rule is recorded on the derived value's `TransformedBy`
+  only where the input-witness summary retains it
+  ([`cfc-transformed-by-input-witnesses.md`](cfc-transformed-by-input-witnesses.md)),
+  an under-claim of integrity. And a refusal names no read for a clause a
+  rule rewrote, since the sources are matched on the clause as stored.
 - Within one location, `labelForEntriesAtPath` in `cfc/consumed-label.ts` unions
   integrity across the label components resolving there, where §8.12.8 asks
   for the class-aware join of §3.1.6.2. Where two components carry integrity
@@ -391,6 +431,19 @@ dials.
   to proceed ahead of unresolved specs dependencies does not supply a ruling;
   the gap still needs one and a reconciled pin. This entry and
   `cfc-enforcement-matrix.md` §4 record the additional gap.
+- The display's render resolver nominates, as a §4.9.3 membership candidate,
+  each space the render read from whose digest a committed module-policy
+  subject is, and the ACL point query decides as for any candidate
+  (`membershipSpacesInConfidentiality` in
+  `runtime/runner/src/cfc/render-ceiling.ts`). This implements
+  [specs#110](https://github.com/commonfabric/specs/pull/110), open and
+  unruled and stacked on
+  [specs#49](https://github.com/commonfabric/specs/pull/49), whose §4.9.3
+  gives a committed subject no candidate. It admits more at strict: the
+  `cfcCommittedSubjectCandidates` dial defaults to on, and off restores
+  #49's text. This is a nonconforming semantic gap and does not satisfy the
+  correspondence procedure's step 4; it needs #110's ruling and a reconciled
+  pin.
   The new clause is absent on `user` and `session` stores, even when their
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;
@@ -472,7 +525,7 @@ document is ensured; equality is computed after the cross-space transform of
 
 **Deviations.**
 
-- With `cfcContentAddressedLabels` on (off by default), a stored version-1
+- With `cfcContentAddressedLabels` on, its default, a stored version-1
   envelope with unchanged labels is rewritten once in version 2;
   [`content-addressed-cfc-labels.md`](content-addressed-cfc-labels.md) under
   "Idempotence and the merge loop" and `SC-11` state this as the one
@@ -698,6 +751,31 @@ describes: a release removes a clause that stands for someone other than the
 owner, which no route under the pin removes, and every such removal is signed
 by the owner and recorded.
 
+An array the value diff rewrites is persisted index by index:
+`normalizeAndDiff` in `data-updating.ts` writes each index whose value changed,
+and the persist region clears the `derived` and `structure` entries beneath
+those paths and stamps them with the attempt's join. An element whose value at
+its index did not change is not written, and keeps the entries stored beneath
+it. An element the write moves to another index keeps them too:
+`elementEntryPlacements` in `cfc/prepare.ts` aligns the old and new arrays by
+a shortest edit script and moves each such entry, existence entries excepted,
+to the element's new index. An element the script removes is paired, in
+order, with an equal element it adds, which is how an element that changes
+places with others is carried, and the entries beneath an element left
+unpaired are dropped, except where the new element at its index is unpaired
+too: that element is the old one edited in place, and keeps its entries
+beneath the paths the diff did not write. Where no script within 64 edits
+aligns the arrays between their common prefix and suffix, the elements between
+are paired by value, in order, and the same exception covers the rest. Without
+the move, an element moved onto an index holding an equal value would take the
+entries of the element that stood there, and its own would be lost. Declared
+entries stay with their position, and link entries follow the reference their
+slot holds. This is §8.10.2.3, which specs `main` adopted at `f549c796`
+([specs#106](https://github.com/commonfabric/specs/pull/106)), later than the
+pin. The runtime conforms to it: the pairing joins equal values only, the
+attempt's join is stamped at the length and the indices the diff writes and
+nowhere else, and existence entries stay at their paths.
+
 **Residuals, with direction.**
 
 - Containers outside the wildcard scope: schemas mixing named `properties`
@@ -718,6 +796,9 @@ by the owner and recorded.
   counts as one under this runtime's presence semantics is not established.
 - Entries written before classification existed are folded into existence
   conservatively, an over-taint the same section states.
+- The alignment matches elements by value, so a write that sets an element
+  equal to one stored elsewhere in the array, without reading it, carries that
+  element's entries to it, an over-taint §8.10.2.3 accepts.
 - Cross-space label metadata: commitments are probe-able; `Space` ids,
   `Policy` and `Context` names and hashes, and authorship subjects stay
   public; declared entries and carried-forward entries persist verbatim;

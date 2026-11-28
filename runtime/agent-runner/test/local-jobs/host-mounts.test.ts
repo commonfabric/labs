@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { runHarnessJob } from "../../src/harness-job.ts";
 import { createLocalJobApi } from "../../src/local-jobs/api.ts";
@@ -11,6 +10,12 @@ import {
 } from "../../src/local-jobs/profiles.ts";
 import { LocalJobStore } from "../../src/local-jobs/store.ts";
 import { answerReply, scriptedJob } from "../fixtures/scripted-job.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("local-job host mounts", () => {
   let root: string;

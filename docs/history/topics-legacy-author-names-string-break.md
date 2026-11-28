@@ -51,8 +51,8 @@ comment author, before the change and after it.
 
 ## What broke, on purpose
 
-Over the 13 baselines from `20260911T185348Z-TLZ8gBXbqm4PebTM` to
-`20261119T222839Z-Qu-HuRv_MxP-XL9Z`, the compatibility proof reports two paths,
+Over the 18 baselines from `20260911T185348Z-TLZ8gBXbqm4PebTM` to
+`20261127T211045Z-bY22_7B0dqerK1Os`, the compatibility proof reports two paths,
 each with "the candidate no longer accepts every previous type":
 
 - `argument.createdByName`

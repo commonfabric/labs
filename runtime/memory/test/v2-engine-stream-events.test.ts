@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 
@@ -22,6 +21,12 @@ import {
   type StreamEventEntry,
   type StreamEventsDocValue,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-engine-stream-events-space";
 const ALICE = "user:alice";

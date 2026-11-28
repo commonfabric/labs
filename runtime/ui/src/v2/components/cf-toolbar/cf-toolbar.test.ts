@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFToolbar } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("CFToolbar", () => {
   afterEach(() => document.body.replaceChildren());

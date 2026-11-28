@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
@@ -15,6 +15,7 @@ import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-external-ingest");
 const space = signer.did();
@@ -70,7 +71,10 @@ describe("CFC external-ingest provenance mint (split-mint)", () => {
     storageManager: ReturnType<typeof StorageManager.emulate>,
     id: string,
   ): StoredEntry[] =>
-    storedDocument(storageManager, id)?.cfc?.labelMap?.entries ?? [];
+    storedLabelEntries<StoredEntry>(
+      storedDocument(storageManager, id)?.cfc,
+      (labelId) => storedDocument(storageManager, labelId),
+    );
 
   const ingestEntries = (
     storageManager: ReturnType<typeof StorageManager.emulate>,
@@ -282,11 +286,16 @@ describe("CFC external-ingest provenance mint (split-mint)", () => {
       expect(appended.error).toBeUndefined();
       await appending.storageManager.synced();
 
-      const stored = (appendingStorage.open(space).replica as unknown as {
-        getDocument(id: string): StoredDocument;
-      }).getDocument(id);
+      const appendingReplica = appendingStorage.open(space)
+        .replica as unknown as {
+          getDocument(id: string): StoredDocument;
+        };
+      const stored = appendingReplica.getDocument(id);
       expect(stored?.value).toEqual(["a", "b"]);
-      const entries = stored?.cfc?.labelMap?.entries ?? [];
+      const entries = storedLabelEntries<StoredEntry>(
+        stored?.cfc,
+        (labelId) => appendingReplica.getDocument(labelId),
+      );
       expect(entries.flatMap((entry) => entry.label.confidentiality ?? []))
         .toEqual(["secret"]);
       expect(entries.flatMap((entry) => entry.label.integrity ?? []))

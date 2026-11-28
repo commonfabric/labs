@@ -14,7 +14,6 @@
  * to the property walk that conflates it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fabricAwareEqual } from "@";
@@ -24,6 +23,7 @@ import {
   FABRIC_INSTANCE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
   FABRIC_PRIMITIVE_EXAMPLE_MAKERS_FOR_TESTING_ONLY,
 } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Fixed `FabricError` state, so two built the same way agree in every slot. */
 const errorState = (message: string) => ({

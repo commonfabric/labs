@@ -50,9 +50,29 @@ to creation and opaque to the pattern. The handle cell reads back
   or one injected into an input from outside (Section 03.3).
 - Cell ids are content-addressed and causally derived
   ([`runtime/runner/src/create-ref.ts`](../../../runtime/runner/src/create-ref.ts)).
-  The runtime allocates (or reuses) the handle cell in the current frame the same
-  way other built-ins allocate their result cells, so the identity is stable
-  across re-runs and rehydration but never chosen by the pattern.
+  The runtime mints the handle cell from the piece and the output spot of the
+  `sqliteDatabase()` node, its place in the pattern, and not from the node's
+  inputs. Those inputs hold the declared tables and, for an indexed collection
+  with a guard, the guard's schema, whose write policy names handlers by the
+  identity of their module. So the identity is stable across re-runs,
+  rehydration, a change to the declaration (which migrates the database, below),
+  and any other change to the pattern's source that leaves the node where it
+  is, but never chosen by the pattern. A change that gives the node another
+  output spot, such as one that renumbers it among the pattern's anonymous
+  cells, names another handle and so another, empty database
+  ([`computed-cell-identity.md`](../computed-cell-identity.md), "Internal cell
+  identity", says what renumbers a cell).
+- A node whose own handle holds nothing keeps a handle its output spot already
+  links to, provided the node minted it: either the handle the node's whole
+  cause, inputs document included, names for its current inputs, or one whose
+  value is a database reference naming the handle itself and whose `result`
+  back-link names the node's piece. A piece can hold a handle minted from the
+  whole cause, and keeping it keeps the rows that handle's database holds. A
+  link to any other cell is not followed, so the output spot cannot point a
+  database at an arbitrary cell. The second test reads the running principal's
+  instance, so for a user- or session-scoped handle the first test does not
+  name, a principal holding no instance of it fails both: the node mints its
+  own handle and repoints the output spot, which every principal shares.
 - **One file per database** (Q6 → Option A). The physical file lives in the
   **same space's storage directory** as the cell. Spaces are already stored
   one-SQLite-file-per-space under `engine-v3/`

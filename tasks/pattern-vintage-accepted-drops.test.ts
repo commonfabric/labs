@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   acceptedDropsFor,
@@ -6,6 +5,7 @@ import {
   withoutAcceptedDrops,
 } from "./pattern-vintage-accepted-drops.ts";
 import { isReduction } from "../runtime/piece/test/state-continuity-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("pattern-vintage-accepted-drops", () => {
   const drops: AcceptedStateDrop[] = [

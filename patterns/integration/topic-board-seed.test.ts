@@ -1,10 +1,10 @@
 /** Verifies the child seeder's persisted board through a fresh reader. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { env } from "@commonfabric/integration";
 import { isCell } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   type PieceController,
@@ -14,6 +14,7 @@ import {
   seedIdentity,
   seedTopicBoardOutOfProcess,
   topicAt,
+  topicIndexTitles,
   topicTitle,
 } from "./topic-board-fixture.ts";
 
@@ -50,6 +51,12 @@ describe("topic board seed", () => {
       });
       try {
         const board = await reader.get(fixture.boardId, false);
+        // The index follows the collection, which follows each topic after
+        // the write that changed it.
+        await topicIndexTitles(
+          board,
+          fixture.topics.map((topic) => topic.title),
+        );
         const rows = await board.result.get(["index"]) as { title: string }[];
         expect(rows.map((row) => row.title)).toEqual(
           fixture.topics.map((topic) => topic.title),

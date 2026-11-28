@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
@@ -8,6 +7,8 @@ import {
   type SpaceHostRegistration,
   SpaceHostValidationError,
 } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { DEPLOYMENT_RESPONSE_BOUND_MS } from "../src/deployment-meta.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 

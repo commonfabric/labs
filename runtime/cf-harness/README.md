@@ -729,11 +729,15 @@ The API gateway's default cache mode remains the provider's implicit mode.
 Explicit mode pins a breakpoint to the first user-message prefix, which is
 stable while the harness appends assistant and tool messages. Use identical
 prompts and tool surfaces when comparing modes, since exact prefix identity is
-required for a cache hit. The ChatGPT/Codex subscription backend rejects the API
-`prompt_cache_options` field, so `--prompt-cache-mode` is not supported with
-`--model-provider openai-codex`; that provider continues to use implicit caching
-with stable affinity and reports the resulting cache usage. OpenAI documents the
-current cache fields and semantics in its
+required for a cache hit. In implicit mode a later request reuses a prompt only
+through the end of a whole message: the Responses providers send the first
+system message as `instructions` and each later one as its own developer
+message, and a batch run's result schema is the last of them, so runs that
+differ only in schema share the prompt before it. The ChatGPT/Codex subscription
+backend rejects the API `prompt_cache_options` field, so `--prompt-cache-mode`
+is not supported with `--model-provider openai-codex`; that provider continues
+to use implicit caching with stable affinity and reports the resulting cache
+usage. OpenAI documents the current cache fields and semantics in its
 [prompt caching guide](https://developers.openai.com/api/docs/guides/prompt-caching).
 
 ChatGPT/Codex subscription mode is a separate, explicit provider. It does not
@@ -3177,6 +3181,18 @@ The `delegate_task` descriptor a run offers lists only the profiles the run
 allows. A delegation to another profile is refused, and recorded among the run's
 failures as `subagent_profile_not_allowed`; the model reads the refusal and the
 run goes on, so that kind is never the run's `primaryFailure`.
+
+The `image-review` profile takes an ordered list of `imageOutputIds` from
+earlier `view_image` calls in the same run. Each ID names the exact pixels
+released by the sandbox and attached to the author's turn. Give the child a goal
+describing those frames and optional author-visible supporting text in
+`context`. It receives them on its first turn, has no tools and returns prose in
+`subagent.summary`. The harness checks the child's confidentiality against the
+author's prior observations and configured read ceiling before releasing the
+reply. An opaque or truncated image read supplies no frame. An image shown
+without a CFC receipt in observe or disabled mode is ineligible. The default
+profile still accepts a caller's `returnSchema` for closed choices such as focus
+and frame.
 
 The browser profile is the only path to the `browser` tool. The tool drives the
 host `agent-browser` CLI one structured action per call, while the parent still

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { commandEnv } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // What a test would inherit from the process running it.
 const INHERITED = {

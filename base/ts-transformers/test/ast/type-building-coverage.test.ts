@@ -12,6 +12,7 @@ import {
   createCaptureTreeNode,
 } from "../../src/utils/capture-tree.ts";
 import { collect, parseModule } from "../transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * Reparse a printed capture-type literal and return its members keyed by name,
@@ -116,7 +117,7 @@ function findPropertyAccess(
 // shouldPreserveBindingDeclaredTypeNode
 //
 
-Deno.test("shouldPreserveBindingDeclaredTypeNode: unwraps parentheses to find a preserved Default alias", () => {
+test("shouldPreserveBindingDeclaredTypeNode: unwraps parentheses to find a preserved Default alias", () => {
   const factory = ts.factory;
   // `(Default<string>)` — the parenthesized-unwrap loop must strip the parens
   // before the Default-alias name check succeeds.
@@ -128,7 +129,7 @@ Deno.test("shouldPreserveBindingDeclaredTypeNode: unwraps parentheses to find a 
   assertEquals(shouldPreserveBindingDeclaredTypeNode(node), true);
 });
 
-Deno.test("shouldPreserveBindingDeclaredTypeNode: strips nested parentheses around a Writable of a preserved type", () => {
+test("shouldPreserveBindingDeclaredTypeNode: strips nested parentheses around a Writable of a preserved type", () => {
   const factory = ts.factory;
   // `((Writable<Default<string>>))` — two layers of parentheses exercise the
   // while-loop, and Writable is preserved only because its argument is itself
@@ -145,7 +146,7 @@ Deno.test("shouldPreserveBindingDeclaredTypeNode: strips nested parentheses arou
   assertEquals(shouldPreserveBindingDeclaredTypeNode(node), true);
 });
 
-Deno.test("shouldPreserveBindingDeclaredTypeNode: a Writable of a plain type is not preserved", () => {
+test("shouldPreserveBindingDeclaredTypeNode: a Writable of a plain type is not preserved", () => {
   const factory = ts.factory;
   // `Writable<string>` — Writable is preserved only when an argument is itself
   // preservable; a plain `string` argument is not.
@@ -155,7 +156,7 @@ Deno.test("shouldPreserveBindingDeclaredTypeNode: a Writable of a plain type is 
   assertEquals(shouldPreserveBindingDeclaredTypeNode(node), false);
 });
 
-Deno.test("shouldPreserveBindingDeclaredTypeNode: a union containing a scope wrapper is preserved", () => {
+test("shouldPreserveBindingDeclaredTypeNode: a union containing a scope wrapper is preserved", () => {
   const factory = ts.factory;
   // A union whose members are walked; `PerSpace<string>` triggers preservation.
   const node = factory.createUnionTypeNode([
@@ -171,7 +172,7 @@ Deno.test("shouldPreserveBindingDeclaredTypeNode: a union containing a scope wra
 // reportUnknownReactiveType / describeCapture
 //
 
-Deno.test("reportUnknownReactiveType: an unknown-typed capture with no printable text falls back to the label", () => {
+test("reportUnknownReactiveType: an unknown-typed capture with no printable text falls back to the label", () => {
   // The capture expression prints to empty text, so describeCapture returns the
   // supplied label; the reported diagnostic message embeds that label.
   withContext(`declare const value: unknown; value;`, (context, sourceFile) => {
@@ -203,7 +204,7 @@ Deno.test("reportUnknownReactiveType: an unknown-typed capture with no printable
   });
 });
 
-Deno.test("reportUnknownReactiveType: a non-unknown capture is not reported", () => {
+test("reportUnknownReactiveType: a non-unknown capture is not reported", () => {
   withContext(`declare const value: string; value;`, (context, sourceFile) => {
     let reported = 0;
     (context as unknown as {
@@ -230,7 +231,7 @@ Deno.test("reportUnknownReactiveType: a non-unknown capture is not reported", ()
 // buildCaptureTypeElements: intermediate nodes
 //
 
-Deno.test("buildCaptureTypeElements: an optional intermediate property is emitted with a question token", () => {
+test("buildCaptureTypeElements: an optional intermediate property is emitted with a question token", () => {
   // `config.nested.value` where `nested?: Nested` on `Config`. The intermediate
   // `nested` node is looked up on the parent (Config) type, and its optional
   // flag drives the emitted `nested?` question token.
@@ -265,7 +266,7 @@ Deno.test("buildCaptureTypeElements: an optional intermediate property is emitte
   });
 });
 
-Deno.test("buildCaptureTypeElements: a required intermediate property has no question token, resolving its type from the root identifier", () => {
+test("buildCaptureTypeElements: a required intermediate property has no question token, resolving its type from the root identifier", () => {
   // `config.nested.value` where `nested: Nested` (required). The root `config`
   // entry has no parent type, so its type is recovered from the root identifier
   // via the descendant-expression search; the required `nested` gets no `?`.
@@ -302,7 +303,7 @@ Deno.test("buildCaptureTypeElements: a required intermediate property has no que
   });
 });
 
-Deno.test("buildCaptureTypeElements: an intermediate node with neither expression nor children throws the invariant error", () => {
+test("buildCaptureTypeElements: an intermediate node with neither expression nor children throws the invariant error", () => {
   // A capture tree node that is neither a leaf (has an expression) nor an
   // interior node (has children) violates the tree invariant.
   withContextEmit(`function f(x: number) { return x; } f;`, (context) => {

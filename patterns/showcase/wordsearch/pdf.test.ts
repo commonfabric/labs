@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { generateWordSearch, type WordSearchOptions } from "./generator.ts";
 import { textWidth, wordSearchPdf } from "./pdf.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const puzzle = (overrides: Partial<WordSearchOptions> = {}) =>
   generateWordSearch({

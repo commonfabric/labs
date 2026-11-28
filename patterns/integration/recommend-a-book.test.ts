@@ -1,7 +1,6 @@
 /** The authored book pair publishes a shelf within one dedicated space. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { fromFileUrl, join } from "@std/path";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
@@ -23,6 +22,7 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { hostGestureProvenance } from "../../runtime/runner/src/cfc/host-review.ts";
 import {
@@ -122,7 +122,7 @@ describe("personalized book invitation", () => {
     try {
       const program = await resolveLocalProgram(
         (request) => runtime.harness.resolve(request),
-        { main: `${ROOT}apps/recommend-a-book/library.tsx`, root: ROOT },
+        { main: `${ROOT}apps/recommend-a-book/library/main.tsx`, root: ROOT },
       );
       const profileSpace = await Identity.fromPassphrase(
         "book originator profile",

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { computeModuleHashes } from "../src/harness/module-identity.ts";
@@ -18,6 +17,7 @@ import {
 import { toURI } from "../src/uri-utils.ts";
 
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // These tests drive the sync parse internals directly (below the async flow
 // boundaries that normally load the deferred compiler stack), so load it here.

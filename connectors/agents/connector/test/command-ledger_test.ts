@@ -6,6 +6,7 @@ import {
 } from "../src/command-ledger.ts";
 import { AGENT_CONNECTOR_SCHEMAS } from "../src/protocol.ts";
 import type { AgentSessionCommandReceipt } from "../src/commands.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function receipt(
   commandId: string,
@@ -44,7 +45,7 @@ async function writeLedger(path: string, value: unknown): Promise<void> {
   if (Deno.build.os !== "windows") await Deno.chmod(path, 0o600);
 }
 
-Deno.test("command ledgers preserve Fabric results across reopen", async () => {
+test("command ledgers preserve Fabric results across reopen", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -71,7 +72,7 @@ Deno.test("command ledgers preserve Fabric results across reopen", async () => {
   }
 });
 
-Deno.test("command ledgers key receipts by command identity", async () => {
+test("command ledgers key receipts by command identity", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -103,7 +104,7 @@ Deno.test("command ledgers key receipts by command identity", async () => {
   }
 });
 
-Deno.test("command ledgers validate their complete persisted shape", async () => {
+test("command ledgers validate their complete persisted shape", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   const cases: Array<[unknown, string]> = [
@@ -167,7 +168,7 @@ Deno.test("command ledgers validate their complete persisted shape", async () =>
   }
 });
 
-Deno.test("command ledgers reject exhausted generations", async () => {
+test("command ledgers reject exhausted generations", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -186,7 +187,7 @@ Deno.test("command ledgers reject exhausted generations", async () => {
   }
 });
 
-Deno.test("command ledgers reject shared files and symbolic links", async () => {
+test("command ledgers reject shared files and symbolic links", async () => {
   if (Deno.build.os === "windows") return;
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
@@ -213,7 +214,7 @@ Deno.test("command ledgers reject shared files and symbolic links", async () => 
   }
 });
 
-Deno.test("command ledgers reject a directory owned by another user", async () => {
+test("command ledgers reject a directory owned by another user", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -236,7 +237,7 @@ Deno.test("command ledgers reject a directory owned by another user", async () =
   }
 });
 
-Deno.test("command ledgers reject a ledger path that is not a file", async () => {
+test("command ledgers reject a ledger path that is not a file", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -251,7 +252,7 @@ Deno.test("command ledgers reject a ledger path that is not a file", async () =>
   }
 });
 
-Deno.test("command ledgers keep their state and remove the temporary file when a write fails", async () => {
+test("command ledgers keep their state and remove the temporary file when a write fails", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -274,7 +275,7 @@ Deno.test("command ledgers keep their state and remove the temporary file when a
   }
 });
 
-Deno.test("command ledgers report a failed temporary-file cleanup with the write failure", async () => {
+test("command ledgers report a failed temporary-file cleanup with the write failure", async () => {
   const directory = await Deno.makeTempDir();
   // The ledger name fits the file system's name limit, and the temporary
   // name beside it does not, so creating and removing it both fail.
@@ -293,7 +294,7 @@ Deno.test("command ledgers report a failed temporary-file cleanup with the write
   }
 });
 
-Deno.test("Windows command ledgers commit both slots before open returns", async () => {
+test("Windows command ledgers commit both slots before open returns", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   const previousPath = `${path}.previous`;
@@ -331,7 +332,7 @@ Deno.test("Windows command ledgers commit both slots before open returns", async
   }
 });
 
-Deno.test("Windows command ledgers repair a missing or invalid slot from the valid one", async () => {
+test("Windows command ledgers repair a missing or invalid slot from the valid one", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   const previousPath = `${path}.previous`;
@@ -365,7 +366,7 @@ Deno.test("Windows command ledgers repair a missing or invalid slot from the val
   }
 });
 
-Deno.test("Windows command ledgers open from the newer of two valid slots", async () => {
+test("Windows command ledgers open from the newer of two valid slots", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   const older = receipt("older");
@@ -384,7 +385,7 @@ Deno.test("Windows command ledgers open from the newer of two valid slots", asyn
   }
 });
 
-Deno.test("Windows command ledgers reject slots that disagree at one generation", async () => {
+test("Windows command ledgers reject slots that disagree at one generation", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   const one = receipt("one");
@@ -410,7 +411,7 @@ Deno.test("Windows command ledgers reject slots that disagree at one generation"
   }
 });
 
-Deno.test("Windows command ledgers reject two invalid slots", async () => {
+test("Windows command ledgers reject two invalid slots", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -433,7 +434,7 @@ Deno.test("Windows command ledgers reject two invalid slots", async () => {
   }
 });
 
-Deno.test("Windows command ledgers accept files that Unix permissions would refuse", async () => {
+test("Windows command ledgers accept files that Unix permissions would refuse", async () => {
   const directory = await Deno.makeTempDir();
   const path = join(directory, "ledger.json");
   try {
@@ -455,7 +456,7 @@ Deno.test("Windows command ledgers accept files that Unix permissions would refu
   }
 });
 
-Deno.test("writeAndSync writes every byte across short writes and then syncs", async () => {
+test("writeAndSync writes every byte across short writes and then syncs", async () => {
   let written = "";
   const events: string[] = [];
   await CommandLedger.accessForTestingOnly.writeAndSync({
@@ -475,7 +476,7 @@ Deno.test("writeAndSync writes every byte across short writes and then syncs", a
   assertEquals(events, ["write 2", "write 2", "write 1", "sync"]);
 });
 
-Deno.test("writeAndSync throws, without syncing, when a write makes no progress", async () => {
+test("writeAndSync throws, without syncing, when a write makes no progress", async () => {
   let synced = false;
   const error = await assertRejects(() =>
     CommandLedger.accessForTestingOnly.writeAndSync({

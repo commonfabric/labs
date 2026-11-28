@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -311,6 +316,29 @@ describe("runner-event-starts", () => {
       expect(namedSince(mark)).toEqual([]);
     });
 
+    it("names no piece a read has asked for since the event's", async () => {
+      await createPiece("read");
+      const mark = runtime.runner.eventStartMark;
+      expect(await send("read", "hello")).toBe("done");
+
+      expect(await runtime.start(pieceNamed("read"), { forRead: true })).toBe(
+        true,
+      );
+
+      expect(namedSince(mark)).toEqual([]);
+    });
+
+    it("names no piece only a read started", async () => {
+      await createPiece("read only");
+      const mark = runtime.runner.eventStartMark;
+
+      expect(
+        await runtime.start(pieceNamed("read only"), { forRead: true }),
+      ).toBe(true);
+
+      expect(namedSince(mark)).toEqual([]);
+    });
+
     it("names no piece stopped since", async () => {
       await createPiece("stopped");
       const mark = runtime.runner.eventStartMark;
@@ -395,6 +423,83 @@ describe("runner-event-starts", () => {
       expect(namedSince(mark)).toEqual([
         pieceNamed("again").getAsNormalizedFullLink().id,
       ]);
+    });
+  });
+
+  describe("releaseReadStart()", () => {
+    it("stops a piece only reads started, and returns `true`", async () => {
+      await createPiece("read");
+      expect(await runtime.start(pieceNamed("read"), { forRead: true })).toBe(
+        true,
+      );
+
+      expect(runtime.runner.releaseReadStart(pieceNamed("read"))).toBe(true);
+
+      expect(runtime.runner.isRunning(pieceNamed("read"))).toBe(false);
+    });
+
+    it("leaves a piece another start has asked for running, and returns `false`", async () => {
+      await createPiece("opened");
+      expect(await runtime.start(pieceNamed("opened"), { forRead: true }))
+        .toBe(true);
+      expect(await runtime.start(pieceNamed("opened"))).toBe(true);
+
+      expect(runtime.runner.releaseReadStart(pieceNamed("opened"))).toBe(false);
+
+      expect(runtime.runner.isRunning(pieceNamed("opened"))).toBe(true);
+    });
+
+    it("leaves a piece another start joined while the read's start was in flight running, and returns `false`", async () => {
+      await createPiece("joined");
+      const forRead = runtime.start(pieceNamed("joined"), { forRead: true });
+      const opened = runtime.start(pieceNamed("joined"));
+      expect(await Promise.all([forRead, opened])).toEqual([true, true]);
+
+      expect(runtime.runner.releaseReadStart(pieceNamed("joined"))).toBe(false);
+
+      expect(runtime.runner.isRunning(pieceNamed("joined"))).toBe(true);
+    });
+
+    it("leaves a piece an event's delivery started running, and returns `false`", async () => {
+      await createPiece("delivered");
+      expect(await send("delivered", "hello")).toBe("done");
+
+      expect(runtime.runner.releaseReadStart(pieceNamed("delivered"))).toBe(
+        false,
+      );
+
+      expect(runtime.runner.isRunning(pieceNamed("delivered"))).toBe(true);
+    });
+
+    it("leaves for `releaseEventStart()` no piece only a read started", async () => {
+      await createPiece("read only");
+      expect(
+        await runtime.start(pieceNamed("read only"), { forRead: true }),
+      ).toBe(true);
+
+      expect(runtime.runner.releaseEventStart(pieceNamed("read only"))).toBe(
+        false,
+      );
+
+      expect(runtime.runner.isRunning(pieceNamed("read only"))).toBe(true);
+    });
+
+    it("leaves a piece whose start is in flight running, and returns `false`", async () => {
+      await createPiece("in-flight");
+      expect(await runtime.start(pieceNamed("in-flight"), { forRead: true }))
+        .toBe(true);
+      // Another read's start, which takes nothing off what may be stopped,
+      // and which has not yet settled.
+      const starting = runtime.start(pieceNamed("in-flight"), {
+        forRead: true,
+      });
+
+      expect(runtime.runner.releaseReadStart(pieceNamed("in-flight"))).toBe(
+        false,
+      );
+
+      expect(await starting).toBe(true);
+      expect(runtime.runner.isRunning(pieceNamed("in-flight"))).toBe(true);
     });
   });
 });

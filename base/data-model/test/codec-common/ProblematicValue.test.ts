@@ -10,7 +10,6 @@
  * this class is for.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { cloneIfNecessary, deepFreeze, isValidDeepFrozenFabricValue } from "@";
@@ -33,6 +32,7 @@ import {
   IS_DEEP_FROZEN,
 } from "@/fabric-bases";
 import { subFreeze, subIsDeepFrozen } from "../fabric-instances/fixtures.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ProblematicValue", () => {
   it("is an instance of `BaseFabricInstance`", () => {

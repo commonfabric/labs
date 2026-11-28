@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { PresenceRecord } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { CellHandle } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { warnWhenSidecarRunWithdrawn } from "../../src/builtins/wish.ts";
 import { captureLogs } from "../support/captured-logs.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SOURCE = "of:sidecar-result";
 

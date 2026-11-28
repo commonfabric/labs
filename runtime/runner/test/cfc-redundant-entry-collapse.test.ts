@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
@@ -11,6 +11,7 @@ import {
   seedStoredEnvelope,
   writeSeedEnvelopeDoc,
 } from "./cfc-seed-envelope.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-redundant-collapse");
 
@@ -25,11 +26,12 @@ const replicaEntries = (
   id: string,
 ): StoredEntry[] => {
   const replica = storageManager.open(signer.did()).replica as unknown as {
-    getDocument(id: string): {
-      cfc?: { labelMap?: { entries: StoredEntry[] } };
-    } | undefined;
+    getDocument(id: string): { cfc?: unknown } | undefined;
   };
-  return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+  return storedLabelEntries<StoredEntry>(
+    replica.getDocument(id)?.cfc,
+    (labelId) => replica.getDocument(labelId),
+  );
 };
 
 const newRuntime = (

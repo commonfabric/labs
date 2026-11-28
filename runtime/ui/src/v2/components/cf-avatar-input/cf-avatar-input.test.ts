@@ -2,12 +2,18 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CFButton } from "../cf-button/index.ts";
 import {
   AVATAR_PIXELS,
-  avatarBytesFromImage,
+  avatarFromImage,
   CFAvatarInput,
   NotAnImageError,
 } from "./index.ts";
@@ -48,7 +54,7 @@ function installCanvas(has2d = true): CanvasRecord {
     }
     convertToBlob(options: unknown) {
       record.encodings.push(options);
-      return Promise.resolve(new Blob([ENCODED]));
+      return Promise.resolve(new Blob([ENCODED], { type: "image/webp" }));
     }
   }
   Object.defineProperty(globalThis, "OffscreenCanvas", {
@@ -65,6 +71,44 @@ async function png(width: number, height: number): Promise<Blob> {
   canvas.getContext("bitmaprenderer");
   return await canvas.convertToBlob({ type: "image/png" });
 }
+
+const SPACE = "did:key:z6MkAvatarSpace";
+
+/** What a stand-in runtime was asked to upload. */
+interface Uploaded {
+  space: string;
+  contentType: string;
+  body: number[];
+}
+
+/**
+ * A stand-in runtime whose `uploadBlob()` records each upload in `uploads`
+ * and returns the id `fid1:stored`, or rejects when `fails` holds.
+ */
+function uploadingRuntime(fails = false) {
+  const uploads: Uploaded[] = [];
+  const runtime = {
+    uploadBlob: (options: {
+      space: string;
+      contentType: string;
+      body: Uint8Array;
+    }) => {
+      uploads.push({
+        space: options.space,
+        contentType: options.contentType,
+        body: [...options.body],
+      });
+      return fails
+        ? Promise.reject(new Error("the blob store refused it"))
+        : Promise.resolve({ id: "fid1:stored", url: "https://blobs/stored" });
+    },
+  } as unknown as RuntimeClient;
+  return { runtime, uploads };
+}
+
+/** A mounted avatar input whose runtime is `runtime`, in the space `SPACE`. */
+const mountInput = (runtime?: RuntimeClient): Promise<CFAvatarInput> =>
+  mount(Object.assign(new CFAvatarInput(), { runtime, space: SPACE }));
 
 /** Resolves with the detail of the next `name` event `element` fires. */
 function next(
@@ -90,13 +134,14 @@ describe("cf-avatar-input", () => {
     document.body.replaceChildren();
   });
 
-  describe("avatarBytesFromImage()", () => {
+  describe("avatarFromImage()", () => {
     it("draws the image's centered square at avatar size and returns it encoded as WebP", async () => {
       const canvas = installCanvas();
 
-      const bytes = await avatarBytesFromImage(image);
+      const avatar = await avatarFromImage(image);
 
-      expect(bytes).toEqual(ENCODED);
+      expect(new Uint8Array(await avatar.arrayBuffer())).toEqual(ENCODED);
+      expect(avatar.type).toBe("image/webp");
       expect(canvas.sizes).toEqual([[AVATAR_PIXELS, AVATAR_PIXELS]]);
       expect(canvas.draws.map(([, ...rest]) => rest)).toEqual([
         [50, 0, 200, 200, 0, 0, AVATAR_PIXELS, AVATAR_PIXELS],
@@ -108,7 +153,7 @@ describe("cf-avatar-input", () => {
       const tall = await png(100, 160);
       const canvas = installCanvas();
 
-      await avatarBytesFromImage(tall);
+      await avatarFromImage(tall);
 
       expect(canvas.draws.map(([, ...rest]) => rest)).toEqual([
         [0, 30, 100, 100, 0, 0, AVATAR_PIXELS, AVATAR_PIXELS],
@@ -118,7 +163,7 @@ describe("cf-avatar-input", () => {
     it("closes the image it decoded once it has drawn it", async () => {
       const canvas = installCanvas();
 
-      await avatarBytesFromImage(image);
+      await avatarFromImage(image);
 
       const [[bitmap]] = canvas.draws;
       expect(bitmap).toBeInstanceOf(ImageBitmap);
@@ -128,14 +173,14 @@ describe("cf-avatar-input", () => {
     it("throws `NotAnImageError` for bytes that are not an image", async () => {
       installCanvas();
 
-      await expect(avatarBytesFromImage(new Blob(["not an image"])))
+      await expect(avatarFromImage(new Blob(["not an image"])))
         .rejects.toThrow(NotAnImageError);
     });
 
     it("throws a plain error where no 2D canvas context is available", async () => {
       installCanvas(false);
 
-      const error = await avatarBytesFromImage(image).catch((e) => e);
+      const error = await avatarFromImage(image).catch((e) => e);
 
       expect(error).toBeInstanceOf(Error);
       expect(error).not.toBeInstanceOf(NotAnImageError);
@@ -188,26 +233,53 @@ describe("cf-avatar-input", () => {
       expect(buttonOf(element).disabled).toBe(true);
     });
 
-    it("emits `cf-change` with the avatar bytes of a picked image, disabling its button meanwhile", async () => {
+    it("emits `cf-change` with the avatar bytes of a picked image and the blob it stored them in, disabling its button meanwhile", async () => {
       installCanvas();
-      const element = await mount(new CFAvatarInput());
+      const { runtime, uploads } = uploadingRuntime();
+      const element = await mountInput(runtime);
       const changed = next(element, "cf-change");
 
       const { values } = pick(element, [new File([image], "wide.png")]);
       await element.updateComplete;
       expect(buttonOf(element).disabled).toBe(true);
 
-      const { bytes } = await changed;
+      const { bytes, blob } = await changed;
       expect(bytes).toBeInstanceOf(FabricBytes);
       expect(bytes.slice()).toEqual(ENCODED);
+      expect(blob).toEqual({ space: SPACE, id: "fid1:stored" });
+      expect(uploads).toEqual([{
+        space: SPACE,
+        contentType: "image/webp",
+        body: [...ENCODED],
+      }]);
       expect(values).toEqual([""]);
       await element.updateComplete;
       expect(buttonOf(element).disabled).toBe(false);
     });
 
+    it("emits `cf-error` saying a picked image could not be stored, and no `cf-change`, where the blob store refuses it or there is no runtime", async () => {
+      for (const runtime of [uploadingRuntime(true).runtime, undefined]) {
+        installCanvas();
+        const element = await mountInput(runtime);
+        const failed = next(element, "cf-error");
+        let changes = 0;
+        element.addEventListener("cf-change", () => changes++);
+
+        pick(element, [new File([image], "wide.png")]);
+
+        expect(await failed).toEqual({
+          message: "wide.png could not be stored",
+        });
+        expect(changes).toBe(0);
+        await element.updateComplete;
+        expect(buttonOf(element).disabled).toBe(false);
+      }
+    });
+
     it("emits `cf-error` naming a picked file that is not an image", async () => {
       installCanvas();
-      const element = await mount(new CFAvatarInput());
+      const { runtime, uploads } = uploadingRuntime();
+      const element = await mountInput(runtime);
       const failed = next(element, "cf-error");
       let changes = 0;
       element.addEventListener("cf-change", () => changes++);
@@ -216,6 +288,7 @@ describe("cf-avatar-input", () => {
 
       expect(await failed).toEqual({ message: "notes.txt is not an image" });
       expect(changes).toBe(0);
+      expect(uploads).toEqual([]);
     });
 
     it("emits `cf-error` saying an image could not be made into a picture where it cannot be drawn", async () => {

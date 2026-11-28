@@ -38,15 +38,18 @@ import {
 import { getLogger } from "@commonfabric/logger";
 import type { Runtime } from "../runtime.ts";
 import type { MemorySpace } from "../storage/interface.ts";
+import { ActionCostTable } from "./action-costs.ts";
 import type { HostMemoryServer } from "./host-memory-server.ts";
 import {
   type ParkedRuntimeHandle,
   ParkedServingRuntime,
 } from "./parked-runtime.ts";
 import { RoutedPlane, type RouteOptions } from "./routed-plane.ts";
+import { type RunEvent, runEventKey } from "./run-beacon.ts";
 import { runInServingContext } from "./serving-context.ts";
 import {
   awaitDisposeTimeboxed,
+  type FailedEvents,
   LIFECYCLE_VERB_SPACE_PARKED,
   type LifecycleVerb,
   type RuntimeFactoryContext,
@@ -62,6 +65,7 @@ import {
   type ServingLoopCounters,
   type ServingLoopStats,
 } from "./stats.ts";
+import { mergeServingLoopStats } from "./stats-merge.ts";
 
 export type { LifecycleVerb } from "./space-server.ts";
 export type {
@@ -172,7 +176,10 @@ export type ExecutorHostOptions = {
    * `experimental: { serverExecution: true }`. `context` is what the
    * SpaceServer hands its factory (see SpaceServerOptions.createRuntime):
    * a factory that reads the home space before returning installs
-   * `context.storeReadThrough` on its storage manager first. */
+   * `context.storeReadThrough` on its storage manager first. The host counts
+   * the runtime's action runs toward its action costs from the moment the
+   * factory returns it, so a run the factory itself waits on is not
+   * counted. */
   createRuntime: (
     space: MemorySpace,
     context: RuntimeFactoryContext,
@@ -266,6 +273,13 @@ export class ExecutorHost {
    * without serving them (see `#endTenure`). */
   readonly #pendingNotices = new Map<string, AdmittedCommitNotice[]>();
 
+  /**
+   * The events, by space, whose handlers the space's tenures do not run but
+   * write the failure of as the consequence (`failEvent()`), shared by each of
+   * the space's tenures in turn.
+   */
+  readonly #failedEvents = new Map<string, FailedEvents>();
+
   /** The ONE process-lifetime localSeq counter for every sink this host
    * builds (the replay keying — engine-wave-sink.ts): survives
    * park/re-activate, shared across ALL spaces. It must be
@@ -312,6 +326,9 @@ export class ExecutorHost {
   readonly #parkedDisposals = new Set<Promise<void>>();
 
   readonly #stats: ServingLoopStats = emptyServingLoopStats();
+
+  /** What each action the serving runtimes ran has cost; see `actions`. */
+  readonly #actionCosts = new ActionCostTable();
 
   /** The routed plane, while the host has a route. */
   readonly #route: RoutedPlane | undefined;
@@ -397,15 +414,30 @@ export class ExecutorHost {
         const existing = this.#spaces.get(space);
         if (existing?.active) existing.noteDemandChanged(reason);
       },
+      // A dormant space judges every root when it next activates, so only
+      // an active loop is told.
+      currencyChanged: (space) => {
+        const existing = this.#spaces.get(space);
+        if (existing?.active) existing.noteCurrencyChanged();
+      },
     });
-    registerServingLoopStatsProvider(() => this.stats());
+    // Merged as the worker pool merges its workers' counters, so the action
+    // costs the health route reads are bounded the same way here.
+    registerServingLoopStatsProvider(() =>
+      mergeServingLoopStats([this.stats()])
+    );
   }
 
-  /** The failure-park backoff streak of each space that has one. */
+  /** The failure-park backoff streak of each space that has one, and the
+   * failed events of each space that keeps a map of them. */
   get accessForTestingOnly(): {
     readonly failureParkStreaks: ReadonlyMap<string, number>;
+    readonly failedEvents: ReadonlyMap<string, FailedEvents>;
   } {
-    return { failureParkStreaks: this.#failureParkStreaks };
+    return {
+      failureParkStreaks: this.#failureParkStreaks,
+      failedEvents: this.#failedEvents,
+    };
   }
 
   /** What this host holds now. A closed host is vacant. */
@@ -421,9 +453,9 @@ export class ExecutorHost {
     return this.#parkedRuntimes.size > 0 ? "parked" : "vacant";
   }
 
-  /** {@link stats} without the settle blocks, in its own deep copy: static
-   * counts merged with per-space state (activeSpaces and watermarkLag read
-   * the current SpaceServers). */
+  /** {@link stats} without the settle blocks and the action costs, in its
+   * own deep copy: static counts merged with per-space state (activeSpaces
+   * and watermarkLag read the current SpaceServers). */
   counters(): ServingLoopCounters {
     refreshDeliveryCheckpointStats(this.#stats);
     let watermarkLag = 0;
@@ -433,8 +465,12 @@ export class ExecutorHost {
       activeSpaces += 1;
       watermarkLag = Math.max(watermarkLag, server.watermarkLag);
     }
-    const { settle: _settle, settleAdvances: _settleAdvances, ...live } =
-      this.#stats;
+    const {
+      settle: _settle,
+      settleAdvances: _settleAdvances,
+      actions: _actions,
+      ...live
+    } = this.#stats;
     const counters = structuredClone(live);
     counters.parkedRuntimes.held = this.#parkedRuntimes.size;
     return { ...counters, activeSpaces, watermarkLag };
@@ -449,6 +485,7 @@ export class ExecutorHost {
       ...this.counters(),
       settle: structuredClone(this.#stats.settle),
       settleAdvances: structuredClone(this.#stats.settleAdvances),
+      actions: this.#actionCosts.costs(),
     };
   }
 
@@ -553,6 +590,19 @@ export class ExecutorHost {
         throw error;
       }
     }
+  }
+
+  /**
+   * Has the tenures of `space` write `reason` as the consequence of `event`
+   * in place of running its handler (events.md §5): the handler's run held
+   * the thread of a serving worker the pool ended, and the pool hands the
+   * event to the worker the space is placed on next, before anything else for
+   * the space. A tenure already serving the space finds it at its next scan
+   * of the space's events.
+   */
+  failEvent(space: MemorySpace, event: RunEvent, reason: string): void {
+    if (this.#closed) return;
+    this.#failedEventsOf(space).set(runEventKey(event), { event, reason });
   }
 
   /**
@@ -797,6 +847,18 @@ export class ExecutorHost {
     this.#noteOccupancy();
   }
 
+  /** Helper for `failEvent()` and the activation, which returns `space`'s
+   * failed events, as every tenure of the space shares them. The end of a
+   * tenure drops a map left empty (`#endTenure()`). */
+  #failedEventsOf(space: MemorySpace): FailedEvents {
+    let failed = this.#failedEvents.get(space);
+    if (failed === undefined) {
+      failed = new Map();
+      this.#failedEvents.set(space, failed);
+    }
+    return failed;
+  }
+
   #activate(space: MemorySpace): Promise<void> {
     // One activation in flight per space: session-open and
     // commit-admitted hooks race, and a second concurrent activation
@@ -854,20 +916,22 @@ export class ExecutorHost {
         space,
         server: this.#options.server,
         engine,
+        failedEvents: this.#failedEventsOf(space),
         serviceIdentity: this.#options.serviceIdentity,
         // A runtime kept from the space's last idle park serves this tenure
         // when the store has not moved since; otherwise the factory builds
-        // one. Called once the tenure holds the lease.
-        createRuntime: (context) => {
-          const parked = this.#takeParkedRuntime(space, engine);
-          return parked !== undefined
-            ? Promise.resolve(parked)
-            : this.#options.createRuntime(space, {
+        // one. Called once the tenure holds the lease. Either way its action
+        // runs count toward the host's action costs.
+        createRuntime: async (context) => {
+          const handle = this.#takeParkedRuntime(space, engine) ??
+            await this.#options.createRuntime(space, {
               ...context,
               ...(this.#options.route === undefined
                 ? {}
                 : { route: this.#options.route }),
             });
+          this.#actionCosts.observe(space, handle.runtime.telemetry);
+          return handle;
         },
         retainParkedRuntime: (handle) => this.#retainParkedRuntime(handle),
         localSeqRef,
@@ -912,6 +976,7 @@ export class ExecutorHost {
           if (reason === SPACE_DELETED_PARK) {
             this.#failureParkStreaks.delete(space);
             this.#pendingNotices.delete(space);
+            this.#failedEvents.delete(space);
             this.#endTenure(space, server, true);
             return;
           }
@@ -1008,12 +1073,14 @@ export class ExecutorHost {
   /**
    * Helper for `#activateInner()`, which declines to activate `space`,
    * found deleted: whatever was buffered for its next tenure is dropped,
-   * since none comes, as are its failure streak and the runtime kept from
-   * its last idle park, and the attempt is reported refused.
+   * since none comes, as are its failure streak, the events failed for it,
+   * and the runtime kept from its last idle park, and the attempt is reported
+   * refused.
    */
   #refuseDeletedSpace(space: MemorySpace): void {
     this.#pendingNotices.delete(space);
     this.#failureParkStreaks.delete(space);
+    this.#failedEvents.delete(space);
     this.#discardParkedRuntime(space);
     this.#reportActivationSettled(space, "refused");
   }
@@ -1053,6 +1120,12 @@ export class ExecutorHost {
     servedWarm: boolean,
   ): void {
     if (this.#spaces.get(space) === server) this.#spaces.delete(space);
+    // Each tenure is handed the space's failed events, so the space keeps a
+    // map only while a tenure holds it or one is left for a later tenure to
+    // write.
+    if (!this.#spaces.has(space) && this.#failedEvents.get(space)?.size === 0) {
+      this.#failedEvents.delete(space);
+    }
     this.#quiescenceEpoch += 1;
     this.#noteOccupancy();
     if (servedWarm || server.warmNotices.length === 0) return;

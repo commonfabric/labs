@@ -1,5 +1,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { test } from "@commonfabric/test-support/test";
 import {
   commitSubjects,
   findCommitMessages,
@@ -12,12 +13,12 @@ import {
   shellQuote,
 } from "./view-commitmsg-test-helpers.ts";
 
-Deno.test("findCommitMessages: a commit line without an object id yields no region", () => {
+test("findCommitMessages: a commit line without an object id yields no region", () => {
   const lines = ["commit not-a-sha", "Author: A", "", "    Subject", ""];
   assertEquals(findCommitMessages(lines).length, 0);
 });
 
-Deno.test("commitSubjects: a header after the email Subject ends it", () => {
+test("commitSubjects: a header after the email Subject ends it", () => {
   const full = "0123456789abcdef0123456789abcdef01234567";
   const subjects = commitSubjects([
     `From ${full} Mon Sep 17 00:00:00 2001`,
@@ -31,7 +32,7 @@ Deno.test("commitSubjects: a header after the email Subject ends it", () => {
   assertEquals(subjects.get(full), "Fix it");
 });
 
-Deno.test({
+test({
   name: "realGit: source hooks observe their configured hooks path",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -68,7 +69,7 @@ printf ran > ${shellQuote(marker)}
   },
 });
 
-Deno.test("realGit: amends a detached reftable HEAD", async () => {
+test("realGit: amends a detached reftable HEAD", async () => {
   const root = await Deno.makeTempDir();
   try {
     if (!await initReftable(root)) return;
@@ -99,7 +100,7 @@ Deno.test("realGit: amends a detached reftable HEAD", async () => {
   }
 });
 
-Deno.test("realGit: rejects an insertion at a hidden deletion boundary", async () => {
+test("realGit: rejects an insertion at a hidden deletion boundary", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -121,7 +122,7 @@ Deno.test("realGit: rejects an insertion at a hidden deletion boundary", async (
   }
 });
 
-Deno.test({
+test({
   name: "realGit: handles an index path beginning with a stage prefix",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -146,7 +147,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "realGit: rollback preserves a concurrent update to the original branch",
   ignore: Deno.build.os === "windows",
@@ -196,7 +197,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: preserves a selected path staged for deletion", async () => {
+test("realGit: preserves a selected path staged for deletion", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -232,7 +233,7 @@ Deno.test("realGit: preserves a selected path staged for deletion", async () => 
   }
 });
 
-Deno.test({
+test({
   name:
     "realGit: reports when a hook restores the old ref before ownership is established",
   ignore: Deno.build.os === "windows",

@@ -15,6 +15,7 @@ import {
   SQLITE3_RELEASE_VERSION,
 } from "../v2/sqlite/column-origin.ts";
 import { ReadConnectionPool } from "../v2/sqlite/read-pool.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // Bind @db/sqlite's column-origin symbols before the sync columnOrigins() calls
 // (production does this once before a labeled query via the server handler).
@@ -57,7 +58,7 @@ const resolved: { version?: string; problem?: string } = await (async () => {
 })();
 const pinMatchesLock = resolved.version === SQLITE3_RELEASE_VERSION;
 
-Deno.test("pinned libsqlite3 release matches the resolved @db/sqlite", () => {
+test("pinned libsqlite3 release matches the resolved @db/sqlite", () => {
   if (resolved.problem) {
     fail(
       `cannot check SQLITE3_RELEASE_VERSION against the lockfile: ` +
@@ -83,7 +84,7 @@ Deno.test("pinned libsqlite3 release matches the resolved @db/sqlite", () => {
 // cannot be opened.
 //
 
-Deno.test("library source follows @db/sqlite's own precedence", () => {
+test("library source follows @db/sqlite's own precedence", () => {
   const env = (vars: Record<string, string>) => (k: string) => vars[k];
   // @db/sqlite reads DENO_SQLITE_LOCAL first, so it wins even with a path set.
   assertEquals(
@@ -110,7 +111,7 @@ Deno.test("library source follows @db/sqlite's own precedence", () => {
   assertEquals(librarySource(env({})), { kind: "release" });
 });
 
-Deno.test("an override that cannot be opened reports, and binds nothing", async () => {
+test("an override that cannot be opened reports, and binds nothing", async () => {
   // A file that is not a library stands in for the real case: a libsqlite3 built
   // without SQLITE_ENABLE_COLUMN_METADATA, which @db/sqlite loads happily while
   // the origin symbols are missing from it.
@@ -130,7 +131,7 @@ Deno.test("an override that cannot be opened reports, and binds nothing", async 
   }
 });
 
-Deno.test("a local @db/sqlite build reports rather than binding another file", async () => {
+test("a local @db/sqlite build reports rather than binding another file", async () => {
   const result = await openSource({ kind: "local" });
   assertEquals("lib" in result, false);
   assertStringIncludes(
@@ -170,7 +171,7 @@ function origins(
   }
 }
 
-Deno.test({
+test({
   name: "column-origin metadata is reachable in this deployment",
   sanitizeResources: false,
 }, () => {
@@ -179,7 +180,7 @@ Deno.test({
   assertEquals(columnOriginAvailable(), true);
 });
 
-Deno.test({
+test({
   name: "column origin is sound through alias / spoof / expression / join",
   sanitizeResources: false,
   ignore: !pinMatchesLock,
@@ -223,7 +224,7 @@ Deno.test({
   }
 });
 
-Deno.test({
+test({
   name:
     "pool.queryWithOrigins returns rows + per-column origin (real pool path)",
   sanitizeResources: false,
@@ -249,7 +250,7 @@ Deno.test({
   }
 });
 
-Deno.test({
+test({
   name:
     "compound/CTE/view origins are sound (true source or null, never wrong)",
   sanitizeResources: false,

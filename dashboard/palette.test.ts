@@ -6,7 +6,6 @@
  * distance matches what a person sees.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Status } from "./types.ts";
 import {
@@ -17,6 +16,7 @@ import {
   STATUS_TEXT,
   STATUS_WASH,
 } from "./palette.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type Triple = [number, number, number];
 

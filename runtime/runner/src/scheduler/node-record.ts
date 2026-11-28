@@ -214,6 +214,24 @@ export class NodeRegistry {
   /** Advances each time a node joins or leaves the active set. */
   #membership = 0;
 
+  /**
+   * The pieces a node of which joined or left the active set, or had its
+   * status written, since `takeChangedPieces()` last ran: each one named by
+   * the `pieceRootId` of the node's action, or, for a node that names none,
+   * each piece that answers for it. `undefined` until `trackChangedPieces()`
+   * asks for the record, so a runtime nothing reads it from keeps none.
+   */
+  #changedPieces: Set<string> | undefined;
+
+  /**
+   * The pieces that answer for each computation that names no piece, as
+   * `setAnsweredFor()` was last told of them.
+   */
+  readonly #answering = new WeakMap<Action, Set<string>>();
+
+  /** The computations each piece answers for, which is `#answering` inverted. */
+  readonly #answeredBy = new Map<string, ReadonlySet<Action>>();
+
   readonly effects: ReadonlySet<Action> = this.#activeEffects;
   readonly computations: ReadonlySet<Action> = this.#activeComputations;
 
@@ -317,6 +335,7 @@ export class NodeRegistry {
     record.cancelLocalReadWake?.();
     record.cancelLocalReadWake = undefined;
     if (this.#all.delete(record)) this.#membership++;
+    this.#noteChangedPiece(record);
     this.#activeEffects.delete(action);
     this.#activeComputations.delete(action);
     this.#invalidNodes.delete(action);
@@ -371,6 +390,67 @@ export class NodeRegistry {
     }
     record.status = status;
     this.#syncInvalidIndex(record);
+    this.#noteChangedPiece(record);
+  }
+
+  /**
+   * Starts recording the pieces whose nodes change, which
+   * `takeChangedPieces()` reads.
+   */
+  trackChangedPieces(): void {
+    this.#changedPieces ??= new Set();
+  }
+
+  /**
+   * The pieces a node of which joined or left the active set, or had its
+   * status written, since this was last called, each named by the
+   * `pieceRootId` of the node's action. A node that names no piece counts
+   * for each piece `setAnsweredFor()` said answers for it. A run writes its
+   * node's status as it starts, so every piece a run touched is among them.
+   * Empty unless `trackChangedPieces()` was called.
+   */
+  takeChangedPieces(): string[] {
+    const changed = this.#changedPieces;
+    if (changed === undefined || changed.size === 0) return [];
+    const taken = [...changed];
+    changed.clear();
+    return taken;
+  }
+
+  /**
+   * Records that `piece` answers for `actions`, computations that name no
+   * piece, and for no other: `piece` is among the changed pieces whenever
+   * one of them is the node that changed.
+   */
+  setAnsweredFor(piece: string, actions: ReadonlySet<Action>): void {
+    for (const action of this.#answeredBy.get(piece) ?? []) {
+      if (!actions.has(action)) this.#answering.get(action)?.delete(piece);
+    }
+    if (actions.size === 0) this.#answeredBy.delete(piece);
+    else this.#answeredBy.set(piece, actions);
+    for (const action of actions) {
+      const pieces = this.#answering.get(action);
+      if (pieces === undefined) this.#answering.set(action, new Set([piece]));
+      else pieces.add(piece);
+    }
+  }
+
+  /**
+   * Helper for the members above, which records the piece of `record`, or
+   * the pieces that answer for it where it names none.
+   */
+  #noteChangedPiece(record: SchedulerNode): void {
+    const changed = this.#changedPieces;
+    if (changed === undefined) return;
+    const pieceRootId = (record.action as Partial<TelemetryAnnotations>)
+      .schedulerObservationIdentity?.pieceRootId;
+    if (pieceRootId !== undefined) {
+      changed.add(pieceRootId);
+      return;
+    }
+    for (const piece of this.#answering.get(record.action) ?? []) {
+      changed.add(piece);
+    }
   }
 
   /**
@@ -550,6 +630,11 @@ export class NodeRegistry {
     return [...found].sort(byJoining);
   }
 
+  /** Whether any active node names `rootId` as a demand root. */
+  hasNodesUnderDemandRoot(rootId: string): boolean {
+    return this.#nodesByDemandRoot.has(rootId);
+  }
+
   /**
    * Files `action`'s node under the demand roots its observation identity
    * names now, in place of the ones it was filed under. The scheduler calls
@@ -628,6 +713,7 @@ export class NodeRegistry {
       this.#membership++;
       this.#joinedAt.set(record, this.#nextJoin++);
       this.#fileUnderDemandRoots(record, { joining: true });
+      this.#noteChangedPiece(record);
     }
     this.#all.add(record);
     if (record.kind === "effect") {

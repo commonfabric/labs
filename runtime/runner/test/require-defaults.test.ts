@@ -7,11 +7,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { DeepDefault, Default } from "@commonfabric/api";
 import type { Cell } from "@commonfabric/runner";
 import type { MustBeTrue } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type {
   RequireDefaults,

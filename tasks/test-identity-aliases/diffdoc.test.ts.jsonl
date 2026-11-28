@@ -1,0 +1,1 @@
+{"date":"2026-11-24","from":{"k":"unit","s":"cli","n":"diffdoc > WorkspaceCache > instance members > without() > returns a copy that has forgotten the paths, leaving the original whole"},"to":{"k":"unit","s":"cli","n":"diffdoc > WorkspaceCache > instance members > editing() > returns a cache that reads the paths afresh, leaving the original's sections of them whole"}}

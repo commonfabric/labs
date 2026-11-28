@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { hasInvalidUpstream } from "../../src/scheduler/dependency-graph.ts";
 import { NodeRegistry } from "../../src/scheduler/node-record.ts";
 import type { Action } from "../../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Counts graph lookups so the cone bound is independent of timing. */
 class CountingEdges extends WeakMap<Action, Set<Action>> {

@@ -24,7 +24,7 @@
  *     "browser-test": "deno run -A ../deno-web-test/cli.ts **\/*.test.ts"
  *
  * `deno-test` takes whatever flags were appended to the `test` task,
- * which is how a report path and the record preload reach the one
+ * which is how the permissions its tests need to record reach the one
  * command that can use them. A failure stops the rest, as `&&` would. A
  * run given `--filter` fails when the filter matched no test.
  *

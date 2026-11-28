@@ -7,6 +7,7 @@ import {
   render,
   waitForContextValue,
 } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // A guest reports what it found by writing it to the `result` cell, and
 // writes something whatever happens, an error included, so a case that fails
@@ -17,7 +18,7 @@ const PIXEL_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=";
 const PIXEL = `data:image/png;base64,${PIXEL_BASE64}`;
 
-Deno.test("reads an asset with `fabric.asset()`: its URL, its bytes, an image and a bitmap of it", async () => {
+test("reads an asset with `fabric.asset()`: its URL, its bytes, an image and a bitmap of it", async () => {
   cleanupFixtures();
   try {
     const context = new ContextShim({ result: null });
@@ -73,7 +74,7 @@ fabric.cell("result").set(result);
   }
 });
 
-Deno.test("loads an image whose `src` is a `cf-asset:` reference under the guest's policy", async () => {
+test("loads an image whose `src` is a `cf-asset:` reference under the guest's policy", async () => {
   // The guest's `load` event comes once its images have loaded or failed,
   // which is after the policy has reported refusing one.
 
@@ -123,7 +124,7 @@ fabric.cell("result").set(result);
   }
 });
 
-Deno.test("reports a reference to an asset it was not given, and loads the guest all the same", async () => {
+test("reports a reference to an asset it was not given, and loads the guest all the same", async () => {
   cleanupFixtures();
   const descriptions: string[] = [];
   const onError = (event: Event) => {

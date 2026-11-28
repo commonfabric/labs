@@ -3,11 +3,12 @@ import { CFButton } from "./cf-button/index.ts";
 import { CFInput } from "./cf-input/index.ts";
 import { CFSelect } from "./cf-select/index.ts";
 import { CFTextarea } from "./cf-textarea/index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const nextFrame = () =>
   new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
-Deno.test("cf-button and cf-input can be created by document.createElement", async () => {
+test("cf-button and cf-input can be created by document.createElement", async () => {
   const button = document.createElement("cf-button") as CFButton;
   const input = document.createElement("cf-input") as CFInput;
 
@@ -26,7 +27,7 @@ Deno.test("cf-button and cf-input can be created by document.createElement", asy
   input.remove();
 });
 
-Deno.test("form control host focus forwards to native shadow controls", async () => {
+test("form control host focus forwards to native shadow controls", async () => {
   const input = document.createElement("cf-input") as CFInput;
   const textarea = document.createElement("cf-textarea") as CFTextarea;
   const select = document.createElement("cf-select") as CFSelect;
@@ -67,7 +68,7 @@ Deno.test("form control host focus forwards to native shadow controls", async ()
   select.remove();
 });
 
-Deno.test("cf-input preserves early programmatic focus before first render", async () => {
+test("cf-input preserves early programmatic focus before first render", async () => {
   const input = document.createElement("cf-input") as CFInput;
   document.body.append(input);
 

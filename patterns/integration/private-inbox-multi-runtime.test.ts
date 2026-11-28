@@ -2,7 +2,8 @@
  * The multi-runtime harness driving the system private inbox: its owner
  * creates it and has their profiles point at it, current and earlier vintages
  * alike, a sender's own handler delivers offers to the inbox the owner's
- * profile points at, and a stranger tries to read them. Two more Homes, whose
+ * profile points at, a notice the sender sends again takes the first one's
+ * row, and a stranger tries to read them. Two more Homes, whose
  * profiles already point at inboxes, are given their inboxes by the host: one
  * adopts an inbox shaped as a loom daemon's rather than creating one, and the
  * other is refused another principal's inbox, holds none, and records the
@@ -37,13 +38,19 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { aclDocId } from "@commonfabric/memory/acl";
 import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
+  once,
   type PieceAddress,
   resolveServerExecution,
 } from "./multi-runtime-harness.ts";
@@ -131,20 +138,7 @@ type ReadOffer = {
   from: string;
   sharedAt: number;
   receivedAt: number;
-};
-
-/**
- * A function that runs `build` on its first call and returns the promise that
- * call made, on that call and every later one.
- *
- * Each Home stand-in's setup is one of these, called by the steps that read
- * it. A lane that runs one step of this file registers the others as ignored,
- * and a setup that ran whatever the lane chose would cost every such lane the
- * whole file's.
- */
-const once = <T>(build: () => Promise<T>): () => Promise<T> => {
-  let built: Promise<T> | undefined;
-  return () => built ??= build();
+  changes?: Record<string, true>;
 };
 
 describe("private inbox across runtimes", () => {
@@ -283,6 +277,7 @@ describe("private inbox across runtimes", () => {
     from: MultiRuntimeSession = sender,
     to: PieceAddress = inbox,
     profile?: number,
+    changes?: Record<string, true>,
   ): Promise<void> => {
     const refusedBefore = await refusals(from);
     await from.send(stream, {
@@ -290,6 +285,7 @@ describe("private inbox across runtimes", () => {
       space: harness.spaceDid,
       title,
       ...(profile === undefined ? {} : { profile }),
+      ...(changes === undefined ? {} : { changes }),
     });
     await harness.settleUntil(async () =>
       (await ownerOffers(to)).some((each) => each.title === title) ||
@@ -1307,6 +1303,26 @@ describe("private inbox across runtimes", () => {
     );
     expect(shared.map((each) => each.from).sort()).toEqual(
       [sender.identity.did(), stranger.identity.did()].sort(),
+    );
+  });
+
+  it("keeps one row for a sender's notice sent again, the later one, in place of the first", async () => {
+    const id = `changed:${harness.spaceDid}`;
+    const notify = (title: string) =>
+      offer(title, "offer", id, sender, inbox, undefined, { title: true });
+    await notify("first notice");
+    const before = await ownerOffers();
+
+    await notify("second notice");
+
+    const after = await ownerOffers();
+    const notices = after.filter((each) => each.id === id);
+    expect(notices.map((each) => each.title)).toEqual(["second notice"]);
+    expect(notices[0].from).toBe(sender.identity.did());
+    expect(notices[0].changes).toEqual({ title: true });
+    expect(after.length).toBe(before.length);
+    expect(after.findIndex((each) => each.id === id)).toBe(
+      before.findIndex((each) => each.id === id),
     );
   });
 

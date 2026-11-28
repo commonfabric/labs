@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { AdmissionWaiters } from "../../v2/admission-waiters.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-waiters-space";
 const OTHER_SPACE = "did:key:z6Mk-waiters-other-space";

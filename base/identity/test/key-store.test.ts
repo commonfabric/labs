@@ -1,5 +1,5 @@
-// Flat `Deno.test` cases: this package's tests also run in a browser through
-// `deno-web-test`, which does not support `@std/testing/bdd`.
+// Flat `test()` cases: this package's tests also run in a browser through
+// `deno-web-test`, where `describe()` is not available.
 //
 // These cases run against `FakeIndexedDB`; `key-store.browser.test.ts` runs
 // the same store against a browser's own IndexedDB.
@@ -11,6 +11,7 @@ import { isNativeEd25519Supported } from "../src/ed25519/utils.ts";
 import { Identity } from "../src/identity.ts";
 import { KeyStore } from "../src/key-store.ts";
 import { FakeIndexedDB } from "./fake-indexed-db.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Writes `value` under `key` in the store `name` of `factory`, directly. */
 async function putRaw(
@@ -24,7 +25,7 @@ async function putRaw(
   await new Promise((resolve) => request.addEventListener("success", resolve));
 }
 
-Deno.test("KeyStore recovers a stored key pair holding material as one, with its DID", async () => {
+test("KeyStore recovers a stored key pair holding material as one, with its DID", async () => {
   const store = await KeyStore.open("material", new FakeIndexedDB());
   const key = await Identity.generate({ implementation: "noble" });
 
@@ -35,7 +36,7 @@ Deno.test("KeyStore recovers a stored key pair holding material as one, with its
   expect(recovered?.keyPair.hasMaterial).toBe(true);
 });
 
-Deno.test("KeyStore recovers a stored key pair holding handles as one, with its DID", async () => {
+test("KeyStore recovers a stored key pair holding handles as one, with its DID", async () => {
   if (!await isNativeEd25519Supported()) return;
   const store = await KeyStore.open("handles", new FakeIndexedDB());
   const key = await Identity.generate({ implementation: "webcrypto" });
@@ -47,7 +48,7 @@ Deno.test("KeyStore recovers a stored key pair holding handles as one, with its 
   expect(recovered?.keyPair.hasMaterial).toBe(false);
 });
 
-Deno.test("KeyStore returns `undefined` for a name it holds nothing under, and after `clear()`", async () => {
+test("KeyStore returns `undefined` for a name it holds nothing under, and after `clear()`", async () => {
   const store = await KeyStore.open("absent", new FakeIndexedDB());
   expect(await store.get("key")).toBeUndefined();
 
@@ -57,7 +58,7 @@ Deno.test("KeyStore returns `undefined` for a name it holds nothing under, and a
   expect(await store.get("key")).toBeUndefined();
 });
 
-Deno.test("KeyStore.open() reaches what an earlier open of the same name stored, and creates its object store once", async () => {
+test("KeyStore.open() reaches what an earlier open of the same name stored, and creates its object store once", async () => {
   const factory = new FakeIndexedDB();
   const key = await Identity.generate({ implementation: "noble" });
   await (await KeyStore.open("shared", factory)).set("key", key);
@@ -70,7 +71,7 @@ Deno.test("KeyStore.open() reaches what an earlier open of the same name stored,
     .toBeUndefined();
 });
 
-Deno.test("KeyStore.open() with no name opens `common-key-store`", async () => {
+test("KeyStore.open() with no name opens `common-key-store`", async () => {
   // Pinned to the literal: the name is persisted browser state, and a change
   // to it would orphan every key a user has already stored.
 
@@ -81,7 +82,7 @@ Deno.test("KeyStore.open() with no name opens `common-key-store`", async () => {
   expect(factory.has("common-key-store")).toBe(true);
 });
 
-Deno.test("KeyStore throws for a stored value that is neither a pair of bytes nor a pair of keys", async () => {
+test("KeyStore throws for a stored value that is neither a pair of bytes nor a pair of keys", async () => {
   const factory = new FakeIndexedDB();
   const store = await KeyStore.open("corrupt", factory);
 
@@ -99,7 +100,7 @@ Deno.test("KeyStore throws for a stored value that is neither a pair of bytes no
   }
 });
 
-Deno.test("KeyStore rejects with the error a failed request reports", async () => {
+test("KeyStore rejects with the error a failed request reports", async () => {
   const factory = new FakeIndexedDB();
   const store = await KeyStore.open("failing", factory);
   const failure = new DOMException("disk full", "QuotaExceededError");
@@ -112,7 +113,7 @@ Deno.test("KeyStore rejects with the error a failed request reports", async () =
   await expect(store.clear()).rejects.toBe(failure);
 });
 
-Deno.test("KeyStore logs an open that is blocked and a later version change", async () => {
+test("KeyStore logs an open that is blocked and a later version change", async () => {
   using log = stub(console, "log");
   const factory = new FakeIndexedDB();
 

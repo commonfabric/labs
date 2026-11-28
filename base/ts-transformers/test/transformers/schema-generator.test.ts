@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { transformCfDirective } from "../../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { validateFiles } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const MAIN = `/// <cts-enable />
 import { toSchema } from "commonfabric";

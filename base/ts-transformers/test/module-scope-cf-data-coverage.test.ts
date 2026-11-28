@@ -10,6 +10,7 @@ import {
   collect,
   parseModule,
 } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * The argument text of the sole `__cfHelpers.__cf_data(...)` wrap call, or
@@ -99,7 +100,7 @@ function transformDirect(source: string): string {
   return output;
 }
 
-Deno.test(
+test(
   "cf-data wraps a bare-identifier call whose result type is primitive",
   () => {
     const output = transformDirect(
@@ -113,7 +114,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data wraps a call whose type is a union of primitives",
   () => {
     const output = transformDirect(
@@ -127,7 +128,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data wraps a call whose type is an intersection of primitives",
   () => {
     const output = transformDirect(
@@ -141,7 +142,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data leaves a call whose intersection has a non-primitive member unwrapped",
   () => {
     const output = transformDirect(
@@ -159,7 +160,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data leaves a declared callable with no body unwrapped on default export",
   () => {
     const output = transformDirect(
@@ -181,7 +182,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data wraps a callable that returns a call-on-call result past a nested class boundary and trailing members",
   () => {
     const output = transformDirect(
@@ -201,7 +202,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data wrap emission on a helpers-less source throws (filter invariant)",
   () => {
     // The HelpersOnlyTransformer filter guarantees every source reaching
@@ -216,7 +217,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "cf-data wraps a block-body callable whose call-on-call return precedes later statements",
   async () => {
     const output = await transformSource(

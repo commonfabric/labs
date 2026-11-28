@@ -4,8 +4,8 @@
  * Grace each have a Home stand-in, which holds their profile, their private
  * inbox, and their FabriChat manager, and which their home space's root links,
  * so that a room's `#chatManager` wish resolves there. Ada's manager offers
- * Grace a group through her profile, which puts her on its roster and among
- * Ada's people. Ada then adds Grace to a second group, from its `addMember`,
+ * Grace a group through her profile, then a direct room whose roster makes
+ * her profile known to an address-only offer. Ada then adds Grace to a second group, from its `addMember`,
  * by address alone: her manager offers Grace that room through the profile it
  * lists for her, and the room's `addRequests`, read through the room, merges
  * the verdict from Ada's home. Grace, a member of the room now, reads none of
@@ -16,11 +16,16 @@
  * No toolshed or browser required (Deno workers + in-process storage server).
  */
 
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,
@@ -150,8 +155,8 @@ describe("fabrichat add offer across runtimes", () => {
   it("offers a room to someone its owner adds by address, and keeps the adder's outcomes to the adder", async () => {
     const graceProfile = await grace.link(["profiles", 0]);
 
-    // A group offered to Grace through her profile puts her on its roster,
-    // and so among Ada's people.
+    // A group offered through Grace's profile puts her on that room's roster;
+    // an address-only offer in another group consults no unrelated roster.
     await ada.send("createGroup", {
       requestId: "g-met",
       title: "Met",
@@ -173,6 +178,51 @@ describe("fabrichat add offer across runtimes", () => {
     await harness.settleUntil(() =>
       graceHolds(addMemberOfferId(named.space, "add-named"))
     );
+
+    // Knowing Grace only through groups sends a notice, not an inbox offer.
+    await ada.send("createGroup", {
+      requestId: "g-group-only",
+      title: "Group only",
+      members: [],
+    }, START_ACTION);
+    await harness.settle();
+    const groupOnly = await ada.link([
+      "requests",
+      "g-group-only",
+      "entry",
+      "room",
+    ]);
+    await ada.send(
+      "addMember",
+      {
+        requestId: "group-only",
+        target: { value: grace.identity.did() },
+      },
+      ADD_MEMBER_ACTION,
+      { piece: groupOnly },
+    );
+    await harness.settleUntil(async () =>
+      (await ada.read(
+        ["$VIEWS", "room", "addRequests", "group-only", "delivery"],
+        { piece: groupOnly },
+      )) !== undefined
+    );
+    expect(
+      await ada.read(["$VIEWS", "room", "addRequests", "group-only"], {
+        piece: groupOnly,
+      }),
+    ).toEqual({ status: "done", delivery: "noticed" });
+    expect(await graceHolds(addMemberOfferId(groupOnly.space, "group-only")))
+      .toBe(false);
+
+    // A direct room's roster is a source an address-only offer may read.
+    await ada.send("openDirect", {
+      requestId: "d-met",
+      counterpart: grace.identity.did(),
+      profile: linkTo(graceProfile),
+    }, START_ACTION);
+    await harness.settleUntil(() => graceHolds("d-met"));
+    expect(await ada.read(["requests", "d-met", "status"])).toBe("done");
 
     // A second group, of Ada's alone.
     await ada.send("createGroup", {

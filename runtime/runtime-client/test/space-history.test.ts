@@ -5,12 +5,17 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { Runtime } from "@commonfabric/runner";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { RuntimeClient } from "@/runtime-client.ts";
 import { attachedClient } from "./attached-client.ts";
@@ -204,6 +209,43 @@ describe("space-history", () => {
 
       await expect(client.createSpaceBranch({ space, name: "fork", forkSeq }))
         .rejects.toThrow("branch name is taken: fork");
+    });
+  });
+
+  describe("watchSpaceHistory()", () => {
+    /** Resolves with the first `spaceseqadvanced` the client emits. */
+    const nextAdvance = (): Promise<{ space: string; seq: number }> => {
+      const advanced = Promise.withResolvers<{ space: string; seq: number }>();
+      const listener = (event: { space: string; seq: number }) => {
+        advanced.resolve(event);
+      };
+      client.on("spaceseqadvanced", listener);
+      return advanced.promise.finally(() =>
+        client.off("spaceseqadvanced", listener)
+      );
+    };
+
+    it("emits `spaceseqadvanced` with the seq of a commit to the watched space", async () => {
+      await client.watchSpaceHistory(space, true);
+      const advanced = nextAdvance();
+
+      await write("first");
+
+      const { steps: [newest] } = await client.spaceHistory({ space });
+      expect(await advanced).toEqual({ space, seq: newest.seq });
+    });
+
+    it("emits nothing once the watch is stopped", async () => {
+      const seen: number[] = [];
+      client.on("spaceseqadvanced", ({ seq }) => seen.push(seq));
+      await client.watchSpaceHistory(space, true);
+      await client.watchSpaceHistory(space, false);
+
+      await write("first");
+      // A reply crosses the channel behind any report the commit posted.
+      await client.spaceHistory({ space });
+
+      expect(seen).toEqual([]);
     });
   });
 });

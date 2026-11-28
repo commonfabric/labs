@@ -35,8 +35,9 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("debug command authorization resolves local schema definitions", () => {
+test("debug command authorization resolves local schema definitions", () => {
   assertEquals(
     commandWriterAuthorization({
       resultSchema: {
@@ -85,7 +86,7 @@ Deno.test("debug command authorization resolves local schema definitions", () =>
   );
 });
 
-Deno.test("debug deployment requires verified command authorization", async () => {
+test("debug deployment requires verified command authorization", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -130,7 +131,7 @@ Deno.test("debug deployment requires verified command authorization", async () =
   }
 });
 
-Deno.test("debug deployment protects its result before starting", async () => {
+test("debug deployment protects its result before starting", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -189,7 +190,7 @@ Deno.test("debug deployment protects its result before starting", async () => {
   }
 });
 
-Deno.test("debug deployment refuses a pre-created unprotected piece", async () => {
+test("debug deployment refuses a pre-created unprotected piece", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -255,7 +256,7 @@ Deno.test("debug deployment refuses a pre-created unprotected piece", async () =
   }
 });
 
-Deno.test("debug deployment refuses an unprotected registration", async () => {
+test("debug deployment refuses an unprotected registration", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),
@@ -310,7 +311,7 @@ Deno.test("debug deployment refuses an unprotected registration", async () => {
   }
 });
 
-Deno.test("debug registration rejects writes from another owner", async () => {
+test("debug registration rejects writes from another owner", async () => {
   const server = newSharedServer();
   const spaceDid = (await Identity.generate()).did();
   const readerSession = createSession({ identity, spaceDid });
@@ -438,7 +439,7 @@ Deno.test("debug registration rejects writes from another owner", async () => {
   }
 });
 
-Deno.test("debug registration rejects another owner-scoped writer", async () => {
+test("debug registration rejects another owner-scoped writer", async () => {
   const session = createSession({
     identity,
     spaceDid: (await Identity.generate()).did(),

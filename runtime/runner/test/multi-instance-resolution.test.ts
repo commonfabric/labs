@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 
 /**

@@ -24,7 +24,7 @@ import {
   maintainCollectionIndexMembership,
   type MaintainedCollectionIndex,
 } from "./collection-index-membership.ts";
-import { listSlotResolutions } from "./list-coordinator-plan.ts";
+import { listSlotLinks } from "./list-coordinator-plan.ts";
 import {
   listElementKeys,
   releaseRemovedElements,
@@ -197,8 +197,8 @@ function createCollectionIndexInstance(
       const rollback = trackListSetupRollback(tx, runs);
       const args = inputs.withTx(tx);
       const mode = args.key("mode").get();
-      const keys = listSlotResolutions(runtime, tx, inputs);
-      const source = listSlotResolutions(runtime, tx, inputs, "elements");
+      const keys = listSlotLinks(tx, inputs);
+      const source = listSlotLinks(tx, inputs, "elements");
       if (!isConfirmed([keys.listCell, source.listCell])) return;
       if (
         (keys.rawList !== undefined && !Array.isArray(keys.rawList)) ||

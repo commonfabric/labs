@@ -9,10 +9,10 @@
  * webhooks.handlers.test.ts.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import env from "@/env.ts";
 import app from "@/app.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");

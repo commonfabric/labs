@@ -26,7 +26,6 @@
 //   annotations carry each event's actor on its consequence writes
 //   (protocol.md §1/§2, scopes.md §5).
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
@@ -44,6 +43,13 @@ import {
   type StreamEventsDocValue,
   toDirtyKey,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -105,6 +111,12 @@ import {
   settleServing,
 } from "./support/serving-waits.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
 
 /** The serving-loop harness's settle-gate seam (see
  * executor-serving-loop.test.ts): when set, the loop's settle hangs at

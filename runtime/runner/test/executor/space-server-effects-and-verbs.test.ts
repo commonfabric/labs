@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -15,6 +14,7 @@ import {
   insertExecutionOutboxRows,
   selectPendingExecutionOutboxRows,
 } from "@commonfabric/memory/v2/execution-outbox";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   LIFECYCLE_VERB_SPACE_PARKED,

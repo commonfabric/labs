@@ -2,8 +2,13 @@
 import { mount, settle, window } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { NAME, type RuntimeClient } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   writesSent,

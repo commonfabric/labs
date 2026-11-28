@@ -74,7 +74,7 @@ export async function loadPackageIntegrationSuites(
   const oppositeLane = serverExecutionCiLane("opposite", defaultEnabled);
   for (const { scope, packageDir, headless } of PACKAGES) {
     const files = await integrationFiles(root, packageDir);
-    const junit = { kind: "integration", scope, filePrefix: packageDir };
+    const records = { kind: "integration", scope };
     // The environment the package's own `integration` task sets, so the
     // suite a lane runs and the suite somebody runs by hand are the same
     // run. `HEADLESS` is not part of it: the task leaves the browser
@@ -88,7 +88,7 @@ export async function loadPackageIntegrationSuites(
       packageDir,
       flags: ["-A"],
       env: { ...env, ...defaultLane.environment },
-      junit,
+      records,
       files: defaultLane.enabled
         ? files.filter((file) => !on.excluded.has(file))
         : files,
@@ -98,7 +98,7 @@ export async function loadPackageIntegrationSuites(
       packageDir,
       flags: ["-A"],
       env: { ...env, ...oppositeLane.environment },
-      junit,
+      records,
       files: oppositeLane.enabled
         ? files.filter((file) => !on.excluded.has(file))
         : files,
@@ -114,11 +114,7 @@ export async function loadPackageIntegrationSuites(
       {
         packageDir: "runtime/cf-harness",
         flags: ["-A"],
-        junit: {
-          kind: "integration",
-          scope: "cf-harness",
-          filePrefix: "runtime/cf-harness",
-        },
+        records: { kind: "integration", scope: "cf-harness" },
         files: (await integrationFiles(root, "runtime/cf-harness")).filter(
           (file) => file === harnessPostureGate,
         ),

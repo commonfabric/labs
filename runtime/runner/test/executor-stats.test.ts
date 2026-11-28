@@ -10,13 +10,13 @@
 // DERIVED_COMMITS_BY_SPACE_MAX spaces tracked, oldest row evicted into
 // the dropped fold.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   bumpDerivedCommits,
   DERIVED_COMMITS_BY_SPACE_MAX,
   emptyServingLoopStats,
 } from "../src/executor/stats.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("bumpDerivedCommits (per-space derived-commit accounting)", () => {
   it("keeps the total and the per-space row in lockstep", () => {

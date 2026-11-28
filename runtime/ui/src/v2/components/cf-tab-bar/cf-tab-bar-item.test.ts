@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFTabBarItem } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** An item mounted with `properties`, and every `tab-bar-click` it fires. */
 async function itemWith(properties: Partial<CFTabBarItem> = {}) {

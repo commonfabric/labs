@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -17,6 +17,7 @@ import type { LabelMapEntry } from "../src/cfc/types.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { linkResolutionProbe } from "../src/storage/reactivity-log.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-observation-classes");
 const space = signer.did();
@@ -111,7 +112,7 @@ describe("CFC observation classes (C1 read-shape plumbing)", () => {
     }).getDocument(id);
 
   const entriesOf = (id: string): StoredEntry[] =>
-    storedDocument(id)?.cfc?.labelMap?.entries ?? [];
+    storedLabelEntries<StoredEntry>(storedDocument(id)?.cfc, storedDocument);
 
   const derivedConfidentiality = (id: string): unknown[] | undefined =>
     entriesOf(id).find((e) => e.origin === "derived")?.label.confidentiality;

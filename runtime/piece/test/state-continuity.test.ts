@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { RuntimeProgram } from "@commonfabric/runner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { assertPatternSchemasBackwardCompatible } from "../src/schema-compatibility.ts";
 import {
   materializeOver,

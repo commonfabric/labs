@@ -25,6 +25,7 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { dirname, fromFileUrl, join } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
 
 const repoRoot = join(dirname(fromFileUrl(import.meta.url)), "..", "..", "..");
 const installer = join(repoRoot, "scripts", "install-cf.sh");
@@ -108,7 +109,7 @@ async function withTempDir(
   }
 }
 
-Deno.test("installs a copy, independent of its source", async () => {
+test("installs a copy, independent of its source", async () => {
   // Deleting or changing the source checkout must not reach back into an
   // install that is already on someone's PATH.
   await withTempDir(async (dir) => {
@@ -137,7 +138,7 @@ Deno.test("installs a copy, independent of its source", async () => {
   });
 });
 
-Deno.test("copies this checkout's script, but defaults to the primary", async () => {
+test("copies this checkout's script, but defaults to the primary", async () => {
   // Two separate questions. The script is the one whose task you invoked —
   // including changes not yet on main. The baked default is the primary, so it
   // survives removing the worktree you installed from.
@@ -178,7 +179,7 @@ Deno.test("copies this checkout's script, but defaults to the primary", async ()
   });
 });
 
-Deno.test("bakes the checkout default into the copy", async () => {
+test("bakes the checkout default into the copy", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     const target = join(dir, "target");
@@ -193,7 +194,7 @@ Deno.test("bakes the checkout default into the copy", async () => {
   });
 });
 
-Deno.test("the shebang stays on line 1", async () => {
+test("the shebang stays on line 1", async () => {
   // The install marker is inserted after it; ahead of it the file is not
   // executable as a script at all.
   await withTempDir(async (dir) => {
@@ -209,7 +210,7 @@ Deno.test("the shebang stays on line 1", async () => {
   });
 });
 
-Deno.test("re-running upgrades an existing install", async () => {
+test("re-running upgrades an existing install", async () => {
   // This is the upgrade path, since a copy does not track its source.
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
@@ -234,7 +235,7 @@ Deno.test("re-running upgrades an existing install", async () => {
   });
 });
 
-Deno.test("reports what it installed", async () => {
+test("reports what it installed", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     const target = join(dir, "target");
@@ -248,7 +249,7 @@ Deno.test("reports what it installed", async () => {
   });
 });
 
-Deno.test("installs cfsh beside cf, with no checkout baked into it", async () => {
+test("installs cfsh beside cf, with no checkout baked into it", async () => {
   // The shell's documented entry point is only real if it lands on a PATH.
   // It carries no checkout of its own — it forwards to `cf sh` and finds `cf`
   // by name — so the copy takes the marker and nothing else.
@@ -270,7 +271,7 @@ Deno.test("installs cfsh beside cf, with no checkout baked into it", async () =>
   });
 });
 
-Deno.test("prints the completion line without editing any rc", async () => {
+test("prints the completion line without editing any rc", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     const target = join(dir, "target");
@@ -283,7 +284,7 @@ Deno.test("prints the completion line without editing any rc", async () => {
   });
 });
 
-Deno.test("is idempotent", async () => {
+test("is idempotent", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     const target = join(dir, "target");
@@ -296,7 +297,7 @@ Deno.test("is idempotent", async () => {
   });
 });
 
-Deno.test("refuses to clobber a real file", async () => {
+test("refuses to clobber a real file", async () => {
   // Something the user put there by hand is not ours to replace.
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
@@ -315,7 +316,7 @@ Deno.test("refuses to clobber a real file", async () => {
   });
 });
 
-Deno.test("dry run changes nothing", async () => {
+test("dry run changes nothing", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     const target = join(dir, "target");
@@ -333,7 +334,7 @@ Deno.test("dry run changes nothing", async () => {
   });
 });
 
-Deno.test("a dry run predicts a failing real run", async () => {
+test("a dry run predicts a failing real run", async () => {
   // A dry run that reports success where the real run would fail is worse than
   // no dry run: it is the wrong answer, delivered confidently.
   await withTempDir(async (dir) => {
@@ -350,7 +351,7 @@ Deno.test("a dry run predicts a failing real run", async () => {
   });
 });
 
-Deno.test("warns when an explicit --dir is not on PATH", async () => {
+test("warns when an explicit --dir is not on PATH", async () => {
   // Auto-detection only picks directories on PATH. An explicit --dir is
   // honored, but installing somewhere unreachable is the exact silent failure
   // this whole area exists to prevent, so it is said out loud.
@@ -366,7 +367,7 @@ Deno.test("warns when an explicit --dir is not on PATH", async () => {
   });
 });
 
-Deno.test("a missing target directory is an error, not a silent success", async () => {
+test("a missing target directory is an error, not a silent success", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     await makeCheckout(checkout);
@@ -380,7 +381,7 @@ Deno.test("a missing target directory is an error, not a silent success", async 
   });
 });
 
-Deno.test("an unknown argument is rejected", async () => {
+test("an unknown argument is rejected", async () => {
   await withTempDir(async (dir) => {
     const checkout = join(dir, "labs");
     await makeCheckout(checkout);
@@ -391,7 +392,7 @@ Deno.test("an unknown argument is rejected", async () => {
   });
 });
 
-Deno.test("the help names both of the things it installs", async () => {
+test("the help names both of the things it installs", async () => {
   // A person who cannot find `cfsh` in the help has no way to learn it was
   // installed, which makes shipping it and not saying so the same as not
   // shipping it.

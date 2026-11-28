@@ -1,7 +1,12 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { close, type Engine, open } from "../../v2/engine.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("engine", () => {
   // The engine prepares a statement the first time it is asked for one and

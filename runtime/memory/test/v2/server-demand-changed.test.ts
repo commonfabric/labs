@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { toDirtyKey } from "../../v2.ts";
 import {
@@ -11,6 +10,7 @@ import {
   TEST_SESSION_OPEN_PRINCIPAL,
   testSessionOpenServerOptions,
 } from "../v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Server", () => {
   describe("instance members", () => {

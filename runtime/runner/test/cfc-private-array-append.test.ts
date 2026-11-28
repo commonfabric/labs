@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
@@ -133,18 +133,25 @@ describe("cfc-private-array-append", () => {
     }
   });
 
-  it("keeps value-dependent array operations behind the read ceiling", async () => {
+  it("adds unique values without disclosing the owner's entries", async () => {
+    // The add-unique snapshot is a write-destination read, as the append's is:
+    // whether a candidate was already present decides only whether it is
+    // written, and afterwards the inbox holds it either way.
+
     const storageManager = StorageManager.emulate({ as: signer });
-    const runtime = new Runtime({
-      apiUrl: new URL("http://toolshed.test"),
-      storageManager,
-      cfcReadMaxConfidentiality: [VISITOR],
-      cfcEnforcementMode: "enforce-strict",
-      cfcFlowLabels: "persist",
-    });
+    const runtimes = [OWNER, VISITOR].map((reader) =>
+      new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager,
+        cfcReadMaxConfidentiality: [reader],
+        cfcEnforcementMode: "enforce-strict",
+        cfcFlowLabels: "persist",
+      })
+    );
+    const [owner, visitor] = runtimes;
     try {
-      const create = runtime.edit();
-      const inbox = runtime.getCell<string[]>(
+      const create = owner.edit();
+      const inbox = owner.getCell<string[]>(
         signer.did(),
         "deduplicated-inbox",
         {
@@ -157,17 +164,24 @@ describe("cfc-private-array-append", () => {
       inbox.set(["private recommendation"]);
       expect((await create.commit().settled).error).toBeUndefined();
       await inbox.sync();
-      await runtime.storageManager.synced();
-      const submit = runtime.edit();
-      try {
-        expect(() => inbox.withTx(submit).addUnique("private recommendation"))
-          .toThrow(/read ceiling/);
-        expect(() => inbox.withTx(submit).get()).toThrow(/read ceiling/);
-      } finally {
-        submit.abort();
-      }
+      const link = inbox.getAsNormalizedFullLink();
+      const visitorInbox = visitor.getCellFromLink<string[]>(link);
+      await visitorInbox.sync();
+      const add = visitor.edit();
+      visitorInbox.withTx(add).addUnique(
+        "private recommendation",
+        "visitor's recommendation",
+      );
+      expect((await add.commit().settled).error).toBeUndefined();
+      await owner.storageManager.synced();
+
+      expect(owner.getCellFromLink<string[]>(link).get()).toEqual([
+        "private recommendation",
+        "visitor's recommendation",
+      ]);
+      expect(() => visitorInbox.get()).toThrow(/read ceiling/);
     } finally {
-      await runtime.dispose();
+      for (const runtime of runtimes) await runtime.dispose();
       await storageManager.close();
     }
   });

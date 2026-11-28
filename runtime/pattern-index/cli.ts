@@ -3,10 +3,11 @@
  *
  * Contract: `runtime/pattern-index/cli.ts --identity <PKCS#8 path>
  * --base-url <index URL>` reads one JSON request on stdin and writes one JSON
- * answer on stdout. Requests use `op: search` or `op: feedback`; replies are
- * `{ok: true, value}` or `{ok: false, status, error}`. A completed request,
- * including a refusal, exits zero. Host failures exit nonzero with detail on
- * stderr and nothing on stdout. Malformed stdin produces a 400 JSON answer.
+ * answer on stdout. Requests use `op: search`, `op: feedback` or `op:
+ * source`; replies are `{ok: true, value}` or `{ok: false, status, error}`.
+ * A completed request, including a refusal, exits zero. Host failures exit
+ * nonzero with detail on stderr and nothing on stdout. Malformed stdin
+ * produces a 400 JSON answer.
  * Index 401 (signature failure) and 403 (DID not allowlisted) remain distinct.
  *
  * CFS invocation: `deno run --no-lock --config <labs deno.json[c]>
@@ -15,13 +16,32 @@
  * These read and network grants are the complete permission set; environment
  * and FFI permissions are not required.
  *
- * Besides `search` and `feedback`, `op: whoami` answers the member the
+ * `op: source {patternIds}` answers each pattern's program as the index
+ * holds it (`getPattern` with its source), at most
+ * {@link SOURCE_PATTERNS_MAX} per request, in the order asked: `{patterns:
+ * [{patternId, name?, description, mine?, program} | {patternId, status}]}`,
+ * where `status` is 404 for a pattern the index does not hold or will not
+ * show this member, and 403 for one it answered without its program, so one
+ * unreadable pattern does not cost the others. Any other refusal answers the
+ * whole request, as for `search`. A caller reads someone else's pattern to build
+ * on it, so it can credit that pattern when it deploys what it built.
+ *
+ * Besides `search`, `feedback` and `source`, `op: whoami` answers the member the
  * identity acts as (with `signer`), `op: admit {did}` admits a key (admins),
  * and `op: join {link}` or `op: join {chain}` (a chain file's text, one
  * chain) joins the index exactly as `cf index join` does, answering
  * `{handle, role, root, signer, joined, storeDir, rootKeptHere}`; a join needs
  * `--membership-store`. A refused join answers the index's status, or 400
  * for a link or chain that is not one and 409 for a conflicting membership.
+ *
+ * `op: chain` answers `{chain}`, the text of a chain file holding the chain
+ * the person's index root issued to `--identity` (renewed first, as every
+ * call renews it), for `cf index join --chain` on another machine that holds
+ * the same identity key: a Weaver user's Mac, whose `cf` acts for the
+ * membership a Common Fabric Service on a cloud host joined. It needs
+ * `--membership-store`; 404 when this machine holds no membership, and 409
+ * when it holds no live chain to hand over: the identity is the membership's
+ * own root, which presents none, or the chain lapsed with its root elsewhere.
  *
  * `--membership-store <dir>` names the directory `cf index join` keeps
  * memberships under (`~/.local/state/commonfabric/pattern-index` by default
@@ -33,8 +53,13 @@
 
 import { parseArgs } from "@std/cli/parse-args";
 import { join as joinPath } from "@std/path";
-import { isPieceRef, PatternIndexClient } from "./src/client.ts";
-import { openPatternIndexClient } from "./src/access.ts";
+import {
+  isPieceRef,
+  PatternIndexClient,
+  PatternIndexError,
+} from "./src/client.ts";
+import { chainForSigner, openPatternIndexClient } from "./src/access.ts";
+import { checkIndexChain } from "./src/membership.ts";
 import { PatternIndexStore } from "./src/store.ts";
 import {
   adoptIndexChain,
@@ -45,6 +70,7 @@ import {
 import {
   decodeDelegationChains,
   type DIDKey,
+  encodeDelegationChains,
   Identity,
   isCanonicalEd25519DID,
 } from "@commonfabric/identity";
@@ -128,6 +154,104 @@ const join = async (
   return { ok: false, status: 400, error: "join needs a link or a chain" };
 };
 
+/**
+ * The chain this identity presents for the membership, as a chain file's
+ * text, so another machine holding the same key can act for the same member.
+ */
+const chain = async (context: HelperContext): Promise<CliAnswer> => {
+  const { store, signer } = context;
+  if (store === undefined) {
+    return {
+      ok: false,
+      status: 400,
+      error: "chain needs --membership-store, where the membership is kept",
+    };
+  }
+  const membership = await store.membership();
+  if (membership === undefined) {
+    return {
+      ok: false,
+      status: 404,
+      error: "this machine holds no index membership",
+    };
+  }
+  if (membership.root === signer.did()) {
+    return {
+      ok: false,
+      status: 409,
+      error: "this identity is its membership's root, which presents no chain",
+    };
+  }
+  const now = Math.floor(Date.now() / 1000);
+  const held = await chainForSigner(store, signer, now);
+  // Where the root is kept elsewhere a lapsed chain is still "held"; handing
+  // it over would only fail later, on the other machine.
+  const checked = held === undefined
+    ? undefined
+    : await checkIndexChain(held, signer.did(), now).catch(() => undefined);
+  // A chain from another root would join the other machine as someone else.
+  const usable = checked !== undefined && checked.root === membership.root;
+  if (held === undefined || !usable) {
+    return {
+      ok: false,
+      status: 409,
+      error: "this machine holds no live chain for this identity",
+    };
+  }
+  return { ok: true, value: { chain: encodeDelegationChains([held]) } };
+};
+
+/** The most patterns one `source` request reads. */
+export const SOURCE_PATTERNS_MAX = 5;
+
+/** `op: source`: each pattern's program, or the index's refusal of it. */
+const answerSource = async (
+  client: PatternIndexClient,
+  body: Record<string, unknown>,
+): Promise<CliAnswer> => {
+  const { patternIds } = body;
+  if (
+    !Array.isArray(patternIds) || patternIds.length === 0 ||
+    patternIds.length > SOURCE_PATTERNS_MAX ||
+    !patternIds.every((id) => typeof id === "string" && id !== "")
+  ) {
+    return {
+      ok: false,
+      status: 400,
+      error:
+        `patternIds must name 1 to ${SOURCE_PATTERNS_MAX} patterns, each a non-empty string`,
+    };
+  }
+  // Read concurrently; `Promise.all` keeps the order asked.
+  const patterns = await Promise.all(
+    (patternIds as string[]).map(async (patternId) => {
+      try {
+        const found = await client.getPattern({
+          patternId,
+          includeSource: true,
+        });
+        // The index answered for the pattern and withheld its program.
+        if (found.program === undefined) return { patternId, status: 403 };
+        return {
+          patternId: found.patternId,
+          ...(found.name === undefined ? {} : { name: found.name }),
+          description: found.description,
+          ...(found.mine === undefined ? {} : { mine: found.mine }),
+          program: found.program,
+        };
+      } catch (error) {
+        // Only "no such pattern" is about the one pattern; any other refusal
+        // (a signature, an allowlist, a rate) is the request's, and answers it.
+        if (!(error instanceof PatternIndexError && error.status === 404)) {
+          throw error;
+        }
+        return { patternId, status: 404 };
+      }
+    }),
+  );
+  return { ok: true, value: { patterns } };
+};
+
 /** Answers one operation, mapping index refusals and propagating failures. */
 const answerRequest = async (
   context: HelperContext,
@@ -169,6 +293,8 @@ const answerRequest = async (
           }
           : { ok: false, status: 502, error: recorded.message };
       }
+      case "source":
+        return await answerSource(client, body);
       case "whoami":
         return {
           ok: true,
@@ -183,6 +309,8 @@ const answerRequest = async (
       }
       case "join":
         return await join(context, body);
+      case "chain":
+        return await chain(context);
       case "view": {
         // A person used something in a loom: a piece (counts toward settling
         // the version of theirs deployed to it) or a pattern they placed from
@@ -244,7 +372,7 @@ const answerRequest = async (
           ok: false,
           status: 400,
           error:
-            "op must be search, feedback, whoami, admit, join, view, getSharing or setSharing",
+            "op must be search, feedback, source, whoami, admit, join, chain, view, getSharing or setSharing",
         };
     }
   } catch (error) {

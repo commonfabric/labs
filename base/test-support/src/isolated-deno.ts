@@ -1,5 +1,7 @@
 import { join } from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
+import { RECORDS_DIR_VARIABLE } from "./records/paths.ts";
+import { SKIP_LIST_VARIABLE } from "./records/skip-list.ts";
 
 export interface DenoCommandWithTemporaryLockOptions {
   root: string;
@@ -88,16 +90,20 @@ export async function runDenoCommandWithTemporaryLock(
 
   try {
     await Deno.copyFile(join(options.root, "deno.lock"), tempLock);
-    const commandOptions: Deno.CommandOptions = {
+    return await new Deno.Command(Deno.execPath(), {
       cwd: options.cwd ?? options.root,
       args: options.args(tempLock),
       stdout: "piped",
       stderr: options.stderr ?? "piped",
-    };
-    if (options.env) {
-      commandOptions.env = options.env;
-    }
-    return await new Deno.Command(Deno.execPath(), commandOptions).output();
+      // The child's tests are the caller's fixtures, so they record nothing
+      // into the caller's run and skip nothing its skip list names, unless
+      // the caller names those variables itself.
+      env: {
+        [RECORDS_DIR_VARIABLE]: "",
+        [SKIP_LIST_VARIABLE]: "",
+        ...options.env,
+      },
+    }).output();
   } finally {
     await removeIfPresent(tempDir, { recursive: true });
   }

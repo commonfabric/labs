@@ -6,7 +6,6 @@
  * profiles are made by `createProfile()`, as profile-create.test.ts drives it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -30,7 +29,14 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { blobDocumentId } from "@commonfabric/runner/blob-record";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "@commonfabric/piece/ops";
 
@@ -1002,6 +1008,39 @@ describe("profile management", () => {
       );
       expect((await listProfiles(CONFIG, { loadPieces }))[0].picture)
         .toBeUndefined();
+    });
+
+    it("uploads a picture of 200 KiB as a blob in the profile's own space, and holds no bytes of it inline", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      const large = new Uint8Array(200 * 1024);
+      large.set(picture);
+
+      await setProfilePicture(
+        { ...CONFIG, profileSpace: ada.space, bytes: large },
+        { loadPieces },
+      );
+
+      const [listed] = await listProfiles(CONFIG, { loadPieces });
+      expect(listed.picture).toEqual(large);
+      expect(listed.pictureByOwner).toBe(true);
+      const profile = runtime.getCellFromEntityId<{
+        picture?: FabricBytes;
+        pictureBlob?: { space?: string; id?: string };
+      }>(spaceOf(ada), ada.id);
+      await profile.sync();
+      const { picture: inline, pictureBlob } = profile.get() ?? {};
+      expect(inline?.length).toBe(0);
+      expect(pictureBlob?.space).toBe(ada.space);
+      const record = await server.readDocument(
+        spaceOf(ada),
+        blobDocumentId(pictureBlob?.id ?? ""),
+      );
+      expect(record?.value).toEqual({
+        type: "image/png",
+        body: new FabricBytes(large),
+      });
     });
 
     it("refuses a picture another principal sets, and keeps the owner's", async () => {

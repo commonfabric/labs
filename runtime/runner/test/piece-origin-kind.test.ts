@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { classifyPieceOriginString } from "../src/piece-origin-kind.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // The fabric branch parses specifiers through the sync parse internals, which
 // sit below the async flow boundaries that normally load the compiler stack.

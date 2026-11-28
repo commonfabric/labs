@@ -32,7 +32,8 @@ export interface CachedAsset {
 /**
  * The cache of static assets served from one base location, holding each
  * asset's content together with a strong ETag over that content. An asset is
- * read at most once per instance: from a `file:` base it is read off the file
+ * read successfully at most once per instance, and a failed read is tried
+ * again on the next request. From a `file:` base it is read off the file
  * system, and from any other base it is fetched over the network.
  */
 export class StaticCache {
@@ -59,6 +60,13 @@ export class StaticCache {
     return new StaticCache(new URL(FS_URL));
   }
 
+  /** `StaticCache.#cache`, the map of asset names to their requests. */
+  get accessForTestingOnly(): {
+    readonly cache: Map<string, Promise<CachedAsset>>;
+  } {
+    return { cache: this.#cache };
+  }
+
   /**
    * Gets the content of a static asset, without its ETag.
    */
@@ -69,7 +77,10 @@ export class StaticCache {
 
   /**
    * Gets a static asset's content together with the ETag a caller validates
-   * it against.
+   * it against. Rejects when `assetName` is not one this package ships, or
+   * when the read fails. The cache keeps only requests that succeed or are
+   * still pending, so a rejected name leaves no entry behind and the next
+   * call for it reads again.
    */
   getWithETag(assetName: string): Promise<CachedAsset> {
     const currentValue = this.#cache.get(assetName);
@@ -78,6 +89,7 @@ export class StaticCache {
     }
     const promise = this.#requestWithETag(assetName);
     this.#cache.set(assetName, promise);
+    promise.catch(() => this.#cache.delete(assetName));
     return promise;
   }
 
@@ -90,11 +102,19 @@ export class StaticCache {
   }
 
   /**
+   * Returns whether `assetName` names an asset this package ships, which is
+   * the condition under which `getUrl()` returns rather than throws.
+   */
+  has(assetName: string): boolean {
+    return assets.includes(assetName);
+  }
+
+  /**
    * Gets the location of a static asset, and throws when `assetName` is not
    * one this package ships.
    */
   getUrl(assetName: string): URL {
-    if (!assets.includes(assetName)) {
+    if (!this.has(assetName)) {
       throw new Error(`No static asset "${assetName}" found.`);
     }
 

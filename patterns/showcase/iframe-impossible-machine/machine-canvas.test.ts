@@ -7,12 +7,12 @@ import {
   type NodeChange,
 } from "@xyflow/react";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   type CanvasReactRuntime,
   createMachineCanvas,
   type MachineCanvasProps,
 } from "./machine-canvas/guest.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 type TestNode = Node<{ label: string }, "sensor" | "gate">;
 

@@ -31,7 +31,7 @@ import {
   propValue,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import StoreMapper, { MapTab } from "./store-mapper.tsx";
+import StoreMapper, { MapTab } from "./main.tsx";
 
 type WallPosition =
   | "front-left"

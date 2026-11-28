@@ -1,6 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 import {
   CommonFabricTransformerPipeline,
@@ -10,6 +9,7 @@ import {
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { transformSource } from "./utils.ts";
 import { collect, parseModule, patternSchemas } from "./transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /** Every JSX tag name (opening/self-closing) appearing under `root`. */
 function jsxTagNames(root: ts.Node): string[] {
@@ -142,7 +142,7 @@ function createProgram(source: string): {
   return { program, sourceFile };
 }
 
-Deno.test(
+test(
   "UI helpers lower to intrinsic tags and emit data-ui markers",
   async () => {
     const source = `/// <cts-enable />
@@ -186,7 +186,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper literal props seed cfcUiContract hints but dynamic props do not",
   () => {
     const source = `/// <cts-enable />
@@ -249,7 +249,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper contract hints propagate onto generated schemas",
   async () => {
     const source = `/// <cts-enable />
@@ -273,7 +273,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper contract hints require all required semantic props to be literal",
   async () => {
     const source = `/// <cts-enable />
@@ -305,7 +305,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper contract hints also reach explicit output schemas",
   async () => {
     const source = `/// <cts-enable />

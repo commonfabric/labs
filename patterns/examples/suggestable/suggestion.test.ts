@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { promptAbout, totalAmount } from "./suggestion.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("suggestion", () => {
   describe("promptAbout()", () => {

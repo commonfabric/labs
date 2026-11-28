@@ -96,7 +96,7 @@ type Cell<T> = {
   equals(other: Cell<T>): boolean;
 };`;
 
-Deno.test(
+test(
   "interprocedural equals-only helper keeps caller argument identity-preserving",
   () => {
     // The callee compares its two parameters with `.equals()`, so neither
@@ -119,7 +119,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper that writes to its parameter marks caller writeonly",
   () => {
     const input = getPaths(
@@ -135,7 +135,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper keeps the reads and writes of a parameter it also hands to an unknown callee",
   () => {
     // `audit` has no body to analyze, so the helper's parameter is a
@@ -160,7 +160,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper analyzed with nested callbacks charges what its closures do",
   () => {
     // A caller that sees into its own nested callbacks sees into the
@@ -194,7 +194,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural wildcard on a member argument keeps that member whole and its siblings narrow",
   () => {
     // The helper's unknown access reaches only `input.count`, so `input` is
@@ -228,7 +228,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "interprocedural helper that reads a parameter field propagates the read path",
   () => {
     const input = getPaths(
@@ -244,7 +244,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "unknown optional callback use still widens its tracked argument",
   () => {
     // Optionality does not change the call policy. The unresolved callback
@@ -262,7 +262,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "optional invocation does not wildcard a supported receiver-method path",
   () => {
     const input = getPaths(
@@ -279,7 +279,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "optional get chains retain the nested cell read path",
   () => {
     const input = getPaths(
@@ -302,7 +302,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "array literal wrapped in an as-expression still yields an element read",
   () => {
     // The array-local element scan must unwrap the parenthesized/as wrappers
@@ -324,7 +324,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "spread of a tracked local array set payload records identity-cell paths",
   () => {
     const input = getPaths(
@@ -347,7 +347,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "object-shape and optional-presence aliases survive a for-of scope",
   () => {
     // A shape alias (`shape`) and an optional-presence alias (`opt`) are both
@@ -379,7 +379,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "equal object shapes pushed on both branches keep a stable local binding",
   () => {
     // Both branches push the identical shape `{ u: input.a }`, so the
@@ -410,7 +410,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "differently shaped pushes on each branch still track both source fields",
   () => {
     // The two branches push shapes with different property sets, exercising the
@@ -446,6 +446,7 @@ Deno.test(
 //
 
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createTypedProgram(
   source: string,
@@ -490,7 +491,7 @@ function createTypedProgram(
   return { program, sourceFile: program.getSourceFile("/test.ts")! };
 }
 
-Deno.test("Interprocedural analysis propagates hasUnverifiedCellUse from callee summaries", () => {
+test("Interprocedural analysis propagates hasUnverifiedCellUse from callee summaries", () => {
   const source = `import { type Cell } from "commonfabric";
 const helper = (c: Cell<{ n: number }>) => {
   c.frobnicate();
@@ -517,7 +518,7 @@ const fn = (input: Cell<{ n: number }>) => {
   assertEquals(input!.wildcard, false);
 });
 
-Deno.test("Interprocedural analysis does not propagate hasUnverifiedCellUse from read-only callees", () => {
+test("Interprocedural analysis does not propagate hasUnverifiedCellUse from read-only callees", () => {
   const source = `import { type Cell } from "commonfabric";
 const helper = (c: Cell<{ n: number }>) => c.get();
 const fn = (input: Cell<{ n: number }>) => {
@@ -537,7 +538,7 @@ const fn = (input: Cell<{ n: number }>) => {
   assertEquals(input!.hasUnverifiedCellUse, false);
 });
 
-Deno.test("Interprocedural analysis lets wildcard subsume the unverified mark for dynamic arguments", () => {
+test("Interprocedural analysis lets wildcard subsume the unverified mark for dynamic arguments", () => {
   const source = `import { type Cell } from "commonfabric";
 const helper = (c: Cell<{ n: number }>) => {
   c.frobnicate();
@@ -563,7 +564,7 @@ const fn = (input: Cell<{ items: Record<string, { n: number }> }>, k: string) =>
   assertEquals(input!.wildcard, true);
 });
 
-Deno.test(
+test(
   "a value leaving for a callee with no summary ends identity use beneath it",
   () => {
     // `record` has no body to summarize, so it may read the whole list it is
@@ -588,7 +589,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "a callee's escape ends the caller's identity use beneath it",
   () => {
     // `pass` hands `holder.list` to a callee with no summary. Its summary says
@@ -621,7 +622,7 @@ for (
     ["the fallback of the root", "record(input ?? spare);"],
   ]
 ) {
-  Deno.test(
+  test(
     `${form} leaving for a callee with no summary ends identity use beneath it`,
     () => {
       // Each form hands `record` a value it may read the whole of, the

@@ -3,7 +3,6 @@
  * presented suggestion cannot be recorded in the space's history.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -17,6 +16,12 @@ import {
   enableMockMode,
   loadConversationFixture,
 } from "@commonfabric/llm/client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { createBuilder } from "../../src/builder/factory.ts";
 import type { Pattern } from "../../src/builder/types.ts";

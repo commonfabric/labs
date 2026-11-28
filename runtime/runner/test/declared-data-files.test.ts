@@ -1,6 +1,6 @@
 import { assertEquals, assertRejects } from "@std/assert";
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import type { ProgramResolver, Source } from "@commonfabric/js-compiler";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 import { attachDeclaredDataFiles } from "../src/harness/declared-data-files.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";

@@ -8,8 +8,8 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { TemplateResult } from "lit";
 import { CFImage } from "./index.ts";
 
@@ -233,6 +233,59 @@ describe("CFImage", () => {
       await answer;
 
       expect(calls).toEqual([{ space: SPACE, id: "fid1:abc" }]);
+      expect(srcOf(element)).toBe("http://host/space/blobs/abc");
+    });
+
+    it("fires a `cf-error` that neither bubbles nor crosses a shadow root when its image fails to load", async () => {
+      const answer = Promise.resolve("http://host/space/blobs/abc");
+      const element = new CFImage();
+      element.runtime = runtimeAnswering(answer).runtime;
+      element.blob = { space: SPACE, id: "fid1:abc" };
+      element.willUpdate(new Map([["blob", undefined]]));
+      await answer;
+      const fired: Event[] = [];
+      element.addEventListener("cf-error", (event) => fired.push(event));
+
+      const onError = (element.render() as TemplateResult).values[2];
+      expect(typeof onError).toBe("function");
+      (onError as () => void)();
+
+      expect(fired).toHaveLength(1);
+      expect(fired[0].bubbles).toBe(false);
+      expect(fired[0].composed).toBe(false);
+    });
+
+    it("fires a `cf-error`, and renders nothing, when the runtime cannot give a blob's URL", async () => {
+      const answer = Promise.reject(new Error("no host serves that space"));
+      answer.catch(() => {});
+      const element = new CFImage();
+      element.runtime = runtimeAnswering(answer).runtime;
+      const fired: Event[] = [];
+      element.addEventListener("cf-error", (event) => fired.push(event));
+      element.blob = { space: SPACE, id: "fid1:abc" };
+
+      element.willUpdate(new Map([["blob", undefined]]));
+      await answer.catch(() => {});
+      await Promise.resolve();
+
+      expect(fired).toHaveLength(1);
+      expect(srcOf(element)).toBeNull();
+    });
+
+    it("asks for no URL again for the same blob given as another object", async () => {
+      const answer = Promise.resolve("http://host/space/blobs/abc");
+      const { calls, runtime } = runtimeAnswering(answer);
+      const element = new CFImage();
+      element.runtime = runtime;
+      const first = { space: SPACE, id: "fid1:abc" };
+      element.blob = first;
+      element.willUpdate(new Map([["blob", undefined]]));
+      await answer;
+
+      element.blob = { space: SPACE, id: "fid1:abc" };
+      element.willUpdate(new Map([["blob", first]]));
+
+      expect(calls).toHaveLength(1);
       expect(srcOf(element)).toBe("http://host/space/blobs/abc");
     });
 

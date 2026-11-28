@@ -7,13 +7,19 @@
 
 import { assert, assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
+import { commentOnlyFiles, diffCounts } from "../lib/view/diffcounts.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
+import {
+  languageForFile,
+  prepareLanguages,
+} from "../lib/view/languages/language.ts";
 import { parseDocument } from "../lib/view/languages/typescript/parse.ts";
 import type { Line } from "../lib/view/model.ts";
 import { overlayBox } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import { cellOf, drawnRows, gitBlobName, mouseKey } from "./view-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function press(s: Session, ...names: string[]): void {
   for (const name of names) {
@@ -135,7 +141,7 @@ const SHOW = [
   "",
 ].join("\n");
 
-Deno.test("jumplist: i lists the diff's files, dirs summarized", () => {
+test("jumplist: i lists the diff's files, dirs summarized", () => {
   const s = diffSession(TWO_FILES);
   press(s, "i");
   assertEquals(entryText(s), [
@@ -147,7 +153,7 @@ Deno.test("jumplist: i lists the diff's files, dirs summarized", () => {
   assertEquals(s.view().overlay?.selectedLine, 0);
 });
 
-Deno.test("jumplist: new and deleted files color their applicable counts", () => {
+test("jumplist: new and deleted files color their applicable counts", () => {
   const s = diffSession(
     [
       "diff --git a/new.ts b/new.ts",
@@ -186,7 +192,7 @@ Deno.test("jumplist: new and deleted files color their applicable counts", () =>
   });
 });
 
-Deno.test("jumplist: a git show lists the commit message before its files", () => {
+test("jumplist: a git show lists the commit message before its files", () => {
   const s = diffSession(SHOW);
   press(s, "i");
   assertEquals(entryText(s), [
@@ -196,7 +202,7 @@ Deno.test("jumplist: a git show lists the commit message before its files", () =
   ]);
 });
 
-Deno.test("jumplist: enter on a file jumps the viewport to its header line", () => {
+test("jumplist: enter on a file jumps the viewport to its header line", () => {
   // A short viewport, so the last file's header can reach the very top.
   const s = diffSession(SHOW, 6);
   press(s, "i");
@@ -208,7 +214,7 @@ Deno.test("jumplist: enter on a file jumps the viewport to its header line", () 
   assert(s.view().message.includes("src/app.test.ts"));
 });
 
-Deno.test("jumplist: enter on the commit entry jumps to the commit header", () => {
+test("jumplist: enter on the commit entry jumps to the commit header", () => {
   const s = diffSession(SHOW, 8);
   press(s, "G"); // scroll to the bottom, away from the commit
   assert(s.view().top > 0);
@@ -220,7 +226,7 @@ Deno.test("jumplist: enter on the commit entry jumps to the commit header", () =
   assert(s.view().message.includes("commit 012345678"));
 });
 
-Deno.test("jumplist: pagedown and pageup jump the selection to the ends", () => {
+test("jumplist: pagedown and pageup jump the selection to the ends", () => {
   const s = diffSession(LOG);
   press(s, "i");
   assertEquals(s.view().overlay?.selectedLine, 0);
@@ -230,7 +236,7 @@ Deno.test("jumplist: pagedown and pageup jump the selection to the ends", () => 
   assertEquals(s.view().overlay?.selectedLine, 0, "clamped to the first entry");
 });
 
-Deno.test("jumplist: the mouse wheel moves three entries", () => {
+test("jumplist: the mouse wheel moves three entries", () => {
   const s = diffSession(LOG);
   press(s, "i");
   assertEquals(s.view().overlay?.selectedLine, 0);
@@ -240,7 +246,7 @@ Deno.test("jumplist: the mouse wheel moves three entries", () => {
   assertEquals(s.view().overlay?.selectedLine, 0);
 });
 
-Deno.test("jumplist: pressing the mouse on an entry selects it", () => {
+test("jumplist: pressing the mouse on an entry selects it", () => {
   const s = diffSession(SHOW);
   press(s, "i");
   assertEquals(s.view().overlay?.selectedLine, 0);
@@ -253,7 +259,7 @@ Deno.test("jumplist: pressing the mouse on an entry selects it", () => {
   assertEquals(s.view().message, "Jumped to src/app.test.ts");
 });
 
-Deno.test("jumplist: pressing the mouse on an entry clears the message", () => {
+test("jumplist: pressing the mouse on an entry clears the message", () => {
   const s = diffSession(TWO_FILES);
   press(s, "i", "T");
   assert(s.view().message !== "", "T reports what it hid");
@@ -261,7 +267,7 @@ Deno.test("jumplist: pressing the mouse on an entry clears the message", () => {
   assertEquals(s.view().message, "");
 });
 
-Deno.test("jumplist: pressing the mouse off the entries keeps the selection", () => {
+test("jumplist: pressing the mouse off the entries keeps the selection", () => {
   const s = diffSession(SHOW);
   press(s, "i", "down");
   assertEquals(s.view().overlay?.selectedLine, 1);
@@ -284,7 +290,7 @@ Deno.test("jumplist: pressing the mouse off the entries keeps the selection", ()
   assertEquals(s.view().overlay?.selectedLine, 1, "a release selects nothing");
 });
 
-Deno.test("jumplist: pressing the mouse on a filtered entry selects it", () => {
+test("jumplist: pressing the mouse on a filtered entry selects it", () => {
   const s = diffSession(SHOW);
   press(s, "i", "/");
   type(s, "app");
@@ -292,7 +298,7 @@ Deno.test("jumplist: pressing the mouse on a filtered entry selects it", () => {
   assertEquals(s.view().overlay?.selectedLine, 1);
 });
 
-Deno.test("jumplist: space pages the selection down", () => {
+test("jumplist: space pages the selection down", () => {
   const s = diffSession(LOG);
   press(s, "i");
   assertEquals(s.view().overlay?.selectedLine, 0);
@@ -300,7 +306,7 @@ Deno.test("jumplist: space pages the selection down", () => {
   assertEquals(s.view().overlay?.selectedLine, 3, "clamped to the last entry");
 });
 
-Deno.test("jumplist: selecting the last entry reveals the summary", () => {
+test("jumplist: selecting the last entry reveals the summary", () => {
   const s = diffSession(CATEGORY_FILES, 12);
   press(s, "i", "pagedown");
   const overlay = s.view().overlay!;
@@ -312,7 +318,7 @@ Deno.test("jumplist: selecting the last entry reveals the summary", () => {
   ]);
 });
 
-Deno.test("jumplist: pressing the mouse on a scrolled entry selects it", () => {
+test("jumplist: pressing the mouse on a scrolled entry selects it", () => {
   const s = diffSession(CATEGORY_FILES, 12);
   press(s, "i", "pagedown");
   const overlay = s.view().overlay!;
@@ -322,7 +328,7 @@ Deno.test("jumplist: pressing the mouse on a scrolled entry selects it", () => {
   assertEquals(s.view().overlay?.selectedLine, 1);
 });
 
-Deno.test("jumplist: pressing the mouse on the last entry reveals the summary", () => {
+test("jumplist: pressing the mouse on the last entry reveals the summary", () => {
   const s = diffSession(CATEGORY_FILES, 12);
   press(s, "i");
   const overlay = s.view().overlay!;
@@ -333,7 +339,7 @@ Deno.test("jumplist: pressing the mouse on the last entry reveals the summary", 
   assertEquals(s.view().overlay?.scroll, 1);
 });
 
-Deno.test("jumplist: a one-row overlay can reveal the summary total", () => {
+test("jumplist: a one-row overlay can reveal the summary total", () => {
   const s = diffSession(TWO_FILES, 7);
   press(s, "i", "pagedown");
   const overlay = s.view().overlay!;
@@ -345,7 +351,7 @@ Deno.test("jumplist: a one-row overlay can reveal the summary total", () => {
   );
 });
 
-Deno.test("jumplist: tab jumps the same as enter", () => {
+test("jumplist: tab jumps the same as enter", () => {
   const s = diffSession(SHOW, 6);
   press(s, "i", "down"); // preselected commit -> src/app.ts
   press(s, "tab");
@@ -353,7 +359,7 @@ Deno.test("jumplist: tab jumps the same as enter", () => {
   assertEquals(s.view().message, "Jumped to src/app.ts");
 });
 
-Deno.test("jumplist: typing filters the list", () => {
+test("jumplist: typing filters the list", () => {
   const s = diffSession(SHOW);
   press(s, "i", "/");
   type(s, "test");
@@ -364,7 +370,7 @@ Deno.test("jumplist: typing filters the list", () => {
   assertEquals(entryText(s).length, 3);
 });
 
-Deno.test("jumplist: a filter matching the commit subject keeps the commit", () => {
+test("jumplist: a filter matching the commit subject keeps the commit", () => {
   const s = diffSession(SHOW);
   press(s, "i", "/");
   type(s, "widget");
@@ -373,7 +379,7 @@ Deno.test("jumplist: a filter matching the commit subject keeps the commit", () 
   ]);
 });
 
-Deno.test("jumplist: spaces are entered in a filter", () => {
+test("jumplist: spaces are entered in a filter", () => {
   const s = diffSession(SHOW);
   press(s, "i", "/");
   type(s, "widget");
@@ -385,14 +391,14 @@ Deno.test("jumplist: spaces are entered in a filter", () => {
   assertEquals(s.view().inputLine, "jump to: widget alignment");
 });
 
-Deno.test("jumplist: q is entered in a filter", () => {
+test("jumplist: q is entered in a filter", () => {
   const s = diffSession(SHOW);
   press(s, "i", "/", "q");
   assertEquals(s.view().inputLine, "jump to: q");
   assert(s.view().overlay !== null, "list remains open");
 });
 
-Deno.test("jumplist: enter with no match leaves the list open", () => {
+test("jumplist: enter with no match leaves the list open", () => {
   const s = diffSession(SHOW);
   press(s, "down", "down"); // scroll off the top so "unmoved" is meaningful
   const top = s.view().top;
@@ -405,7 +411,7 @@ Deno.test("jumplist: enter with no match leaves the list open", () => {
   assertEquals(s.view().top, top, "viewport unmoved");
 });
 
-Deno.test("jumplist: escape leaves filtering before it closes the list", () => {
+test("jumplist: escape leaves filtering before it closes the list", () => {
   const s = diffSession(SHOW);
   press(s, "i", "/");
   type(s, "test");
@@ -417,7 +423,7 @@ Deno.test("jumplist: escape leaves filtering before it closes the list", () => {
   assertEquals(s.view().overlay, null);
 });
 
-Deno.test("jumplist: file visibility keys remain active while browsing", () => {
+test("jumplist: file visibility keys remain active while browsing", () => {
   const s = diffSession(TWO_FILES);
   press(s, "i", "T");
   assert(entryText(s)[1].startsWith(" T ▸ src/app.test.ts"));
@@ -443,7 +449,7 @@ Deno.test("jumplist: file visibility keys remain active while browsing", () => {
   );
 });
 
-Deno.test("jumplist: C toggles comment-only files while browsing", () => {
+test("jumplist: C toggles comment-only files while browsing", () => {
   const s = diffSession(
     [
       "diff --git a/a.ts b/a.ts",
@@ -475,7 +481,7 @@ Deno.test("jumplist: C toggles comment-only files while browsing", () => {
   assert(!hidden(1), "C shows the comment-only file again");
 });
 
-Deno.test("jumplist: the summary reports all and shown file counts", () => {
+test("jumplist: the summary reports all and shown file counts", () => {
   const s = diffSession(TWO_FILES);
   press(s, "i");
   assertEquals(summaryText(s), [
@@ -489,7 +495,7 @@ Deno.test("jumplist: the summary reports all and shown file counts", () => {
   ]);
 });
 
-Deno.test("jumplist: D cycles the diff-count policy", () => {
+test("jumplist: D cycles the diff-count policy", () => {
   const s = diffSession(
     [
       "diff --git a/a.ts b/a.ts",
@@ -516,7 +522,7 @@ Deno.test("jumplist: D cycles the diff-count policy", () => {
   assertEquals(summaryText(s)[0], "Counts: normal");
 });
 
-Deno.test("jumplist: counts use syntax before the first hunk", () => {
+test("jumplist: counts use syntax before the first hunk", () => {
   const diff = [
     "diff --git a/main.rs b/main.rs",
     "--- a/main.rs",
@@ -539,7 +545,7 @@ Deno.test("jumplist: counts use syntax before the first hunk", () => {
   ]);
 });
 
-Deno.test("jumplist: complete count context rebuilds after an edit", () => {
+test("jumplist: complete count context rebuilds after an edit", () => {
   const diff = [
     "diff --git a/main.rs b/main.rs",
     "--- a/main.rs",
@@ -561,15 +567,103 @@ Deno.test("jumplist: complete count context rebuilds after an edit", () => {
   const source = diffSource(ws, edit);
 
   const initial = source.diffCountContexts?.(diff);
-  assert(initial !== undefined);
-  assert(source.diffCountContexts?.(diff) === initial);
+  assertEquals(initial?.[0].newLines?.()?.[2].text, " * new note");
   const edited = diff.replace("+ * new note", "+ * newer note");
   const context = source.diffCountContexts?.(edited);
-  assert(context !== undefined);
-  assertEquals(context[0].newLines?.[2].text, " * newer note");
+  assertEquals(context?.[0].newLines?.()?.[2].text, " * newer note");
 });
 
-Deno.test("jumplist: complete count context retains final-newline changes", () => {
+test("jumplist: counts read complete sides one file at a time", async () => {
+  const files = [
+    {
+      path: "lib.rs",
+      before: "/*\n * header\n * old note\n */\nfn main() {}\n",
+      removed: " * old note",
+      added: " * new note",
+    },
+    {
+      path: "run.sh",
+      before: "cat <<EOF\n# not a comment\nEOF\n# comment\n",
+      removed: "# not a comment",
+      added: "# changed text",
+    },
+    {
+      path: "notes.ts",
+      before: "run();\n// old\n",
+      removed: "// old",
+      added: "// new",
+    },
+    {
+      path: "code.ts",
+      before: "run();\nrun(1);\n",
+      removed: "run(1);",
+      added: "run(2);",
+    },
+  ];
+  await prepareLanguages(files.map(({ path }) => languageForFile(path)));
+  const diff = [
+    ...files.flatMap(({ path, before, removed, added }) => {
+      const lines = before.split("\n");
+      const at = lines.indexOf(removed) + 1;
+      return [
+        `diff --git a/${path} b/${path}`,
+        `index ${gitBlobName(before)}..${
+          gitBlobName(before.replace(removed, added))
+        } 100644`,
+        `--- a/${path}`,
+        `+++ b/${path}`,
+        `@@ -${at} +${at} @@`,
+        `-${removed}`,
+        `+${added}`,
+      ];
+    }),
+    "",
+  ].join("\n");
+  const ws: DiffWorkspace = {
+    resolve: () => null,
+    read: () => null,
+    readBlob: (object) =>
+      files.find(({ before }) => gitBlobName(before) === object)?.before ??
+        null,
+  };
+  const { doc, edit } = buildDiffDocument(diff, parseDiff(diff)!, ws);
+  const asked: number[] = [];
+  const source = diffSource(ws, {
+    ...edit,
+    oldFileLines: (fileIndex) => {
+      asked.push(fileIndex);
+      return edit.oldFileLines(fileIndex);
+    },
+  });
+
+  const contexts = source.diffCountContexts?.(diff);
+  assertEquals(asked, []);
+  const counts = diffCounts(diff, doc.lines, "comments", contexts);
+  assertEquals(counts.files, [
+    { adds: 0, dels: 0 },
+    { adds: 1, dels: 1 },
+    { adds: 0, dels: 0 },
+    { adds: 1, dels: 1 },
+  ]);
+  // Only Rust and shell files are scanned across the lines between hunks,
+  // and each is read before the next.
+  assertEquals(asked, [...asked].sort((a, b) => a - b));
+  assertEquals([...new Set(asked)], [0, 1]);
+  asked.length = 0;
+  assertEquals(commentOnlyFiles(diff, contexts ?? []), [
+    true,
+    false,
+    true,
+    false,
+  ]);
+  assertEquals(asked, [...asked].sort((a, b) => a - b));
+  assertEquals([...new Set(asked)], [0, 1, 2, 3]);
+  asked.length = 0;
+  diffCounts(diff, doc.lines, "normal", contexts);
+  assertEquals(asked, []);
+});
+
+test("jumplist: complete count context retains final-newline changes", () => {
   const source = (diff: string, fileText: string) => {
     const ws: DiffWorkspace = {
       resolve: (path) => path === "main.rs" ? path : null,
@@ -629,23 +723,25 @@ Deno.test("jumplist: complete count context retains final-newline changes", () =
   ].join("\n");
 
   assertEquals(
-    contexts(addsNewline, "new\n")?.newLines?.map((line) => line.text),
+    contexts(addsNewline, "new\n")?.newLines?.()?.map((line) => line.text),
     ["new", ""],
   );
   assertEquals(
-    contexts(removesNewline, "new")?.newLines?.map((line) => line.text),
+    contexts(removesNewline, "new")?.newLines?.()?.map((line) => line.text),
     ["new"],
   );
   assertEquals(
-    contexts(createsWithNewline, "value\n")?.newLines?.map((line) => line.text),
+    contexts(createsWithNewline, "value\n")?.newLines?.()?.map((line) =>
+      line.text
+    ),
     ["value", ""],
   );
   assertEquals(
-    contexts(deletesToEmpty, "")?.newLines?.map((line) => line.text),
+    contexts(deletesToEmpty, "")?.newLines?.()?.map((line) => line.text),
     [""],
   );
   assertEquals(
-    contexts(crlfChange, "new\r\n")?.newLines?.map((line) => line.text),
+    contexts(crlfChange, "new\r\n")?.newLines?.()?.map((line) => line.text),
     ["new", ""],
   );
   assertEquals(
@@ -654,7 +750,7 @@ Deno.test("jumplist: complete count context retains final-newline changes", () =
   );
 });
 
-Deno.test("jumplist: escape cancels and leaves the viewport put", () => {
+test("jumplist: escape cancels and leaves the viewport put", () => {
   const s = diffSession(SHOW);
   press(s, "down"); // move the viewport off line 0
   const top = s.view().top;
@@ -665,7 +761,7 @@ Deno.test("jumplist: escape cancels and leaves the viewport put", () => {
   assertEquals(s.view().top, top, "the view did not move");
 });
 
-Deno.test("jumplist: q cancels and leaves the viewport put", () => {
+test("jumplist: q cancels and leaves the viewport put", () => {
   const s = diffSession(SHOW);
   press(s, "down");
   const top = s.view().top;
@@ -675,7 +771,7 @@ Deno.test("jumplist: q cancels and leaves the viewport put", () => {
   assertEquals(s.view().top, top, "the view did not move");
 });
 
-Deno.test("jumplist: opening preselects the file the viewport is on", () => {
+test("jumplist: opening preselects the file the viewport is on", () => {
   const s = diffSession(SHOW, 6);
   // Put app.test.ts's header (line 14) at the top of the viewport.
   press(s, "i", "down", "down", "enter");
@@ -719,7 +815,7 @@ const LOG = [
   "",
 ].join("\n");
 
-Deno.test("jumplist: git log -p interleaves each commit with its own files", () => {
+test("jumplist: git log -p interleaves each commit with its own files", () => {
   const s = diffSession(LOG);
   press(s, "i");
   assertEquals(entryText(s), [
@@ -730,7 +826,7 @@ Deno.test("jumplist: git log -p interleaves each commit with its own files", () 
   ]);
 });
 
-Deno.test("jumplist: files stay listed and jumpable while collapsed", () => {
+test("jumplist: files stay listed and jumpable while collapsed", () => {
   const s = diffSession(SHOW, 6);
   press(s, "F"); // collapse every file to a summary line
   press(s, "i");
@@ -768,7 +864,7 @@ const CATEGORY_FILES = [
   "+new",
 ]).concat("").join("\n");
 
-Deno.test("jumplist: file rows use an aligned category-toggle column", () => {
+test("jumplist: file rows use an aligned category-toggle column", () => {
   const s = diffSession(CATEGORY_FILES);
   press(s, "i");
   assertEquals(entryText(s), [
@@ -779,7 +875,7 @@ Deno.test("jumplist: file rows use an aligned category-toggle column", () => {
   ]);
 });
 
-Deno.test("jumplist: only currently collapsed file rows are muted", () => {
+test("jumplist: only currently collapsed file rows are muted", () => {
   const s = diffSession(CATEGORY_FILES);
   press(s, "i", "M");
   const lines = entryLines(s);
@@ -793,7 +889,7 @@ Deno.test("jumplist: only currently collapsed file rows are muted", () => {
   }
 });
 
-Deno.test("jumplist: i on a non-diff view says it is diff-only", () => {
+test("jumplist: i on a non-diff view says it is diff-only", () => {
   const doc = parseDocument("const a = 1;\n", "a.ts");
   const s = new Session(
     doc,
@@ -824,7 +920,7 @@ const EMAIL = [
   "",
 ].join("\n");
 
-Deno.test("jumplist: an email patch shows and filters by its Subject", () => {
+test("jumplist: an email patch shows and filters by its Subject", () => {
   const s = diffSession(EMAIL);
   press(s, "i");
   assertEquals(entryText(s), [
@@ -839,7 +935,7 @@ Deno.test("jumplist: an email patch shows and filters by its Subject", () => {
   ]);
 });
 
-Deno.test("jumplist: a plain diff with no commit lists only files", () => {
+test("jumplist: a plain diff with no commit lists only files", () => {
   const s = diffSession(TWO_FILES);
   press(s, "i");
   assert(
@@ -887,7 +983,7 @@ const MIXED_CHANGES = [
   "",
 ].join("\n");
 
-Deno.test("jumplist: S orders commit files by net, then total change", () => {
+test("jumplist: S orders commit files by net, then total change", () => {
   const s = diffSession(MIXED_CHANGES, 30);
   press(s, "i");
   const diffOrder = entryText(s);
@@ -925,7 +1021,7 @@ Deno.test("jumplist: S orders commit files by net, then total change", () => {
   assertEquals(summaryText(s)[0], "Counts: normal");
 });
 
-Deno.test("jumplist: S orders the files of a diff with no commit", () => {
+test("jumplist: S orders the files of a diff with no commit", () => {
   const s = diffSession(
     [...fileDiff("a.ts", 1, 3), ...fileDiff("b.ts", 3, 1), ""].join("\n"),
   );
@@ -933,7 +1029,7 @@ Deno.test("jumplist: S orders the files of a diff with no commit", () => {
   assertEquals(entryText(s), ["   ▸ b.ts  +3 −1", "   ▸ a.ts  +1 −3"]);
 });
 
-Deno.test("jumplist: S orders files by the selected count policy", () => {
+test("jumplist: S orders files by the selected count policy", () => {
   // Normally both files are +3 −1 and keep their diff order. Ignoring the
   // whitespace-only pair leaves spaced.ts at +2 −0, fewer changed lines in
   // total than real.ts, so it moves below it.
@@ -964,7 +1060,7 @@ Deno.test("jumplist: S orders files by the selected count policy", () => {
   assertEquals(s.view().overlay?.selectedLine, 1, "spaced.ts stays selected");
 });
 
-Deno.test("jumplist: reordering keeps the highlighted file selected", () => {
+test("jumplist: reordering keeps the highlighted file selected", () => {
   const s = diffSession(MIXED_CHANGES, 30);
   press(s, "i", "down"); // the commit row -> shrinks.ts
   press(s, "S");
@@ -975,7 +1071,7 @@ Deno.test("jumplist: reordering keeps the highlighted file selected", () => {
   assertEquals(s.view().message, "Jumped to commit 111111111");
 });
 
-Deno.test("jumplist: a sorted list opens on the viewport's file", () => {
+test("jumplist: a sorted list opens on the viewport's file", () => {
   const s = diffSession(MIXED_CHANGES, 8);
   press(s, "i", "S", "down", "down", "enter"); // commit -> grows-more -> grows
   assertEquals(s.view().message, "Jumped to grows.ts");

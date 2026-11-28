@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   authorOf,
@@ -8,6 +7,7 @@ import {
   threadRoots,
   writerCount,
 } from "./fabrichat-room-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("fabrichat-room-fixture", () => {
   // The rooms these describe are built by the four-hourly benchmark workflow,

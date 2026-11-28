@@ -1,4 +1,5 @@
 import { Identity } from "@commonfabric/identity";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import {
   afterEach,
   beforeEach,

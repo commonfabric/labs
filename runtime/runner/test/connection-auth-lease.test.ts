@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -7,6 +6,7 @@ import {
   readRoutedStatement,
   ROUTED_CHALLENGE_SECONDS,
 } from "@commonfabric/memory/v2/routed-wire";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   CONNECTION_AUTH_LEASE_SECONDS,
   createSignedConnectionAuth,

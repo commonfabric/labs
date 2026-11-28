@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { gitUncommitted, mine } from "../commands/pattern.ts";
 import type { IndexDeps } from "../commands/pattern-index.ts";
 import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
@@ -151,9 +156,9 @@ describe("pattern", () => {
       expect(rendered).toEqual([{
         value: [
           "about id-mine  id-mine",
-          `  unlisted: run cf pattern share ${
+          `  not shared: run cf pattern share ${
             join(dir, "bins.tsx")
-          } to request a listing`,
+          } to share it on beta, by link`,
         ].join("\n"),
         json: undefined,
       }]);

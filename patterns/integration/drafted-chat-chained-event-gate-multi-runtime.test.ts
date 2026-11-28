@@ -25,11 +25,11 @@
  * honest gates that close it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
 import { experimentalOptionsFromEnv } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   MultiRuntimeHarness,
   type MultiRuntimeSession,

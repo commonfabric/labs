@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CellScope } from "@commonfabric/api";
 import {
@@ -16,6 +15,7 @@ import type {
   SpaceAclView,
 } from "@commonfabric/runtime-client";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   CFPieceMenu,
   closePieceMenuFor,

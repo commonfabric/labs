@@ -2,10 +2,10 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { createMockCellHandle } from "../../test-utils/mock-cell-handle.ts";
 import { type AuthData, CFGoogleOAuth } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A mounted component whose auth cell holds `auth`. */
 function googleOAuth(auth: AuthData): Promise<CFGoogleOAuth> {

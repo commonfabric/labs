@@ -40,6 +40,10 @@ const C = {
   delBg: hex("#331c22"),
   // The green button face.
   button: hex("#4b9e5f"),
+  // A security key's metal plug and its contacts, and its green light.
+  metal: hex("#9ba5b3"),
+  contacts: hex("#4a5462"),
+  lightOn: hex("#59ff84"),
 } as const;
 
 /** The palette, for a view outside this package drawn to match this one. */
@@ -165,6 +169,9 @@ export const ui = {
 
   statusDim: { fg: C.fgDim, bg: C.panel } as Style,
 
+  /** The spinner and filled part of the status bar's highlighting progress. */
+  statusBusy: { fg: C.cyan, bg: C.panel, bold: true } as Style,
+
   /** The notice region above the status bar (e.g. the files a save would
    * write), tinted to read as a callout rather than ordinary content. */
   noticeBar: { fg: C.ink, bg: C.cyan } as Style,
@@ -214,6 +221,21 @@ export const ui = {
   /** The mark of a step in the task dialog that ended without being done. */
   dialogFailed: { fg: C.red, bold: true } as Style,
 
+  /** The metal plug of the security key beside the task dialog. */
+  keyPlug: { fg: C.white, bg: C.metal } as Style,
+
+  /** The contacts inside the security key's plug. */
+  keyContacts: { fg: C.contacts, bg: C.metal } as Style,
+
+  /** The color of the security key's touch pad. */
+  keyPad: { fg: C.yellow } as Style,
+
+  /** The security key's light while it blinks on, waiting for a touch. */
+  keyLightOn: { fg: C.lightOn } as Style,
+
+  /** The security key's light once it has been touched. */
+  keyLightTouched: { fg: C.blue } as Style,
+
   /** A Turbo Vision push-button: dark text on a green face. */
   button: { fg: C.ink, bg: C.button } as Style,
 
@@ -244,6 +266,12 @@ export const ui = {
   /** The arrows at the ends of an input line that say its text runs on past
    * them. */
   inputArrow: { fg: C.green, bg: C.editorBg, bold: true } as Style,
+
+  /** The track of a slider, a well like an input line's. */
+  sliderTrack: { fg: C.fgDim, bg: C.editorBg } as Style,
+
+  /** The thumb on a slider's track, at the stop its value is at. */
+  sliderThumb: { fg: C.cyan, bg: C.editorBg, bold: true } as Style,
 
   scrollbarTrack: { fg: C.fgDim } as Style,
   scrollbarThumb: { fg: C.cyan } as Style,

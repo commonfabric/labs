@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { getLogger } from "@commonfabric/logger";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { Cell } from "../src/cell.ts";
 import type { Runtime } from "../src/runtime.ts";
 import type { JSONSchema } from "../src/builder/types.ts";

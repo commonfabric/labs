@@ -1,11 +1,12 @@
-// Flat `Deno.test` cases: this package's tests also run in a browser through
-// `deno-web-test`, which does not support `@std/testing/bdd`.
+// Flat `test()` cases: this package's tests also run in a browser through
+// `deno-web-test`, where `describe()` is not available.
 
 import { expect } from "@std/expect";
 
 import { StaticCache } from "../cache.ts";
 import { generateETag } from "../etag.ts";
 import { TEST_ASSET } from "../utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const BASE = "https://assets.example/static";
 
@@ -31,7 +32,7 @@ async function withFetch(
   return requested;
 }
 
-Deno.test("StaticCache fetches an asset from a base that is not a file, once", async () => {
+test("StaticCache fetches an asset from a base that is not a file, once", async () => {
   const cache = new StaticCache(new URL(BASE));
 
   const requested = await withFetch(
@@ -51,7 +52,7 @@ Deno.test("StaticCache fetches an asset from a base that is not a file, once", a
   expect(requested).toEqual([`${BASE}/${TEST_ASSET}`]);
 });
 
-Deno.test("StaticCache rejects naming the asset and its location when the fetch fails", async () => {
+test("StaticCache rejects naming the asset and its location when the fetch fails", async () => {
   const cache = new StaticCache(new URL(BASE));
 
   await withFetch(
@@ -64,7 +65,71 @@ Deno.test("StaticCache rejects naming the asset and its location when the fetch 
   );
 });
 
-Deno.test("StaticCache throws for an asset the package does not ship, fetching nothing", async () => {
+test("StaticCache keeps no entry for a name the package does not ship, and keeps one for an asset it does", async () => {
+  const cache = new StaticCache(new URL(BASE));
+  const names = Array.from({ length: 50 }, (_, i) => `types/missing-${i}.d.ts`);
+
+  const requested = await withFetch(
+    () => new Response("asset bytes"),
+    async () => {
+      for (const name of names) {
+        await expect(cache.getWithETag(name)).rejects.toThrow(
+          `No static asset "${name}" found.`,
+        );
+      }
+      expect(cache.accessForTestingOnly.cache.size).toBe(0);
+
+      const asset = await cache.getWithETag(TEST_ASSET);
+      expect([...cache.accessForTestingOnly.cache.keys()]).toEqual([
+        TEST_ASSET,
+      ]);
+      expect(await cache.getWithETag(TEST_ASSET)).toBe(asset);
+    },
+  );
+
+  expect(requested).toEqual([`${BASE}/${TEST_ASSET}`]);
+});
+
+test("StaticCache fetches an asset again after a fetch for it fails, and keeps the one that succeeds", async () => {
+  const cache = new StaticCache(new URL(BASE));
+  const responses = [
+    new Response("missing", { status: 404 }),
+    new Response("asset bytes"),
+  ];
+
+  const requested = await withFetch(
+    () => responses.shift()!,
+    async () => {
+      // Two calls made while the failing fetch is pending share it.
+      const first = cache.getWithETag(TEST_ASSET);
+      const second = cache.getWithETag(TEST_ASSET);
+      expect(second).toBe(first);
+      await expect(first).rejects.toThrow(
+        `Could not retrieve "${TEST_ASSET}"`,
+      );
+      expect(cache.accessForTestingOnly.cache.size).toBe(0);
+
+      const asset = await cache.getWithETag(TEST_ASSET);
+      expect(await asset.blob.text()).toBe("asset bytes");
+      expect(await cache.getWithETag(TEST_ASSET)).toBe(asset);
+    },
+  );
+
+  expect(requested).toEqual([
+    `${BASE}/${TEST_ASSET}`,
+    `${BASE}/${TEST_ASSET}`,
+  ]);
+});
+
+test("StaticCache has() returns whether the package ships the named asset", () => {
+  const cache = new StaticCache(new URL(BASE));
+
+  expect(cache.has(TEST_ASSET)).toBe(true);
+  expect(cache.has("types/missing.d.ts")).toBe(false);
+  expect(cache.has(`../${TEST_ASSET}`)).toBe(false);
+});
+
+test("StaticCache throws for an asset the package does not ship, fetching nothing", async () => {
   const cache = new StaticCache(new URL(BASE));
 
   const requested = await withFetch(

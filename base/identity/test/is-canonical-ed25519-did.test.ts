@@ -8,8 +8,9 @@ import {
   hasEd25519DIDShape,
   isCanonicalEd25519DID,
 } from "../src/ed25519/utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("isCanonicalEd25519DID reuses canonicality checks within a bounded cache and revalidates evicted keys", () => {
+test("isCanonicalEd25519DID reuses canonicality checks within a bounded cache and revalidates evicted keys", () => {
   const did = bytesToDid(ed25519.Point.BASE.multiply(100_000n).toBytes());
   const decode = spy(ed25519.Point, "fromBytes");
   try {
@@ -33,7 +34,7 @@ Deno.test("isCanonicalEd25519DID reuses canonicality checks within a bounded cac
   }
 });
 
-Deno.test("isCanonicalEd25519DID rejects malformed and small-order encodings on repeated checks", () => {
+test("isCanonicalEd25519DID rejects malformed and small-order encodings on repeated checks", () => {
   const valid = bytesToDid(ed25519.Point.BASE.toBytes());
   expect(isCanonicalEd25519DID(valid)).toBe(true);
   const identity = new Uint8Array(32);
@@ -61,7 +62,7 @@ Deno.test("isCanonicalEd25519DID rejects malformed and small-order encodings on 
   }
 });
 
-Deno.test("hasEd25519DIDShape accepts an Ed25519 did:key's shape without decoding its point", () => {
+test("hasEd25519DIDShape accepts an Ed25519 did:key's shape without decoding its point", () => {
   const did = bytesToDid(ed25519.Point.BASE.toBytes());
   const decode = spy(ed25519.Point, "fromBytes");
   try {

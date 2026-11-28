@@ -18,6 +18,7 @@ import {
   treePreOrderPrev,
   treePrevSibling,
 } from "../lib/view/actions.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Minimal structure node with just the depth the navigation helpers read. */
 function node(depth: number, label = ""): StructureNode {
@@ -35,7 +36,7 @@ function node(depth: number, label = ""): StructureNode {
   };
 }
 
-Deno.test("clamp / maxTop", () => {
+test("clamp / maxTop", () => {
   assertEquals(clamp(5, 0, 3), 3);
   assertEquals(clamp(-1, 0, 3), 0);
   assertEquals(clamp(2, 0, 3), 2);
@@ -44,7 +45,7 @@ Deno.test("clamp / maxTop", () => {
   assertEquals(maxTop(5, 24), 0);
 });
 
-Deno.test("maxPagerTop leaves the bottom three quarters below the last line", () => {
+test("maxPagerTop leaves the bottom three quarters below the last line", () => {
   // Height 21 has 20 content rows. The last line occupies the fifth row, with
   // 15 rows below it.
   assertEquals(maxPagerTop(100, 21), 95);
@@ -52,7 +53,7 @@ Deno.test("maxPagerTop leaves the bottom three quarters below the last line", ()
   assertEquals(maxPagerTop(100, 2), 99, "one content row still shows text");
 });
 
-Deno.test("findMatches: smartcase", () => {
+test("findMatches: smartcase", () => {
   const doc = parseDocument(SAMPLE);
   // lower-case query is case-insensitive
   const lower = findMatches(doc, "token");
@@ -67,7 +68,7 @@ Deno.test("findMatches: smartcase", () => {
   for (const m of lower) assertEquals(m.end - m.start, 5);
 });
 
-Deno.test("findMatches: empty query returns nothing", () => {
+test("findMatches: empty query returns nothing", () => {
   const doc = parseDocument(SAMPLE);
   assertEquals(findMatches(doc, "").length, 0);
 });
@@ -84,7 +85,7 @@ function linesDoc(...texts: string[]): Document {
   };
 }
 
-Deno.test("findMatches: case-insensitive columns are in the original string", () => {
+test("findMatches: case-insensitive columns are in the original string", () => {
   // `İ` (U+0130) lowercases to two code units (`i` + combining dot above), so a
   // match after it must not be shifted by the extra folded unit. `foo` starts
   // at original code-point column 3 regardless of the fold length change.
@@ -109,7 +110,7 @@ Deno.test("findMatches: case-insensitive columns are in the original string", ()
   );
 });
 
-Deno.test("nextMatchIndex: forward, backward and wrap", () => {
+test("nextMatchIndex: forward, backward and wrap", () => {
   const matches = [
     { line: 2, start: 4, end: 8 },
     { line: 5, start: 0, end: 4 },
@@ -143,7 +144,7 @@ function navTree() {
   ];
 }
 
-Deno.test("tree navigation: a parent, d first child", () => {
+test("tree navigation: a parent, d first child", () => {
   const flat = navTree();
   assertEquals(treeParent(flat, 3), 2, "A1a -> A1");
   assertEquals(treeParent(flat, 2), 1, "A1 -> A");
@@ -156,7 +157,7 @@ Deno.test("tree navigation: a parent, d first child", () => {
   assertEquals(treeChild(flat, 5), 5, "A2 is a leaf");
 });
 
-Deno.test("tree navigation: w/s siblings, with s exiting and w going to parent", () => {
+test("tree navigation: w/s siblings, with s exiting and w going to parent", () => {
   const flat = navTree();
   // plain siblings
   assertEquals(treeNextSibling(flat, 3), 4, "A1a -> A1b");
@@ -177,7 +178,7 @@ Deno.test("tree navigation: w/s siblings, with s exiting and w going to parent",
   assertEquals(treePrevSibling(flat, 0), 0, "Z is the very first node");
 });
 
-Deno.test("tree navigation: Tab/Shift-Tab are depth-first (pre-order)", () => {
+test("tree navigation: Tab/Shift-Tab are depth-first (pre-order)", () => {
   const flat = navTree();
   assertEquals(treePreOrderNext(flat, 1), 2, "A -> A1 (descends)");
   assertEquals(treePreOrderNext(flat, 4), 5, "A1b -> A2");
@@ -186,7 +187,7 @@ Deno.test("tree navigation: Tab/Shift-Tab are depth-first (pre-order)", () => {
   assertEquals(treePreOrderPrev(flat, 0), 0, "clamps at the start");
 });
 
-Deno.test("tree navigation: child's parent round-trips on the fixture", () => {
+test("tree navigation: child's parent round-trips on the fixture", () => {
   const doc = parseDocument(SAMPLE);
   const flat = doc.flatStructure;
   assert(flat.length > 3);
@@ -199,7 +200,7 @@ Deno.test("tree navigation: child's parent round-trips on the fixture", () => {
   }
 });
 
-Deno.test("nodeAtLine finds the innermost containing node", () => {
+test("nodeAtLine finds the innermost containing node", () => {
   const doc = parseDocument(SAMPLE);
   const liftIdx = doc.flatStructure.findIndex((n) =>
     n.label.startsWith("lift __cfLift_1")
@@ -217,7 +218,7 @@ Deno.test("nodeAtLine finds the innermost containing node", () => {
   );
 });
 
-Deno.test("frameTop: centers a node that fits on screen", () => {
+test("frameTop: centers a node that fits on screen", () => {
   // node lines 20–29 (height 10), height 40 -> contentRows 39 (fits)
   // centered: top = 20 - floor((39 - 10) / 2) = 20 - 14 = 6
   const top = frameTop(20, 29, 40, 1000);
@@ -230,28 +231,28 @@ Deno.test("frameTop: centers a node that fits on screen", () => {
   assert(Math.abs(above - below) <= 1, "node roughly centered");
 });
 
-Deno.test("frameTop: puts a too-tall node's top line ~1/10 down", () => {
+test("frameTop: puts a too-tall node's top line ~1/10 down", () => {
   // node lines 100–200 (height 101) > contentRows 39 -> top = 100 - floor(39/10)
   const top = frameTop(100, 200, 40, 1000);
   assertEquals(top, 100 - 3);
   assert(top < 100, "node start is below the top of the screen");
 });
 
-Deno.test("frameTop: respects document bounds", () => {
+test("frameTop: respects document bounds", () => {
   assertEquals(frameTop(0, 2, 40, 1000), 0, "cannot scroll above the start");
   const t = frameTop(999, 999, 40, 1000);
   assertEquals(t, 980, "the padded end lets the final line be centered");
   assert(t <= maxPagerTop(1000, 40));
 });
 
-Deno.test("scrollToAnchor: no scroll when the anchor is already visible", () => {
+test("scrollToAnchor: no scroll when the anchor is already visible", () => {
   // height 12 -> contentRows 11 -> visible window [top, top+10]
   assertEquals(scrollToAnchor(15, 10, 12, 1000), 10); // mid-screen
   assertEquals(scrollToAnchor(10, 10, 12, 1000), 10); // top edge
   assertEquals(scrollToAnchor(20, 10, 12, 1000), 10); // bottom edge
 });
 
-Deno.test("scrollToAnchor: minimal scroll when the anchor is off screen", () => {
+test("scrollToAnchor: minimal scroll when the anchor is off screen", () => {
   // anchor above the viewport -> scroll up, anchor becomes visible
   const up = scrollToAnchor(5, 30, 12, 1000);
   assert(up < 30, "scrolled up");
@@ -262,7 +263,7 @@ Deno.test("scrollToAnchor: minimal scroll when the anchor is off screen", () => 
   assert(60 >= down && 60 <= down + 10, "anchor now visible");
 });
 
-Deno.test("scrollToAnchor: respects document bounds", () => {
+test("scrollToAnchor: respects document bounds", () => {
   assertEquals(scrollToAnchor(0, 50, 12, 1000), 0); // can't scroll past the top
   // The padded end leaves room for the normal lower margin around the anchor.
   const t = scrollToAnchor(999, 0, 12, 1000);
@@ -271,7 +272,7 @@ Deno.test("scrollToAnchor: respects document bounds", () => {
   assert(999 >= t && 999 <= t + 10, "last-line anchor visible");
 });
 
-Deno.test("nodeForViewport: prefers the first node whose anchor is on screen", () => {
+test("nodeForViewport: prefers the first node whose anchor is on screen", () => {
   const doc = parseDocument(SAMPLE);
   // From the top with a tall viewport, the very first node is chosen.
   const idx0 = nodeForViewport(doc.flatStructure, 0, 50);

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -21,6 +20,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROOM = "room-0123456789abcdefghijklmnop";
 

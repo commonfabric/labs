@@ -54,21 +54,27 @@ export function normalizeLLMResponse(data: unknown, id: string): LLMResponse {
 
 /**
  * The LLM endpoint a process starts with: the one on the host that served the
- * page at `location`, else the one on the API at `apiUrl`, else a path on
- * whatever host the request is made against. An `apiUrl` that is not a URL is
- * passed over the way a missing one is.
+ * page at `location`, else the one on the API at `apiUrl`, else none. An
+ * `apiUrl` that is not a URL is passed over the way a missing one is. A
+ * process with none can be given one by `setLLMUrl()`; a call can also name
+ * its own, as a runtime's builtins do for the deployment its host named.
  */
 export function initialLLMUrl(
   location: Pick<Location, "protocol" | "host"> | undefined,
   apiUrl: string | undefined,
-): string {
-  if (location) {
+): string | undefined {
+  // A Deno worker also has a location, but it is its module's file: URL, and
+  // a POST there fails, so only an http(s) location names the toolshed.
+  if (
+    location &&
+    (location.protocol === "http:" || location.protocol === "https:")
+  ) {
     return location.protocol + "//" + location.host + "/api/ai/llm";
   }
   if (apiUrl && URL.canParse(apiUrl)) {
     return new URL("/api/ai/llm", apiUrl).toString();
   }
-  return "//api/ai/llm";
+  return undefined;
 }
 
 /** The environment variable `name`, where there is one to read. */
@@ -86,6 +92,30 @@ let llmApiUrl = initialLLMUrl(globalThis.location, readEnv("API_URL"));
 export const setLLMUrl = (toolshedUrl: string) => {
   llmApiUrl = new URL("/api/ai/llm", toolshedUrl).toString();
 };
+
+/**
+ * The endpoint LLM calls without a per-space endpoint are sent to, or
+ * `undefined` while this process has none.
+ */
+export const getLLMUrl = (): string | undefined => llmApiUrl;
+
+/**
+ * The endpoint a call is sent to: its own, else the process's. A call with
+ * neither is refused before anything is sent, naming what would have set one,
+ * rather than sent to a URL no fetch can resolve.
+ */
+function endpointFor(endpoint: string | URL | undefined): string {
+  const url = endpoint?.toString() ?? llmApiUrl;
+  if (url === undefined) {
+    throw new Error(
+      "LLMClient: this call names no endpoint and this process has no LLM " +
+        "endpoint. A runtime built from a deployment-facing preset names " +
+        "its own; otherwise one comes from `setLLMUrl()`, the `API_URL` " +
+        "environment variable, or the http(s) page the process runs in.",
+    );
+  }
+  return url;
+}
 
 //
 // Mock Mode for Testing
@@ -565,7 +595,8 @@ export class LLMClient {
     // `{}` here, silently. The payload wants the same transport-safety
     // check the schema gets.
     const response = await this.#post(
-      (opts?.endpoint?.toString() ?? llmApiUrl) + "/generateObject",
+      opts?.endpoint,
+      "/generateObject",
       request,
       abortSignal,
       "generateObject",
@@ -620,7 +651,8 @@ export class LLMClient {
     // `messages`/`system` data is not, and a `FabricValue` in it stringifies
     // to `{}` here, silently.
     const response = await this.#post(
-      opts?.endpoint?.toString() ?? llmApiUrl,
+      opts?.endpoint,
+      "",
       request,
       abortSignal,
       "generateText",
@@ -630,12 +662,14 @@ export class LLMClient {
   }
 
   /**
-   * POSTs `request` as JSON to `url`, and returns the response once it has
+   * POSTs `request` as JSON to `path` under `endpoint` (the process's endpoint
+   * where the call names none), and returns the response once it has
    * succeeded. A failed response is logged under `label`, with a hint naming
    * `parameters` where the request is to blame, and thrown.
    */
   async #post(
-    url: string,
+    endpoint: string | URL | undefined,
+    path: string,
     request: LLMRequest | LLMGenerateObjectRequest,
     abortSignal: AbortSignal | undefined,
     label: string,
@@ -646,7 +680,7 @@ export class LLMClient {
     if (_isTestEnvironment && send === globalThis.fetch) {
       throw new Error(TEST_GUARD_MESSAGE);
     }
-    const response = await send(url, {
+    const response = await send(endpointFor(endpoint) + path, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(request),

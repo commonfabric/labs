@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -6,6 +5,7 @@ import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import type { Cell } from "../src/cell.ts";

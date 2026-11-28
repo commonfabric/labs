@@ -189,6 +189,7 @@ export const localJobSpecOf = async (
       ? { imageAttachments: runRequest.imageAttachments }
       : {}),
     taskRole: profile.taskRole,
+    ...(profile.taskDelivery ? { taskDelivery: profile.taskDelivery } : {}),
     resultSchema: request.resultSchema as HarnessJobSpec["resultSchema"],
     tools: [
       ...new Set([
@@ -218,6 +219,9 @@ export const localJobSpecOf = async (
       : {}),
     instructions: framing.length > 0 ? framing.join("\n\n") : undefined,
     model: profile.model ?? options.model,
+    ...(profile.modelProvider !== undefined
+      ? { modelProvider: profile.modelProvider }
+      : {}),
     loomRetrievalConfigPath: profile.loomRetrievalConfig ??
       options.loomRetrievalConfigPath,
     ...(profile.commands !== undefined

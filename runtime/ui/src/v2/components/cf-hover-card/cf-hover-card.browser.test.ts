@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { CFHoverCard } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The card's box, as the browser laid it out. */
 function cardRect(element: CFHoverCard): DOMRect {
@@ -37,7 +38,7 @@ async function mount(top: number): Promise<{
   return { element, button: element.querySelector("button")! };
 }
 
-Deno.test("cf-hover-card starts with its card hidden", async () => {
+test("cf-hover-card starts with its card hidden", async () => {
   const { element } = await mount(200);
   try {
     expect(element.open).toBe(false);
@@ -46,7 +47,7 @@ Deno.test("cf-hover-card starts with its card hidden", async () => {
   }
 });
 
-Deno.test("cf-hover-card shows its card while the pointer is on it", async () => {
+test("cf-hover-card shows its card while the pointer is on it", async () => {
   const { element } = await mount(200);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
@@ -59,7 +60,7 @@ Deno.test("cf-hover-card shows its card while the pointer is on it", async () =>
   }
 });
 
-Deno.test("cf-hover-card shows its card while focus is inside it", async () => {
+test("cf-hover-card shows its card while focus is inside it", async () => {
   const { element, button } = await mount(200);
   try {
     button.focus();
@@ -73,7 +74,7 @@ Deno.test("cf-hover-card shows its card while focus is inside it", async () => {
   }
 });
 
-Deno.test("cf-hover-card keeps its card while focus stays after the pointer leaves", async () => {
+test("cf-hover-card keeps its card while focus stays after the pointer leaves", async () => {
   const { element, button } = await mount(200);
   try {
     button.focus();
@@ -85,7 +86,7 @@ Deno.test("cf-hover-card keeps its card while focus stays after the pointer leav
   }
 });
 
-Deno.test("cf-hover-card places its card above its content when there is room", async () => {
+test("cf-hover-card places its card above its content when there is room", async () => {
   const { element } = await mount(200);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
@@ -99,7 +100,7 @@ Deno.test("cf-hover-card places its card above its content when there is room", 
   }
 });
 
-Deno.test("cf-hover-card places its card below its content at the top of the window", async () => {
+test("cf-hover-card places its card below its content at the top of the window", async () => {
   const { element } = await mount(0);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
@@ -112,7 +113,7 @@ Deno.test("cf-hover-card places its card below its content at the top of the win
   }
 });
 
-Deno.test("cf-hover-card keeps its card above its content as its container scrolls", async () => {
+test("cf-hover-card keeps its card above its content as its container scrolls", async () => {
   // A page scrolls inside a container of its own, which moves the content and
   // leaves a card the top layer holds where it was placed.
   const scroller = document.createElement("div");
@@ -155,7 +156,7 @@ Deno.test("cf-hover-card keeps its card above its content as its container scrol
   }
 });
 
-Deno.test("cf-hover-card shows its card when focus reaches content below the fold", async () => {
+test("cf-hover-card shows its card when focus reaches content below the fold", async () => {
   const { element, button } = await mount(4000);
   try {
     // Focus scrolls the content into view, and the card must survive that.
@@ -172,7 +173,7 @@ Deno.test("cf-hover-card shows its card when focus reaches content below the fol
   }
 });
 
-Deno.test("cf-hover-card keeps its card above its content as the card grows", async () => {
+test("cf-hover-card keeps its card above its content as the card grows", async () => {
   const { element } = await mount(300);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));
@@ -194,7 +195,7 @@ Deno.test("cf-hover-card keeps its card above its content as the card grows", as
   }
 });
 
-Deno.test("cf-hover-card shows its card for a pointer that arrives before it renders", async () => {
+test("cf-hover-card shows its card for a pointer that arrives before it renders", async () => {
   const element = document.createElement("cf-hover-card") as CFHoverCard;
   element.innerHTML = `
     <button>😺 2</button>
@@ -211,7 +212,7 @@ Deno.test("cf-hover-card shows its card for a pointer that arrives before it ren
   }
 });
 
-Deno.test("cf-hover-card keeps its card in the window when it goes below", async () => {
+test("cf-hover-card keeps its card in the window when it goes below", async () => {
   const { element } = await mount(20);
   const tall = element.querySelector<HTMLElement>('[slot="card"]')!;
   // Too tall to fit above content this near the top, or below it either.
@@ -228,7 +229,7 @@ Deno.test("cf-hover-card keeps its card in the window when it goes below", async
   }
 });
 
-Deno.test("cf-hover-card follows its content when the window resizes", async () => {
+test("cf-hover-card follows its content when the window resizes", async () => {
   const { element } = await mount(300);
   try {
     element.dispatchEvent(new PointerEvent("pointerenter"));

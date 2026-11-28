@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import type {
@@ -8,8 +7,15 @@ import type {
 } from "@commonfabric/pattern-index/client";
 import { decodeDataFile } from "@commonfabric/text/data-file";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   entryHistory,
   historyLines,
+  type HistoryRow,
   PatternHistoryError,
   type RollbackDeps,
   rollbackEntry,
@@ -126,6 +132,32 @@ describe("pattern-history", () => {
         false,
       ]]);
       expect(historyLines("count.tsx", rows)[1]).toContain("(current)");
+    });
+
+    it("marks each shared version's number and channel, and nothing on one never shared", () => {
+      const row: HistoryRow = {
+        seq: 2,
+        versionId: "ver-2",
+        createdAt: "2026-11-16T10:02:00.000Z",
+        visibility: "shared",
+        share: "exposed",
+        current: true,
+      };
+      const lines = historyLines("count.tsx", [
+        { ...row, shared: { number: 3, stable: false } },
+        { ...row, seq: 1, current: false, shared: { number: 1, stable: true } },
+        {
+          ...row,
+          seq: 0,
+          current: false,
+          visibility: "private",
+          share: "none",
+        },
+      ]);
+
+      expect(lines[1]).toContain("shared #3 (beta)");
+      expect(lines[2]).toContain("shared #1 (stable)");
+      expect(lines[3]).not.toContain("shared #");
     });
 
     it("throws saying deploys keep versions for an entry with none", async () => {

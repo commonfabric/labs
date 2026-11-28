@@ -1,10 +1,15 @@
 import { settle } from "./dom.ts";
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { FabricBridge } from "../src/bridge.ts";
 import { CommonIframeSandboxElement } from "../src/index.ts";
@@ -773,6 +778,65 @@ describe("CommonIframeSandboxElement", () => {
       expect(posts).toEqual([{
         type: "load-document",
         data: guestDocument("<p>second</p>", "go();"),
+        presentation: null,
+      }]);
+    });
+
+    for (const value of ["", undefined, null] as const) {
+      it(`clears the guest and its subscriptions when \`src\` becomes ${JSON.stringify(value) ?? "undefined"}`, async () => {
+        const { bridge, open } = countingBridge();
+        const { element, posts } = await readyElement((element) => {
+          element.src = "<p>guest</p>";
+          element.script = "go();";
+          element.bridge = bridge;
+        });
+        addGuestFrame(element);
+        const client = connectFabric();
+        postFromOuter(element, { type: "load" });
+        try {
+          client.cell("count").sink(() => {});
+          await client.describe();
+          expect(open()).toBe(1);
+
+          element.src = value;
+          await element.updateComplete;
+          await settle();
+
+          expect(element.src).toBe("");
+          expect(open()).toBe(0);
+          expect(posts).toEqual([{
+            type: "load-document",
+            data: "",
+            presentation: null,
+          }]);
+
+          element.src = "<p>next guest</p>";
+          await element.updateComplete;
+          await settle();
+          expect(posts.at(-1)).toEqual({
+            type: "load-document",
+            data: guestDocument("<p>next guest</p>", "go();"),
+            presentation: null,
+          });
+        } finally {
+          client.disconnect();
+        }
+      });
+    }
+
+    it("clears the guest when the `src` attribute is removed", async () => {
+      const { element, posts } = await readyElement((element) => {
+        element.setAttribute("src", "<p>guest</p>");
+      });
+
+      element.removeAttribute("src");
+      await element.updateComplete;
+      await settle();
+
+      expect(element.src).toBe("");
+      expect(posts).toEqual([{
+        type: "load-document",
+        data: "",
         presentation: null,
       }]);
     });

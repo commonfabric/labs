@@ -23,9 +23,15 @@ import {
   entryHistory,
   historyLines,
   lineageLines,
+  type LinkChannel,
+  linkLine,
+  makeStable,
   PatternHistoryError,
+  patternLink,
+  requireLineage,
   rollbackEntry,
   rollbackLines,
+  stableLine,
 } from "../lib/pattern-history.ts";
 import {
   type DeployedSource,
@@ -45,7 +51,10 @@ import {
 import { type ListedProfile, listProfiles } from "../lib/profile.ts";
 import type { DIDKey } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type {
+  PatternIndexChannel,
+  PatternIndexClient,
+} from "@commonfabric/pattern-index/client";
 import {
   publishPatternFromDisk,
   type PublishReport,
@@ -85,6 +94,8 @@ interface PublishCLIOptions extends PieceCLIOptions {
   allowDirty?: boolean;
   skipLocalCheck?: boolean;
   remixedFrom?: string;
+  standalone?: boolean;
+  part?: boolean;
   patternIndexUrl?: string;
   json?: boolean;
 }
@@ -193,11 +204,24 @@ interface NamedPublishCLIOptions extends PublishCLIOptions {
 }
 
 /**
- * Checks and shares `entry`, printing the report; with `naming`, then names
- * the lineage the share was kept in, once the report is out, so a naming
- * that fails never hides what the share did.
+ * `cf pattern share`: checks and shares `entry` on beta, by link only,
+ * printing the report; `cf pattern stable` makes it findable.
  */
 export async function share(
+  options: PublishCLIOptions,
+  entry: string,
+  deps: PublishCommandDeps = {},
+): Promise<void> {
+  await shareOn("beta", options, entry, deps);
+}
+
+/**
+ * Checks and shares `entry` on `channel`, printing the report; with
+ * `naming`, then names the lineage the share was kept in, once the report is
+ * out, so a naming that fails never hides what the share did.
+ */
+async function shareOn(
+  channel: PatternIndexChannel,
   options: PublishCLIOptions,
   entry: string,
   {
@@ -250,10 +274,16 @@ export async function share(
           : { keywords: listFlag(options.keywords) }),
         allowDirty: !!options.allowDirty,
         slot: await entrySlot(absPath(entry), slotSources(store)),
+        channel,
         skipLocalCheck: !!options.skipLocalCheck,
         ...(options.remixedFrom === undefined
           ? {}
           : { remixedFrom: options.remixedFrom }),
+        ...(options.standalone
+          ? { standalone: true }
+          : options.part
+          ? { standalone: false }
+          : {}),
       },
       {
         compileEntry: (main, program) =>
@@ -298,7 +328,8 @@ export async function share(
 }
 
 /**
- * `cf pattern publish`: shares `entry` as `share` does, then names the
+ * `cf pattern publish`: shares `entry` as `share` does but on stable, so it
+ * is findable once checked, then names the
  * person as its author under one of their profiles. It names nothing unless
  * `--as` repeats the profile's name, so whoever runs it has had to read the
  * name it shows, and an agent has to have asked the person. Everything that
@@ -354,7 +385,8 @@ export async function publishNamed(
   const sources = slotSources(
     storeFor(resolvePatternIndexUrl(options.patternIndexUrl), deps.store),
   );
-  await share(options, entry, deps, async (client, report) => {
+  // Publishing under a name is meant to be found, so it shares on stable.
+  await shareOn("stable", options, entry, deps, async (client, report) => {
     // The lineage the share landed in, which the index may have found by
     // an earlier publication rather than by this file's slot.
     const lineageId = report.lineageId ??
@@ -572,6 +604,43 @@ export async function unshare(
   });
 }
 
+/** `cf pattern stable`: makes the newest shared version findable. */
+export async function stable(
+  options: IndexCLIOptions,
+  entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options, access);
+    const lineage = await requireLineage(client, absPath(entry), sources);
+    const report = await makeStable(client, lineage, entry);
+    out(options.json ? report : stableLine(entry, report), {
+      json: options.json,
+    });
+  });
+}
+
+/** `cf pattern link`: a link to the entry's stable, beta or numbered version. */
+export async function link(
+  options: IndexCLIOptions & { beta?: boolean; number?: number },
+  entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
+  if (options.beta && options.number !== undefined) {
+    throw new ValidationError("Pass --beta or --number, not both.");
+  }
+  const channel: LinkChannel = options.number ??
+    (options.beta ? "beta" : "stable");
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options, access);
+    const lineage = await requireLineage(client, absPath(entry), sources);
+    const report = await patternLink(client, lineage, entry, channel);
+    out(options.json ? report : linkLine(entry, lineage, report), {
+      json: options.json,
+    });
+  });
+}
+
 export async function unpublish(
   options: IndexCLIOptions,
   entry: string,
@@ -667,6 +736,20 @@ const shareOptions = (cmd: Command<any>) =>
       "--remixed-from <patternId:string>",
       "The published pattern this one was built from, when cf has no record of it.",
     )
+    .option(
+      "--standalone",
+      "Offer it to people choosing what to place, on its own at the top of a " +
+        "loom. Without --standalone or --part, a new version keeps its " +
+        "predecessor's answer, a remix its source's, and any other first " +
+        "version stands alone when its entry file is main.tsx. A pattern " +
+        "that needs an input with no default is a part either way.",
+      { conflicts: ["part"] },
+    )
+    .option(
+      "--part",
+      "Offer it only as a part other patterns build from, not on its own.",
+      { conflicts: ["standalone"] },
+    )
     .env(
       "CF_PATTERN_INDEX_URL=<url:string>",
       "Base URL of the pattern index.",
@@ -692,9 +775,11 @@ export const pattern = new Command()
     targetOptions(
       shareOptions(new Command())
         .description(
-          "Share a pattern anonymously: others who share see it under a " +
-            "pseudonym of this pattern alone, never linked to your other " +
-            "patterns or your name. Join first with cf index join. It " +
+          "Share a pattern anonymously on beta: anyone with its link " +
+            "(cf pattern link --beta) can reach it, under a pseudonym of this " +
+            "pattern alone, never linked to your other patterns or your " +
+            "name; cf pattern stable makes it findable. Join first with " +
+            "cf index join. It " +
             "checks the pattern for personal details with the index's own " +
             "privacy question, and when it finds some, rewrites it into a " +
             "general version (specific values lifted into arguments). The " +
@@ -717,7 +802,7 @@ export const pattern = new Command()
       shareOptions(new Command())
         .description(
           "Publish a pattern under your name: shares it as cf pattern share " +
-            "does, then shows one of your profiles as its author to every " +
+            "does but on stable, findable once checked, then shows one of your profiles as its author to every " +
             "member. Only this pattern is named; your other patterns stay " +
             "anonymous and unlinked. Says what it reveals, and names nothing " +
             "unless --as repeats the name it shows.",
@@ -814,6 +899,40 @@ export const pattern = new Command()
         )
         .arguments("<entry:string>"),
     ).action(unshare),
+  )
+  /* pattern stable */
+  .command(
+    "stable",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Make a pattern's newest shared version stable: what search, the " +
+            "catalog and a plain link give. It passed the privacy check when " +
+            "it was shared on beta, so no new source is exposed; only who " +
+            "can find it changes. One still being checked becomes stable " +
+            "once it passes.",
+        )
+        .arguments("<entry:string>"),
+    ).action(stable),
+  )
+  /* pattern link */
+  .command(
+    "link",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Print a link to a shared pattern: its stable version, or beta " +
+            "when nothing is stable yet. A link names the pattern by its " +
+            "pseudonym, and shows your name only on a pattern published " +
+            "under it.",
+        )
+        .arguments("<entry:string>")
+        .option("--beta", "Link to beta, the newest shared version.")
+        .option(
+          "--number <n:integer>",
+          "Link to exactly shared version n, which never changes.",
+        ),
+    ).action(link),
   )
   /* pattern unpublish */
   .command(

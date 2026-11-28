@@ -10,6 +10,31 @@ a record: archive it to `docs/history/plans/` following the procedure in
 
 ## Current plans
 
+- [What patterns and agents are made of, in the spec's terms](spec-surface-alignment.md)
+  maps the runtime onto the CFC specification's abstract surface (§14.2.2):
+  labeled values, references, node contexts, trusted and untrusted transitions
+  and their operations. For each it says where the runtime matches, duplicates
+  or drifts from the spec, lists the cleanups that line it back up, and records
+  provisional answers to the questions it raised, for the specification's
+  author to confirm.
+- [Skills and MCP servers in the fabric](skills-and-mcp-bridges.md) brings any
+  Agent Skill or MCP server into the fabric through an importer at the edge
+  that emits only existing records: a wrapper pattern whose verbs are the
+  tools, candidate tool descriptors trusted only inside an accepted registry
+  snapshot, and labeled text. Review unlocks trust, not use, and lowering a
+  tool into pattern code is rewriting one handler.
+- [Reviewed skills: trusting a skill's text, not what it reads](reviewed-skills.md)
+  lets a skill that a trusted party reviewed work under CFC enforcement. A
+  review is a trust statement over the skill's exact bytes, accepted the way a
+  connector is. Until calls carry per-call authority, a child whose skill an
+  accepted review fully covers keeps the delegating run's binding. Only the
+  reviewed bytes are cleared: what the run reads while it works stays treated
+  as injectable.
+- [Joining a Loom lists you in it](social-space-join-as-viewer.md) is a
+  stopgap so that a browser host's guests are named on a Loom's roster: the
+  host lists its guest through the existing `addParticipant`, and then the Loom
+  root exports `joinAsViewer`. READ link guests, people with several profiles,
+  rooms and older roots stay as the plan's accepted limits.
 - [CFC spec correspondence process](cfc-spec-correspondence-process.md)
   gives agents the procedure for changing Contextual Flow Control here: read
   the specification first, classify the change as host arrangement, conforming
@@ -27,6 +52,23 @@ a record: archive it to `docs/history/plans/` following the procedure in
   the memory server's per-session walk and encode on the main thread, the
   four measurements that decide which change to make, the recipes for taking
   them, and how the overlapped commit is validated.
+- [Serving a piece's stored outputs while they are current](stored-output-currency.md)
+  keeps a durable record, per piece and per viewer of it, of what it read,
+  what it writes and which stored outputs a serving loop vouched for, marks
+  that record stale through the store when an input changes, and has the
+  demand pass leave a piece unstarted
+  only while its record proves every demanded output of it current, with a
+  mode that records and judges without acting so the judgment can be checked
+  first.
+- [Serving a stored output that depends on another space or on a wish](stored-output-currency-across-spaces.md)
+  continues that index across spaces: a reading space registers the
+  instances it read with their source, the source tells its readers when one
+  changed or its producer became stale, by a trigger that carries nothing
+  and a pull from a position, and demand travels upstream only along stale
+  edges; with it, a wish's own computations are recorded under an identity,
+  a slice that read the interval clock expires, and a computation the
+  scheduler runs without demand may be left unrun while nothing can observe
+  what it would write.
 - [What a create leaves on a serving worker's heap](serving-worker-heap.md)
   carries the work on what a piece a handler starts keeps alive on a serving
   worker: what has been released, what is left, and the process for finding the
@@ -67,9 +109,8 @@ a record: archive it to `docs/history/plans/` following the procedure in
   gain one.
 
 - [Shuffled test order: what is left to build](test-order-shuffle.md) carries
-  the piece the shuffle does not yet have: a shuffle inside this repository's
-  own `describe()` and `it()`, which every test file already resolves to,
-  reordering the cases inside a file that `deno test --shuffle` leaves in
+  the piece the shuffle does not yet have: a shuffle inside the test module
+  every test file registers its tests through, reordering the cases inside a file that `deno test --shuffle` leaves in
   place. Its first stage, a scheduled run under the next day's seed a day
   ahead, is built.
 - [Security and privacy roadmap](security-privacy-roadmap.md) gives an overview

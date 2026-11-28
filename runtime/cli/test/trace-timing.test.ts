@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   type PhaseTrace,
   reportCliPhase,
   timeCliPhase,
 } from "../lib/trace-timing.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function capturingTrace(enabled: boolean): PhaseTrace & { lines: string[] } {
   const lines: string[] = [];

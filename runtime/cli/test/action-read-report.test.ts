@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ActionReadReport } from "../lib/action-read-report.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("action-read-report", () => {
   it("includes every run in totals when the displayed rows are limited", () => {

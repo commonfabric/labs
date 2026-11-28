@@ -33,6 +33,7 @@ import {
   resetServerExecutionConfig,
   setServerExecutionConfig,
 } from "../v2.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:space-a";
 const SERVICE = "did:key:service";
@@ -73,7 +74,7 @@ const leaveStoredRow = (engine: Engine, holder: string): void => {
   ).run({ space: SPACE, holder, expires_at: Date.now() + 3_600_000 });
 };
 
-Deno.test("execution_lease: the stored table stays in the schema, and acquiring and releasing leave it empty", async () => {
+test("execution_lease: the stored table stays in the schema, and acquiring and releasing leave it empty", async () => {
   const { engine } = await createEngine();
   try {
     const columns = engine.database.prepare(
@@ -92,7 +93,7 @@ Deno.test("execution_lease: the stored table stays in the schema, and acquiring 
   }
 });
 
-Deno.test("execution_lease: a pre-stage-B store gains the table on reopen", async () => {
+test("execution_lease: a pre-stage-B store gains the table on reopen", async () => {
   const { engine, path } = await createEngine();
   close(engine);
 
@@ -118,7 +119,7 @@ Deno.test("execution_lease: a pre-stage-B store gains the table on reopen", asyn
   }
 });
 
-Deno.test("restart: a new process's map starts empty, so a row or an in-memory holder of an earlier process delays nobody", async () => {
+test("restart: a new process's map starts empty, so a row or an in-memory holder of an earlier process delays nobody", async () => {
   const { engine, path } = await createEngine();
   const successor = await open({ url: toFileUrl(path) });
   setServerExecutionConfig(true);
@@ -145,7 +146,7 @@ Deno.test("restart: a new process's map starts empty, so a row or an in-memory h
   }
 });
 
-Deno.test("holder identity: service identity + process-instance component, stable within the process (DR1)", () => {
+test("holder identity: service identity + process-instance component, stable within the process (DR1)", () => {
   const holder = executionLeaseHolder(SERVICE);
   // Stable across every mint within one process lifetime: the process
   // component is minted once at process start.
@@ -158,7 +159,7 @@ Deno.test("holder identity: service identity + process-instance component, stabl
   assert(holder !== successor);
 });
 
-Deno.test("acquire: takes a free space and keeps one's own, and leaves another holder's lease alone", async () => {
+test("acquire: takes a free space and keeps one's own, and leaves another holder's lease alone", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
@@ -180,7 +181,7 @@ Deno.test("acquire: takes a free space and keeps one's own, and leaves another h
   }
 });
 
-Deno.test("release: frees the caller's own lease and leaves a foreign one alone", async () => {
+test("release: frees the caller's own lease and leaves a foreign one alone", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
@@ -197,7 +198,7 @@ Deno.test("release: frees the caller's own lease and leaves a foreign one alone"
   }
 });
 
-Deno.test("releaseAllOf: frees every lease of one holder, counts them, and leaves other holders' alone", async () => {
+test("releaseAllOf: frees every lease of one holder, counts them, and leaves other holders' alone", async () => {
   const { engine } = await createEngine();
   try {
     const mine = executionLeaseHolder(SERVICE);
@@ -217,7 +218,7 @@ Deno.test("releaseAllOf: frees every lease of one holder, counts them, and leave
   }
 });
 
-Deno.test("failure notice: the server patches the source entry only under the lease, once, and leaves a compacted entry alone", async () => {
+test("failure notice: the server patches the source entry only under the lease, once, and leaves a compacted entry alone", async () => {
   const server = new Server({
     ...testSessionOpenServerOptions,
     store: new URL("memory://lease-failure-notice"),
@@ -305,7 +306,7 @@ Deno.test("failure notice: the server patches the source entry only under the le
   }
 });
 
-Deno.test("admission: off the flag, `derived` stays unclaimable even under a live matching lease", async () => {
+test("admission: off the flag, `derived` stays unclaimable even under a live matching lease", async () => {
   const { engine } = await createEngine();
   try {
     const holder = executionLeaseHolder(SERVICE);
@@ -328,7 +329,7 @@ Deno.test("admission: off the flag, `derived` stays unclaimable even under a liv
   }
 });
 
-Deno.test("admission: under the flag, the live holder's derived commit is admitted and carries class + holder", async () => {
+test("admission: under the flag, the live holder's derived commit is admitted and carries class + holder", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -350,7 +351,7 @@ Deno.test("admission: under the flag, the live holder's derived commit is admitt
   }
 });
 
-Deno.test("admission: the one equality check rejects non-holders, missing holders, and missing spaces", async () => {
+test("admission: the one equality check rejects non-holders, missing holders, and missing spaces", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -387,7 +388,7 @@ Deno.test("admission: the one equality check rejects non-holders, missing holder
   }
 });
 
-Deno.test("admission: a released lease matches NOBODY, its last holder included", async () => {
+test("admission: a released lease matches NOBODY, its last holder included", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -413,7 +414,7 @@ Deno.test("admission: a released lease matches NOBODY, its last holder included"
   }
 });
 
-Deno.test("admission: a stored row names nobody, its holder included", async () => {
+test("admission: a stored row names nobody, its holder included", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -438,7 +439,7 @@ Deno.test("admission: a stored row names nobody, its holder included", async () 
   }
 });
 
-Deno.test("admission: authored and system commits ignore the lease, and a stray holder never sticks to them", async () => {
+test("admission: authored and system commits ignore the lease, and a stray holder never sticks to them", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -467,7 +468,7 @@ Deno.test("admission: authored and system commits ignore the lease, and a stray 
   }
 });
 
-Deno.test("admission: a holder smuggled into the client payload is inert", async () => {
+test("admission: a holder smuggled into the client payload is inert", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -502,7 +503,7 @@ Deno.test("admission: a holder smuggled into the client payload is inert", async
 // stop-committing MUST, enforced before any reacquire).
 //
 
-Deno.test("discipline (C7a): a probe sealed before a release never commits — the release ends the tenure before any reacquire", async () => {
+test("discipline (C7a): a probe sealed before a release never commits — the release ends the tenure before any reacquire", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -562,7 +563,7 @@ Deno.test("discipline (C7a): a probe sealed before a release never commits — t
   }
 });
 
-Deno.test("discipline (C7b): without the in-process check the same-process stale probe WOULD be admitted — the residue the MUST exists for", async () => {
+test("discipline (C7b): without the in-process check the same-process stale probe WOULD be admitted — the residue the MUST exists for", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -611,7 +612,7 @@ Deno.test("discipline (C7b): without the in-process check the same-process stale
 // from the lease holder's own service session.
 //
 
-Deno.test("replay: a byte-identical retry answers from the store after the lease is RELEASED — fresh commits stay rejected", async () => {
+test("replay: a byte-identical retry answers from the store after the lease is RELEASED — fresh commits stay rejected", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -679,7 +680,7 @@ Deno.test("replay: a byte-identical retry answers from the store after the lease
   }
 });
 
-Deno.test("replay: after SUCCESSION the old holder's accepted commit still replays from the store — its fresh commits do not, the successor's do", async () => {
+test("replay: after SUCCESSION the old holder's accepted commit still replays from the store — its fresh commits do not, the successor's do", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -743,7 +744,7 @@ Deno.test("replay: after SUCCESSION the old holder's accepted commit still repla
   }
 });
 
-Deno.test("replay: a same-key DIFFERENT-bytes resubmission is refused as a replay mismatch, not answered", async () => {
+test("replay: a same-key DIFFERENT-bytes resubmission is refused as a replay mismatch, not answered", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -779,7 +780,7 @@ Deno.test("replay: a same-key DIFFERENT-bytes resubmission is refused as a repla
   }
 });
 
-Deno.test("replay: the stored class + holder are part of the replay identity — a same-bytes resubmission under a different envelope is refused", async () => {
+test("replay: the stored class + holder are part of the replay identity — a same-bytes resubmission under a different envelope is refused", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -829,7 +830,7 @@ Deno.test("replay: the stored class + holder are part of the replay identity —
   }
 });
 
-Deno.test("replay: authored replays are untouched — a stray holder stays inert on both the original and the retry", async () => {
+test("replay: authored replays are untouched — a stray holder stays inert on both the original and the retry", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -868,7 +869,7 @@ Deno.test("replay: authored replays are untouched — a stray holder stays inert
   }
 });
 
-Deno.test("replay: a retry while the lease is STILL HELD keeps answering from the store", async () => {
+test("replay: a retry while the lease is STILL HELD keeps answering from the store", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -896,7 +897,7 @@ Deno.test("replay: a retry while the lease is STILL HELD keeps answering from th
   }
 });
 
-Deno.test("discipline (C7b): cross-process succession is fenced by the equality check alone — no discipline needed", async () => {
+test("discipline (C7b): cross-process succession is fenced by the equality check alone — no discipline needed", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {

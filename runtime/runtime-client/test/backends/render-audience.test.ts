@@ -4,7 +4,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import type { VDomOp } from "@commonfabric/html/vdom-ops";
@@ -21,6 +20,7 @@ import {
 } from "@commonfabric/runner";
 import { buildCfcPolicyArtifactManifest } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,

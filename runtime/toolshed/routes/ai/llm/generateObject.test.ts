@@ -1,10 +1,10 @@
 import { assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { MockLanguageModelV4 } from "ai/test";
 import env from "@/env.ts";
 import { generateObject } from "./generateObject.ts";
 import { registryWith } from "@/test/fixtures/llm-models.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");

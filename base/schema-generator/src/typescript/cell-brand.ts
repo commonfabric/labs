@@ -217,13 +217,54 @@ export function wrapperKindToBrand(wrapperKind: CellWrapperKind): CellBrand {
   }
 }
 
+/**
+ * Whether `type` is a type parameter or is built from one: as a member of a
+ * union or an intersection, as a type argument, or as the type of a property
+ * of an object type written in place. `seen` holds the types already looked
+ * at, so a type that refers to itself is looked at once.
+ */
+function mentionsTypeParameter(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+  seen = new Set<ts.Type>(),
+): boolean {
+  if (type.flags & ts.TypeFlags.TypeParameter) return true;
+  if (seen.has(type)) return false;
+  seen.add(type);
+  const within = (inner: ts.Type) =>
+    mentionsTypeParameter(inner, checker, seen);
+  if (type.isUnionOrIntersection()) return type.types.some(within);
+  if (type.aliasTypeArguments?.some(within)) return true;
+  if (!(type.flags & ts.TypeFlags.Object)) return false;
+  const objectType = type as ts.ObjectType;
+  if (objectType.objectFlags & ts.ObjectFlags.Reference) {
+    return checker.getTypeArguments(objectType as ts.TypeReference)
+      .some(within);
+  }
+  if (objectType.objectFlags & ts.ObjectFlags.Anonymous) {
+    return type.getProperties().some((property) =>
+      within(checker.getTypeOfSymbol(property))
+    );
+  }
+  return false;
+}
+
+/**
+ * Returns the first reference with a type argument in the hierarchy of
+ * `type`, which is the wrapper's own where the wrapper is what was written.
+ * With `named`, only a reference to the type of that name counts.
+ */
 function extractWrapperTypeReference(
   type: ts.Type,
   checker: ts.TypeChecker,
   seen: Set<ts.Type>,
+  named?: string,
 ): ts.TypeReference | undefined {
   return traverseTypeHierarchy(type, {
     checker,
+    // A named type is looked for among the types the given one extends.
+    visitTypeReferenceTarget: named !== undefined,
+    visitBaseTypes: named !== undefined,
     checkType: (t) => {
       if (t.flags & ts.TypeFlags.Object) {
         const objectType = t as ts.ObjectType;
@@ -231,7 +272,16 @@ function extractWrapperTypeReference(
           const typeRef = objectType as ts.TypeReference;
           const typeArgs = typeRef.typeArguments ??
             checker.getTypeArguments(typeRef);
-          if (typeArgs && typeArgs.length > 0) {
+          if (
+            typeArgs && typeArgs.length > 0 &&
+            (named === undefined ||
+              // Reached through a declaration, a base can still carry the
+              // declaration's own parameter, as `SqliteDb<T>` does under
+              // `interface Board<T> extends SqliteDb<T>`. That names no
+              // payload, and the search by name gives way to the plain one.
+              (typeRef.target.symbol?.name === named &&
+                !typeArgs.some((arg) => mentionsTypeParameter(arg, checker))))
+          ) {
             return typeRef;
           }
         }
@@ -251,7 +301,13 @@ export function getCellWrapperInfo(
   const kind = brandToWrapperKind(brand);
   if (!kind) return undefined;
 
-  const typeRef = extractWrapperTypeReference(type, checker, new Set());
+  // A database handle has subtypes with type parameters of their own, as
+  // `IndexedCollections<Kinds>` has, and the first of those is not the value
+  // the handle reads as. The reference to `SqliteDb` itself carries that.
+  const typeRef =
+    (kind === "SqliteDb"
+      ? extractWrapperTypeReference(type, checker, new Set(), "SqliteDb")
+      : undefined) ?? extractWrapperTypeReference(type, checker, new Set());
   if (!typeRef) return undefined;
 
   return { brand, kind, typeRef };

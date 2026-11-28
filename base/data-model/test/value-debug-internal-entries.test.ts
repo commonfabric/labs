@@ -6,9 +6,9 @@
 
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
-import { describe, it } from "@std/testing/bdd";
 
 import { reportFromFreshRealm } from "./value-debug-internal-worker-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The entries which are a single module that renders nothing, and so have no

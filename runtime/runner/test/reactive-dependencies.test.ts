@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -8,6 +7,8 @@ import {
 } from "@commonfabric/data-model/fabric-instances";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { resolveScopeKey } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   addressesToPathByEntity,
@@ -361,6 +362,41 @@ const TEST_IDENTITY = {
 };
 
 describe("addresssesToPathByEntity", () => {
+  it("deduplicates canonical instances while retaining parents and children", () => {
+    const parent: IMemorySpaceAddress = {
+      ...createAddress(["value"]),
+      scope: "session",
+    };
+    const ownKey = resolveScopeKey("session", TEST_IDENTITY);
+    const otherKey = resolveScopeKey("session", {
+      ...TEST_IDENTITY,
+      sessionId: "other",
+    });
+    const addresses = [
+      { ...parent, scopeKey: ownKey, path: ["value", "nested"] },
+      parent,
+      { ...parent, scopeKey: ownKey },
+      { ...parent, path: ["value", "nested"] },
+      { ...parent, scopeKey: otherKey },
+    ];
+    const result = addressesToPathByEntity(addresses, TEST_IDENTITY);
+    expect([...result.entries()]).toEqual([
+      [
+        `${parent.space}/${ownKey}/${parent.id}`,
+        [["value", "nested"], ["value"]],
+      ],
+      [`${parent.space}/${otherKey}/${parent.id}`, [["value"]]],
+    ]);
+    expect(addressesToPathByEntity(addresses, TEST_IDENTITY)).toBe(result);
+    expect(addresses.map(({ path }) => path)).toEqual([
+      ["value", "nested"],
+      ["value"],
+      ["value"],
+      ["value", "nested"],
+      ["value"],
+    ]);
+  });
+
   it("returns empty map for empty input", () => {
     const result = addressesToPathByEntity([], TEST_IDENTITY);
     expect(result.size).toBe(0);

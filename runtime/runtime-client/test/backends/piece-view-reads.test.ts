@@ -1,7 +1,6 @@
 /** Checks the documents acquired while resolving a piece for display. */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -15,6 +14,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { RequestType } from "../../src/protocol/mod.ts";
 import { buildProcessor } from "./build-processor.ts";

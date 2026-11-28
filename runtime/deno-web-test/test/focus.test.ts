@@ -1,6 +1,5 @@
-import { describe, it } from "@std/testing/bdd";
-
 import { runDenoWebTest } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("browser", () => {
   it("gives the page focus in every test file a run loads", async () => {

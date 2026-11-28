@@ -4,13 +4,13 @@
  * passes, with what it read joining the run's model context.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -555,18 +555,20 @@ describe("read-value", () => {
      * a rings piece set up in the second space and never run there.
      */
     const foreignRings = async (): Promise<{
+      runtime: Runtime;
       session: HarnessFabricSession;
       table: HarnessHandleTable;
       token: string;
       ref: string;
     }> => {
-      fabric = await createFabric("observe");
+      const opened = await createFabric("observe");
+      fabric = opened;
       const neighbour = new PiecesController(
         createSession({
           identity: signer,
           spaceDid: (await Identity.generate()).did(),
         }),
-        fabric.runtime,
+        opened.runtime,
       );
       await neighbour.synced();
       const created = await neighbour.create(RINGS_PATTERN_SOURCE, {
@@ -576,8 +578,9 @@ describe("read-value", () => {
       const ref =
         `//${neighbour.getSpace()}/${created.getCell().getAsNormalizedFullLink().id}`;
       return {
+        runtime: opened.runtime,
         session: {
-          ...fabric.session,
+          ...opened.session,
           foreignSpaces: { [neighbour.getSpace()]: "http://toolshed.test/" },
         },
         ref,
@@ -633,6 +636,27 @@ describe("read-value", () => {
       expect(output).toMatchObject({
         status: "error",
         message: expect.stringContaining("the piece has not run"),
+      });
+      expect(JSON.stringify(output)).not.toContain("holds nothing");
+    });
+
+    it("refuses a derived field whose piece is stopped while it starts, naming that it could not be started", async () => {
+      const { runtime, session, table, token } = await foreignRings();
+      const startWithCommit = runtime.startWithCommit.bind(runtime);
+      runtime.startWithCommit = ((cell, options) => {
+        const started = startWithCommit(cell, options);
+        runtime.runner.stop(cell);
+        return started;
+      }) as typeof startWithCommit;
+
+      const output = await readValueTool.invoke(
+        contextWith(session, table, true),
+        { token, select: "rings/0/id" },
+      );
+
+      expect(output).toMatchObject({
+        status: "error",
+        message: expect.stringContaining("could not be started here"),
       });
       expect(JSON.stringify(output)).not.toContain("holds nothing");
     });

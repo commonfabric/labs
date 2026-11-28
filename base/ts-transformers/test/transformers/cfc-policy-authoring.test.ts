@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import ts from "typescript";
@@ -7,6 +6,7 @@ import { compileCfcPolicyManifestsForSource } from "../../src/transformers/cfc-p
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { literalToValue, parseModule } from "../transformed-ast.ts";
 import { transformSource, validateSource } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const IMPORTS =
   `import { exchangeRule, exchangeRules, THIS_POLICY } from "commonfabric/cfc";`;

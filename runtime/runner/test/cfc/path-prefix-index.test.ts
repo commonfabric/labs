@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { isPrefix, PathPrefixIndex } from "../../src/cfc/path-prefix-index.ts";
 import { PATH_INDEX_GRID, pathIndexCorpus } from "./path-index-corpus.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function scan(sources: readonly string[][], path: readonly string[]): boolean {
   return sources.some((source) => isPrefix(source, path));

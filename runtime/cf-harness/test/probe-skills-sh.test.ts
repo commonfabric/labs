@@ -2,11 +2,11 @@
  * Exercises the hand-run skills.sh probe against captured and refused answers.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { main } from "../scripts/probe-skills-sh.ts";
 import { SkillsShSearchClient } from "../src/skills-sh/search-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const clientAnswering = (
   response: Response,

@@ -7,10 +7,10 @@
  * reported as correct.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { runTestPattern, type TestRunResult } from "../lib/test-runner.ts";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
 
 const fixtures = resolve(import.meta.dirname!, "fixtures");
 

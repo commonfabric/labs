@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -7,6 +6,7 @@ import {
   normalizeTerminalResponse,
   toResponsesInput,
 } from "../../src/model/responses-protocol.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PROVIDER = "openai-codex";
 const MODEL = "gpt-5.4";

@@ -49,6 +49,7 @@ import {
   getServerExecutionConfig,
   type GraphQuery,
   type GraphQueryRoot,
+  identityOfScopeKey,
   isScopeKey,
   resolveScopeKey,
   type ScopeKey,
@@ -64,9 +65,10 @@ const DEFAULT_SCOPE: CellScope = "space";
 /**
  * Query/watch doc keys are per scope INSTANCE (scopes.md §7 M2, stage E):
  * the middle segment is the shared scope_key vocabulary, resolved against
- * the querying session's identity — the same identity the manager resolves
- * scoped reads with, so a key names exactly the instance the tracked read
- * saw. Per tracked-graph state the identity is fixed, so this re-keying
+ * the identity a graph's roots are walked under — the same identity the
+ * manager resolves scoped reads with, so a key names exactly the instance
+ * the tracked read saw. Per tracked-graph state the identity is fixed, so
+ * this re-keying
  * partitions state exactly as the scope-NAME form did (key-vocabulary.md
  * §2).
  */
@@ -219,11 +221,13 @@ export type SlowestQueryRoot = {
   reads: number;
 
   /** The walk this root ran, as counters: how many documents it crossed
-   * (`dagTraversals`), what kind of structure it crossed them through, and
-   * how much the schema memo saved. `elapsedMs` says a root was expensive;
-   * this says what it did to get that way — a wide root crossing thousands
-   * of documents and one deep root re-walking a schema are the same
-   * duration and different bugs. */
+   * (`dagTraversals`), what kind of structure it crossed them through, how
+   * much the schema memo saved, and how many positions it ran from the
+   * traversal's own stack because the data was deep enough
+   * (`nativeDepthHandoffs`). `elapsedMs` says a root was expensive; this
+   * says what it did to get that way — a wide root crossing thousands of
+   * documents and one deep root re-walking a schema are the same duration
+   * and different bugs. */
   walk: GraphQueryWalkStats;
 };
 
@@ -241,6 +245,9 @@ const walkStatsDelta = (
   dagTraversals: after.dagTraversals - before.dagTraversals,
   getDocAtPathCalls: after.getDocAtPathCalls - before.getDocAtPathCalls,
   schemaMemoHits: after.schemaMemoHits - before.schemaMemoHits,
+  nativeDepthHandoffs: after.nativeDepthHandoffs - before.nativeDepthHandoffs,
+  unresolvedLinkScopes: after.unresolvedLinkScopes -
+    before.unresolvedLinkScopes,
 });
 
 /**
@@ -257,6 +264,12 @@ export type QueryTraversalStats = GraphQueryWalkStats & {
    * delivered the same space-scoped version — costs no scan, so on a
    * refresh this counts the documents that actually changed. */
   schemaRefScans: number;
+
+  /** Records the cycle sweep visited (`sweepSuspects`). Each search starts
+   * at a record that lost an attribution and kept a walker, and reads back
+   * through what attributes it until it reaches a root, or until it has
+   * read every record that could reach it, which then retire. */
+  sweepVisits: number;
 
   /** Roots this evaluation visited. A cache hit visits none. */
   rootsVisited: number;
@@ -276,6 +289,7 @@ export type QueryTraversalStats = GraphQueryWalkStats & {
 const createQueryTraversalStats = (): QueryTraversalStats => ({
   managerReads: 0,
   schemaRefScans: 0,
+  sweepVisits: 0,
   rootsVisited: 0,
   rootsElapsedMs: 0,
   ...createGraphQueryWalkStats(),
@@ -331,9 +345,9 @@ const chargeRootVisit = (
 };
 
 /**
- * The identity a manager's tracked-graph keys resolve against: the
- * querying session's own (the same identity the manager threads into every
- * scoped engine read).
+ * The identity a manager's tracked-graph keys resolve against: the one its
+ * graph's roots are walked under (the same identity the manager threads into
+ * every scoped engine read).
  */
 const identityOf = (manager: EngineObjectManager): ScopeKeyIdentity => ({
   principal: manager.principal,
@@ -355,17 +369,28 @@ export class EngineObjectManager implements ObjectStorageManager {
   readonly #engine: Engine.Engine;
   readonly #branch: string;
   readonly #readSeq?: number;
+  readonly #held?: EngineObjectManager;
 
+  /**
+   * Constructs an instance which reads `branch` of `engine` as `principal`
+   * and `sessionId`, at `readSeq` when given. With `held`, a document `held`
+   * has read and found present is taken from it in place of a read of the
+   * engine, so the caller vouches that `held` holds no present document that
+   * has changed since `held` read it. A document `held` found absent is read
+   * from the engine again.
+   */
   constructor(
     engine: Engine.Engine,
     branch: string,
     readonly principal?: string,
     readonly sessionId?: string,
     readSeq?: number,
+    held?: EngineObjectManager,
   ) {
     this.#engine = engine;
     this.#branch = branch;
     this.#readSeq = readSeq;
+    this.#held = held;
   }
 
   /** The scope INSTANCE an address resolves to for this manager: the
@@ -428,6 +453,10 @@ export class EngineObjectManager implements ObjectStorageManager {
       this.#missing.set(key, true);
       return null;
     }
+    const held = this.#held === undefined
+      ? undefined
+      : this.#held.#attestations.get(key);
+    if (held !== undefined) return held;
 
     const state = this.readState(address.id, scope, scopeKey);
     this.#readCount++;
@@ -463,11 +492,11 @@ export class EngineObjectManager implements ObjectStorageManager {
     },
   ) {
     const scope = address.scope ?? DEFAULT_SCOPE;
-    return this.#details.get(
-      `${this.#scopeKeyFor(scope, address.scopeKey)}/${address.id}/${
-        address.type ?? "application/json"
-      }`,
-    );
+    const key = `${this.#scopeKeyFor(scope, address.scopeKey)}/${address.id}/${
+      address.type ?? "application/json"
+    }`;
+    return this.#details.get(key) ??
+      (this.#held === undefined ? undefined : this.#held.#details.get(key));
   }
 
   get readCount(): number {
@@ -493,14 +522,6 @@ export class EngineObjectManager implements ObjectStorageManager {
         scopeKey,
       };
     });
-  }
-
-  invalidateIds(ids: Iterable<string>, scope: CellScope = DEFAULT_SCOPE): void {
-    // Own-instance invalidation: the manager caches under its own bound
-    // identity's keys (plus explicitly named instances, which dirty
-    // marking addresses by exact key through the same construction).
-    const scopeKey = this.#scopeKeyFor(scope);
-    for (const id of ids) this.forgetInstance(scopeKey, id);
   }
 
   /** Drops what is cached for the instance `scopeKey` names of `id`, so
@@ -617,9 +638,6 @@ const evaluationQueryKey = (query: GraphQuery): string =>
       .toSorted(),
   ]);
 
-const evaluationIdentityKey = (options: TrackGraphOptions): string =>
-  JSON.stringify([options.principal ?? null, options.sessionId ?? null]);
-
 /**
  * Bounds an evaluation cache's entry COUNT — the cardinality backstop for
  * adversarial query-shape churn, not the memory bound. Memory is bounded
@@ -633,7 +651,7 @@ export type QueryEvaluationCacheDiagnostics = {
   entries: number;
   weight: number;
 
-  /** Total serves: the sum of the three per-class hit counters. */
+  /** Total serves: the sum of the two per-class hit counters. */
   hits: number;
 
   misses: number;
@@ -647,26 +665,17 @@ export type QueryEvaluationCacheDiagnostics = {
    * same class). */
   hitsAbsentResidue: number;
 
-  /** Serves of a tainted entry to the identity it is keyed to. */
-  hitsIdentity: number;
-
   /** Absent-residue shares refused because a residue doc is PRESENT
-   * for the requester. A refusal is not a miss by itself: the call
-   * then serves from the identity entry (an identity hit) or
-   * evaluates in full (a miss). */
+   * for the requester. The call then evaluates in full, which counts a
+   * miss. */
   residueRefusals: number;
 
-  /** Live scope-pure entries. This count and the two below it are the live
-   * entries by share class; together with the hit split they are the
-   * production measure of how often scoped reach actually forecloses
-   * cross-identity sharing. */
+  /** Live scope-pure entries. This count and the one below it are the live
+   * entries by share class. */
   entriesPure: number;
 
   /** Live absent-residue entries. */
   entriesAbsentResidue: number;
-
-  /** Live tainted entries, each keyed to one identity. */
-  entriesTainted: number;
 };
 
 /**
@@ -688,26 +697,39 @@ export type QueryEvaluationCacheDiagnostics = {
  *
  * Only whole, current-state evaluations consult the cache: an eligible
  * `graph.query` (without `atSeq` or keyed snapshots), a whole watch-set
- * establishment, and a `session.watch.add` or view replacement for a branch
- * the session has no tracked graph for. A `session.watch.add` for an already
- * tracked branch extends the session's graph through `extendTrackedGraph()`,
- * and a view replacement moves it, releasing the roots the replacement drops
- * and extending it by the roots it adds. Either depends on the graph's
- * existing coverage, so it neither serves nor records a cache entry.
+ * establishment, and a `session.watch.add` or view replacement whose roots
+ * fall to a graph the session does not hold yet. A `session.watch.add` whose
+ * roots fall to a graph it holds extends that graph through
+ * `extendTrackedGraph()`, and a view replacement moves it, releasing the
+ * roots the replacement drops and extending it by the roots it adds. Either
+ * depends on the graph's existing coverage, so it neither serves nor records
+ * a cache entry. Nor does the graph of a named instance
+ * (`partitionGraphQuery()`): its root is scoped, so its evaluation could be
+ * served to no other identity.
  *
- * Scope purity decides who may share an entry. An evaluation whose whole
- * reach — tracked, missed, and loaded — resolved under the `space` scope is
- * identical for every identity and is shared across them; one that touched
- * a session- or user-scoped instance is keyed to the evaluating identity
- * (key-vocabulary.md §5's identity-bound invariant — the same value-bleed
- * rule `assertSchemaMemoIdentity` enforces for the inner schema memos).
+ * Scope purity decides which evaluations the cache keeps. An evaluation
+ * whose whole reach — tracked, missed, and loaded — resolved under the
+ * `space` scope is identical for every identity and is shared across them.
+ * One whose only scoped reach is links to documents that are absent is
+ * shared too, with those links rewritten to the requester's instances
+ * (`classifyStateScope()`). One that touched a session- or user-scoped
+ * instance that is present serves its own identity alone, and is not kept,
+ * and nor is one that left a link unfollowed because its identity resolves
+ * no instance of the link's scope: every entry is one any identity may be
+ * served (key-vocabulary.md §5's identity-bound invariant — the same
+ * value-bleed rule `assertSchemaMemoIdentity` enforces for the inner schema
+ * memos). An entry that could be served to its own identity alone would
+ * take one of the cache's few places (`EVALUATION_CACHE_MAX_ENTRIES`) from
+ * an entry every session can use.
  * ACL changes are themselves commits, so a grant or revocation rotates the
  * cache before any post-change evaluation could be served from it.
  *
  * Cross-identity sharing rests on evaluation being recipient-blind: the
  * walk consults the requesting identity only to resolve scope instances,
- * never to shape what a document contributes, so scope classification
- * alone decides who an entry may serve. CFC enforcement lives outside
+ * never to shape what a document contributes, so the scope instances an
+ * evaluation reached, and whether it left a link unfollowed for want of an
+ * identity, decide whether every identity may be served it. CFC
+ * enforcement lives outside
  * this path (the runtime's flow-label and sink-ceiling dials; the
  * server's sqlite read labeling annotates results rather than filtering
  * them). A per-recipient filter inside evaluation would invalidate
@@ -729,7 +751,7 @@ export type QueryEvaluationCache = {
   seq: number;
   entries: Map<
     string,
-    { state: TrackedGraphState; share: StateScopeClass; weight: number }
+    { state: TrackedGraphState; share: SharedScopeClass; weight: number }
   >;
 
   /** Sum of entry weights (retained entity count — the proxy for the
@@ -737,16 +759,13 @@ export type QueryEvaluationCache = {
    * cross-space budget against this. */
   weight: number;
 
-  /** Serves of a scope-pure entry. This counter and the two below it are the
+  /** Serves of a scope-pure entry. This counter and the one below it are the
    * per-class serve counters, which diagnostics report summed as `hits`;
    * {@link QueryEvaluationCacheDiagnostics} defines each class. */
   hitsPure: number;
 
   /** Serves of an absent-residue entry. */
   hitsAbsentResidue: number;
-
-  /** Serves of a tainted entry to the identity it is keyed to. */
-  hitsIdentity: number;
 
   /** Absent-residue shares refused because a residue doc is present. */
   residueRefusals: number;
@@ -769,7 +788,6 @@ export const createQueryEvaluationCache = (
   weight: 0,
   hitsPure: 0,
   hitsAbsentResidue: 0,
-  hitsIdentity: 0,
   residueRefusals: 0,
   misses: 0,
   rotations: 0,
@@ -778,7 +796,7 @@ export const createQueryEvaluationCache = (
 export const queryEvaluationCacheDiagnostics = (
   cache: QueryEvaluationCache,
 ): QueryEvaluationCacheDiagnostics => {
-  const entriesByClass = { "pure": 0, "absent-residue": 0, "tainted": 0 };
+  const entriesByClass = { "pure": 0, "absent-residue": 0 };
   for (const { share } of cache.entries.values()) {
     entriesByClass[share.kind]++;
   }
@@ -786,16 +804,14 @@ export const queryEvaluationCacheDiagnostics = (
     seq: cache.seq,
     entries: cache.entries.size,
     weight: cache.weight,
-    hits: cache.hitsPure + cache.hitsAbsentResidue + cache.hitsIdentity,
+    hits: cache.hitsPure + cache.hitsAbsentResidue,
     misses: cache.misses,
     rotations: cache.rotations,
     hitsPure: cache.hitsPure,
     hitsAbsentResidue: cache.hitsAbsentResidue,
-    hitsIdentity: cache.hitsIdentity,
     residueRefusals: cache.residueRefusals,
     entriesPure: entriesByClass["pure"],
     entriesAbsentResidue: entriesByClass["absent-residue"],
-    entriesTainted: entriesByClass["tainted"],
   };
 };
 
@@ -812,7 +828,8 @@ export const queryEvaluationCacheDiagnostics = (
  * identity-dependent part of the state (nothing was delivered from them,
  * nothing was traversed under them) — after verifying each is absent for
  * the requester too. `tainted`: scoped PRESENT data reached the tracker,
- * or a key did not classify; the entry stays keyed to its identity.
+ * or a key did not classify; the evaluation serves its own identity alone,
+ * and the cache does not keep it.
  */
 type StateScopeClass =
   | { kind: "pure" }
@@ -821,6 +838,9 @@ type StateScopeClass =
     residue: { key: QueryDocKey; id: string; scope: CellScope }[];
   }
   | { kind: "tainted" };
+
+/** The classes of evaluation a cache keeps. */
+type SharedScopeClass = Exclude<StateScopeClass, { kind: "tainted" }>;
 
 /** Exported for testing (the malformed-key guard is unreachable through
  * a real walk while the scope-key vocabulary holds). */
@@ -868,8 +888,11 @@ export const classifyStateScope = (
  * before the entry was recorded (the recording walk never looked at it).
  * They are also sufficient — entries live only within one engine seq, and
  * absence cannot change without a commit. A present instance returns
- * null: the caller evaluates normally, and that evaluation's tracker then
- * carries the scoped doc, keying its own entry to the identity.
+ * null: the caller evaluates normally, and that evaluation reaches the
+ * scoped doc, so it is not kept. So does a residue scope the requester's
+ * identity resolves no instance of: the requester's own walk leaves that
+ * link unfollowed or fails at it, where the recording walk followed it to
+ * nothing.
  */
 const cloneWithRewrittenResidue = (
   engine: Engine.Engine,
@@ -885,6 +908,9 @@ const cloneWithRewrittenResidue = (
   const mapping = new Map<string, string>();
   let probeReads = 0;
   for (const { key, id, scope } of residue) {
+    if (!canResolveScopeKey(scope, identity)) {
+      return { state: null, probeReads };
+    }
     const requesterScopeKey = resolveScopeKey(scope, identity);
     const requesterKey = `${space}/${requesterScopeKey}/${id}`;
     if (requesterKey !== key) {
@@ -1144,7 +1170,7 @@ const snapshotForDocKey = (
 };
 
 /** The tracked doc key for a query root: the explicit instance where the
- * root names one (protocol.md §2's read row), else the session identity's
+ * root names one (protocol.md §2's read row), else the walking identity's
  * own — one construction for track/extend/coverage so the three never
  * disagree on which instance a root means. */
 const rootDocKey = (
@@ -2171,20 +2197,98 @@ const recordsOfReferrer = (
     : recordsOf(state, referrerDocKey(referrer));
 
 /**
+ * One record on `searchBackForRoot()`'s path, and how far the search has
+ * read what attributes it: the referrers not yet read, and the records the
+ * referrer it is reading stands for.
+ */
+type SearchFrame = {
+  entry: string;
+  referrers: Iterator<string>;
+  records: readonly string[];
+  next: number;
+};
+
+/** The referrers that attribute `entry`, walked and covered alike. */
+function* referrersOfEntry(
+  state: TrackedAttribution,
+  entry: string,
+): Generator<string, void, undefined> {
+  yield* state.trackedBy.get(entry) ?? [];
+  yield* state.coveredBy.get(entry) ?? [];
+}
+
+/**
+ * Helper for `sweepSuspects()`, which searches back from `suspect` through
+ * what attributes it, referrer by referrer, for a root or a record in
+ * `reachable`. Returns `undefined` once it reaches one, having added to
+ * `reachable` the records on its way back to `suspect`, and otherwise every
+ * record it visited: a closed set of records nothing reaches. The search
+ * is depth first, so a record with many referrers costs the one it follows
+ * back to a root rather than all of them.
+ */
+const searchBackForRoot = (
+  state: TrackedGraphState,
+  suspect: string,
+  reachable: Set<string>,
+  stats: QueryTraversalStats,
+): Set<string> | undefined => {
+  const seen = new Set<string>();
+  // The records from `suspect` to the one being read, each attributed by a
+  // referrer standing for the record after it, so a root reached from the
+  // last one proves every one of them reachable.
+  const path: SearchFrame[] = [];
+  // Puts `entry` on the path, and returns whether it is a root itself: a
+  // record nothing attributes counts as one.
+  const enter = (entry: string): boolean => {
+    seen.add(entry);
+    stats.sweepVisits++;
+    path.push({
+      entry,
+      referrers: referrersOfEntry(state, entry),
+      records: [],
+      next: 0,
+    });
+    return !state.trackedBy.has(entry) && !state.coveredBy.has(entry);
+  };
+  let rooted = enter(suspect);
+  while (!rooted && path.length > 0) {
+    const frame = path[path.length - 1];
+    if (frame.next < frame.records.length) {
+      const record = frame.records[frame.next++];
+      if (reachable.has(record)) rooted = true;
+      else if (!seen.has(record)) rooted = enter(record);
+      continue;
+    }
+    const referrer = frame.referrers.next();
+    if (referrer.done) {
+      path.pop();
+    } else if (referrer.value.startsWith(ROOT_REFERRER_PREFIX)) {
+      rooted = true;
+    } else {
+      frame.records = recordsOfReferrer(state, referrer.value);
+      frame.next = 0;
+    }
+  }
+  if (!rooted) return seen;
+  for (const { entry } of path) reachable.add(entry);
+  return undefined;
+};
+
+/**
  * Retires the suspect records no root reaches through the attribution,
  * with every record reachable only through them. Attribution alone retires
  * a record when its last referrer lets go, which two records reached only
  * through each other never do, so each record that lost an attribution and
- * kept a walker is searched for backwards, referrer by referrer, until a
- * root or a record already found reachable: a search that finds neither
- * has found a closed set of records nothing reaches, which retires
- * together, and a document left with no record is emptied. A record
- * nothing attributes counts as a root.
+ * kept a walker is searched for backwards (`searchBackForRoot()`): a
+ * search that finds no root has found a closed set of records nothing
+ * reaches, which retires together, and a document left with no record is
+ * emptied.
  */
 const sweepSuspects = (
   state: TrackedGraphState,
   retirement: Retirement,
   changedMisses: Set<string>,
+  stats: QueryTraversalStats,
 ): void => {
   const reachable = new Set<string>();
   const suspects = [...retirement.suspects];
@@ -2195,52 +2299,8 @@ const sweepSuspects = (
     if (reachable.has(suspect) || selectorOf(suspect) === undefined) {
       continue;
     }
-    // The search runs backwards from the suspect through referrers. A
-    // referrer found rooted proves reachable only the records on its way
-    // back to the suspect, not every referrer the search visited, so the
-    // parents record that way.
-    const seen = new Set<string>([suspect]);
-    const parent = new Map<string, string>();
-    const queue: string[] = [suspect];
-    let rooted: string | undefined;
-    search: while (queue.length > 0) {
-      const entry = queue.pop()!;
-      const walked = state.trackedBy.get(entry);
-      const covered = state.coveredBy.get(entry);
-      if (walked === undefined && covered === undefined) {
-        rooted = entry;
-        break;
-      }
-      for (const referrers of [walked, covered]) {
-        for (const referrer of referrers ?? []) {
-          if (referrer.startsWith(ROOT_REFERRER_PREFIX)) {
-            rooted = entry;
-            break search;
-          }
-          for (const record of recordsOfReferrer(state, referrer)) {
-            if (reachable.has(record)) {
-              rooted = entry;
-              break search;
-            }
-            if (!seen.has(record)) {
-              seen.add(record);
-              parent.set(record, entry);
-              queue.push(record);
-            }
-          }
-        }
-      }
-    }
-    if (rooted !== undefined) {
-      for (
-        let entry: string | undefined = rooted;
-        entry !== undefined;
-        entry = parent.get(entry)
-      ) {
-        reachable.add(entry);
-      }
-      continue;
-    }
+    const seen = searchBackForRoot(state, suspect, reachable, stats);
+    if (seen === undefined) continue;
     for (const entry of seen) {
       const selector = selectorOf(entry);
       if (selector === undefined) continue;
@@ -2284,7 +2344,7 @@ const settleRetirement = (
       retireEmptied(state, retirement, changedMisses);
       if (retirement.candidates.size > 0) continue;
       if (retirement.suspects.size === 0) break;
-      sweepSuspects(state, retirement, changedMisses);
+      sweepSuspects(state, retirement, changedMisses, stats);
       // A record the sweep retires can orphan what its walk reached, with
       // or without emptying a document.
       if (
@@ -2532,6 +2592,120 @@ export const syncCrossingsOf = (
   return crossings;
 };
 
+/**
+ * The share of a query's roots that one tracked graph walks, and the
+ * identity it walks them under.
+ */
+export type GraphQueryPartition = {
+  /**
+   * Scope instance whose identity walks the roots, or `undefined` for the
+   * querying session's own.
+   */
+  instance: ScopeKey | undefined;
+
+  /** Identity the roots, and every link followed from them, resolve under. */
+  identity: ScopeKeyIdentity;
+
+  /** The query's roots that fall to this partition, in the query's order. */
+  query: GraphQuery;
+};
+
+/**
+ * Helper for `partitionGraphQuery()`, which returns the scope instance whose
+ * identity walks `root`: the one the root names (`entityScopeKey`), unless
+ * that is `identity`'s own or names no identity, as the `space` instance
+ * does.
+ */
+const actingInstanceOf = (
+  root: GraphQueryRoot,
+  identity: ScopeKeyIdentity,
+): ScopeKey | undefined => {
+  const named = root.entityScopeKey;
+  if (named === undefined || identityOfScopeKey(named) === undefined) {
+    return undefined;
+  }
+  const scope = scopeOfScopeKey(named);
+  return canResolveScopeKey(scope, identity) &&
+      resolveScopeKey(scope, identity) === named
+    ? undefined
+    : named;
+};
+
+/**
+ * Throws where `roots` holds one that names a scope instance of an identity
+ * other than `identity`, the one a graph walks its roots under, or an
+ * instance of a scope other than the one the root declares. Walked under
+ * `identity`, either is recorded under another instance of the document as
+ * well, which then counts as walked when it was not. `partitionGraphQuery()`
+ * gives a root of the first kind a graph of its own.
+ */
+const assertRootsWalkedUnder = (
+  roots: readonly GraphQueryRoot[],
+  identity: ScopeKeyIdentity,
+): void => {
+  for (const root of roots) {
+    const named = root.entityScopeKey;
+    if (named === undefined) continue;
+    const declared = root.scope ?? DEFAULT_SCOPE;
+    if (scopeOfScopeKey(named) !== declared) {
+      throw new Error(
+        `root \`${root.id}\` declares the \`${declared}\` scope and names ` +
+          `an instance of the \`${scopeOfScopeKey(named)}\` scope`,
+      );
+    }
+    if (actingInstanceOf(root, identity) !== undefined) {
+      throw new Error(
+        `root \`${root.id}\` names a scope instance of another identity; ` +
+          "split the query with `partitionGraphQuery()` and walk each part " +
+          "under its identity",
+      );
+    }
+  }
+};
+
+/**
+ * Splits `query` by the identity each of its roots is walked under, into at
+ * least one partition. A root naming a scope instance (`entityScopeKey`,
+ * protocol.md §2's read row) that is not `identity`'s own is walked under
+ * the identity that instance belongs to, so a link followed from it resolves
+ * to that identity's instances, as it does in a walk that identity's own
+ * session runs. Every other root is walked under `identity`.
+ *
+ * A `user` instance names a principal and no session, so the walk of a root
+ * naming one follows no session-scoped link.
+ */
+export const partitionGraphQuery = (
+  query: GraphQuery,
+  identity: ScopeKeyIdentity,
+): GraphQueryPartition[] => {
+  const partitions = new Map<ScopeKey | undefined, GraphQueryPartition>();
+  for (const root of query.roots) {
+    const instance = actingInstanceOf(root, identity);
+    let partition = partitions.get(instance);
+    if (partition === undefined) {
+      partition = {
+        instance,
+        identity: instance === undefined
+          ? identity
+          : identityOfScopeKey(instance)!,
+        query: { ...query, roots: [] },
+      };
+      partitions.set(instance, partition);
+    }
+    partition.query.roots.push(root);
+  }
+  return partitions.size === 0
+    ? [{ instance: undefined, identity, query }]
+    : [...partitions.values()];
+};
+
+/**
+ * Walks `query`'s roots under the identity `options` names, and returns the
+ * graph tracking what they reach. Every link a walk follows resolves under
+ * that identity, so a caller holding roots that name another identity's
+ * scope instance splits the query first (`partitionGraphQuery()`); a root
+ * naming one is refused.
+ */
 export const trackGraph = (
   space: string,
   engine: Engine.Engine,
@@ -2543,6 +2717,10 @@ export const trackGraph = (
   state: TrackedGraphState;
   stats: QueryTraversalStats;
 } => {
+  assertRootsWalkedUnder(query.roots, {
+    principal: options.principal,
+    sessionId: options.sessionId,
+  });
   const branch = query.branch ?? "";
   // Historical reads bypass the cache (entries are current-seq only), and
   // so does the lease-holder exemption class: an exempt evaluation judges
@@ -2552,7 +2730,7 @@ export const trackGraph = (
   const cache = options.readSeq === undefined && options.keyedSnapshots !== true
     ? options.evaluationCache
     : undefined;
-  let cacheKeys: { pure: string; identity: string } | undefined;
+  let cacheKey: string | undefined;
   let refusalProbeReads = 0;
   if (cache !== undefined) {
     const currentSeq = Engine.serverSeq(engine);
@@ -2563,21 +2741,19 @@ export const trackGraph = (
       cache.weight = 0;
       cache.rotations++;
     }
-    const queryKey = evaluationQueryKey(query);
-    cacheKeys = {
-      pure: `P${queryKey}`,
-      identity: `I${evaluationIdentityKey(options)}${queryKey}`,
-    };
-    const pureEntry = cache.entries.get(cacheKeys.pure);
+    cacheKey = `P${evaluationQueryKey(query)}`;
+    const entry = cache.entries.get(cacheKey);
     let served: TrackedGraphState | null = null;
     let probeReads = 0;
-    if (pureEntry !== undefined) {
-      if (pureEntry.share.kind === "absent-residue") {
+    if (entry !== undefined) {
+      if (entry.share.kind === "absent-residue") {
+        // A residue document that is PRESENT for this identity refuses the
+        // share, and the evaluation below then runs in full.
         const rewritten = cloneWithRewrittenResidue(
           engine,
           space,
-          pureEntry.state,
-          pureEntry.share.residue,
+          entry.state,
+          entry.share.residue,
           options,
         );
         served = rewritten.state;
@@ -2590,26 +2766,10 @@ export const trackGraph = (
       } else {
         served = cloneTrackedGraphStateForIdentity(
           engine,
-          pureEntry.state,
+          entry.state,
           options,
         );
         cache.hitsPure++;
-      }
-    }
-    if (served === null) {
-      // Either no shared entry, or its residue is PRESENT for this
-      // identity and the share was refused. The identity's own earlier
-      // evaluation — tainted, keyed to exactly this (principal,
-      // sessionId) — still answers; without this lookup a shared entry
-      // would shadow it and the identity would re-evaluate every time.
-      const identityEntry = cache.entries.get(cacheKeys.identity);
-      if (identityEntry !== undefined) {
-        served = cloneTrackedGraphStateForIdentity(
-          engine,
-          identityEntry.state,
-          options,
-        );
-        cache.hitsIdentity++;
       }
     }
     if (served !== null) {
@@ -2679,9 +2839,8 @@ export const trackGraph = (
       const rootScope = root.scope ?? DEFAULT_SCOPE;
       // A root naming an explicit instance (protocol.md §2's read row —
       // lease-holder only, admission enforced at the server layer) reads
-      // and tracks THAT instance; traversal beyond the root resolves under
-      // the session identity as today (per-run deep threading is the
-      // Phase 2 fan-out work).
+      // and tracks THAT instance. A link the walk follows from it resolves
+      // under the manager's identity.
       const loaded = manager.load({
         id: root.id,
         scope: rootScope,
@@ -2751,22 +2910,27 @@ export const trackGraph = (
     schemaRefs,
   };
   if (
-    cache !== undefined && cacheKeys !== undefined &&
+    cache !== undefined && cacheKey !== undefined &&
     cache.entries.size < EVALUATION_CACHE_MAX_ENTRIES &&
     state.entities.size <= cache.maxEntryWeight
   ) {
-    // The cache keeps its own clone: the state returned below belongs to
-    // the caller's session, whose refreshes and extensions mutate it.
-    const share = classifyStateScope(state);
-    const weight = state.entities.size;
-    const key = share.kind === "tainted" ? cacheKeys.identity : cacheKeys.pure;
-    const previous = cache.entries.get(key);
-    cache.entries.set(key, {
-      state: cloneTrackedGraphState(engine, state),
-      share,
-      weight,
-    });
-    cache.weight += weight - (previous?.weight ?? 0);
+    // A walk that left a link unfollowed for want of a session reached
+    // less than a walk under another identity would, whatever its keys say.
+    const share: StateScopeClass = stats.unresolvedLinkScopes > 0
+      ? { kind: "tainted" }
+      : classifyStateScope(state);
+    if (share.kind !== "tainted") {
+      // The cache keeps its own clone: the state returned below belongs to
+      // the caller's session, whose refreshes and extensions mutate it.
+      const weight = state.entities.size;
+      const previous = cache.entries.get(cacheKey);
+      cache.entries.set(cacheKey, {
+        state: cloneTrackedGraphState(engine, state),
+        share,
+        weight,
+      });
+      cache.weight += weight - (previous?.weight ?? 0);
+    }
   }
   return {
     serverSeq: Engine.serverSeq(engine),
@@ -2786,6 +2950,7 @@ export const extendTrackedGraph = (
   stats: QueryTraversalStats;
 } => {
   const manager = state.manager;
+  assertRootsWalkedUnder(query.roots, identityOf(manager));
   const stats = createQueryTraversalStats();
   const readCountBefore = manager.readCount;
   const touched = new Set<QueryDocKey>();
@@ -2974,7 +3139,6 @@ export const refreshTrackedGraph = (
   // their re-evaluation routes a still-absent outcome back into the miss
   // set (never the tracker, whose entries reach the wire).
   const affectedMisses = new Map<QueryDocKey, Set<SchemaPathSelector>>();
-  const invalidations = new Map<CellScope, Set<string>>();
   const identity = identityOf(state.manager);
   let outcome = "failed";
   let rootEvaluations = 0;
@@ -3003,21 +3167,14 @@ export const refreshTrackedGraph = (
       // the affected-tracker lookup is a direct join — no session-identity
       // re-resolution, and another principal's instance simply never
       // matches this state's tracker.
-      const { id, scopeKey, scope } = fromDirtyKey(dirtyId);
-      // The manager's read cache keys by (scope name, id) under its ONE
-      // bound identity, so invalidate only dirtiness aimed at THIS
-      // identity's own instance — a foreign instance was never cached here.
-      if (
-        canResolveScopeKey(scope, identity) &&
-        resolveScopeKey(scope, identity) === scopeKey
-      ) {
-        let scopedIds = invalidations.get(scope);
-        if (scopedIds === undefined) {
-          scopedIds = new Set();
-          invalidations.set(scope, scopedIds);
-        }
-        scopedIds.add(id);
-      }
+      const { id, scopeKey } = fromDirtyKey(dirtyId);
+      // The graph's own cache lets go of every dirty document, tracked or
+      // not: one that changed while nothing reached it is read at its stored
+      // version when a root added later does, and the walks below take every
+      // present document the cache still holds from it. A dirty key names
+      // one instance, and the cache holds an instance under that same key,
+      // whether the graph's identity resolves to it or a root named it.
+      state.manager.forgetInstance(scopeKey, id);
       const key: QueryDocKey = `${space}/${scopeKey}/${id}`;
       const selectors = state.tracker.get(key);
       if (selectors !== undefined && selectors.size > 0) {
@@ -3034,23 +3191,24 @@ export const refreshTrackedGraph = (
         affectedMisses.set(key, new Set(missedSelectors));
       }
     }
-    // The graph's own cache lets go of every dirty document, tracked or
-    // not: one that changed while nothing reached it is read at its stored
-    // version when a root added later does.
-    for (const [scope, ids] of invalidations) {
-      state.manager.invalidateIds(ids, scope);
-    }
     if (affectedDocs.size === 0 && affectedMisses.size === 0) {
       outcome = "untouched";
       return null;
     }
     phases.enter("rewalk");
 
+    // The walks take from the graph's cache the present documents it still
+    // holds, none of which is dirty, so of everything a changed document
+    // links to they read from the engine what changed with it, what no walk
+    // reached before, and what was absent. The cache takes what they read
+    // once the refresh has succeeded.
     const manager = walked = new EngineObjectManager(
       engine,
       state.branch,
       state.manager.principal,
       state.manager.sessionId,
+      undefined,
+      state.manager,
     );
     const sharedMemo = createSchemaMemo();
     const stats = createQueryTraversalStats();
@@ -3134,6 +3292,9 @@ export const refreshTrackedGraph = (
       touched.add(key);
     }
 
+    // What the walks read from the engine is delivered unless the graph
+    // holds that version of it already. A document they took from the cache
+    // is one an earlier pass read, and delivered then.
     phases.enter("loaded");
     for (const address of manager.loadedAddresses()) {
       const key: QueryDocKey = `${space}/${address.scopeKey}/${address.id}`;

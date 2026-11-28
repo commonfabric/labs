@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { URI } from "@commonfabric/memory/interface";
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {

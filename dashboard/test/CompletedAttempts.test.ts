@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { CompletedAttempts } from "../completed-attempts.ts";
 import type { Run } from "../types.ts";
 import { byUrl, type GithubAnswer, withGithubAttempt } from "./github-attempts.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const REPO = "example/repo";
 

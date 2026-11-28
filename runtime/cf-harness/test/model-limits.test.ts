@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type {
   HarnessModelLimits,
   HarnessModelTurnRequest,
@@ -8,6 +7,7 @@ import { limitHarnessModelClient } from "../src/model/limits.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import { OpenAICompatibleGatewayModelClient } from "../src/model/openai-compatible-gateway.ts";
 import { OpenAICompatibleGatewayClient } from "../src/gateway/openai-client.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const request: HarnessModelTurnRequest = {
   model: "gpt-6.1-sol",

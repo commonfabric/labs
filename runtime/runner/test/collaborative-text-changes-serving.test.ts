@@ -5,7 +5,6 @@
  * did not read.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -14,6 +13,12 @@ import {
   toValuePath,
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { stampWaveRunContext } from "../src/executor/wave.ts";

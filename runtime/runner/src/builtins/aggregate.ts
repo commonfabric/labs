@@ -34,7 +34,7 @@ import {
   aggregateSumValue,
   combineAggregateSums,
 } from "./aggregate-sum.ts";
-import { listSlotResolutions } from "./list-coordinator-plan.ts";
+import { listSlotLinks } from "./list-coordinator-plan.ts";
 import {
   listElementKeys,
   releaseRemovedElements,
@@ -251,7 +251,7 @@ export function aggregate(
       const rawList = listCell.getRaw() as unknown;
       const slots = operation === "count"
         ? []
-        : listSlotResolutions(runtime, tx, inputs).slots;
+        : listSlotLinks(tx, inputs).slots;
       if (rawList !== undefined && !Array.isArray(rawList)) {
         throw new TypeError(`${operation} requires an array`);
       }
@@ -260,7 +260,7 @@ export function aggregate(
       );
       const selectingElement = operation === "minBy" || operation === "maxBy";
       const elementSlots = selectingElement
-        ? listSlotResolutions(runtime, tx, inputs, "elements").slots
+        ? listSlotLinks(tx, inputs, "elements").slots
         : slots;
       if (selectingElement && elementSlots.length !== slots.length) return;
       const elementCells = selectingElement

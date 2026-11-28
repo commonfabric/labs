@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { type DID, Identity } from "@commonfabric/identity";
 import {
@@ -13,6 +12,12 @@ import {
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   clickCfButton,

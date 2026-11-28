@@ -35,7 +35,6 @@
 //   the handler requeues, the derivation drops, everything else commits,
 //   and no batch is ever built for the failed space.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
@@ -54,6 +53,7 @@ import {
   SERVER_EXECUTION_EFFECTS_DOC_ID,
   type SessionEffectsDocValue,
   streamEntriesDocId,
+  toDirtyKey,
 } from "@commonfabric/memory/v2";
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
@@ -64,6 +64,12 @@ import {
   StorageManager,
 } from "../src/storage/v2.ts";
 import type { Signer } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import type { Module, Pattern } from "../src/builder/types.ts";
 import type {
@@ -77,6 +83,7 @@ import type {
 } from "../src/storage/interface.ts";
 import {
   isAclDocumentWriteRefusal,
+  markScopedDefaultSeed,
   stageSpaceAccessChanges,
   stampWaveRunContext,
   WaveAccumulator,
@@ -125,10 +132,13 @@ describe("stage D seal-into-wave", () => {
     spaceAccessAuthority?: ConstructorParameters<
       typeof WaveAccumulator
     >[0]["spaceAccessAuthority"];
+
+    /** The seq the wave opens at, the engine's head when left out. */
+    basisSeq?: number;
   } = {}): WaveAccumulator =>
     new WaveAccumulator({
       space,
-      basisSeq: Engine.serverSeq(engine),
+      basisSeq: options.basisSeq ?? Engine.serverSeq(engine),
       // OFF-arm cardinality 1: the instance keys derive from the
       // runtime's own authenticated session (plan Phase 1 stage E). The
       // accumulator constructs keys via the ONE shared constructor — a
@@ -229,10 +239,7 @@ describe("stage D seal-into-wave", () => {
     };
   };
 
-  const routePieceInstantiationWaves = (
-    firstWave: WaveAccumulator,
-    recoveryWave: WaveAccumulator,
-  ) => {
+  const routePieceInstantiationWaves = (firstWave: WaveAccumulator) => {
     let destinationWave = firstWave;
     const firstSeal = Promise.withResolvers<void>();
     const recoverySeal = Promise.withResolvers<void>();
@@ -271,28 +278,25 @@ describe("stage D seal-into-wave", () => {
       recoverySeal: recoverySeal.promise,
       recoverySeals: () => recoverySeals,
       idleSeals: () => sealChain,
-      useRecoveryWave: () => {
+      useRecoveryWave: (recoveryWave: WaveAccumulator) => {
         destinationWave = recoveryWave;
       },
     };
   };
 
+  /**
+   * A sink that reports every write past a wave's basis as a whole-document
+   * write, which nothing can rebase over. Paired with a wave opened at seq 0
+   * (`newWave({ basisSeq: 0 })`), every document the wave wrote that the
+   * store holds has moved past the basis, by commits the replica holds.
+   */
   const wholeDocumentConflictSink = (
     inner: WaveCommitSink,
-  ): WaveCommitSink => {
-    const conflictHead = Engine.serverSeq(engine) + 1;
-    return {
-      currentHeads: (_targetSpace, docs) =>
-        Promise.resolve(
-          new Map(docs.map((doc) => [
-            `${doc.id} ${doc.scopeKey}`,
-            conflictHead,
-          ])),
-        ),
-      concurrentWritePaths: () => Promise.resolve([[]]),
-      commitWave: (batch) => inner.commitWave(batch),
-    };
-  };
+  ): WaveCommitSink => ({
+    currentHeads: (targetSpace, docs) => inner.currentHeads(targetSpace, docs),
+    concurrentWritePaths: () => Promise.resolve([[]]),
+    commitWave: (batch) => inner.commitWave(batch),
+  });
 
   /** Seed a foreign engine's GENESIS ACL as its first commit (OW31 B4:
    * the sink refuses a foreign data batch into a seq-0/no-ACL engine —
@@ -345,6 +349,25 @@ describe("stage D seal-into-wave", () => {
     await server.flushSessions([space]);
     await storageManager.open(space).pullToServerHead?.();
     for (const cell of cells) await cell.sync();
+  };
+
+  /**
+   * Replaces the case's server, storage, runtime, and engine with ones over a
+   * server that sends each session the commits it owes only when it is told
+   * to, so that the case decides when the replica takes a commit.
+   */
+  const connectToManualServer = async (): Promise<void> => {
+    await runtime.dispose();
+    await storageManager.close();
+    await server.close();
+    server = newSharedServer({ subscriptionRefreshDelayMs: "manual" });
+    storageManager = EmulatedStorageManager.connectTo(server, { as: signer });
+    runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      experimental: { serverExecution: true },
+    });
+    engine = await server.engineForSpace(space);
   };
 
   beforeEach(async () => {
@@ -1083,6 +1106,34 @@ describe("stage D seal-into-wave", () => {
     expect(commitMeta.holder).toBe(lease.holder);
   });
 
+  it("annotates each space-scoped write of a run that acts as nobody with the action whose run made it", async () => {
+    const lease = await liveLease();
+    const leasedWave = newWave({ lease });
+    runtime.installSealDestination(leasedWave);
+    const a = runtime.getCell<{ value: number }>(space, "made-a", undefined);
+    const b = runtime.getCell<{ value: number }>(space, "made-b", undefined);
+    const tx1 = runtime.edit();
+    stampWaveRunContext(tx1, { actionId: "derive-a", kind: "derivation" });
+    a.withTx(tx1).set({ value: 1 });
+    expect((await tx1.commit().settled).error).toBeUndefined();
+    const tx2 = runtime.edit();
+    stampWaveRunContext(tx2, { actionId: "derive-b", kind: "derivation" });
+    b.withTx(tx2).set({ value: 2 });
+    expect((await tx2.commit().settled).error).toBeUndefined();
+    runtime.clearSealDestination();
+
+    const outcome = await leasedWave.commitWave(newSink());
+    await leasedWave.settled();
+
+    const row = engine.database.prepare(
+      `SELECT annotations FROM "commit" WHERE seq = :seq`,
+    ).get({ seq: outcome.seq }) as { annotations: string };
+    expect(decodeMemoryBoundary(row.annotations)).toEqual([
+      { op: 0, action: "derive-a" },
+      { op: 1, action: "derive-b" },
+    ]);
+  });
+
   it("drops superseded pure writes (C8a) and the derivations that read them; the authored value survives", async () => {
     const lease = await liveLease();
     const wave = newWave({ lease });
@@ -1346,6 +1397,150 @@ describe("stage D seal-into-wave", () => {
     expect(outcome.seq).toBeUndefined();
     expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
       value: { value: 99 },
+    });
+  });
+
+  it("drops a scoped-default seed when the viewer wrote the instance before the wave opened and the seed had yet to see the write", async () => {
+    // The loop's own writes read the same lagging view. A seed that found a
+    // viewer's instance absent, sealing into a wave opened after the
+    // viewer's first write was admitted, would otherwise create the
+    // instance over that write.
+
+    const w = runtime.getCell<{ value: number }>(
+      space,
+      "wave-stale-bookkeeping",
+      undefined,
+    );
+    await w.sync();
+    const wLink = w.getAsNormalizedFullLink();
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: wLink.id,
+          value: { value: { value: 99 } },
+        }],
+      },
+    });
+    const lease = await liveLease();
+    const wave = newWave({ lease });
+    expect(
+      Engine.selectDocHead(engine, { id: wLink.id, scopeKey: "space" }),
+    ).toBeLessThanOrEqual(wave.basisSeq);
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "seed-w", kind: "bookkeeping" });
+    markScopedDefaultSeed(tx);
+    expect(w.withTx(tx).get()).toBeUndefined();
+    w.withTx(tx).set({ value: 1 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const settlement = waveSettlementOf(tx);
+    expect(settlement).toBeDefined();
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+
+    expect(outcome.aborted).toBeUndefined();
+    expect(outcome.dispositions[0]).toEqual({ kind: "dropped" });
+    expect(
+      ((await settlement!).error as
+        | { waveWithdrawalCause?: unknown }
+        | undefined)?.waveWithdrawalCause,
+    ).toBe("contribution-dropped");
+    expect(outcome.seq).toBeUndefined();
+    expect(Engine.readState(engine, { id: wLink.id })?.document).toEqual({
+      value: { value: 99 },
+    });
+  });
+
+  it("makes a dropped bookkeeping write's retry wait until the replica has taken every commit the write lost to", async () => {
+    // A dropped bookkeeping contribution, a piece start's among them, is
+    // retried in place, and the retry writes every document of the dropped
+    // write again over what the replica holds of it. Started before the
+    // replica takes a commit the write lost to, it writes over that commit
+    // without having seen it. This server sends a session the commits it
+    // owes only when it is told to, so the case decides when the replica
+    // takes each rival commit.
+
+    await connectToManualServer();
+
+    const cell = (name: string) =>
+      runtime.getCell<{ value: number }>(space, name, undefined);
+    const first = cell("wave-dropped-retry-first");
+    const second = cell("wave-dropped-retry-second");
+    const fresh = cell("wave-dropped-retry-fresh");
+    await first.sync();
+    await second.sync();
+    const lease = await liveLease();
+    const wave = newWave({ lease });
+    runtime.installSealDestination(wave);
+
+    const tx = runtime.edit();
+    stampWaveRunContext(tx, { actionId: "start", kind: "bookkeeping" });
+    first.withTx(tx).set({ value: 1 });
+    second.withTx(tx).set({ value: 2 });
+    fresh.withTx(tx).set({ value: 3 });
+    expect((await tx.commit().settled).error).toBeUndefined();
+    const settlement = waveSettlementOf(tx);
+    expect(settlement).toBeDefined();
+
+    // Rival sessions write the first two documents mid-wave. The replica
+    // takes the write to the first before the wave commits, and the write to
+    // the second only when the server is told to send it.
+    const rivalSet = async (target: typeof first, value: number) => {
+      const rivalStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const rival = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager: rivalStorage,
+      });
+      try {
+        const rivalTx = rival.edit();
+        rival.getCellFromLink<{ value: number }>(
+          target.getAsNormalizedFullLink(),
+        ).withTx(rivalTx).set({ value });
+        expect((await rivalTx.commit().settled).error).toBeUndefined();
+      } finally {
+        await rival.dispose();
+        await rivalStorage.close();
+      }
+    };
+    await rivalSet(first, 99);
+    await server.flushSessions([space]);
+    await storageManager.open(space).pullToServerHead?.();
+    await rivalSet(second, 88);
+
+    runtime.clearSealDestination();
+    const outcome = await wave.commitWave(newSink());
+    await wave.settled();
+    expect(outcome.dispositions[0]).toEqual({ kind: "dropped" });
+    const { error } = await settlement!;
+    expect(error?.waveWithdrawalCause).toBe("contribution-dropped");
+    expect(second.get()).toBeUndefined();
+
+    const seenByRetry = runtime.awaitCommitRetryReadiness(
+      error,
+      undefined,
+      error?.supersededOutputs,
+    ).then(() => ({
+      first: first.get(),
+      second: second.get(),
+      fresh: fresh.get(),
+    }));
+    // A round trip to the server, over which a wait for nothing would end.
+    await storageManager.open(space).pullToServerHead?.();
+    await server.flushSessions([space]);
+    expect(await seenByRetry).toEqual({
+      first: { value: 99 },
+      second: { value: 88 },
+      fresh: undefined,
     });
   });
 
@@ -1815,7 +2010,12 @@ describe("stage D seal-into-wave", () => {
       Record<string, unknown>
     >;
     expect(annotations).toEqual([
-      { op: 0, actingUser: "did:key:alice", actingSession: "sess-1" },
+      {
+        op: 0,
+        actingUser: "did:key:alice",
+        actingSession: "sess-1",
+        action: "handle-vote",
+      },
     ]);
     const basis = selectSchedulerBasisRows(engine, {
       branch: "",
@@ -5961,9 +6161,9 @@ describe("stage D seal-into-wave", () => {
     );
     const { cell } = witness;
     const lease = await liveLease();
-    const firstWave = newWave({ lease });
+    const firstWave = newWave({ lease, basisSeq: 0 });
     const recoveryWave = newWave({ lease });
-    const route = routePieceInstantiationWaves(firstWave, recoveryWave);
+    const route = routePieceInstantiationWaves(firstWave);
     const failures: Array<{ actionId: string; error: unknown }> = [];
     runtime.pieceStartCommitFailureObserver = (failure) => {
       failures.push(failure);
@@ -5973,7 +6173,7 @@ describe("stage D seal-into-wave", () => {
     await route.firstSeal;
     await runtime.idle();
     await route.idleSeals();
-    route.useRecoveryWave();
+    route.useRecoveryWave(recoveryWave);
 
     // Every document the first wave wrote appears to have advanced, and a
     // whole-document rival write overlaps it. Bookkeeping cannot commute with
@@ -6014,21 +6214,88 @@ describe("stage D seal-into-wave", () => {
     await lease.release();
   });
 
+  it("retries a dropped piece start only once the replica has taken the commit it was dropped over", async () => {
+    // A rival writes the piece's result document while the start's wave is
+    // open, so the wave drops the start. Its retry writes the result document
+    // again, so it waits until the replica takes the rival's commit, which
+    // this server sends only when it is told to.
+
+    await connectToManualServer();
+
+    const witness = await stoppedWitnessPiece("wave-piece-retry-waits");
+    const lease = await liveLease();
+    const firstWave = newWave({ lease });
+    const route = routePieceInstantiationWaves(firstWave);
+    const failures: Array<{ actionId: string; error: unknown }> = [];
+    runtime.pieceStartCommitFailureObserver = (failure) => {
+      failures.push(failure);
+    };
+
+    expect(await runtime.start(witness.cell)).toBe(true);
+    await route.firstSeal;
+    await runtime.idle();
+    await route.idleSeals();
+
+    // The server holds the rival's commit and sends it to the sessions
+    // watching the document when it is told to.
+    const resultId = witness.cell.getAsNormalizedFullLink().id;
+    const stored = Engine.readState(engine, { id: resultId, scopeKey: "space" })
+      ?.document;
+    expect(stored).toBeDefined();
+    Engine.applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id: resultId,
+          value: { ...stored, value: { witness: 100 } },
+        }],
+      },
+    });
+    const recoveryWave = newWave({ lease });
+    route.useRecoveryWave(recoveryWave);
+
+    const firstOutcome = await firstWave.commitWave(newSink());
+    await firstWave.settled();
+    expect(firstOutcome.dispositions).toContainEqual({ kind: "dropped" });
+    await storageManager.open(space).pullToServerHead?.();
+    expect(route.recoverySeals()).toBe(0);
+    expect(witness.instantiations()).toBe(2);
+
+    server.markSpaceDirty(space, [toDirtyKey(resultId)]);
+    await server.flushSessions([space]);
+    await route.recoverySeal;
+    await runtime.idle();
+    runtime.clearSealDestination();
+    const recoveryOutcome = await recoveryWave.commitWave(newSink());
+    await recoveryWave.settled();
+    await runtime.runner.idlePieceInstantiationSettlements();
+    expect(recoveryOutcome.aborted).toBeUndefined();
+    expect(route.recoverySeals()).toBe(1);
+    expect(failures).toEqual([]);
+    expect(witness.instantiations()).toBe(3);
+    expect(witness.lastRunInstantiation()).toBe(3);
+    await lease.release();
+  });
+
   it("tears down after a second dropped piece-instantiation contribution instead of retrying again", async () => {
     const witness = await stoppedWitnessPiece(
       "wave-piece-instantiate-second-drop",
     );
     const lease = await liveLease();
-    const firstWave = newWave({ lease });
-    const recoveryWave = newWave({ lease });
-    const route = routePieceInstantiationWaves(firstWave, recoveryWave);
+    const firstWave = newWave({ lease, basisSeq: 0 });
+    const recoveryWave = newWave({ lease, basisSeq: 0 });
+    const route = routePieceInstantiationWaves(firstWave);
     const conflictSink = wholeDocumentConflictSink(newSink());
 
     expect(await runtime.start(witness.cell)).toBe(true);
     await route.firstSeal;
     await runtime.idle();
     await route.idleSeals();
-    route.useRecoveryWave();
+    route.useRecoveryWave(recoveryWave);
     await firstWave.commitWave(conflictSink);
     await firstWave.settled();
     await route.recoverySeal;
@@ -6055,9 +6322,9 @@ describe("stage D seal-into-wave", () => {
       { throwOnInstantiation: 3 },
     );
     const lease = await liveLease();
-    const firstWave = newWave({ lease });
+    const firstWave = newWave({ lease, basisSeq: 0 });
     const recoveryWave = newWave({ lease });
-    const route = routePieceInstantiationWaves(firstWave, recoveryWave);
+    const route = routePieceInstantiationWaves(firstWave);
     const failures: unknown[] = [];
     runtime.pieceStartCommitFailureObserver = ({ error }) => {
       failures.push(error);
@@ -6067,7 +6334,7 @@ describe("stage D seal-into-wave", () => {
     await route.firstSeal;
     await runtime.idle();
     await route.idleSeals();
-    route.useRecoveryWave();
+    route.useRecoveryWave(recoveryWave);
     await firstWave.commitWave(wholeDocumentConflictSink(newSink()));
     await firstWave.settled();
     await runtime.runner.idlePieceInstantiationSettlements();
@@ -6139,9 +6406,9 @@ describe("stage D seal-into-wave", () => {
       "wave-piece-instantiate-stop",
     );
     const lease = await liveLease();
-    const firstWave = newWave({ lease });
+    const firstWave = newWave({ lease, basisSeq: 0 });
     const recoveryWave = newWave({ lease });
-    const route = routePieceInstantiationWaves(firstWave, recoveryWave);
+    const route = routePieceInstantiationWaves(firstWave);
     const readinessEntered = Promise.withResolvers<void>();
     const heldReadiness = Promise.withResolvers<void>();
     // Park the recovery inside the readiness gate. The withdrawal error the
@@ -6164,7 +6431,7 @@ describe("stage D seal-into-wave", () => {
     await route.firstSeal;
     await runtime.idle();
     await route.idleSeals();
-    route.useRecoveryWave();
+    route.useRecoveryWave(recoveryWave);
     await firstWave.commitWave(wholeDocumentConflictSink(newSink()));
     await firstWave.settled();
     await readinessEntered.promise;
@@ -6189,7 +6456,7 @@ describe("stage D seal-into-wave", () => {
     const lease = await liveLease();
     const firstWave = newWave({ lease });
     const recoveryWave = newWave({ lease });
-    const route = routePieceInstantiationWaves(firstWave, recoveryWave);
+    const route = routePieceInstantiationWaves(firstWave);
     const failures: unknown[] = [];
     runtime.pieceStartCommitFailureObserver = ({ error }) => {
       failures.push(error);
@@ -6199,7 +6466,7 @@ describe("stage D seal-into-wave", () => {
     await route.firstSeal;
     await runtime.idle();
     await route.idleSeals();
-    route.useRecoveryWave();
+    route.useRecoveryWave(recoveryWave);
     firstWave.abandon("whole-wave lifecycle recovery owns this case");
     await firstWave.settled();
     await runtime.runner.idlePieceInstantiationSettlements();

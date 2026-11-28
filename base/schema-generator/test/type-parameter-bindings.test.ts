@@ -1,10 +1,10 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import type { GenerationContext } from "../src/interface.ts";
 import { readBoundTypeNode } from "../src/type-parameter-bindings.ts";
 import { getTypeFromCode } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A bound member and its checker-created instantiation beside a sibling. */
 async function memberOf(code: string) {

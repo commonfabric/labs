@@ -41,7 +41,7 @@ import {
   styleOf,
 } from "../../tools/test-support/vnode-helpers.ts";
 import type { Message, User } from "../group-chat-room/group-chat-room.tsx";
-import GroupChatLobby, { joinChat } from "./group-chat-lobby.tsx";
+import GroupChatLobby, { joinChat } from "./main.tsx";
 
 type TestProfile = { name?: string } & ProfileFaceFields;
 

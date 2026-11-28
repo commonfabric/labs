@@ -8,6 +8,7 @@ import {
   valueEqual,
   valueEqualByWalk,
 } from "@commonfabric/data-model";
+import { isLinkRef, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { SlotLimitError } from "@commonfabric/data-model/codec-json";
 import { isRoutedIdentifier } from "./routed-parser.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -27,6 +28,7 @@ import {
   isCapable,
   isDeletionTombstone,
 } from "../acl.ts";
+import { asPatternIdentityRef } from "../../runner/src/meta-seam.ts";
 import { lookupSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   type BranchCreateRequest,
@@ -147,6 +149,7 @@ import {
   type WireMemoryProtocolFlags,
 } from "../v2.ts";
 import { AdmissionWaiters } from "./admission-waiters.ts";
+import { retireBareDidLabels } from "./cfc-bare-did-migration.ts";
 import {
   type CommitRatesReport,
   CommitRateTracker,
@@ -162,14 +165,46 @@ import {
   SessionReportLog,
   type SessionReportsReport,
 } from "./session-reports.ts";
+import {
+  advanceCurrencyCursor,
+  applyCurrencyImports,
+  type CurrencyBatch,
+  type CurrencyInstance,
+  type CurrencyMarked,
+  type CurrencyRefusal,
+  type CurrencyStored,
+  type CurrencyUpstreamRead,
+  dropUnreadCurrencyImports,
+  forgetCurrencyImports,
+  forgetCurrencySource,
+  judgeCurrencyRoots,
+  pullCurrencyExports,
+  registerCurrencyReads,
+  selectCurrencyDeriver,
+  selectCurrencyExport,
+  selectCurrencyImports,
+  selectCurrencyNextExpiry,
+  selectCurrencyPiece,
+  selectCurrencyReadersMoved,
+  selectCurrencySourcePosition,
+  selectCurrencySources,
+  selectCurrencyWriters,
+  storeCurrencyRecords,
+  unregisterCurrencyReads,
+} from "./currency-index.ts";
+import { sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import * as Engine from "./engine.ts";
 import {
-  executeInvite,
+  applyInvite,
   type InviteRequest,
   type InviteResult,
   parseInviteOperation,
 } from "./invites.ts";
-import { type RedeemReceipt, SpaceInviteError } from "../space-invites.ts";
+import {
+  type RedeemReceipt,
+  SPACE_INVITES_REVISION_DOC_ID,
+  SpaceInviteError,
+} from "../space-invites.ts";
 import {
   isGenesisRoot,
   readGenesisRoot,
@@ -195,6 +230,7 @@ import {
   extendTrackedGraph,
   fromDirtyKey,
   fromDocKey,
+  partitionGraphQuery,
   type QueryDocKey,
   type QueryEvaluationCache,
   type QueryEvaluationCacheDiagnostics,
@@ -217,8 +253,6 @@ import {
   buildFullSync,
   cacheKeyForEntity,
   compareSyncAddress,
-  graphWatchesByBranch,
-  groupedQueries,
   holdingsToCacheEntries,
   isEmptySync,
   mergeWatchesById,
@@ -231,13 +265,15 @@ import {
   toWireUpsert,
   trackedAndPieceKeysFromEntries,
   trackedIdsFromEntries,
-  unionQuery,
+  watchGraphGroups,
 } from "./server-sync.ts";
 import {
   authorizationError,
+  carriesOnlySessionOpenProofs,
   verifySessionOpenProofs,
 } from "./session-open-auth.ts";
 import {
+  type FullResyncCause,
   isServingSessionOf,
   type SessionLifecycleEvent,
   SessionRegistry,
@@ -376,6 +412,162 @@ const echoBreakerReportCount = operationMeter.createCounter(
 const timing = getLogger("memory", { enabled: false });
 
 const SUBSCRIPTION_REFRESH_DELAY_MS = 5;
+
+/**
+ * How many `result` back-links the currency judgment follows from a root to
+ * the piece it belongs to: as many as a start follows
+ * (`MAX_RESULT_LINK_DEPTH` in the runner's `ensure-piece-running.ts`).
+ */
+const CURRENCY_ROOT_HOPS_MAX = 10;
+
+/** Whether `id` is that of a document a computation derives. */
+const isComputedId = (id: string): boolean => id.startsWith("computed:");
+
+/**
+ * Whether `document`, the stored space instance of a document, is one a
+ * structure load of it starts no piece from and finishes reading at: it is
+ * absent, or it carries no `result` field and no pattern pointer. The
+ * pattern pointer is tested with `asPatternIdentityRef()`, the test the
+ * load itself applies. A `result` field counts whatever it holds, so a
+ * document whose `result` holds no link is not plain, though a load of it
+ * may start nothing.
+ */
+const isPlainDocument = (document: EntityDocument | null): boolean =>
+  document === null ||
+  (!("result" in document) &&
+    asPatternIdentityRef(document.patternIdentity) === undefined);
+
+/**
+ * How many times the change behind a trigger may come back to a space before
+ * no other space rests on that space for a while (serving-loop.md §3b).
+ * Spaces whose pieces read each other pass a trigger around for as long as
+ * their computations keep changing each other's inputs, and nothing in one
+ * space sees the whole circle. A space a change keeps coming back to is
+ * held: a slice that read it is marked instead of armed, so each piece that
+ * reads it starts, as it would with no index kept, and no trigger leaves it
+ * until the hold ends.
+ */
+const CURRENCY_TRIGGER_LAPS_MAX = 8;
+
+/** How long a space's first hold lasts, in milliseconds. */
+const CURRENCY_HOLD_BASE_MS = 1_000;
+
+/**
+ * The longest a hold lasts, in milliseconds. Each hold of a space that was
+ * not left alone for as long again as its last one lasts twice as long, up
+ * to this.
+ */
+const CURRENCY_HOLD_MAX_MS = 300_000;
+
+/**
+ * What a space holds of the change behind the latest trigger it was sent
+ * (serving-loop.md §3b).
+ */
+type CurrencyTrail = {
+  /**
+   * The change the trigger leads back to, one with no trigger behind it,
+   * by the number this server gave it.
+   */
+  origin: number;
+
+  /** How many triggers lead from that change to the space. */
+  hops: number;
+
+  /** How many times that change came back to the space since its last hold. */
+  laps: number;
+
+  /**
+   * The spaces the latest trigger passed on its way here, the one that sent
+   * it last. Where this space is among them, the spaces before its first
+   * appearance are left out, so the list is no longer than one circle.
+   */
+  path: string[];
+
+  /**
+   * The circle the change last came round, from this space back to the one
+   * that sent it here. Absent while the change has not come back.
+   */
+  circle?: string[];
+
+  /** How many times the space was held. */
+  holds: number;
+
+  /** How long the space's last hold lasted, in milliseconds, `0` for none. */
+  gapMs: number;
+
+  /** The time until which no other space rests on this one, `0` for none. */
+  heldUntil: number;
+};
+
+/** The part of a trail a trigger carries. */
+type CurrencyTrailStep = Pick<CurrencyTrail, "origin" | "hops" | "path">;
+
+/** How many spaces `Server.currencyDelivery()` lists. */
+const CURRENCY_DELIVERY_SPACES_MAX = 50;
+
+/**
+ * What passed between the currency indexes of the spaces a memory server
+ * holds (serving-loop.md §3b), for the health route.
+ */
+export type CurrencyDeliveryReport = {
+  /** Triggers sent to a space that read another. */
+  triggers: number;
+
+  /** Pulls a space made from one it reads. */
+  pulls: number;
+
+  /** Advances of a cursor queued behind a commit, for an armed reader. */
+  advancesQueued: number;
+
+  /** Times a space was held because a change kept coming back to it. */
+  holds: number;
+
+  /** Pairs of a space and a space it is armed with. */
+  armed: number;
+
+  /**
+   * The spaces a change came back to, most often held first, at most
+   * `CURRENCY_DELIVERY_SPACES_MAX` of them.
+   */
+  spaces: Array<{
+    space: string;
+
+    /** The number of the change behind the latest trigger it was sent. */
+    origin: number;
+
+    /** How many triggers lead from that change to the space. */
+    hops: number;
+
+    /** How many times that change came back since the space's last hold. */
+    laps: number;
+
+    /** The circle it last came round, from the space back to its sender. */
+    circle: string[];
+
+    /** How many times the space was held. */
+    holds: number;
+
+    /** How long its last hold lasted, in milliseconds, `0` for none. */
+    gapMs: number;
+
+    /** The time its hold ends, where it is held now. */
+    heldUntil?: number;
+  }>;
+};
+
+/**
+ * Live servers' currency-delivery providers in construction order; a server
+ * removes its own on close(), so the newest LIVE server is always the one
+ * reported.
+ */
+const currencyDeliveryProviders: (() => CurrencyDeliveryReport)[] = [];
+
+/**
+ * The co-hosted memory server's currency delivery for the health route — the
+ * most recently constructed server still open; undefined when none is.
+ */
+export const getCurrencyDelivery = (): CurrencyDeliveryReport | undefined =>
+  currencyDeliveryProviders.at(-1)?.();
 const MIN_REFRESH_QUEUE_DRAIN_WAIT_MS = 500;
 /**
  * The duration, in milliseconds, past which an operation is recorded for
@@ -458,9 +650,32 @@ export type SlowQuery = {
   roots?: number;
   watches?: number;
 
-  /** session.watch.refresh only: the refreshed session's principal, so a
-   * slow refresh names whose watch set cost it. */
+  /** Watch operations: the principal of the session whose watch set the
+   * entry evaluated or refreshed, so a slow entry names whose watches cost
+   * it. */
   principal?: string;
+
+  /** Watch evaluations: the session whose watch set was evaluated. */
+  sessionId?: string;
+
+  /** Watch evaluations: how many views the session held. A view's root is
+   * one of the watches `watches` counts. */
+  views?: number;
+
+  /** Watch evaluations: why the evaluation ran. `request` for a watch
+   * request the session sent, `selection` for checking a planner selection
+   * before it is accepted, `support-replaced` for a selection that dropped
+   * a delivered root, `unscoped-flush` for a refresh pass that names no
+   * dirty documents, and otherwise the {@link FullResyncCause} that marked
+   * the session for a full evaluation. */
+  cause?: WatchEvaluationCause;
+
+  /** Watch evaluations: which of the session's graphs the entry evaluated.
+   * `demand` is its ordinary watches and its views' roots, `support` the
+   * delivery its views' planner selections add, and `selection` a planner
+   * selection checked before it is accepted. One request or refresh pass
+   * records an entry per part it evaluated. */
+  part?: "demand" | "support" | "selection";
 
   /** transact only: milliseconds the commit waited for the space
    * publication lock before evaluation began. Flush passes hold the same
@@ -491,9 +706,11 @@ export type SlowQuery = {
    * so a slow entry reporting zero spent it somewhere else — assembling
    * the response, or attaching operation fields.
    *
-   * `session.watch.refresh` carries none of these fields. It re-evaluates
-   * by dirty document rather than by root, so it has no roots to
-   * attribute; absent is the honest answer there, not zero. */
+   * A `session.watch.refresh` entry for a refresh by dirty document carries
+   * none of these fields. It re-evaluates by document rather than by root,
+   * so it has no roots to attribute; absent is the honest answer there, not
+   * zero. A `session.watch.refresh` entry for a pass that evaluated a
+   * session whole carries them, as a request's entry does. */
   rootsVisited?: number;
 
   /** Query and watch operations: summed elapsed time of those root visits.
@@ -504,18 +721,21 @@ export type SlowQuery = {
    * the delivered snapshots to the wire. */
   rootsElapsedMs?: number;
 
-  /** Query and watch operations: engine document reads across every branch
-   * group. Unlike `rootsVisited`, this exposes roots whose declarations fan
-   * out over many documents, and unlike `slowestRoot.reads`, it accounts for
-   * the complete request rather than only its costliest root. */
+  /** Query and watch operations: engine document reads across every graph
+   * the request evaluates. Unlike `rootsVisited`, this exposes roots whose
+   * declarations fan out over many documents, and unlike
+   * `slowestRoot.reads`, it accounts for the complete request rather than
+   * only its costliest root. */
   managerReads?: number;
 
-  /** watch.add and watch.refresh: changed entity snapshots delivered to the
-   * client. This is the delivered-width counterpart to `watches` and
-   * `managerReads`: a wide traversal that yields few upserts is repeated
-   * server work, while a wide frame is also transport and client-ingest
-   * work. A refresh that produced no upserts answers with an empty catch-up
-   * and is not recorded, so a refresh entry never reports zero here. */
+  /** watch.add, watch.remove, and a refresh by dirty document: changed
+   * entity snapshots delivered to the client. This is the delivered-width
+   * counterpart to `watches` and `managerReads`: a wide traversal that
+   * yields few upserts is repeated server work, while a wide frame is also
+   * transport and client-ingest work. A refresh with no upserts, removals,
+   * or new crossings answers with an empty catch-up and is not recorded; a
+   * refresh entry reporting zero here delivered removals or crossings
+   * alone. */
   upserts?: number;
 
   /** Query and watch operations: the costliest single root, which is what
@@ -535,7 +755,7 @@ export type SlowQuery = {
   rows?: number;
 };
 
-/** The root attribution accumulated across one request's branch groups. */
+/** The root attribution accumulated across the graphs a request evaluates. */
 type RootAttribution = {
   rootsVisited: number;
   rootsElapsedMs: number;
@@ -572,13 +792,6 @@ const foldRootAttribution = (
   }
 };
 
-/** The attribution for a request that evaluated exactly one query. */
-const rootAttributionOf = (stats: QueryTraversalStats): RootAttribution => {
-  const attribution = createRootAttribution();
-  foldRootAttribution(attribution, stats);
-  return attribution;
-};
-
 const slowQueries: SlowQuery[] = [];
 
 const recordSlowQuery = (entry: SlowQuery): void => {
@@ -607,6 +820,49 @@ const recordSlowQueryDuration = (
     ...details,
   });
 };
+
+/** Why a watch evaluation ran ({@link SlowQuery}'s `cause` defines each). */
+export type WatchEvaluationCause =
+  | "request"
+  | "selection"
+  | "support-replaced"
+  | "unscoped-flush"
+  | FullResyncCause;
+
+/**
+ * What a watch evaluation's slow-query entry records about why it ran:
+ * the operation it is filed under, the cause, the part of the session's
+ * graphs it evaluated, and how many views the session held
+ * ({@link SlowQuery} defines each).
+ */
+export type WatchEvaluationRecord = {
+  operation: string;
+  cause: WatchEvaluationCause;
+  part: "demand" | "support" | "selection";
+  views?: number;
+};
+
+/** The operation and cause a caller files a session's watch evaluations under. */
+type WatchEvaluationContext = Pick<
+  WatchEvaluationRecord,
+  "operation" | "cause"
+>;
+
+/** The session and cause fields of a watch evaluation's slow-query entry. */
+const watchEvaluationDetails = (
+  scopeContext: { principal?: string; sessionId?: string },
+  record: WatchEvaluationRecord,
+): Pick<SlowQuery, "principal" | "sessionId" | "views" | "cause" | "part"> => ({
+  ...(scopeContext.principal === undefined
+    ? {}
+    : { principal: scopeContext.principal }),
+  ...(scopeContext.sessionId === undefined
+    ? {}
+    : { sessionId: scopeContext.sessionId }),
+  views: record.views ?? 0,
+  cause: record.cause,
+  part: record.part,
+});
 
 /** Returns the last N slow query, watch, commit, and SQLite read operations —
  * those over `CF_SLOW_QUERY_THRESHOLD_MS`, 100 ms unless set. */
@@ -965,9 +1221,10 @@ function isDeclaredTable(
 
 /**
  * Returns why a session may not create a branch named `name`, or `undefined`
- * when it may. The server keys a session's graphs and its sync cache by
- * branch name, so a name that carries a control character, or that begins
- * as one of those keys does, could stand for another branch's entry there.
+ * when it may. The server builds the keys of a session's graphs and of its
+ * sync cache from branch names, so a name that carries a control character,
+ * or that begins as one of those keys does, could stand for another entry
+ * there.
  */
 const refusedBranchName = (name: string): string | undefined =>
   // deno-lint-ignore no-control-regex
@@ -1161,7 +1418,8 @@ type SessionHandle = {
 /** Kind of the LAST operation an origin commit applied to a doc — decides the
  * own-write echo shape at flush (CT-1965): `set`/`delete` heads are elided
  * (the writer provably holds their outcome), `patch` heads ride the frame as
- * full post-apply documents, and `derived` heads, which the engine wrote from
+ * full post-apply documents unless the origin's `base` shows the writer
+ * reaches them by replay, and `derived` heads, which the engine wrote from
  * the commit rather than the writer supplying them, always ride it. */
 type DirtyOp = "set" | "patch" | "delete" | "derived";
 
@@ -1169,6 +1427,19 @@ type DirtyOrigin = {
   sessionId: string;
   seq: number;
   op: DirtyOp;
+
+  /**
+   * For a `patch` head, what the writing session's replica replays its own
+   * patches over to reach the head, when that is known. A number is the seq of
+   * the revision that precedes the unbroken run of the session's own patches
+   * ending at `seq`: a session that holds that revision reaches the head by
+   * replaying the patches it sent, so the head is left out of its frame. The
+   * value `own-write` says the run follows the session's own `set` or
+   * `delete` in the same dirty batch, whose outcome the session holds without
+   * a frame. Absent, nothing shows the session can reach the head, and the
+   * head rides the frame.
+   */
+  base?: number | "own-write";
 };
 
 /**
@@ -1295,6 +1566,14 @@ export type ServerExecutionObserver = {
   ) => void;
 
   /**
+   * `space`'s currency index changed from outside its serving loop
+   * (serving-loop.md §3b): a space it reads told it of a change, or a
+   * request the memory server made of the index for another space marked a
+   * slice here. A loop that holds a root unstarted judges it again.
+   */
+  currencyChanged?: (space: string) => void;
+
+  /**
    * A session's VIEW SET was set: a `session.watch.set` carried views,
    * which is the one message that registers, revises or withdraws them.
    * Fires beside the `demandChanged` the same message raises, and only
@@ -1340,7 +1619,64 @@ export type DemandedInstanceRow = {
    * root: a piece reached only through a data link (design §2.8 flag 4).
    */
   piece?: true;
+
+  /**
+   * True when the row is marked `piece` and the document the session was
+   * sent for it holds no value: the piece has not written one, or derived
+   * `undefined`. A serving loop starts a stopped piece from such a
+   * `computed:` document until the piece has derived it, where it otherwise
+   * leaves the document to the store (serving-loop.md §1, "A computed
+   * document a demand names").
+   */
+  valueless?: true;
+
+  /**
+   * For a row another space carried here (`Server.setCarriedDemand()`),
+   * the client session it is carried for and the space that session is
+   * of. A serving loop that carries the row's pair on names this origin
+   * again. Absent on a row of a session of this space.
+   */
+  origin?: { readonly space: string; readonly sessionId: string };
 };
+
+/**
+ * A demand carried into a space from another (serving-loop.md §3b): an
+ * instance of the space that a run in a reading space read under the actor
+ * of the session `origin` names. The space's demand set holds it as a row
+ * of that session's pair, as if the session watched the instance there.
+ */
+export type CarriedDemandRow = {
+  id: string;
+  scope: CellScope;
+  scopeKey: ScopeKey;
+
+  /**
+   * The client session the demand is carried for, and the space it is a
+   * session of. The row stands while that session does.
+   */
+  origin: {
+    readonly space: string;
+    readonly sessionId: string;
+  };
+};
+
+/** The demand carried for one origin session from one reading space. */
+type CarriedSession = {
+  /** The id the space's demand set and session mirror hold it under. */
+  readonly sessionId: string;
+  readonly origin: CarriedDemandRow["origin"];
+  readonly principal: string | undefined;
+  readonly share: SessionDemand;
+};
+
+/**
+ * The id a carried demand is held under among a space's sessions, which
+ * is not one a client's session is opened under.
+ */
+const carriedSessionId = (
+  reader: string,
+  origin: CarriedDemandRow["origin"],
+): string => `carried\0${reader}\0${origin.space}\0${origin.sessionId}`;
 
 /**
  * One client session's share of a space's demand set: its
@@ -2554,6 +2890,9 @@ class Connection {
       );
       if (response.type === "hello.ok") {
         response.sessionOpen = this.issueSessionOpenAuth();
+        if (this.#slotLimit !== MAX_UNTRUSTED_MESSAGE_SLOTS) {
+          response.messageSlots = this.#slotLimit;
+        }
       }
       this.#send(response);
       if (response.type !== "hello.ok") {
@@ -2621,7 +2960,8 @@ class Connection {
           this.#routedOwns !== undefined &&
           (!this.#routedOwns(parsed.space) || parsed.principal === undefined ||
             parsed.invocation !== undefined ||
-            parsed.authorization !== undefined ||
+            (parsed.authorization !== undefined &&
+              !carriesOnlySessionOpenProofs(parsed)) ||
             parsed.session.actingAs !== undefined)
         ) {
           this.#send({
@@ -3617,6 +3957,83 @@ export class Server {
   #serverExecutionObserver: ServerExecutionObserver | undefined;
 
   /**
+   * The spaces each space has told nothing since they last pulled from it
+   * (serving-loop.md §3b): the readers it tells of the next change to an
+   * instance they registered. Each is held with the position its pull
+   * returned, and with the time until which it may rest on hearing nothing,
+   * where the space or one it reads holds a slice that expires: no commit
+   * reports an expiry, so the reader pulls again then. It is held in
+   * memory, so after a restart every reader pulls from a source before it
+   * rests on it.
+   */
+  readonly #currencyArmed = new Map<
+    string,
+    Map<string, { position: number; until?: number }>
+  >();
+
+  /**
+   * The demand carried into each space, by the reading space that carries
+   * it and then by the id it is held under (`carriedSessionId()`). Held in
+   * memory: a reading loop sends its set again when it next serves.
+   */
+  readonly #carriedDemand = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
+   * What each reading space offered to carry into each space, by the same
+   * keys: every row `setCarriedDemand()` admitted. `#carriedDemand` holds
+   * the rows of these that stand, which leaves out an instance the space's
+   * currency index proves current (`#refreshCarriedDemand()`).
+   */
+  readonly #carriedOffered = new Map<
+    string,
+    Map<string, Map<string, CarriedSession>>
+  >();
+
+  /**
+   * The position of each space through which its armed readers were told
+   * of what moved.
+   */
+  readonly #currencyToldThrough = new Map<string, number>();
+
+  /**
+   * What each space holds of the change behind the latest trigger it was
+   * sent. A space no trigger reached since a client's commit landed in it
+   * has no entry, and each change of its own is one with no trigger behind
+   * it.
+   */
+  readonly #currencyTrails = new Map<string, CurrencyTrail>();
+
+  /** How many changes with no trigger behind them this server numbered. */
+  #currencyOrigins = 0;
+
+  /**
+   * The spaces with an advance of the currency cursor queued behind a
+   * commit, which has not started.
+   */
+  readonly #currencyAdvancesQueued = new Set<string>();
+
+  /** The queued advances that have not finished. */
+  readonly #currencyAdvancing = new Set<Promise<void>>();
+
+  /**
+   * The slices of each space that an advance marked on a request other
+   * than its serving loop's, which that loop is handed with its next
+   * request.
+   */
+  readonly #currencyMarksOwed = new Map<string, Map<string, CurrencyMarked>>();
+
+  /** What passed between the currency indexes of the spaces held here. */
+  readonly #currencyDelivery = {
+    triggers: 0,
+    pulls: 0,
+    advancesQueued: 0,
+    holds: 0,
+  };
+
+  /**
    * What runs `pattern.lifecycle` requests: the deployment's serving side,
    * installed with `setPatternLifecycleHandler()`. `undefined` until one is
    * installed, and while it is the server refuses every such request.
@@ -3797,10 +4214,13 @@ export class Server {
        * is). It bounds the work one message can cost the server, so a
        * higher one is for a bounded operation that needs it, such as moving
        * the source of a holder with thousands of members, whose update
-       * sends one watch per member document. It may only raise the default,
-       * and construction throws for one below it: a direct client sizes the
-       * parts it stages a watch set in by the default, and nothing tells it
-       * of a lower limit, so a set it would send in parts would be refused. */
+       * sends one watch per member document. A connection's `hello.ok`
+       * carries a limit other than the default (`messageSlots`), and a
+       * direct client holds its requests to it. It may only raise the
+       * default, and construction throws for one below it: a client that
+       * does not read `messageSlots` sizes the parts it stages a watch set
+       * in by the default, so a set it would send in parts would be
+       * refused. */
       untrustedMessageSlots?: number;
 
       authorizeSessionOpen: (
@@ -3837,6 +4257,13 @@ export class Server {
        * that does not, and `false` is how a deployment turns them off.
        */
       syncCidReferences?: boolean;
+
+      /**
+       * Whether each store this server opens has its bare-DID confidentiality
+       * labels respelled as `User{subject}` before it is served, once per
+       * store (`cfc-bare-did-migration.ts`). Off unless `true`.
+       */
+      retireBareDidLabels?: boolean;
 
       /**
        * Whether this server's posture names instances (INV-16): the
@@ -3962,7 +4389,12 @@ export class Server {
       );
     }
     this.#sessions = options.sessions ?? new SessionRegistry();
-    this.#sessions.setObserver((event) => this.#notifySessionChanged(event));
+    this.#sessions.setObserver((event) => {
+      this.#notifySessionChanged(event);
+      if (event.kind === "removed") {
+        this.#dropCarriedDemandOf(event.space, event.sessionId);
+      }
+    });
     this.#store = options.store;
     this.#operationCodecs = options.operationCodecs ??
       createDefaultOperationCodecRegistry();
@@ -3987,6 +4419,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     commitRatesProviders.push(this.#commitRatesProvider);
+    currencyDeliveryProviders.push(this.#currencyDeliveryProvider);
     sessionReportsProviders.push(this.#sessionReportsProvider);
     documentInterestsProviders.push(this.#documentInterestsProvider);
   }
@@ -4037,6 +4470,7 @@ export class Server {
   #pushPriorityStatsProvider = () => this.pushPriorityStats();
   #documentCachesDiagnosticsProvider = () => this.documentCachesDiagnostics();
   #commitRatesProvider = () => this.commitRates();
+  #currencyDeliveryProvider = () => this.currencyDelivery();
   #sessionReportsProvider = () => this.sessionReports();
   #documentInterestsProvider = (query: DocumentInterestQuery) =>
     this.#sessions.documentInterests(query);
@@ -4964,6 +5398,9 @@ export class Server {
     }
     this.#revokeDeauthorizedSessions(engine, space, writerSessionId);
     this.#noticeAdmissions(engine, space);
+    // A space that rests on `space` may hold an instance of an actor the
+    // list no longer grants, so each pulls again before it rests on.
+    this.#disarmCurrencyReaders(space);
   }
 
   /**
@@ -5476,7 +5913,7 @@ export class Server {
   markSessionForFullResync(space: string, sessionId: string): void {
     const session = this.#sessions.get(space, sessionId);
     if (session !== null) {
-      session.forceFullResync = true;
+      session.forceFullResync = "failed-pass";
     }
   }
 
@@ -5500,6 +5937,7 @@ export class Server {
       this.#documentCachesDiagnosticsProvider,
     );
     withdrawProvider(commitRatesProviders, this.#commitRatesProvider);
+    withdrawProvider(currencyDeliveryProviders, this.#currencyDeliveryProvider);
     withdrawProvider(sessionReportsProviders, this.#sessionReportsProvider);
     withdrawProvider(
       documentInterestsProviders,
@@ -5511,6 +5949,7 @@ export class Server {
     }
     // A verb still running writes through the engines closed below.
     await Promise.all(this.#lifecycleRuns);
+    await this.#currencyAdvancesSettled();
     await this.#refreshing;
     await this.#drainSpacePublicationLocks();
     this.#closed = true;
@@ -5550,6 +5989,7 @@ export class Server {
       ),
     );
     await this.#drainSpacePublicationLocks();
+    await this.#currencyAdvancesSettled();
     // Dirty spaces with no timer armed are manual mode's held fan-out.
     // idle() is an explicit synchronization point exactly like
     // flushSessions(), so it drains them rather than returning with
@@ -5562,7 +6002,11 @@ export class Server {
     }
   }
 
-  /** Executes an authenticated invitation operation with ordinary ACL publication. */
+  /**
+   * Executes an authenticated invitation operation, and publishes what it
+   * committed as any commit is published: a redemption's ACL grant, and the
+   * move of the ledger's revision document (`SPACE_INVITES_REVISION_DOC_ID`).
+   */
   async invite(request: InviteRequest): Promise<InviteResult["result"]> {
     return await this.#withSpacePublicationLock(request.space, async () => {
       if (!(await this.#spaceStoreExists(request.space))) {
@@ -5573,10 +6017,11 @@ export class Server {
         );
       }
       const engine = await this.#openEngine(request.space);
-      const { result, commit } = executeInvite(engine, {
+      const outcome = applyInvite(engine, {
         ...request,
         implicitOwner: this.#isServicePrincipal(request.principal),
       });
+      const { commit, revision } = outcome;
       if (commit !== undefined) {
         this.#invalidateAclCapabilities(request.space);
         this.#accessListChanged(engine, request.space);
@@ -5591,7 +6036,22 @@ export class Server {
           writes: [{ id: aclDocId(request.space), scopeKey: "space" }],
         });
       }
-      return result;
+      // Published before a refusal is thrown, since a refused preview or
+      // redemption can have retired an invitation.
+      if (revision !== undefined) {
+        this.markSpaceDirty(request.space, [
+          toDirtyKey(SPACE_INVITES_REVISION_DOC_ID),
+        ]);
+        this.#notifyCommitAdmitted({
+          space: request.space,
+          seq: revision.seq,
+          class: "system",
+          sessionId: "invite-service",
+          writes: [{ id: SPACE_INVITES_REVISION_DOC_ID, scopeKey: "space" }],
+        });
+      }
+      if ("failure" in outcome) throw new SpaceInviteError(outcome.failure);
+      return outcome.result;
     });
   }
 
@@ -5642,6 +6102,15 @@ export class Server {
       ) {
         throw new Engine.ProtocolError(
           "direct writes may not delete a space",
+        );
+      }
+      // The invitation service moves its revision document in the
+      // transaction that changes its ledger, and a direct write would say the
+      // ledger moved when it had not, which the store refuses of any commit
+      // but a system one (`refuseInviteRevisionWritesOutsideTheService`).
+      if (id === SPACE_INVITES_REVISION_DOC_ID) {
+        throw new Engine.ProtocolError(
+          "direct writes may not move the invitation service's revision document",
         );
       }
       if (this.#aclMode() !== "off") {
@@ -7142,7 +7611,7 @@ export class Server {
           // The catch-up below evaluates only when something is dirty or
           // owed; a replaced diff base is neither, so the full evaluation
           // that diffs against it is forced explicitly.
-          resumed.forceFullResync = true;
+          resumed.forceFullResync = "resume";
         }
       }
       const session = opened;
@@ -8228,15 +8697,66 @@ export class Server {
           // decides the flush-time echo shape.
           const committedWrites: Array<{ id: string; scopeKey: ScopeKey }> = [];
           const dirtyOps = new Map<string, DirtyOp>();
+          const revisionCounts = new Map<string, number>();
+          for (const revision of commit.revisions) {
+            const dirtyKey = toDirtyKey(
+              revision.id,
+              revision.scopeKey as ScopeKey,
+            );
+            revisionCounts.set(
+              dirtyKey,
+              (revisionCounts.get(dirtyKey) ?? 0) + 1,
+            );
+          }
+          // For each document whose head this commit produced by applying
+          // one `patch` of the session's exactly as the session sent it, the
+          // seq of the revision the patch was applied over. The writer's
+          // replica promotes its pending layer by replaying those patches
+          // over what it holds, with the function the engine applied them
+          // with, so a writer holding that revision holds the head. A
+          // revision whose patches are not the array the operation carried
+          // is one the engine rewrote first, with an event's stamps for one,
+          // and a document the commit wrote more than once is promoted by a
+          // path that replays only part of it; neither gets an entry, and
+          // their heads ride the frame. So does every head of a commit that
+          // carries a field edit: the writer's layer shows the edited field
+          // as the text its transaction computed, and the engine stores the
+          // text the edit integrates to, or leaves the field as it was for an
+          // edit it has already integrated.
+          const replayable = getOwnWriteEchoConfig() &&
+            applyOperations.length === 0;
+          const precedingSeqs = new Map<string, number>();
           for (const revision of commit.revisions) {
             const scopeKey = revision.scopeKey as ScopeKey;
             committedWrites.push({ id: revision.id, scopeKey });
+            if (
+              replayable && revision.op === "patch" &&
+              revision.derived !== true && revision.patches !== undefined
+            ) {
+              const dirtyKey = toDirtyKey(revision.id, scopeKey);
+              const sent = message.commit.operations[revision.opIndex];
+              if (
+                revisionCounts.get(dirtyKey) === 1 && sent?.op === "patch" &&
+                sent.patches === revision.patches
+              ) {
+                const preceding = Engine.precedingRevisionSeq(engine, {
+                  branch: commit.branch,
+                  id: revision.id,
+                  scopeKey,
+                  seq: commit.seq,
+                });
+                if (preceding !== undefined) {
+                  precedingSeqs.set(dirtyKey, preceding);
+                }
+              }
+            }
             // A revision the engine derived, a field's anchors document
             // rewritten for an edit, is no write of the committing session's,
-            // which holds nothing of it to promote. With own-write echo on, a
-            // `patch` head reaches its writer anyway; with it off, a `patch`
-            // head is withheld from its writer, so only the `derived` kind
-            // gets the rewrite to the session whose edit moved the anchors.
+            // which holds nothing of it to promote. A `patch` head is
+            // withheld from a writer that reaches it by replay, and from
+            // every writer with own-write echo off, so only the `derived`
+            // kind gets the rewrite to the session whose edit moved the
+            // anchors.
             dirtyOps.set(
               toDirtyKey(revision.id, scopeKey),
               revision.derived === true ? "derived" : revision.op,
@@ -8247,6 +8767,7 @@ export class Server {
               sessionId: message.sessionId,
               seq: commit.seq,
               ops: dirtyOps,
+              precedingSeqs,
             });
           } else {
             // Every operation elided: nothing was written, so no document
@@ -8302,11 +8823,12 @@ export class Server {
           // Dirty-origin tracking decides the echo shape for the session's
           // own accepted writes (CT-1965): set- and delete-produced heads are
           // elided from the frame — the writer provably holds their outcome,
-          // and the verdict plus marker promote it — while patch-produced
-          // heads ride the frame as full post-apply documents, since merged
-          // state is truth the writer cannot extrapolate. REJECTED commits'
-          // docs are staged origin-less (stageConflictRefreshDirtyIds), so
-          // repair frames DO cover them.
+          // and the verdict plus marker promote it — while a patch-produced
+          // head rides the frame as the full post-apply document, since
+          // merged state is truth the writer cannot extrapolate, unless the
+          // writer holds the revision its patches were applied over.
+          // REJECTED commits' docs are staged origin-less
+          // (stageConflictRefreshDirtyIds), so repair frames DO cover them.
           session.pendingCaughtUpLocalSeq = Math.max(
             session.pendingCaughtUpLocalSeq,
             message.commit.localSeq,
@@ -8843,9 +9365,8 @@ export class Server {
           // A branch other than the default is computed by the client that
           // opened it, so its documents and their labels are that client's
           // word, which a restore would write onto the default branch. Only
-          // the default branch's own history is restored from until the
-          // specification rules on what a restore may admit.
-          // SPEC-PENDING https://github.com/commonfabric/specs/pull/105
+          // the default branch's own history is restored from; what a
+          // restore may admit is ruled in commonfabric/specs pull request 105.
           if (
             message.source !== undefined && message.source !== DEFAULT_BRANCH
           ) {
@@ -9067,6 +9588,12 @@ export class Server {
           })),
           engine,
           { principal: session!.principal, sessionId: session!.id },
+          {
+            operation: "view.selection",
+            cause: "selection",
+            part: "selection",
+            views: session!.views.length,
+          },
         );
         if (!current()) return false;
       }
@@ -9103,7 +9630,7 @@ export class Server {
         }
         session!.viewPlansPending = true;
       } else {
-        session!.forceFullResync = true;
+        session!.forceFullResync = "first-selection";
       }
       this.markSpaceDirty(space, []);
       return true;
@@ -9132,11 +9659,16 @@ export class Server {
     });
   }
 
-  /** Evaluates demand independently from delivery-only supporting roots. */
+  /**
+   * Evaluates demand independently from delivery-only supporting roots.
+   * `context` names the operation and cause each evaluation's slow-query
+   * entry records.
+   */
   async #evaluateViewWatchSet(
     session: SessionState,
     watches: readonly WatchSpec[],
     views: readonly ViewInterest[],
+    context: WatchEvaluationContext,
     engine?: Engine.Engine,
   ) {
     this.#assertRoutedAuthority(session);
@@ -9154,6 +9686,7 @@ export class Server {
       renderWatches,
       engine,
       identity,
+      { ...context, part: "demand", views: views.length },
     );
     const selected = this.#viewSupportWatches(session, views);
     const delivery = selected.length === 0
@@ -9163,14 +9696,15 @@ export class Server {
         selected,
         engine,
         identity,
+        { ...context, part: "support", views: views.length },
       );
-    const graphs = new Map([...demand.graphs].map(([branch, graph]) => [
-      views.length === 0 ? branch : `view-demand:${branch}`,
+    const graphs = new Map([...demand.graphs].map(([key, graph]) => [
+      views.length === 0 ? key : `view-demand:${key}`,
       graph,
     ]));
     if (delivery !== demand) {
-      for (const [branch, graph] of delivery.graphs) {
-        graphs.set(`view-support:${branch}`, graph);
+      for (const [key, graph] of delivery.graphs) {
+        graphs.set(`view-support:${key}`, graph);
       }
     }
     return {
@@ -9211,13 +9745,19 @@ export class Server {
         selected,
         engine,
         identity,
+        {
+          operation: "session.watch.refresh",
+          cause: "support-replaced",
+          part: "support",
+          views: session.views.length,
+        },
       );
-    const graphs = new Map([...demandGraphs].map(([branch, graph]) => [
-      `view-demand:${branch}`,
+    const graphs = new Map([...demandGraphs].map(([key, graph]) => [
+      `view-demand:${key}`,
       graph,
     ]));
-    for (const [branch, graph] of delivery?.graphs ?? []) {
-      graphs.set(`view-support:${branch}`, graph);
+    for (const [key, graph] of delivery?.graphs ?? []) {
+      graphs.set(`view-support:${key}`, graph);
     }
     return {
       serverSeq: delivery?.serverSeq ?? Engine.serverSeq(engine),
@@ -9255,11 +9795,13 @@ export class Server {
    * the replacement's views (`#moveWatchGraphs()`). What it returns is what
    * `#evaluateViewWatchSet()` returns for the same request, and only the
    * roots the replacement adds and documents awaiting refresh are walked.
+   * `context` names the operation and cause its slow-query entries record.
    */
   async #replaceViewWatchSet(
     session: SessionState,
     watches: readonly WatchSpec[],
     views: readonly ViewInterest[],
+    context: WatchEvaluationContext,
     engine?: Engine.Engine,
   ) {
     this.#assertRoutedAuthority(session);
@@ -9267,7 +9809,13 @@ export class Server {
     this.#assertRoutedAuthority(session);
     const dirtyIds = this.#dirtyDocsBySpace.get(session.space);
     if (this.#dirtySpaces.has(session.space) && dirtyIds === undefined) {
-      return await this.#evaluateViewWatchSet(session, watches, views, engine);
+      return await this.#evaluateViewWatchSet(
+        session,
+        watches,
+        views,
+        context,
+        engine,
+      );
     }
     const startedAt = performance.now();
     const renderWatches = [...watches, ...viewWatches(views)];
@@ -9278,35 +9826,56 @@ export class Server {
         previousSupport.set(key.slice("view-support:".length), graph);
       }
     }
-    const attribution = createRootAttribution();
+    const identity = { principal: session.principal, sessionId: session.id };
+    const demandAttribution = createRootAttribution();
     const demandGraphs = this.#moveWatchGraphs(
       session,
       engine,
       renderWatches,
       session.viewDemandGraphs,
-      attribution,
+      demandAttribution,
       dirtyIds,
     );
+    recordSlowQueryDuration(context.operation, session.space, startedAt, {
+      watches: renderWatches.length,
+      ...watchEvaluationDetails(identity, {
+        ...context,
+        part: "demand",
+        views: views.length,
+      }),
+      ...demandAttribution,
+    });
+    const supportStartedAt = performance.now();
+    const supportAttribution = createRootAttribution();
     const supportGraphs = this.#moveWatchGraphs(
       session,
       engine,
       selected,
       previousSupport,
-      attribution,
+      supportAttribution,
       dirtyIds,
     );
-    recordSlowQueryDuration("session.watch.set", session.space, startedAt, {
-      watches: renderWatches.length + selected.length,
-      ...attribution,
-    });
+    recordSlowQueryDuration(
+      context.operation,
+      session.space,
+      supportStartedAt,
+      {
+        watches: selected.length,
+        ...watchEvaluationDetails(identity, {
+          ...context,
+          part: "support",
+          views: views.length,
+        }),
+        ...supportAttribution,
+      },
+    );
     const graphs = new Map<string, TrackedGraphState>();
-    for (const [branch, graph] of demandGraphs) {
-      graphs.set(`view-demand:${branch}`, graph);
+    for (const [key, graph] of demandGraphs) {
+      graphs.set(`view-demand:${key}`, graph);
     }
-    for (const [branch, graph] of supportGraphs) {
-      graphs.set(`view-support:${branch}`, graph);
+    for (const [key, graph] of supportGraphs) {
+      graphs.set(`view-support:${key}`, graph);
     }
-    const identity = { principal: session.principal, sessionId: session.id };
     return {
       serverSeq: Engine.serverSeq(engine),
       graphs,
@@ -9333,8 +9902,8 @@ export class Server {
       session.viewDemandGraphs,
     );
     const graphs = new Map(session.graphs);
-    for (const [branch, graph] of demandGraphs) {
-      graphs.set(`view-demand:${branch}`, graph);
+    for (const [key, graph] of demandGraphs) {
+      graphs.set(`view-demand:${key}`, graph);
     }
     const identity = this.#sessionScopeIdentity(session);
     return {
@@ -9425,10 +9994,10 @@ export class Server {
 
   /**
    * Helper for `#watchRemove()`, which releases the removed watches' roots
-   * from their branches' graphs (`releaseTrackedRoots`): what no remaining
+   * from the graphs tracking them (`releaseTrackedRoots`): what no remaining
    * root or link keeps retires and is retracted, a root a retired record
-   * had covered is walked again on its own, and a branch with no watch
-   * left drops its graph. Nothing else is walked.
+   * had covered is walked again on its own, and a graph with no root left
+   * is dropped. Nothing else is walked.
    */
   async #removeWatchesByRelease(
     message: WatchRemoveRequest,
@@ -9488,57 +10057,78 @@ export class Server {
       const remaining = session.watches.filter((watch) =>
         !removedIds.has(watch.id)
       );
-      const remainingByBranch = graphWatchesByBranch(remaining);
       const identity = this.#sessionScopeIdentity(session);
+      const remainingGroups = watchGraphGroups(remaining, identity);
       const graphs = new StagedMap(session.graphs);
       const graphCommits: Array<() => void> = [];
       const attribution = createRootAttribution();
       // The graphs the release walked roots of again, whose crossings the
       // session may not have been told of.
       const touchedGraphs: TrackedGraphState[] = [];
+      // Those same graphs by key, as the release has left them so far.
+      const stagedGraphs = new Map<string, TrackedGraphState>();
       const updates = new Map<string, SessionCacheEntry>();
       const removes = new Map<string, SessionCacheEntry>();
       const changedInterests = new Set<string>();
       for (
-        const [branch, removedGroup] of graphWatchesByBranch(removedWatches)
+        const { key: graphKey, branch, query: removedQuery }
+          of watchGraphGroups(
+            removedWatches,
+            identity,
+          ).values()
       ) {
-        const existing = graphs.get(branch);
+        const existing = graphs.get(graphKey);
         if (existing === undefined) continue;
+        // A session holds one graph over a branch for each identity its
+        // roots are walked under, so a document this graph lets go of can be
+        // one another still tracks. Only what no other graph of the session
+        // over the branch tracks is retracted.
+        const trackedElsewhere = (docKey: QueryDocKey): boolean => {
+          for (const [otherKey, other] of graphs) {
+            if (otherKey === graphKey || other.branch !== branch) continue;
+            if ((stagedGraphs.get(otherKey) ?? other).tracker.has(docKey)) {
+              return true;
+            }
+          }
+          return false;
+        };
         const retract = (docKey: QueryDocKey) => {
           const { id, scopeKey } = fromDocKey(docKey);
+          changedInterests.add(toDirtyKey(id, scopeKey));
+          if (trackedElsewhere(docKey)) return;
           const entry = session.entities.get(
             cacheKeyForEntity(branch, id, scopeKey),
           );
           if (entry !== undefined) {
             removes.set(cacheKeyForEntity(branch, id, scopeKey), entry);
           }
-          changedInterests.add(toDirtyKey(id, scopeKey));
         };
-        const group = remainingByBranch.get(branch) ?? [];
-        if (group.length === 0) {
+        const remainingGroup = remainingGroups.get(graphKey);
+        if (remainingGroup === undefined) {
           for (const docKey of existing.entities.keys()) retract(docKey);
           for (const [key] of existing.missed) {
             const { id, scopeKey } = fromDocKey(key as QueryDocKey);
             changedInterests.add(toDirtyKey(id, scopeKey));
           }
-          graphs.delete(branch);
+          graphs.delete(graphKey);
           continue;
         }
         // A root two watches share stays while either does.
         const kept = new Set(rootReferrersOf(
           message.space,
-          group.flatMap((watch) => watch.query.roots),
+          remainingGroup.query.roots,
           identity,
         ));
         const released = rootReferrersOf(
           message.space,
-          removedGroup.flatMap((watch) => watch.query.roots),
+          removedQuery.roots,
           identity,
         ).filter((referrer) => !kept.has(referrer));
         if (released.length === 0) continue;
         const staged = stageTrackedGraphState(engine, existing);
         graphCommits.push(staged.commit);
         touchedGraphs.push(staged.value);
+        stagedGraphs.set(graphKey, staged.value);
         const result = releaseTrackedRoots(
           message.space,
           engine,
@@ -9802,6 +10392,12 @@ export class Server {
       // replacement or a removal, and walks only the roots it adds.
       const moved = views.length > 0 && !incremental &&
         session.views.length > 0 && !session.forceFullResync;
+      // A request evaluated whole because the session owed a full
+      // evaluation is filed under that cause.
+      const context: WatchEvaluationContext = {
+        operation: `session.watch.${mode === "replace" ? "set" : mode}`,
+        cause: session.forceFullResync || "request",
+      };
       const evaluated: Awaited<ReturnType<Server["evaluateWatchSet"]>> & {
         demandGraphs?: typeof session.graphs;
         demandEntities?: typeof session.entities;
@@ -9814,6 +10410,7 @@ export class Server {
             principal: session.principal,
             sessionId: message.sessionId,
           },
+          { ...context, part: "demand", views: 0 },
         )
         : extended
         ? await this.#extendViewWatchSet(session, message.watches, aclEngine)
@@ -9822,12 +10419,14 @@ export class Server {
           session,
           message.watches,
           views,
+          context,
           aclEngine,
         )
         : await this.#evaluateViewWatchSet(
           session,
           message.watches,
           views,
+          context,
           aclEngine,
         );
       this.#assertRoutedAuthority(session);
@@ -10018,7 +10617,7 @@ export class Server {
     engine: Engine.Engine,
     watches: readonly WatchSpec[],
     previous: SessionState["graphs"],
-    keyOf: (branch: string) => string = (branch) => branch,
+    keyOf: (groupKey: string) => string = (groupKey) => groupKey,
   ) {
     const graphs = new Map(previous);
     const identity = this.#sessionScopeIdentity(session);
@@ -10033,19 +10632,19 @@ export class Server {
       );
     };
     const attribution = createRootAttribution();
-    for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const key = keyOf(branch);
+    for (const group of watchGraphGroups(watches, identity).values()) {
+      const key = keyOf(group.key);
       const existing = graphs.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(
           session.space,
           engine,
-          unionQuery(branch, group),
+          group.query,
           undefined,
           {
-            principal: session.principal,
-            sessionId: session.id,
-            evaluationCache: this.#evaluationCacheFor(session.space),
+            principal: group.identity.principal,
+            sessionId: group.identity.sessionId,
+            ...this.#evaluationCacheOption(session.space, group.instance),
           },
         );
         foldRootAttribution(attribution, tracked.stats);
@@ -10066,7 +10665,7 @@ export class Server {
         session.space,
         engine,
         staged,
-        unionQuery(branch, group),
+        group.query,
       );
       foldRootAttribution(attribution, extended.stats);
       for (const [docKey, entity] of extended.updates) {
@@ -10078,15 +10677,15 @@ export class Server {
   }
 
   /**
-   * Moves `previous`, a session's graphs by branch, to the roots of `watches`.
-   * Each branch's graph releases the roots `watches` no longer name
-   * (`releaseTrackedRoots()`) and walks only the roots it adds
-   * (`extendTrackedGraph()`). Roots both sets name keep their coverage,
-   * refreshed by pending dirty documents before the added roots extend it. A
-   * branch `watches` adds is evaluated whole, a branch it leaves drops its
-   * graph, and a clean graph whose roots stay the same is returned as it
-   * stands. A moved graph is a clone, so `previous` is untouched until the
-   * caller installs the result.
+   * Moves `previous`, a session's graphs by graph key
+   * (`watchGraphGroups()`), to the roots of `watches`. Each graph releases
+   * the roots `watches` no longer name (`releaseTrackedRoots()`) and walks
+   * only the roots it adds (`extendTrackedGraph()`). Roots both sets name
+   * keep their coverage, refreshed by pending dirty documents before the
+   * added roots extend it. A graph `watches` adds is evaluated whole, a
+   * graph it leaves no root for is dropped, and a clean graph whose roots
+   * stay the same is returned as it stands. A moved graph is a clone, so
+   * `previous` is untouched until the caller installs the result.
    */
   #moveWatchGraphs(
     session: SessionState,
@@ -10098,18 +10697,20 @@ export class Server {
   ): Map<string, TrackedGraphState> {
     const graphs = new Map<string, TrackedGraphState>();
     const identity = this.#sessionScopeIdentity(session);
-    for (const [branch, group] of graphWatchesByBranch(watches)) {
-      const query = unionQuery(branch, group);
-      const existing = previous.get(branch);
+    for (
+      const { key, branch, query, identity: walker, instance }
+        of watchGraphGroups(watches, identity).values()
+    ) {
+      const existing = previous.get(key);
       if (existing === undefined) {
         const tracked = trackGraph(session.space, engine, query, undefined, {
-          principal: session.principal,
-          sessionId: session.id,
-          evaluationCache: this.#evaluationCacheFor(session.space),
+          principal: walker.principal,
+          sessionId: walker.sessionId,
+          ...this.#evaluationCacheOption(session.space, instance),
         });
         foldRootAttribution(attribution, tracked.stats);
         this.#enforceEvaluationCacheBudget();
-        graphs.set(branch, tracked.state);
+        graphs.set(key, tracked.state);
         continue;
       }
       const referrers = rootReferrersOf(session.space, query.roots, identity);
@@ -10124,7 +10725,7 @@ export class Server {
         released.length === 0 && added.length === 0 &&
         (dirtyIds === undefined || dirtyIds.size === 0)
       ) {
-        graphs.set(branch, existing);
+        graphs.set(key, existing);
         continue;
       }
       const moved = cloneTrackedGraphState(engine, existing);
@@ -10157,7 +10758,7 @@ export class Server {
         });
         foldRootAttribution(attribution, result.stats);
       }
-      graphs.set(branch, moved);
+      graphs.set(key, moved);
     }
     return graphs;
   }
@@ -10346,18 +10947,18 @@ export class Server {
       // a new graph's state, or an extended graph's STAGED state, which is
       // where the extension's crossings sit until it commits.
       const touchedGraphs: TrackedGraphState[] = [];
-      for (const [branch, group] of graphWatchesByBranch(newWatches)) {
-        const existing = graphs.get(branch);
+      for (const group of watchGraphGroups(newWatches, identity).values()) {
+        const existing = graphs.get(group.key);
         if (existing === undefined) {
           const tracked = trackGraph(
             message.space,
             engine,
-            unionQuery(branch, group),
+            group.query,
             undefined,
             {
-              principal: session.principal,
-              sessionId: message.sessionId,
-              evaluationCache: this.#evaluationCacheFor(message.space),
+              principal: group.identity.principal,
+              sessionId: group.identity.sessionId,
+              ...this.#evaluationCacheOption(message.space, group.instance),
             },
           );
           foldRootAttribution(attribution, tracked.stats);
@@ -10365,7 +10966,7 @@ export class Server {
           // failure (or a failing operation-field attachment) must not
           // leave an already-inserted entry over budget.
           this.#enforceEvaluationCacheBudget();
-          graphs.set(branch, tracked.state);
+          graphs.set(group.key, tracked.state);
           touchedGraphs.push(tracked.state);
           this.#addMissedToTrackedIds(addedInterests, [tracked.state]);
           for (const [docKey, entity] of tracked.state.entities) {
@@ -10381,7 +10982,7 @@ export class Server {
           message.space,
           engine,
           staged.value,
-          unionQuery(branch, group),
+          group.query,
         );
         foldRootAttribution(attribution, extended.stats);
         for (const [docKey, entity] of extended.updates) {
@@ -10523,6 +11124,21 @@ export class Server {
     }
   }
 
+  /**
+   * The `evaluationCache` option of a walk of a graph over `space`: the
+   * space's cache for a session's own roots, and none for the roots of the
+   * scope instance `instance`, whose evaluation could be served to no other
+   * identity.
+   */
+  #evaluationCacheOption(
+    space: string,
+    instance: string | undefined,
+  ): { evaluationCache?: QueryEvaluationCache } {
+    return instance === undefined
+      ? { evaluationCache: this.#evaluationCacheFor(space) }
+      : {};
+  }
+
   #evaluationCacheFor(space: string): QueryEvaluationCache {
     let cache = this.#queryEvaluationCaches.get(space);
     if (cache !== undefined) {
@@ -10616,21 +11232,47 @@ export class Server {
       // `stats` is diagnostics, not wire: split it off here so the
       // response carries exactly the declared result shape.
       const queryEngine = engine ?? await this.#openEngine(space);
-      const { stats, ...result } = queryGraph(
-        space,
-        queryEngine,
-        query,
-        reuse,
-        {
-          ...scopeContext,
-          ...(cacheEligible
-            ? { evaluationCache: this.#evaluationCacheFor(space) }
-            : {}),
-        },
-      );
+      const attribution = createRootAttribution();
+      const evaluations: ReturnType<typeof queryGraph>["entities"][] = [];
+      let serverSeq = 0;
+      for (const partition of partitionGraphQuery(query, scopeContext)) {
+        const evaluated = queryGraph(
+          space,
+          queryEngine,
+          partition.query,
+          reuse,
+          {
+            ...scopeContext,
+            principal: partition.identity.principal,
+            sessionId: partition.identity.sessionId,
+            ...(cacheEligible
+              ? this.#evaluationCacheOption(space, partition.instance)
+              : {}),
+          },
+        );
+        foldRootAttribution(attribution, evaluated.stats);
+        serverSeq = evaluated.serverSeq;
+        evaluations.push(evaluated.entities);
+      }
+      let [entities] = evaluations;
+      if (evaluations.length > 1) {
+        // Two graphs can reach one document, which the result holds once. A
+        // query whose roots name an instance is answered with keyed
+        // snapshots, so each instance of a document has a key of its own.
+        const merged = new Map<string, (typeof entities)[number]>();
+        for (const entity of evaluations.flat()) {
+          merged.set(
+            `${entity.scopeKey ?? ""}\0${entity.scope ?? ""}\0${entity.id}`,
+            entity,
+          );
+        }
+        entities = [...merged.values()]
+          .toSorted((left, right) => left.id.localeCompare(right.id));
+      }
+      const result = { serverSeq, entities };
       recordSlowQueryDuration("graph.query", space, startedAt, {
         roots: query.roots.length,
-        ...rootAttributionOf(stats),
+        ...attribution,
       });
       if (query.includeAuthoredSeq === true) {
         return {
@@ -10657,6 +11299,11 @@ export class Server {
     watches: readonly WatchSpec[],
     engine?: Engine.Engine,
     scopeContext: { principal?: string; sessionId?: string } = {},
+    record: WatchEvaluationRecord = {
+      operation: "session.watch.set",
+      cause: "request",
+      part: "demand",
+    },
   ): Promise<{
     serverSeq: number;
     graphs: Map<string, TrackedGraphState>;
@@ -10671,25 +11318,27 @@ export class Server {
     let serverSeq = Engine.serverSeq(resolvedEngine);
 
     const attribution = createRootAttribution();
-    for (const [branch, query] of groupedQueries(watches)) {
+    for (const group of watchGraphGroups(watches, scopeContext).values()) {
       const result = trackGraph(
         space,
         resolvedEngine,
-        query,
+        group.query,
         reuse,
         {
-          ...scopeContext,
-          evaluationCache: this.#evaluationCacheFor(space),
+          principal: group.identity.principal,
+          sessionId: group.identity.sessionId,
+          ...this.#evaluationCacheOption(space, group.instance),
         },
       );
       foldRootAttribution(attribution, result.stats);
       serverSeq = result.serverSeq;
       this.#enforceEvaluationCacheBudget();
-      graphs.set(branch, result.state);
+      graphs.set(group.key, result.state);
     }
 
-    recordSlowQueryDuration("session.watch.set", space, startedAt, {
+    recordSlowQueryDuration(record.operation, space, startedAt, {
       watches: watches.length,
+      ...watchEvaluationDetails(scopeContext, record),
       ...attribution,
     });
     return {
@@ -10775,12 +11424,15 @@ export class Server {
     // wake the push loop, but they are not graph execution demand. Rebuild
     // the graph-only provenance from delivered entries plus traversal misses
     // before producing demand rows.
-    const { tracked: graphTrackedIds, pieces: pieceKeys } =
-      trackedAndPieceKeysFromEntries(
-        (session.views.length === 0
-          ? session.entities
-          : session.viewDemandEntities).values(),
-      );
+    const {
+      tracked: graphTrackedIds,
+      pieces: pieceKeys,
+      valueless: valuelessKeys,
+    } = trackedAndPieceKeysFromEntries(
+      (session.views.length === 0
+        ? session.entities
+        : session.viewDemandEntities).values(),
+    );
     this.#addMissedToTrackedIds(
       graphTrackedIds,
       (session.views.length === 0 ? session.graphs : session.viewDemandGraphs)
@@ -10801,6 +11453,7 @@ export class Server {
         root,
       };
       if (pieceKeys.has(dirtyKey)) row.piece = true;
+      if (valuelessKeys.has(dirtyKey)) row.valueless = true;
       rows.set(dirtyKey, row);
     };
     for (const dirtyKey of session.trackedIds) {
@@ -10850,7 +11503,7 @@ export class Server {
       return;
     }
     const sync = undelivered.effect;
-    if (sync.viewPlans !== undefined) session.forceFullResync = true;
+    if (sync.viewPlans !== undefined) session.forceFullResync = "lost-frame";
     // Both arms below rewrite the delivered entities and the tracked set.
     this.#touchDemand(session);
     const identity = this.#sessionScopeIdentity(session);
@@ -10910,7 +11563,7 @@ export class Server {
           },
         );
         session.trackedIds.add(toDirtyKey(entry.id, entry.scopeKey));
-        session.forceFullResync = true;
+        session.forceFullResync = "lost-frame";
         ids.push(toDirtyKey(entry.id, entry.scopeKey));
       }
       this.#rollbackCaughtUpMarker(session, sync);
@@ -10935,7 +11588,7 @@ export class Server {
         session.leaseHolderReads === true &&
         upsert.scope !== undefined && upsert.scope !== "space"
       ) {
-        session.forceFullResync = true;
+        session.forceFullResync = "lost-frame";
       }
     }
     for (const remove of sync.removes) {
@@ -10959,7 +11612,7 @@ export class Server {
         },
       );
       session.trackedIds.add(toDirtyKey(remove.id, scopeKey));
-      session.forceFullResync = true;
+      session.forceFullResync = "lost-frame";
       ids.push(toDirtyKey(remove.id, scopeKey));
     }
     this.#rollbackCaughtUpMarker(session, sync);
@@ -11413,7 +12066,7 @@ export class Server {
                   engine,
                   this.#viewSupportWatches(session, session.views),
                   session.graphs,
-                  (branch) => `view-support:${branch}`,
+                  (groupKey) => `view-support:${groupKey}`,
                 );
                 grownGraphs = grown.graphs;
                 for (const [key, entry] of grown.updates) {
@@ -11474,14 +12127,24 @@ export class Server {
                     // have moved it since, so `entry.doc` IS that commit's
                     // post-apply document. A `set`/`delete` head is then elided —
                     // the client supplied the bytes (or the absence) and the
-                    // verdict + marker promote them — while a `patch` head is
-                    // delivered in full: its post-apply state can contain merged
-                    // foreign content the writer's own ops cannot reproduce.
+                    // verdict + marker promote them. A `patch` head can contain
+                    // merged foreign content the writer's own ops cannot
+                    // reproduce, so it is elided only where the origin names
+                    // the base its run of patches started from and the session
+                    // holds that base: the revision this session was last sent
+                    // or last had elided, or its own `set` or `delete` in this
+                    // batch. Every revision from that base to the head is then
+                    // a patch the session sent, and replaying them over the
+                    // base yields `entry.doc`. Any other `patch` head is
+                    // delivered in full.
                     const held = origin !== undefined &&
                       origin.sessionId === sessionId &&
                       origin.seq === entry.seq &&
                       origin.op !== "derived" &&
-                      (origin.op !== "patch" || !getOwnWriteEchoConfig());
+                      (origin.op !== "patch" || !getOwnWriteEchoConfig() ||
+                        origin.base === "own-write" ||
+                        (origin.base !== undefined &&
+                          previous?.seq === origin.base));
                     if (!held) {
                       upserts.push(entry);
                     }
@@ -11697,6 +12360,10 @@ export class Server {
                 session,
                 session.watches,
                 session.views,
+                {
+                  operation: "session.watch.refresh",
+                  cause: preCallForceFullResync || "unscoped-flush",
+                },
               )
               : await this.#reevaluateViewSupport(
                 session,
@@ -11938,6 +12605,13 @@ export class Server {
       sessionId: string;
       seq: number;
       ops: ReadonlyMap<string, DirtyOp>;
+
+      /**
+       * For each dirty key whose head the commit produced by applying one
+       * `patch` exactly as the session sent it, the seq of the revision
+       * that patch was applied over.
+       */
+      precedingSeqs?: ReadonlyMap<string, number>;
     },
   ): void {
     if (dirtyIds !== undefined) {
@@ -11969,10 +12643,32 @@ export class Server {
           // every session, the writer included.
           origins?.delete(id);
         } else {
+          const op = origin.ops.get(id) ?? "patch";
+          const preceding = origin.precedingSeqs?.get(id);
+          // A patch applied over the head an origin of this session already
+          // names continues that origin's run: the two commits are adjacent
+          // revisions of the document, both the session's own. The run then
+          // keeps the base it started from, or starts at the session's own
+          // `set` or `delete`. A patch applied over any other revision
+          // starts a run at that revision.
+          const earlier = origins?.get(id);
+          const continues = earlier !== undefined &&
+            earlier.sessionId === origin.sessionId &&
+            earlier.seq === preceding;
+          const base = op !== "patch" || preceding === undefined
+            ? undefined
+            : !continues
+            ? preceding
+            : earlier.op === "patch"
+            ? earlier.base
+            : earlier.op === "derived"
+            ? undefined
+            : "own-write";
           origins?.set(id, {
             sessionId: origin.sessionId,
             seq: origin.seq,
-            op: origin.ops.get(id) ?? "patch",
+            op,
+            ...(base === undefined ? {} : { base }),
           });
         }
       }
@@ -11994,9 +12690,10 @@ export class Server {
     space: string,
     options: { excludePrincipal?: string } = {},
   ): boolean {
-    return this.#sessions.sessionsForSpace(space).some((session) =>
-      !isServingSessionOf(session, options.excludePrincipal)
-    );
+    return this.#carriedDemand.has(space) ||
+      this.#sessions.sessionsForSpace(space).some((session) =>
+        !isServingSessionOf(session, options.excludePrincipal)
+      );
   }
 
   /** Whether ONE specific (principal, sessionId) pair holds a live
@@ -12209,6 +12906,9 @@ export class Server {
       }
       demand.push(share);
     }
+    // What another space carries here is demand of the session it names,
+    // whichever identity the reading loop signs with.
+    for (const { share } of this.#carriedSessions(space)) demand.push(share);
     return demand;
   }
 
@@ -12227,7 +12927,17 @@ export class Server {
     // Prune once for the batch before the targeted, non-pruning lookups.
     this.#sessions.sessionsForSpace(space);
     const demand: SessionDemand[] = [];
+    const carried = new Map(
+      this.#carriedSessions(space).map((
+        session,
+      ) => [session.sessionId, session.share]),
+    );
     for (const sessionId of sessionIds) {
+      const carriedShare = carried.get(sessionId);
+      if (carriedShare !== undefined) {
+        demand.push(carriedShare);
+        continue;
+      }
       const session = this.#sessions.peek(space, sessionId);
       if (
         session === undefined ||
@@ -12244,6 +12954,817 @@ export class Server {
       demand.push(share);
     }
     return demand;
+  }
+
+  /**
+   * Brings the marks of `space`'s currency index up to its store's head
+   * (serving-loop.md §3b), and returns the slices marked since `space`'s
+   * serving loop last asked: the ones this advance marked, and the ones an
+   * advance made on another request did. Server-internal machinery and tests
+   * only, as `engineForSpace()` is.
+   */
+  async advanceCurrency(space: string): Promise<CurrencyMarked[]> {
+    const engine = await this.#openEngine(space);
+    const marked = advanceCurrencyCursor(engine, { space });
+    this.#tellCurrencyReaders(space, engine);
+    return this.#takeCurrencyMarks(space, marked);
+  }
+
+  /**
+   * What passed between the currency indexes of the spaces this server
+   * holds: the triggers sent, the pulls made, the advances a commit queued,
+   * how often a space was held because a change kept coming back to it, and
+   * the spaces one came back to, each with the circle it came round. The
+   * health route publishes it.
+   */
+  currencyDelivery(): CurrencyDeliveryReport {
+    const now = Date.now();
+    let armed = 0;
+    for (const readers of this.#currencyArmed.values()) armed += readers.size;
+    const spaces: CurrencyDeliveryReport["spaces"] = [];
+    for (const [space, trail] of this.#currencyTrails) {
+      if (trail.circle === undefined) continue;
+      spaces.push({
+        space,
+        origin: trail.origin,
+        hops: trail.hops,
+        laps: trail.laps,
+        circle: [...trail.circle],
+        holds: trail.holds,
+        gapMs: trail.gapMs,
+        ...(trail.heldUntil > now && { heldUntil: trail.heldUntil }),
+      });
+    }
+    spaces.sort((a, b) => b.holds - a.holds || b.laps - a.laps);
+    return {
+      ...this.#currencyDelivery,
+      armed,
+      spaces: spaces.slice(0, CURRENCY_DELIVERY_SPACES_MAX),
+    };
+  }
+
+  /**
+   * The spaces `source` tells of the next change to an instance they
+   * registered. Diagnostics and tests only.
+   */
+  currencyReadersArmedOn(source: string): string[] {
+    return [...this.#currencyArmed.get(source)?.keys() ?? []];
+  }
+
+  /**
+   * The engine of `source`, a space whose store a slice of another space
+   * read, or `undefined` where this server cannot ask it: another owner
+   * holds the space, it has no store, or it is deleted.
+   */
+  async #currencySourceEngine(
+    source: string,
+  ): Promise<Engine.Engine | undefined> {
+    if (
+      this.options.ownsSpace !== undefined && !this.options.ownsSpace(source)
+    ) return undefined;
+    // A record names the space, and opening a store that is not there
+    // would make one.
+    if (!(await this.#spaceStoreExists(source))) return undefined;
+    const engine = await this.#openEngine(source);
+    return this.#deletedRefusal(engine, source) === null ? engine : undefined;
+  }
+
+  /**
+   * Returns a check of whether the space `source` may tell another space of
+   * an instance of its store: a shared one always, and a user's or a
+   * session's own only while the actor its key names holds READ on
+   * `source` (protocol.md §2). A read that names no one instance is told of
+   * nothing. Each actor is looked up once.
+   */
+  #currencyGrantCheck(
+    sourceEngine: Engine.Engine,
+    source: string,
+  ): (instance: CurrencyInstance) => boolean {
+    const granted = new Map<string, boolean>();
+    return ({ scopeKey }) => {
+      if (scopeKey === "space") return true;
+      const actor = identityOfScopeKey(scopeKey)?.principal;
+      if (actor === undefined) return false;
+      let verdict = granted.get(actor);
+      if (verdict === undefined) {
+        verdict = this.#foreignGrantOn(sourceEngine, source, actor, "READ")
+          .granted;
+        granted.set(actor, verdict);
+      }
+      return verdict;
+    };
+  }
+
+  /**
+   * Forgets what `space`'s index holds of each instance of `source` it may
+   * not be told of any longer, because the actor the instance is the own
+   * of holds no READ on `source` now, and drops `space`'s registration of
+   * it there. Each slice that read one is marked `2`.
+   *
+   * @returns Whether a slice was marked.
+   */
+  #forgetUngrantedCurrencyReads(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    sourceEngine: Engine.Engine,
+  ): boolean {
+    const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+    const refused = selectCurrencyImports(engine, { space, source }).filter((
+      instance,
+    ) => !mayBeTold(instance));
+    if (refused.length === 0) return false;
+    unregisterCurrencyReads(sourceEngine, {
+      space: source,
+      reader: space,
+      reads: refused,
+    });
+    return forgetCurrencyImports(engine, {
+      space,
+      source,
+      instances: refused,
+    }).length > 0;
+  }
+
+  /**
+   * Hands `space`'s serving loop `marked`, the slices its own request
+   * marked, with the slices an advance made on another request marked since
+   * the loop last asked.
+   */
+  #takeCurrencyMarks(
+    space: string,
+    marked: CurrencyMarked[],
+  ): CurrencyMarked[] {
+    const owed = this.#currencyMarksOwed.get(space);
+    if (owed === undefined) return marked;
+    this.#currencyMarksOwed.delete(space);
+    return [...owed.values(), ...marked];
+  }
+
+  /**
+   * Keeps `marked`, slices of `space` an advance marked on a request that
+   * was not its serving loop's, for that loop's next request, and tells the
+   * loop. The loop re-arms a root it holds unstarted from the seq a slice
+   * was marked at, which no later advance returns.
+   */
+  #oweCurrencyMarks(space: string, marked: readonly CurrencyMarked[]): void {
+    if (marked.length === 0) return;
+    let owed = this.#currencyMarksOwed.get(space);
+    if (owed === undefined) {
+      owed = new Map();
+      this.#currencyMarksOwed.set(space, owed);
+    }
+    for (const entry of marked) {
+      const key = `${entry.slice}\0${entry.piece}`;
+      const known = owed.get(key);
+      if (known === undefined || entry.seq < known.seq) owed.set(key, entry);
+    }
+    this.#notifyCurrencyChanged(space);
+  }
+
+  /**
+   * Tells each armed reader of `space` that registered an instance whose
+   * row moved since its pull, once, and disarms it, and shortens the arming
+   * of each reader armed for longer than `space` may now be rested on.
+   * Called after each change to `space`'s currency index, whose rows are
+   * current by then.
+   */
+  #tellCurrencyReaders(space: string, engine: Engine.Engine): void {
+    try {
+      this.#tellArmedCurrencyReaders(space, engine);
+    } finally {
+      // The index changed, and a reader may have been disarmed or had its
+      // arming shortened: each can change which demand carried into `space`
+      // stands.
+      this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Helper for `#tellCurrencyReaders()`, which tells the armed readers. */
+  #tellArmedCurrencyReaders(space: string, engine: Engine.Engine): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    const moved = selectCurrencyReadersMoved(engine, {
+      space,
+      since: this.#currencyToldThrough.get(space) ?? 0,
+    });
+    this.#currencyToldThrough.set(space, moved.position);
+    let step: CurrencyTrailStep | undefined;
+    for (const { reader, position } of moved.readers) {
+      const pulledAt = armed.get(reader)?.position;
+      if (pulledAt === undefined || position <= pulledAt) continue;
+      armed.delete(reader);
+      step ??= this.#currencyTrailFrom(space);
+      this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
+    // A reader armed for longer than `space` now holds was told a later
+    // time, or none, by a pull made before a slice here was recorded as
+    // expiring sooner, or before `space` was armed with a space it reads
+    // for a limited time.
+    const until = this.#currencyRestsUntil(space, engine);
+    if (until !== undefined) this.#shortenCurrencyArmings(space, until);
+  }
+
+  /**
+   * Shortens to `until` the arming of each reader armed with `space` for
+   * longer, and tells that reader, once `space` may be rested on only until
+   * then. Nothing in `space` moved, so the reader stays armed and pulls
+   * nothing, and its loop judges again, which returns it that time.
+   * Disarming it instead would have it pull again, and where it is read
+   * back by `space`, round a circle of spaces, the trigger would disarm
+   * `space` in turn, whose pull would arm the reader for longer again: the
+   * circle would go round with nothing moving in it, and never yield. A
+   * reader shortened may itself be rested on only until `until`, so its own
+   * readers are shortened in turn, which ends at the first space whose
+   * readers are armed until then or sooner.
+   *
+   * @returns Whether a reader of `space` was shortened. The caller brings
+   * the demand carried into `space` into line.
+   */
+  #shortenCurrencyArmings(space: string, until: number): boolean {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined) return false;
+    const shortened: string[] = [];
+    for (const [reader, entry] of armed) {
+      if (entry.until !== undefined && entry.until <= until) continue;
+      armed.set(reader, { ...entry, until });
+      shortened.push(reader);
+    }
+    for (const reader of shortened) {
+      this.#notifyCurrencyChanged(reader);
+      if (this.#shortenCurrencyArmings(reader, until)) {
+        this.#refreshCarriedDemand(reader);
+      }
+    }
+    return shortened.length > 0;
+  }
+
+  /**
+   * The time until which another space may rest on hearing nothing from
+   * `space`, or `undefined` where no time bounds it: the earliest time a
+   * slice of `space` expires at, or `space`'s own arming with a space it
+   * reads runs out. No commit reports either.
+   */
+  #currencyRestsUntil(
+    space: string,
+    engine: Engine.Engine,
+  ): number | undefined {
+    let until = selectCurrencyNextExpiry(engine, { space });
+    const now = Date.now();
+    for (const source of selectCurrencySources(engine, { space })) {
+      const armed = this.#currencyArmed.get(source)?.get(space)?.until;
+      // An arming that ran out bounds nothing: `space` pulls from that
+      // source again before another space rests on it, except round a
+      // circle of spaces, where the time would never move on.
+      if (armed === undefined || armed <= now) continue;
+      if (until === undefined || armed < until) until = armed;
+    }
+    return until;
+  }
+
+  /**
+   * The step a trigger from `space` carries: one hop further along the
+   * change behind the latest trigger `space` was sent, or the first hop of
+   * a change of its own where none reached it.
+   */
+  #currencyTrailFrom(space: string): CurrencyTrailStep {
+    const trail = this.#currencyTrails.get(space);
+    if (trail === undefined) {
+      this.#currencyOrigins += 1;
+      return { origin: this.#currencyOrigins, hops: 1, path: [space] };
+    }
+    return {
+      origin: trail.origin,
+      hops: trail.hops + 1,
+      path: [...trail.path, space],
+    };
+  }
+
+  /**
+   * Notes that a trigger carrying `step` reached `space`. A change `space`
+   * has not been sent before starts its trail over, and ends a hold. The
+   * same change arriving through more triggers than before has come back
+   * round a circle of spaces, which is a lap; arriving through no more, it
+   * is a further change of a space upstream, and changes nothing. At
+   * `CURRENCY_TRIGGER_LAPS_MAX` laps `space` is held, for twice as long as
+   * its last hold unless it was left alone for as long again as that one
+   * lasted.
+   */
+  #noteCurrencyTrail(space: string, step: CurrencyTrailStep): void {
+    const trail = this.#currencyTrails.get(space);
+    // The spaces before this one's first appearance are not on the circle.
+    const from = step.path.indexOf(space);
+    const path = from < 0 ? step.path : step.path.slice(from);
+    if (trail === undefined || trail.origin !== step.origin) {
+      this.#currencyTrails.set(space, {
+        origin: step.origin,
+        hops: step.hops,
+        laps: 0,
+        path,
+        // What is known of the space's earlier circles is kept, for the
+        // report.
+        ...(trail?.circle !== undefined && { circle: trail.circle }),
+        holds: trail?.holds ?? 0,
+        gapMs: 0,
+        heldUntil: 0,
+      });
+      return;
+    }
+    if (step.hops <= trail.hops) return;
+    trail.hops = step.hops;
+    trail.path = path;
+    trail.circle = path;
+    trail.laps += 1;
+    if (trail.laps < CURRENCY_TRIGGER_LAPS_MAX) return;
+    const now = Date.now();
+    const rested = now - trail.heldUntil > trail.gapMs;
+    trail.gapMs = trail.gapMs === 0 || rested
+      ? CURRENCY_HOLD_BASE_MS
+      : Math.min(trail.gapMs * 2, CURRENCY_HOLD_MAX_MS);
+    trail.heldUntil = now + trail.gapMs;
+    trail.laps = 0;
+    trail.holds += 1;
+    this.#currencyDelivery.holds += 1;
+    console.warn(
+      `memory v2: a change came back to the space ${space} ` +
+        `${CURRENCY_TRIGGER_LAPS_MAX} times, round ` +
+        `${[...path, space].join(" -> ")}; no space rests on its currency ` +
+        `index for ${trail.gapMs} ms`,
+    );
+  }
+
+  /** Whether `space` is held, so that no other space rests on it. */
+  #currencyHeld(space: string): boolean {
+    return (this.#currencyTrails.get(space)?.heldUntil ?? 0) > Date.now();
+  }
+
+  /**
+   * Tells every armed reader of `space` that it may have moved, and disarms
+   * them: `space` no longer hears of each change to a space it reads, so
+   * no reader may rest on hearing nothing from it. `step` is what the
+   * triggers carry, where a change is behind them.
+   */
+  #disarmCurrencyReaders(space: string, step?: CurrencyTrailStep): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    const readers = [...armed.keys()];
+    armed.clear();
+    this.#refreshCarriedDemand(space);
+    for (const reader of readers) {
+      this.#triggerCurrencyReader(reader, step);
+      this.#queueFollowForCarriedDemand(reader, space);
+    }
+  }
+
+  /**
+   * Delivers a trigger to `reader`, which a space it reads has just
+   * disarmed: something in that space may have moved. `step` says which
+   * change is behind the trigger and how far it has come, where one is. The
+   * reader's serving loop is told, and judges again where it holds a root
+   * unstarted. Nothing is pulled here. The reader's own armed readers are
+   * told in turn, since what the reader computes from that space may have
+   * moved with it. A reader is told at most once between two pulls, so one
+   * trigger ends at the first space already told.
+   */
+  #triggerCurrencyReader(reader: string, step?: CurrencyTrailStep): void {
+    this.#currencyDelivery.triggers += 1;
+    if (step !== undefined) this.#noteCurrencyTrail(reader, step);
+    this.#notifyCurrencyChanged(reader);
+    this.#disarmCurrencyReaders(
+      reader,
+      step === undefined ? undefined : this.#currencyTrailFrom(reader),
+    );
+  }
+
+  /**
+   * Queues an advance of `space`'s currency cursor behind a commit that was
+   * just admitted, where a reader is armed and none is queued: the advance
+   * is what finds whether an instance a reader registered changed. It runs
+   * in a transaction of its own once the commit has landed.
+   */
+  #queueCurrencyAdvance(space: string): void {
+    const armed = this.#currencyArmed.get(space);
+    if (armed === undefined || armed.size === 0) return;
+    if (this.#currencyAdvancesQueued.has(space)) return;
+    this.#currencyAdvancesQueued.add(space);
+    this.#currencyDelivery.advancesQueued += 1;
+    const advancing = Promise.resolve().then(async () => {
+      // A commit admitted from here on queues another.
+      this.#currencyAdvancesQueued.delete(space);
+      if (this.#closed) return;
+      const engine = await this.#openEngine(space);
+      this.#oweCurrencyMarks(space, advanceCurrencyCursor(engine, { space }));
+      this.#tellCurrencyReaders(space, engine);
+    }).catch((error) => {
+      console.warn(
+        `memory v2: the currency advance queued for ${space} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(advancing);
+    });
+    this.#currencyAdvancing.add(advancing);
+  }
+
+  /** Settles once no advance a commit queued is waiting or running. */
+  async #currencyAdvancesSettled(): Promise<void> {
+    while (this.#currencyAdvancing.size > 0) {
+      await Promise.all(this.#currencyAdvancing);
+    }
+  }
+
+  /**
+   * Brings what `space`'s currency index holds of each of `sources` up to
+   * what that space reports now. `visiting` holds the spaces a request is
+   * already bringing up to date, so that spaces that read each other are
+   * each followed once.
+   *
+   * @returns Whether a slice of `space` was marked.
+   */
+  async #followCurrencySources(
+    engine: Engine.Engine,
+    space: string,
+    sources: readonly string[],
+    visiting: Set<string>,
+  ): Promise<boolean> {
+    let marked = false;
+    for (const source of sources) {
+      if (await this.#followCurrencySource(engine, space, source, visiting)) {
+        marked = true;
+      }
+    }
+    return marked;
+  }
+
+  /**
+   * Helper for `#followCurrencySources()`, which follows one source. A
+   * source `space` is armed with has told it nothing since its last pull,
+   * and is not asked until the time that arming runs to has come. One that
+   * cannot be asked, or is held, is forgotten,
+   * which marks each slice that read it. Any other is pulled from, and arms
+   * `space` in the same step. A source that is pulled from or held follows
+   * the spaces it reads itself first, so that it hears of a change upstream
+   * of it: that is what a reader armed with it rests on, and what ends a
+   * hold early.
+   */
+  async #followCurrencySource(
+    engine: Engine.Engine,
+    space: string,
+    source: string,
+    visiting: Set<string>,
+  ): Promise<boolean> {
+    let armed = this.#currencyArmed.get(source);
+    const sourceEngine = await this.#currencySourceEngine(source);
+    if (sourceEngine === undefined) {
+      armed?.delete(space);
+      this.#refreshCarriedDemand(source);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
+    }
+    const resting = armed?.get(space);
+    if (
+      resting !== undefined && !this.#currencyHeld(source) &&
+      (resting.until === undefined || resting.until > Date.now())
+    ) return false;
+    if (!visiting.has(source)) {
+      visiting.add(source);
+      const marked = await this.#followCurrencySources(
+        sourceEngine,
+        source,
+        selectCurrencySources(sourceEngine, { space: source }),
+        visiting,
+      );
+      // The source's own loop may hold a root unstarted on a slice this
+      // marked.
+      if (marked) this.#notifyCurrencyChanged(source);
+    }
+    if (this.#currencyHeld(source)) {
+      this.#currencyArmed.get(source)?.delete(space);
+      this.#refreshCarriedDemand(source);
+      return forgetCurrencySource(engine, { space, source }).length > 0;
+    }
+    // A grant withdrawn since `space` registered an actor's own instance
+    // ends what it may be told of it.
+    const ungranted = this.#forgetUngrantedCurrencyReads(
+      engine,
+      space,
+      source,
+      sourceEngine,
+    );
+    const pulled = pullCurrencyExports(sourceEngine, {
+      space: source,
+      reader: space,
+      since: selectCurrencySourcePosition(engine, { space, source }),
+      dropped: dropUnreadCurrencyImports(engine, { space, source }),
+    });
+    this.#currencyDelivery.pulls += 1;
+    this.#oweCurrencyMarks(source, pulled.marked);
+    armed = this.#currencyArmed.get(source);
+    if (armed === undefined) {
+      armed = new Map();
+      this.#currencyArmed.set(source, armed);
+    }
+    // With no reader armed, nothing below this position is owed to anyone.
+    if (armed.size === 0) {
+      this.#currencyToldThrough.set(source, pulled.position);
+    }
+    const until = this.#currencyRestsUntil(source, sourceEngine);
+    armed.set(space, {
+      position: pulled.position,
+      ...(until !== undefined && { until }),
+    });
+    // The pull's advance may have moved a row another reader registered.
+    this.#tellCurrencyReaders(source, sourceEngine);
+    const applied = applyCurrencyImports(engine, {
+      space,
+      source,
+      entries: pulled.entries,
+      position: pulled.position,
+    }).length > 0;
+    return applied || ungranted;
+  }
+
+  /**
+   * Stores the records a serving loop took of `space`'s pieces at a quiescent
+   * point in its currency index (serving-loop.md §3b). Each instance of
+   * another space that a record read is registered with that space's index
+   * first, where this server holds its store and the space is not held, so
+   * the record is stored against what that space reports of it.
+   * Server-internal machinery and tests only.
+   */
+  async storeCurrencyRecords(
+    space: string,
+    batch: Omit<CurrencyBatch, "space">,
+  ): Promise<CurrencyStored> {
+    const engine = await this.#openEngine(space);
+    const reads = new Map<string, Map<string, CurrencyInstance>>();
+    for (const record of batch.records) {
+      for (const slice of record.slices) {
+        for (const { space: source, id, scopeKey } of slice.reads) {
+          if (source === space) continue;
+          let instances = reads.get(source);
+          if (instances === undefined) {
+            instances = new Map();
+            reads.set(source, instances);
+          }
+          instances.set(`${scopeKey}\0${id}`, { id, scopeKey });
+        }
+      }
+    }
+    let unheard = false;
+    for (const [source, instances] of reads) {
+      const sourceEngine = await this.#currencySourceEngine(source);
+      // A read of a space that cannot be asked, or is held, is stored with
+      // nothing reported of it, which leaves its slice marked.
+      if (sourceEngine === undefined || this.#currencyHeld(source)) continue;
+      // An instance that is a user's or a session's own is read under that
+      // actor's READ grant on the source (protocol.md §2), and what the
+      // source reports of it is told under the same grant. One whose actor
+      // holds none is not registered, and what an earlier record registered
+      // of it is forgotten, which leaves its slice marked too.
+      this.#forgetUngrantedCurrencyReads(engine, space, source, sourceEngine);
+      const mayBeTold = this.#currencyGrantCheck(sourceEngine, source);
+      const admitted = [...instances.values()].filter(mayBeTold);
+      const registered = registerCurrencyReads(sourceEngine, {
+        space: source,
+        reader: space,
+        reads: admitted,
+      });
+      this.#oweCurrencyMarks(source, registered.marked);
+      this.#tellCurrencyReaders(source, sourceEngine);
+      applyCurrencyImports(engine, {
+        space,
+        source,
+        entries: registered.entries,
+      });
+      unheard ||= this.#currencyArmed.get(source)?.has(space) !== true;
+    }
+    const stored = storeCurrencyRecords(engine, { ...batch, space });
+    // A space no slice of the batch reads any longer may hold registrations
+    // nothing here reads behind, which a pull from it drops.
+    await this.#followCurrencySources(
+      engine,
+      space,
+      stored.unread,
+      new Set([space]),
+    );
+    this.#tellCurrencyReaders(space, engine);
+    // A record that read a space `space` is not armed with rests on what a
+    // registration returned, and a later change there reaches nobody here.
+    // So no reader goes on resting on hearing nothing from `space`.
+    if (unheard) this.#disarmCurrencyReaders(space);
+    return { ...stored, marked: this.#takeCurrencyMarks(space, stored.marked) };
+  }
+
+  /**
+   * Judges which of `roots`, ids of space-scoped documents awaiting a
+   * structure load, the store can serve with no piece started
+   * (serving-loop.md §1), against the demand rows of `space`'s client
+   * sessions as `demandForSpace()` reads them, after bringing the currency
+   * index's marks up to the store's head. A root that is no result document
+   * is judged as the piece its `result` back-links lead to, which is the
+   * piece a structure load of it starts. A `computed:` root that one
+   * recorded piece writes is judged as that piece without its back-links
+   * being read, so one a session names at an instance narrower than the
+   * space, which the space may hold no instance of, is judged too.
+   *
+   * A root that is no `computed:` document and whose stored space instance
+   * is absent or carries neither a `result` field nor a pattern pointer
+   * (`isPlainDocument()`) is one a structure load starts no piece from,
+   * whatever writes it. It is judged as no piece and returned in `plain`.
+   *
+   * A root may rest on a slice that read another space. Each space read by
+   * a slice the demand rows are resolved under is followed first: one that
+   * `space` is armed with is not asked, and any other is pulled from.
+   *
+   * A root that would pass but for slices that are stale only through
+   * what is upstream of them is held: what the store holds of it is not
+   * current, and starting its piece would not make it so. `running` are
+   * pieces `space`'s serving loop runs already, asked about for what is
+   * upstream of them alone.
+   *
+   * @returns The roots that pass, each with the piece it was judged as, the
+   * roots a load starts no piece from, the roots that are held, the reads
+   * that keep a held root or a running piece stale upstream, each with the
+   * piece to start for it, how many roots each reason refused, the slices
+   * marked since `space`'s serving loop last asked, and the earliest time a
+   * slice of `space` expires at or its arming with a space it reads runs
+   * out, where either does: the roots are to be judged again then, since no
+   * commit reports it.
+   */
+  async judgeCurrencyRoots(
+    space: string,
+    roots: readonly string[],
+    options: {
+      excludePrincipal?: string;
+      epoch: string;
+      running?: readonly string[];
+    },
+  ): Promise<{
+    /**
+     * The roots the store can serve, each with its piece and the pieces it
+     * rests on that record a source origin, which the loop follows before
+     * it leaves the root unstarted.
+     */
+    servable: Array<{ root: string; piece: string; origins: string[] }>;
+
+    /**
+     * The roots a structure load starts no piece from (`isPlainDocument()`),
+     * absent where there is none.
+     */
+    plain?: string[];
+
+    held: Array<{ root: string; piece: string; readers: string[] }>;
+    upstream: CurrencyUpstreamRead[];
+    refused: Partial<Record<CurrencyRefusal, number>>;
+    marked: CurrencyMarked[];
+    nextExpiry?: number;
+  }> {
+    const engine = await this.#openEngine(space);
+    const advanced = advanceCurrencyCursor(engine, { space });
+    this.#tellCurrencyReaders(space, engine);
+    const marked = this.#takeCurrencyMarks(space, advanced);
+    const refused: Partial<Record<CurrencyRefusal, number>> = {};
+    /** What every return carries besides the roots that pass. */
+    const found = () => {
+      const nextExpiry = this.#currencyRestsUntil(space, engine);
+      return {
+        refused,
+        marked,
+        ...(nextExpiry !== undefined && { nextExpiry }),
+      };
+    };
+    const running = options.running ?? [];
+    if (roots.length === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...found() };
+    }
+
+    /** The roots a structure load starts no piece from. */
+    const plain = new Set<string>();
+
+    /**
+     * The recorded piece `root` leads to: the one piece recorded as deriving
+     * it where it is a computed document, or else the piece its back-links
+     * reach, if they reach one. A root that is no computed document and
+     * whose stored space instance is plain leads to none, and is noted in
+     * `plain`.
+     */
+    const pieceOf = (root: string): string | undefined => {
+      const deriver = selectCurrencyDeriver(engine, { space, id: root });
+      if (deriver !== undefined) return deriver;
+      let id = root;
+      for (let hops = 0; hops <= CURRENCY_ROOT_HOPS_MAX; hops++) {
+        if (selectCurrencyPiece(engine, { piece: id }) !== undefined) {
+          return id;
+        }
+        const document = Engine.read(engine, {
+          id,
+          scopeKey: "space",
+        });
+        if (id === root && !isComputedId(root) && isPlainDocument(document)) {
+          plain.add(root);
+          return undefined;
+        }
+        const link = document === null
+          ? undefined
+          : (document as Record<string, unknown>).result;
+        if (!isLinkRef(link)) return undefined;
+        const target = linkRefPayload(link).id;
+        if (typeof target !== "string") return undefined;
+        id = target;
+      }
+      return undefined;
+    };
+    const pieces = new Map<string, string>();
+    for (const root of roots) {
+      const piece = pieceOf(root);
+      if (piece !== undefined) pieces.set(root, piece);
+      else if (!plain.has(root)) {
+        refused["no-record"] = (refused["no-record"] ?? 0) + 1;
+      }
+    }
+    /** What every return carries besides what the index judged. */
+    const unjudged = () => ({
+      ...(plain.size > 0 && { plain: [...plain] }),
+      ...found(),
+    });
+    if (pieces.size === 0 && running.length === 0) {
+      return { servable: [], held: [], upstream: [], ...unjudged() };
+    }
+    const demand = this.demandForSpace(
+      space,
+      options.excludePrincipal === undefined
+        ? {}
+        : { excludePrincipal: options.excludePrincipal },
+    );
+    // Whose view of a slot is asked about decides which slice answers for
+    // it, and the scope key of a row at the space names no pair. So each row
+    // carries the session key of the pair whose session demands it, where
+    // that session names a principal.
+    const rows = function* (): Generator<
+      CurrencyInstance & { demander?: string }
+    > {
+      for (const share of demand) {
+        for (const row of share.rows.values()) {
+          const { principal, sessionId } = row.identity ?? {};
+          yield {
+            id: row.id,
+            scopeKey: row.scopeKey,
+            ...(principal !== undefined && sessionId !== undefined && {
+              demander: resolveScopeKey("session", { principal, sessionId }),
+            }),
+          };
+        }
+      }
+    };
+    const slices = new Set<string>([SPACE_SLICE]);
+    for (const { scopeKey } of rows()) {
+      if (slices.has(scopeKey)) continue;
+      for (const slice of sliceChain(scopeKey)) slices.add(slice);
+    }
+    await this.#followCurrencySources(
+      engine,
+      space,
+      selectCurrencySources(engine, { space, slices }),
+      new Set([space]),
+    );
+    // What a pull marked here may have moved a row another space reads.
+    this.#tellCurrencyReaders(space, engine);
+    const judgment = judgeCurrencyRoots(engine, {
+      space,
+      roots: [...new Set(pieces.values())],
+      rows: rows(),
+      epoch: options.epoch,
+      running,
+    });
+    const passing = new Set(judgment.servable);
+    const holding = new Map(
+      judgment.held.map(({ root, readers }) => [root, readers]),
+    );
+    const reasons = new Map(
+      judgment.refused.map(({ root, reason }) => [root, reason]),
+    );
+    const origins = new Map(
+      judgment.origins.map(({ root, pieces }) => [root, pieces]),
+    );
+    const servable: Array<
+      { root: string; piece: string; origins: string[] }
+    > = [];
+    const held: Array<{ root: string; piece: string; readers: string[] }> = [];
+    for (const [root, piece] of pieces) {
+      if (passing.has(piece)) {
+        servable.push({ root, piece, origins: origins.get(piece) ?? [] });
+        continue;
+      }
+      const readers = holding.get(piece);
+      if (readers !== undefined) {
+        held.push({ root, piece, readers });
+        continue;
+      }
+      const reason = reasons.get(piece);
+      if (reason !== undefined) refused[reason] = (refused[reason] ?? 0) + 1;
+    }
+    return { servable, held, upstream: judgment.upstream, ...unjudged() };
   }
 
   /** (d′) DIAGNOSTIC: per-session `trackedIds.size` for a
@@ -12305,6 +13826,11 @@ export class Server {
       for (const event of this.#sessions.snapshot()) {
         this.#notifySessionChanged(event);
       }
+      for (const space of this.#carriedDemand.keys()) {
+        for (const event of this.#carriedSnapshot(space)) {
+          this.#notifySessionChanged(event);
+        }
+      }
     }
   }
 
@@ -12313,7 +13839,361 @@ export class Server {
    * up to date, as installing an observer replays them for every space.
    */
   sessionSnapshot(space: string): SessionLifecycleEvent[] {
-    return this.#sessions.snapshot(space);
+    return [...this.#sessions.snapshot(space), ...this.#carriedSnapshot(space)];
+  }
+
+  /** The demands carried into `space`, each as the opening of a session. */
+  #carriedSnapshot(space: string): SessionLifecycleEvent[] {
+    return this.#carriedSessions(space).map(({ sessionId, principal }) => ({
+      kind: "opened" as const,
+      space,
+      sessionId,
+      ...(principal !== undefined && { principal }),
+    }));
+  }
+
+  /** The demands carried into `space`, from every reading space. */
+  #carriedSessions(space: string): CarriedSession[] {
+    const carried: CarriedSession[] = [];
+    for (const sessions of this.#carriedDemand.get(space)?.values() ?? []) {
+      for (const session of sessions.values()) carried.push(session);
+    }
+    return carried;
+  }
+
+  /**
+   * Replaces the demand the reading space `reader` carries into `space`
+   * with `rows` (serving-loop.md §3b): each instance a run of `reader` read
+   * here under the actor of a client session, which then demands it here
+   * as if it watched it. A row for the actor's own instance is admitted
+   * only where the actor holds READ on `space`, as a named scoped read is
+   * (protocol.md §2). A row for a shared instance is admitted without that,
+   * and then stands with no pair, as an anonymous session's does: the
+   * piece that computes it is loaded, and nothing is run for the actor. A
+   * row is refused where its origin is not a live client session on this
+   * server, which a serving session of `excludePrincipal`
+   * (`isServingSessionOf()`) is not; where that session is anonymous, and
+   * so names no actor to carry; where its instance is another actor's; and
+   * where this server cannot ask `space`'s store. A row stands until
+   * `reader` replaces it or its origin session ends.
+   *
+   * `reader` may be `space` itself: its loop then offers the instances its
+   * own index named as stale upstream of what a session demands, so that
+   * the pieces that write them start (serving-loop.md §1, "A root stale
+   * upstream"). Each of those rows stands, and an origin that is a session
+   * of `space` is carried as a pair without the grant being asked.
+   *
+   * @returns How many of `rows` were refused.
+   */
+  async setCarriedDemand(
+    space: string,
+    reader: string,
+    rows: readonly CarriedDemandRow[],
+    options: { excludePrincipal?: string } = {},
+  ): Promise<{ refused: number }> {
+    const engine = rows.length === 0
+      ? undefined
+      : await this.#currencySourceEngine(space);
+    let refused = 0;
+    const next = new Map<
+      string,
+      {
+        origin: CarriedDemandRow["origin"];
+        principal: string | undefined;
+        rows: Map<string, DemandedInstanceRow>;
+      }
+    >();
+    /**
+     * Whether a principal reads `space`, asked once for each, apart for an
+     * origin in `space` and one in another space.
+     */
+    const granted = new Map<string, boolean>();
+    for (const row of rows) {
+      const origin = this.#sessions.peek(
+        row.origin.space,
+        row.origin.sessionId,
+      );
+      const principal = origin?.principal;
+      const actor = row.scopeKey === "space"
+        ? principal
+        : identityOfScopeKey(row.scopeKey)?.principal;
+      let admitted = engine !== undefined && origin !== undefined &&
+        !isServingSessionOf(origin, options.excludePrincipal) &&
+        principal !== undefined && actor === principal;
+      // Whether the actor holds READ here, and so is carried as a pair.
+      let reads = false;
+      if (admitted) {
+        // A session of `space` itself reads it already: its own loop offers
+        // a row for it, for a piece upstream of what it demands.
+        const own = row.origin.space === space;
+        const asked = `${own}\0${principal!}`;
+        let verdict = granted.get(asked);
+        if (verdict === undefined) {
+          verdict = own ||
+            this.#foreignGrantOn(engine!, space, principal!, "READ").granted;
+          granted.set(asked, verdict);
+        }
+        reads = verdict;
+        // A serving loop reads a shared instance of another space whoever
+        // it runs for (protocol.md §2b), so the demand for one stands
+        // without the actor. The actor's own instance is read under the
+        // actor's grant alone, and so is demanded under it.
+        admitted = verdict || row.scopeKey === "space";
+      }
+      if (!admitted) {
+        refused += 1;
+        continue;
+      }
+      const sessionId = carriedSessionId(reader, row.origin);
+      let session = next.get(sessionId);
+      if (session === undefined) {
+        session = {
+          origin: { ...row.origin },
+          principal: reads ? principal : undefined,
+          rows: new Map(),
+        };
+        next.set(sessionId, session);
+      }
+      session.rows.set(toDirtyKey(row.id, row.scopeKey), {
+        id: row.id,
+        scope: row.scope,
+        scopeKey: row.scopeKey,
+        ...(reads && {
+          identity: { principal: principal!, sessionId: row.origin.sessionId },
+        }),
+        root: true,
+        origin: session.origin,
+      });
+    }
+    let offered = this.#carriedOffered.get(space);
+    if (next.size === 0) {
+      offered?.delete(reader);
+      if (offered?.size === 0) this.#carriedOffered.delete(space);
+    } else {
+      if (offered === undefined) {
+        offered = new Map();
+        this.#carriedOffered.set(space, offered);
+      }
+      offered.set(
+        reader,
+        new Map(
+          [...next].map(([sessionId, { origin, principal, rows }]) => [
+            sessionId,
+            { sessionId, origin, principal, share: { sessionId, rows } },
+          ]),
+        ),
+      );
+    }
+    this.#refreshCarriedDemand(space);
+    // What is proven current is proven for a reading space that hears of
+    // the next change, so one that offers demand is armed first. A space
+    // that offers demand to itself asks for what its own index named stale,
+    // and every such row stands.
+    if (next.size > 0 && reader !== space) {
+      await this.#followForCarriedDemand(reader, space);
+    }
+    return { refused };
+  }
+
+  /**
+   * Has `reader` pull from `source`, which arms it, where it offers demand
+   * there and is not armed: `source`'s index can then prove an instance
+   * `reader` read current, and the offered row for it need not stand.
+   */
+  async #followForCarriedDemand(reader: string, source: string): Promise<void> {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const engine = await this.#currencySourceEngine(reader);
+    if (engine === undefined || this.#closed) return;
+    const marked = await this.#followCurrencySource(
+      engine,
+      reader,
+      source,
+      new Set([reader]),
+    );
+    // The reader's own loop may hold a root unstarted on a slice this
+    // marked.
+    if (marked) this.#notifyCurrencyChanged(reader);
+  }
+
+  /**
+   * Queues a pull by `reader` from `source`, which has just disarmed it,
+   * where `reader` offers demand there (`#followForCarriedDemand()`).
+   */
+  #queueFollowForCarriedDemand(reader: string, source: string): void {
+    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
+    const following = Promise.resolve().then(() =>
+      this.#followForCarriedDemand(reader, source)
+    ).catch((error) => {
+      console.warn(
+        `memory v2: the pull queued for ${reader} from ${source} failed`,
+        error,
+      );
+    }).finally(() => {
+      this.#currencyAdvancing.delete(following);
+    });
+    this.#currencyAdvancing.add(following);
+  }
+
+  /**
+   * Brings the demand that stands in `space` into line with what the
+   * reading spaces offered, and tells the serving host of each change. An
+   * offered row stands unless `space`'s currency index proves its instance
+   * current: the reading space registered the instance and is armed with
+   * `space` for no limited time, so that it hears of the next change, and
+   * the index holds the instance as one no piece here is behind on. With a
+   * row that stands, stands a row for each piece the index records as
+   * writing its document, for the same pair. Called whenever
+   * what is offered, the index, or the arming may have changed.
+   */
+  #refreshCarriedDemand(space: string): void {
+    const offered = this.#carriedOffered.get(space);
+    let readers = this.#carriedDemand.get(space);
+    if (offered === undefined && readers === undefined) return;
+    const engine = this.#resolvedEngines.get(space);
+    /** What to tell the serving host, once the rows below are in place. */
+    const told: Array<() => void> = [];
+    for (
+      const reader of new Set([
+        ...offered?.keys() ?? [],
+        ...readers?.keys() ?? [],
+      ])
+    ) {
+      const armed = this.#currencyArmed.get(space)?.get(reader);
+      const rests = engine !== undefined && armed !== undefined &&
+        armed.until === undefined && !this.#currencyHeld(space);
+      const held = readers?.get(reader) ?? new Map<string, CarriedSession>();
+      const stands = new Map<string, CarriedSession>();
+      for (const [sessionId, session] of offered?.get(reader) ?? []) {
+        const rows = new Map(
+          [...session.share.rows].filter(([, row]) =>
+            !rests ||
+            selectCurrencyExport(engine, {
+                space,
+                id: row.id,
+                scopeKey: row.scopeKey,
+              })?.stale !== false
+          ),
+        );
+        if (rows.size === 0) continue;
+        // A serving loop starts no piece for a demanded document that a
+        // computation derives, and an instance that is an actor's own may
+        // not exist yet for it to find the piece from. So each piece the
+        // index records as writing a row's document is demanded with it,
+        // for the same pair.
+        if (engine !== undefined) {
+          for (const row of [...rows.values()]) {
+            for (
+              const piece of selectCurrencyWriters(engine, {
+                space,
+                id: row.id,
+              })
+            ) {
+              const key = toDirtyKey(piece, "space");
+              if (rows.has(key)) continue;
+              rows.set(key, {
+                id: piece,
+                scope: "space",
+                scopeKey: "space",
+                ...(row.identity !== undefined && { identity: row.identity }),
+                root: true,
+                origin: session.origin,
+              });
+            }
+          }
+        }
+        stands.set(sessionId, {
+          ...session,
+          share: { sessionId, rows },
+        });
+      }
+      for (const [sessionId, session] of [...held]) {
+        if (stands.has(sessionId)) continue;
+        held.delete(sessionId);
+        told.push(() => {
+          this.#notifySessionChanged({ kind: "removed", space, sessionId });
+          this.#notifyCarriedDemandChanged(space, session);
+        });
+      }
+      for (const [sessionId, session] of stands) {
+        const before = held.get(sessionId);
+        if (
+          before !== undefined &&
+          before.share.rows.size === session.share.rows.size &&
+          [...session.share.rows.keys()].every((key) =>
+            before.share.rows.has(key)
+          )
+        ) continue;
+        held.set(sessionId, session);
+        told.push(() => {
+          if (before === undefined) {
+            this.#notifySessionChanged({
+              kind: "opened",
+              space,
+              sessionId,
+              ...(session.principal !== undefined &&
+                { principal: session.principal }),
+            });
+            this.#notifySessionOpened(space);
+          }
+          this.#notifyCarriedDemandChanged(space, session);
+        });
+      }
+      if (held.size === 0) {
+        readers?.delete(reader);
+      } else {
+        if (readers === undefined) {
+          readers = new Map();
+          this.#carriedDemand.set(space, readers);
+        }
+        readers.set(reader, held);
+      }
+    }
+    if (readers?.size === 0) this.#carriedDemand.delete(space);
+    // The host asks what stands when it is told, so it is told once every
+    // row is in place.
+    for (const tell of told) tell();
+  }
+
+  /**
+   * Drops every demand carried for the session `sessionId` of `origin`,
+   * which has ended, from each space it was carried into.
+   */
+  #dropCarriedDemandOf(origin: string, sessionId: string): void {
+    for (const [space, readers] of [...this.#carriedOffered]) {
+      let dropped = false;
+      for (const [reader, offered] of [...readers]) {
+        for (const [id, session] of [...offered]) {
+          if (
+            session.origin.space !== origin ||
+            session.origin.sessionId !== sessionId
+          ) continue;
+          offered.delete(id);
+          dropped = true;
+        }
+        if (offered.size === 0) readers.delete(reader);
+      }
+      if (readers.size === 0) this.#carriedOffered.delete(space);
+      if (dropped) this.#refreshCarriedDemand(space);
+    }
+  }
+
+  /** Tells the serving host that the demand `session` carries changed. */
+  #notifyCarriedDemandChanged(space: string, session: CarriedSession): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.demandChanged === undefined) return;
+    try {
+      observer.demandChanged(
+        space,
+        "watch",
+        session.principal,
+        session.sessionId,
+      );
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on demandChanged",
+        error,
+      );
+    }
   }
 
   /**
@@ -12363,6 +14243,10 @@ export class Server {
   }
 
   #notifyCommitAdmitted(notice: AdmittedCommitNotice): void {
+    // A change of the space after a commit a client authored there is one
+    // with no trigger behind it.
+    if (notice.class === "authored") this.#currencyTrails.delete(notice.space);
+    this.#queueCurrencyAdvance(notice.space);
     const observer = this.#serverExecutionObserver;
     if (observer?.commitAdmitted !== undefined) {
       try {
@@ -12409,6 +14293,19 @@ export class Server {
     } catch (error) {
       console.warn(
         "memory v2: server-execution observer threw on sessionOpened",
+        error,
+      );
+    }
+  }
+
+  #notifyCurrencyChanged(space: string): void {
+    const observer = this.#serverExecutionObserver;
+    if (observer?.currencyChanged === undefined) return;
+    try {
+      observer.currencyChanged(space);
+    } catch (error) {
+      console.warn(
+        "memory v2: server-execution observer threw on currencyChanged",
         error,
       );
     }
@@ -13115,6 +15012,38 @@ export class Server {
   }
 
   /**
+   * Helper for `#openEngineInner()`, which respells `space`'s bare-DID labels
+   * before its engine is served (`cfc-bare-did-migration.ts`). A failure is
+   * reported and serves the store as it stands, so it never makes the space
+   * unservable.
+   */
+  async #retireBareDidLabels(
+    engine: Engine.Engine,
+    space: string,
+  ): Promise<void> {
+    try {
+      const report = await retireBareDidLabels(engine, { space });
+      if (report.rewritten > 0) {
+        console.info(
+          `memory v2: respelled the bare-DID labels of ${report.rewritten} ` +
+            `document instance(s) in ${space}`,
+        );
+      }
+      for (const { id, scopeKey, reason } of report.skipped) {
+        console.error(
+          `memory v2: could not respell the bare-DID labels of ${id} ` +
+            `(${scopeKey}) in ${space}: ${reason}`,
+        );
+      }
+    } catch (error) {
+      console.error(
+        `memory v2: respelling the bare-DID labels of ${space} failed`,
+        error,
+      );
+    }
+  }
+
+  /**
    * The co-hosted direct-engine access of server-execution v2
    * (serving-loop.md §1): the wave commit step's sink runs its store
    * transaction (per-doc re-verification + derived-class apply + basis rows)
@@ -13412,7 +15341,7 @@ export class Server {
       if (url.protocol === "file:") {
         await FS.ensureDir(Path.toFileUrl(Path.dirname(Path.fromFileUrl(url))));
       }
-      return await Engine.open({
+      const engine = await Engine.open({
         url,
         operationCodecs: this.#operationCodecs,
         operationCheckpointInterval: this.options.operationCheckpointInterval,
@@ -13427,6 +15356,10 @@ export class Server {
         commitObserver: (decision) =>
           this.#observeCommit({ ...decision, space }),
       });
+      if (this.options.retireBareDidLabels === true) {
+        await this.#retireBareDidLabels(engine, space);
+      }
+      return engine;
     })();
     // The SYNC engine view, which the read paths that must not add a
     // microtask boundary consult.

@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { sortDisplayMessages } from "./logic.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Thread order must be deterministic for messages that land in the same
 // millisecond — the tiebreaker chain (author → body → origin) is the contract

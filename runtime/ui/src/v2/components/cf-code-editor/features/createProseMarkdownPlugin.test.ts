@@ -1,7 +1,6 @@
 // First, so that the document it installs is there when CodeMirror loads.
 import { window } from "../../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
 import { EditorState, type Extension } from "@codemirror/state";
@@ -10,6 +9,7 @@ import { markdown } from "@codemirror/lang-markdown";
 import { ensureSyntaxTree } from "@codemirror/language";
 import { GFM } from "@lezer/markdown";
 import { createProseMarkdownPlugin } from "./prose-markdown.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** Every view `openView()` has opened and `closeViews()` not yet destroyed. */
 const openViews: EditorView[] = [];

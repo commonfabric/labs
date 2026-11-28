@@ -5,12 +5,12 @@
  * case drives one of them and reads the file where a poller would.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { readHarnessRunReport, readHarnessRunState } from "../src/artifacts.ts";
 import { createCliPromptSlotBinding } from "../src/contracts/prompt-slot.ts";

@@ -1,3 +1,8 @@
+import { expect } from "@std/expect";
+import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   afterAll,
   afterEach,
@@ -5,12 +10,7 @@ import {
   beforeEach,
   describe,
   it,
-} from "@std/testing/bdd";
-import { expect } from "@std/expect";
-import { Identity } from "@commonfabric/identity";
-import { getLogger } from "@commonfabric/logger";
-import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
-import { isObjectOrArray } from "@commonfabric/js-values/types";
+} from "@commonfabric/test-support/test";
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
 import {
@@ -128,7 +128,7 @@ const ITEMS_SCHEMA = {
   items: { type: "object", properties: { seed: { type: "string" } } },
 } as const;
 // One card per case, each cold on the replica that runs it.
-const CARD_COUNT = 16;
+const CARD_COUNT = 17;
 
 type EventCommitMarker = {
   type: "scheduler.event.commit";
@@ -748,6 +748,35 @@ describe("piece-named-before-start", () => {
     expect((await settled).outcome).toBe("installed");
     await quiesce(b);
     expect(b.runner.cancels.has(key)).toBe(false);
+  });
+
+  it("runs the named start again when this replica changes a document it read before its commit lands", async () => {
+    // Another transaction on the same replica writes a document the start
+    // read, between the read and the start's commit: a parent piece's start
+    // writing the owner link of a per-session cell its nested piece's start
+    // read as absent is the shape that reaches it. The replica refuses the
+    // commit as a stale basis, which a run from the start resolves.
+    const { cardB, itemB, key } = locateCard(16);
+    const outcomes: (string | undefined)[] = [];
+    b.runner.accessForTestingOnly.deferredStartCommitter = async (
+      _tx,
+      _resultCell,
+      commit,
+    ) => {
+      if (outcomes.length === 0) {
+        const racing = b.edit();
+        itemB.withTx(racing).key("seed").set("raced");
+        expect((await racing.commit().settled).error).toBeUndefined();
+      }
+      const result = await commit();
+      outcomes.push(result.error?.name);
+      return result;
+    };
+    await runCard(cardB, itemB);
+    await quiesce(b);
+
+    expect(outcomes).toEqual(["StorageTransactionInconsistent", undefined]);
+    expect(b.runner.cancels.has(key)).toBe(true);
   });
 
   it("hands the named run's start the trust snapshot of the transaction that asked for the run", async () => {

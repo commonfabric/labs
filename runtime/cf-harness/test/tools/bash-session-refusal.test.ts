@@ -8,7 +8,6 @@
  * runtime makes and the records are the ones the engine keeps.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 
@@ -31,6 +30,12 @@ import {
   BASH_SESSION_UNAVAILABLE_EXIT_CODE,
   BASH_TIMEOUT_EXIT_CODE,
 } from "../../src/tools/bash.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const RUNSC_SUBCOMMANDS = ["run", "exec", "state", "delete", "kill"];
 

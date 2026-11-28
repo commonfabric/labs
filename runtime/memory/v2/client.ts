@@ -27,6 +27,7 @@ import {
   type BranchName,
   type BranchRestoreRequest,
   type BranchRestoreResult,
+  carriesMarkedSplice,
   type ClientCommit,
   type CommitSummary,
   compatibleMemoryProtocolFlags,
@@ -276,7 +277,10 @@ export type Transport = {
    * for replay on the next connection, so the transport must report the same
    * loss to its close receiver, which starts the reconnect that replays it;
    * `reset()` and `close()` are the exceptions, as the client calls them
-   * itself. A transport whose write of this very payload failed on an open
+   * itself. A transport that knows it wrote none of the payload, such as one
+   * whose socket was replaced while the payload waited its turn, rejects
+   * with `unsentConnectionError()`, so that the client knows no server holds
+   * it. A transport whose write of this very payload failed on an open
    * connection rejects with `writeFailedError()` instead, so that the client
    * stops replaying a commit whose own write keeps failing. Any other
    * rejection fails the request with that error. A response that arrived
@@ -635,6 +639,18 @@ type OutstandingCommit = {
    * `MAX_OWN_WRITE_FAILURES`.
    */
   writeFailures?: number;
+
+  /**
+   * Set as the commit's first send begins, and taken back where the
+   * transport reports it wrote none of that send
+   * ({@link isUnsentConnectionError}). Until then, a commit carrying a marked
+   * splice is refused where the connection it would go out on does not
+   * advertise `markedSplicesV1` ({@link isMarkedSpliceRefusal}). From then on
+   * every attempt sends it unchanged, whatever the connection advertises: the
+   * store may already hold it, and it tells a resend of a commit it took from
+   * a new one by the commit's bytes.
+   */
+  sent?: true;
 };
 
 /**
@@ -891,10 +907,12 @@ export class Client {
    */
   #cidBodyFetches = new Map<string, Promise<boolean>>();
   /**
-   * The bounds a watch set is staged in parts to fit on this connection: on
-   * a routed connection, the frame cap and the 4 MiB a request may take, in
-   * parts of 1 MiB; on a direct one, the server's slot limit on a client
-   * message.
+   * The bounds one request is held to on this connection, which a watch
+   * set is staged in parts to fit and a commit past them is refused unsent:
+   * on a routed connection, the frame cap and the 4 MiB a request may take,
+   * in parts of 1 MiB; on a direct one, the server's slot limit on a client
+   * message, which is the one its `hello.ok` carries (`messageSlots`) or
+   * else the default.
    */
   #requestLimits: PartLimits | undefined;
   /** The split syncs whose last part has not arrived, by session. */
@@ -1085,6 +1103,18 @@ export class Client {
     return this.#requestLimits === undefined
       ? undefined
       : wholeLimits(this.#requestLimits).bytes;
+  }
+
+  /**
+   * Indicates whether `encoded`, a request encoded for the current
+   * connection, fits what that connection takes in one request sent whole,
+   * in bytes and in values. Everything fits before the first handshake.
+   *
+   * @internal For `SpaceSession`.
+   */
+  fitsOneRequest(encoded: string): boolean {
+    return this.#requestLimits === undefined ||
+      payloadFits(encoded, wholeLimits(this.#requestLimits));
   }
 
   /**
@@ -1345,6 +1375,12 @@ export class Client {
    * only after the server has handled the request, and so after the frames
    * the server sent while handling it. `options.onResponse` hears the
    * response as the client handles it, before any frame after it.
+   *
+   * `options.beforeSend` runs once the request is encoded for the connection
+   * it goes out on, with nothing left that could still stop it there, so that
+   * `serverFlags` and the request bounds are that connection's; it is handed
+   * the encoding, and throwing stops the request, unsent, with the error
+   * thrown.
    */
   async request<Result>(
     message: FabricPlainObject,
@@ -1353,6 +1389,7 @@ export class Client {
       epoch?: number;
       encoded?: string;
       onResponse?: (response: ResponseMessage<Result>) => void;
+      beforeSend?: (encoded: string) => void;
     } = {},
   ): Promise<Result> {
     if (options.whileConnected === true && !this.#connected) {
@@ -1385,6 +1422,7 @@ export class Client {
     const encoded = options.encoded !== undefined && options.epoch === epoch
       ? options.encoded
       : this.#encodeRequest(message);
+    options.beforeSend?.(encoded);
     const { onResponse } = options;
     // Set as the response arrives, which on some transports is before the
     // send settles.
@@ -2510,10 +2548,11 @@ export class Client {
     // `sessionReportV1`, `watchRemoveV1`, `watchSetPartsV1`,
     // `patternLifecycle`, `patternLifecycleOrigins`,
     // `patternLifecycleScopes`, `servedRequests`, `spaceInvites`,
-    // `instanceNameMark` and `branches` are the server's capabilities alone:
-    // the client reads them from `hello.ok` and never offers them. Other
-    // flags an endpoint does not know are ignored there, since the routed
-    // flag allowlists were removed (infra DEVIATIONS row 41).
+    // `spaceInvitesRevision`, `instanceNameMark` and `branches` are the
+    // server's capabilities alone: the client reads them from `hello.ok` and
+    // never offers them. Other flags an endpoint does not know are ignored
+    // there, since the routed flag allowlists were removed (infra DEVIATIONS
+    // row 41).
     const {
       sessionReportV1: _reportsServerOnly,
       watchRemoveV1: _removalServerOnly,
@@ -2523,6 +2562,7 @@ export class Client {
       patternLifecycleScopes: _lifecycleScopesServerOnly,
       servedRequests: _servedServerOnly,
       spaceInvites: _invitesServerOnly,
+      spaceInvitesRevision: _invitesRevisionServerOnly,
       instanceNameMark: _instanceNameMarkServerOnly,
       branches: _branchesServerOnly,
       ...expectedFlags
@@ -2761,7 +2801,7 @@ export class Client {
           }
           : this.#transport.messageLimits ?? {
             bytes: Number.MAX_SAFE_INTEGER,
-            values: MAX_UNTRUSTED_MESSAGE_SLOTS,
+            values: helloOk.messageSlots ?? MAX_UNTRUSTED_MESSAGE_SLOTS,
           };
         this.#helloPending.resolve();
         return;
@@ -3512,6 +3552,7 @@ export class SpaceSession {
   #restoreComplete: PromiseWithResolvers<void> | undefined;
   #viewCapabilityLostObservers = new Set<() => void>();
   #terminationObservers = new Set<(error: Error) => void>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #watchSpecPositions = new Map<string, number[]>();
   #watchView: WatchView | null = null;
   #precedingWatchSyncs: SessionSync[] = [];
@@ -3696,6 +3737,18 @@ export class SpaceSession {
 
   get sessionId(): string {
     return this.#sessionId;
+  }
+
+  /**
+   * The branch this session's opens name (`MountOptions.branch`): the default
+   * branch when they name none. It is the branch the session is of, except
+   * where an open asked the server to fork it (`MountOptions.forkBranch`) for
+   * a principal that may not write to the space: the server then opens the
+   * session on the default branch (04-protocol.md section 4.1.2), and
+   * `session.open` does not say so.
+   */
+  get requestedBranch(): BranchName {
+    return this.#branch ?? DEFAULT_BRANCH;
   }
 
   /** Serving-process provenance from the latest successful session open. */
@@ -4471,6 +4524,20 @@ export class SpaceSession {
   }
 
   /**
+   * Observes the newest seq of the space this session has learned of
+   * (`serverSeq`) moving forward, whether by an answer to a request of its
+   * own or by an update the server pushes. The seq is that of the space's
+   * own history. It moves for commits this session hears of, its own and
+   * those to documents it watches, and for an answer that names the space's
+   * head, as listing its history or its branches does, which can name a
+   * commit this session is not sent, such as one of another branch.
+   */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
+  }
+
+  /**
    * Observes this session ending with an error, which `closeError` then
    * holds: a revocation (a takeover, an authorization denial, or a space
    * marked for instance names, which requires an update), a permanent
@@ -5067,6 +5134,7 @@ export class SpaceSession {
     this.#viewInterests = [];
     this.#viewCapabilityLostObservers.clear();
     this.#terminationObservers.clear();
+    this.#serverSeqObservers.clear();
     this.#watchView?.close();
     this.#watchView = null;
   }
@@ -5139,6 +5207,7 @@ export class SpaceSession {
     this.#watchView?.close();
     this.#watchView = null;
     this.#endPresenceRooms(error);
+    this.#serverSeqObservers.clear();
     const observers = [...this.#terminationObservers];
     this.#terminationObservers.clear();
     for (const observer of observers) {
@@ -5248,13 +5317,21 @@ export class SpaceSession {
         facets: publication.facets,
       });
     };
-    void send().catch((error) => {
+    void send().catch(this.#presenceFailure(state));
+  }
+
+  /**
+   * What tells `state`'s observers that a presence request failed, unless
+   * the connection went away or the client closed, which say so themselves.
+   */
+  #presenceFailure(state: PresenceRoomState): (error: unknown) => void {
+    return (error) => {
       if (isConnectionError(error) || this.#closed) return;
       this.#deliverPresence(state, {
         kind: "failure",
         error: error instanceof Error ? error : new Error(String(error)),
       });
-    });
+    };
   }
 
   /**
@@ -5277,13 +5354,7 @@ export class SpaceSession {
           state.revision += 1;
           this.#publishPresence(state, state.revision, state.publication);
         }
-      }).catch((error) => {
-        if (isConnectionError(error) || this.#closed) return;
-        this.#deliverPresence(state, {
-          kind: "failure",
-          error: error instanceof Error ? error : new Error(String(error)),
-        });
-      });
+      }).catch(this.#presenceFailure(state));
     }
   }
 
@@ -5727,7 +5798,21 @@ export class SpaceSession {
   }
 
   #noteResult(serverSeq: number): void {
-    this.#serverSeq = Math.max(this.#serverSeq, serverSeq);
+    if (serverSeq <= this.#serverSeq) return;
+    // A session closing still hears its in-flight requests answered, and
+    // reports none of them.
+    if (this.#closed) {
+      this.#serverSeq = serverSeq;
+      return;
+    }
+    this.#serverSeq = serverSeq;
+    for (const observer of [...this.#serverSeqObservers]) {
+      try {
+        observer(serverSeq);
+      } catch (cause) {
+        console.error("server-seq subscriber threw:", cause);
+      }
+    }
   }
 
   #noteOperationWatchCursors(sync: SessionSync): void {
@@ -5969,6 +6054,8 @@ export class SpaceSession {
         return;
       }
 
+      // Whether this attempt began the commit's first send.
+      let firstSend = false;
       try {
         const applied = await this.#client.request<AppliedCommit>({
           type: "transact",
@@ -5980,6 +6067,26 @@ export class SpaceSession {
           onResponse: (response) => {
             if (response.ok !== undefined) pendingCommit.applied = response.ok;
           },
+          beforeSend: (encoded) => {
+            if (pendingCommit.sent === true) return;
+            // A connection refuses a request past its bounds by closing, and
+            // the commit would be sent again on each connection after it, so
+            // one that does not fit is refused here instead.
+            if (!this.#client.fitsOneRequest(encoded)) {
+              throw oversizedCommitRefusal(
+                memoryMessageFrameBytes(encoded),
+                this.#client.requestBytesLimit,
+              );
+            }
+            if (
+              carriesMarkedSplice(pendingCommit.commit) &&
+              this.#client.serverFlags?.markedSplicesV1 !== true
+            ) {
+              throw markedSpliceRefusal();
+            }
+            pendingCommit.sent = true;
+            firstSend = true;
+          },
         });
         this.#noteResult(applied.seq);
         if (this.#outstandingCommits.get(localSeq) === pendingCommit) {
@@ -5990,6 +6097,11 @@ export class SpaceSession {
           void this.ack(applied.seq).catch(() => undefined);
         }
       } catch (error) {
+        // A first send the transport wrote none of reached no server, so the
+        // next attempt is a first send again, checked on its own connection.
+        if (firstSend && isUnsentConnectionError(error)) {
+          delete pendingCommit.sent;
+        }
         if (isConnectionError(error) || isSessionRevokedError(error)) {
           // A commit whose own write fails on one new connection after
           // another is at fault itself, and replaying it again would only take
@@ -6482,6 +6594,29 @@ export const writeFailedError = (message: string, cause?: unknown): Error =>
   Object.assign(connectionError(message, cause), { ownWriteFailed: true });
 
 /**
+ * Like `connectionError()`, except that it marks a payload the transport is
+ * sure it wrote none of to any connection, such as one queued behind earlier
+ * writes whose socket was replaced before its turn: no server holds it
+ * ({@link isUnsentConnectionError}).
+ */
+export const unsentConnectionError = (
+  message: string,
+  cause?: unknown,
+): Error => markUnsent(connectionError(message, cause));
+
+/**
+ * Marks `error`, a `ConnectionError` such as a `writeFailedError()`, as one
+ * for a payload the transport wrote none of, as
+ * {@link unsentConnectionError} does, and returns it.
+ */
+export const markUnsent = (error: Error): Error =>
+  Object.assign(error, { unsent: true });
+
+/** Whether `error` is an {@link unsentConnectionError}. */
+export const isUnsentConnectionError = (error: unknown): boolean =>
+  isConnectionError(error) && (error as { unsent?: unknown }).unsent === true;
+
+/**
  * Like `connectionError()`, except that it marks a frame the transport
  * received and could not decode: a frame past the negotiated size or slot cap,
  * a compressed frame that does not inflate, or an invalid router credit. A
@@ -6574,6 +6709,52 @@ const protocolError = (message: string): Error => {
   error.name = "ProtocolError";
   return error;
 };
+
+/**
+ * The refusal of a commit carrying a marked splice (`PatchOp`'s `pinned`)
+ * whose first send would go out on a connection that does not advertise
+ * `markedSplicesV1`, as the server it reaches may then read the splice as
+ * overwriting nothing. Nothing was sent, so the commit's writer can diff the
+ * change again for the connection as it is. Named `ConflictError`, a refusal
+ * its writer can retry; it carries no seq to wait for, as the store's own
+ * conflicts do.
+ */
+/**
+ * A session's refusal of a commit, unsent, because its encoding, `bytes`
+ * long, is past the bounds its connection holds one request to, of `limit`
+ * bytes and of a number of values. It
+ * carries the name the memory server gives a message it refuses for its
+ * size, which the runner reads as a terminal rejection.
+ */
+const oversizedCommitRefusal = (
+  bytes: number,
+  limit: number | undefined,
+): Error =>
+  Object.assign(
+    new Error(
+      `memory v2 commit not sent: its encoding, ${bytes} bytes, is past ` +
+        `the bounds this connection holds one request to (at most ${limit} ` +
+        "bytes)",
+    ),
+    { name: "MessageTooLargeError" },
+  );
+
+const markedSpliceRefusal = (): Error =>
+  Object.assign(
+    new Error(
+      "memory v2 commit not sent: it marks a splice, and the connection " +
+        "does not advertise markedSplicesV1",
+    ),
+    { name: "ConflictError", markedSpliceRefusal: true },
+  );
+
+/**
+ * Whether `error` is a session's refusal of a commit, unsent, because it
+ * marks a splice and its connection does not advertise `markedSplicesV1`.
+ */
+export const isMarkedSpliceRefusal = (error: unknown): boolean =>
+  error instanceof Error &&
+  (error as { markedSpliceRefusal?: unknown }).markedSpliceRefusal === true;
 
 // A ProtocolError that no retry can heal (the peers disagree on a data-model
 // wire contract). Tagged so the reconnect loop gives up rather than retrying it.
@@ -6716,6 +6897,7 @@ const parseHelloOk = (
   routerTransport?: number;
   routerUploadWindow?: number;
   routerFrameSlots?: number | null;
+  messageSlots?: number;
 } | null => {
   if (!isPlainObject(message)) {
     return null;
@@ -6740,6 +6922,17 @@ const parseHelloOk = (
   ) {
     return null;
   }
+  // A server's limit is never below the default, so a lower one is not a
+  // limit any server was given.
+  const messageSlots = message.messageSlots;
+  if (
+    messageSlots !== undefined &&
+    (typeof messageSlots !== "number" ||
+      !Number.isSafeInteger(messageSlots) ||
+      messageSlots < MAX_UNTRUSTED_MESSAGE_SLOTS)
+  ) {
+    return null;
+  }
   return {
     flags: parsed,
     sessionOpen: message.sessionOpen,
@@ -6748,6 +6941,7 @@ const parseHelloOk = (
       ? { routerUploadWindow: message.routerUploadWindow }
       : {}),
     ...(frameSlots === undefined ? {} : { routerFrameSlots: frameSlots }),
+    ...(messageSlots === undefined ? {} : { messageSlots }),
   };
 };
 

@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { type FabricValue, isDeepFrozen } from "@commonfabric/data-model";
 import { getContainersHashedForTestingOnly } from "@commonfabric/data-model/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   EmulatedStorageManager,
   newLoopbackServer,

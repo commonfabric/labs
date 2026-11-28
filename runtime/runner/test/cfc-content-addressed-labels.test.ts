@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { CFC_ATOM_TYPE, CFC_CONCEPT_KIND } from "@commonfabric/api/cfc";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { canonicalizeCfcMetadata } from "../src/cfc/canonical.ts";
 import {
@@ -565,11 +565,35 @@ describe("CFC content-addressed labels", () => {
       });
     });
 
+    it("writes a version-2 envelope when the runtime leaves the flag unset", async () => {
+      const storageManager = StorageManager.emulate({ as: signer });
+      const runtime = new Runtime({
+        apiUrl: new URL(import.meta.url),
+        storageManager,
+      });
+      try {
+        const { stored } = await declaredWrite(runtime, "flag-default", {
+          secret: "classified",
+          note: "n",
+        }, runtime.cfcContentAddressedLabels);
+        expect(runtime.cfcContentAddressedLabels).toBe(true);
+        expect(stored?.version).toBe(2);
+        expect(
+          stored!.labelMap.entries.some((entry) =>
+            isCfcLabelReference(entry.label)
+          ),
+        ).toBe(true);
+      } finally {
+        await runtime.dispose();
+      }
+    });
+
     it("keeps the version-1 inline form with the flag off", async () => {
       const storageManager = StorageManager.emulate({ as: signer });
       const runtime = new Runtime({
         apiUrl: new URL(import.meta.url),
         storageManager,
+        cfcContentAddressedLabels: false,
       });
       try {
         const { stored } = await declaredWrite(runtime, "flag-off", {
@@ -600,9 +624,9 @@ describe("CFC content-addressed labels", () => {
           tx as unknown as ConstructorParameters<typeof TransactionWrapper>[0],
           {},
         );
-        expect(tx.getCfcState().contentAddressedLabels).toBe(false);
-        wrapper.setCfcContentAddressedLabels(true);
         expect(tx.getCfcState().contentAddressedLabels).toBe(true);
+        wrapper.setCfcContentAddressedLabels(false);
+        expect(tx.getCfcState().contentAddressedLabels).toBe(false);
         tx.abort();
       } finally {
         await runtime.dispose();

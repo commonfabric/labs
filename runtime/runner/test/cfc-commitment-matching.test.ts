@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import {
@@ -7,6 +6,7 @@ import {
   CFC_CONCEPT_KIND,
   cfcAtom,
 } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { atomEntails, matchAtomPattern } from "../src/cfc/atom-pattern.ts";
 import { clauseSubsumes } from "../src/cfc/clause.ts";

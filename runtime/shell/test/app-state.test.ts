@@ -1,5 +1,4 @@
 import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
@@ -12,6 +11,7 @@ import {
   resolveIdentity,
   serialize,
 } from "@commonfabric/shell/app-state";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const API_URL = "http://common.test/";
 const SPACE_NAME = "common-knowledge";

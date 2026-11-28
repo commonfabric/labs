@@ -15,14 +15,9 @@
  * without a carriage return before it.
  */
 
-import type { Document, Line, StructureNode, TokenClass } from "../../model.ts";
-import { flattenStructure } from "../../model.ts";
+import type { Document, Line, TokenClass } from "../../model.ts";
 import { linesFromClasses } from "../classes.ts";
-import {
-  type LocatedEntry,
-  structureNode,
-  structureSource,
-} from "../structure.ts";
+import { type LocatedEntry, scannedDocument } from "../structure.ts";
 
 const HOST_LINE = /^[^\s=]*[^\s=:]\s+(?:[^\s=]+=|#)/;
 const QUOTED = String.raw`"(?:[^"\\]|\\.)*"?|'[^']*'?`;
@@ -188,20 +183,5 @@ export function iniLines(text: string): Line[] {
 /** Color `text` and list its sections and the keys each one sets. */
 export function iniDocument(text: string): Document {
   const scanner = new Scanner(text);
-  const source = structureSource(text);
-  const node = (entry: Entry, depth: number): StructureNode =>
-    structureNode(
-      source,
-      entry,
-      depth,
-      (inner) => entry.children.map((child) => node(child, inner)),
-    );
-  const structure = scanner.entries.map((entry) => node(entry, 0));
-  return {
-    text,
-    lines: linesFromClasses(text, scanner.classes, source.lineStarts),
-    structure,
-    flatStructure: flattenStructure(structure),
-    definitions: source.definitions,
-  };
+  return scannedDocument(text, scanner.classes, scanner.entries);
 }

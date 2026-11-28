@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
 import { binaryCacheKey } from "./binary-cache-key.ts";
 import { cachedBinaries } from "./ci-capabilities.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Runs git in `root`, failing the test on anything but success. */
 async function git(root: string, ...args: string[]): Promise<void> {

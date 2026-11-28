@@ -1,9 +1,9 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { realFileGateway } from "../lib/view/filegateway.ts";
 import { loadViewInput } from "../lib/view/loadinput.ts";
@@ -13,7 +13,7 @@ const CLI_PACKAGE_DIR = join(import.meta.dirname!, "..");
 const REPO_ROOT = join(CLI_PACKAGE_DIR, "..", "..");
 
 describe("view-procfs", () => {
-  const linuxIt = Deno.build.os === "linux" ? it : it.skip;
+  const linuxIt = Deno.build.os === "linux" ? it : it.ignore;
 
   linuxIt("reads zero-sized virtual files through EOF", async () => {
     expect(Deno.statSync(PROCFS_PATH).size).toBe(0);

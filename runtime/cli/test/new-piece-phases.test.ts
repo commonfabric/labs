@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { newPiece } from "../lib/piece.ts";
 import type { PhaseTrace } from "../lib/trace-timing.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const CONFIG = {
   apiUrl: "https://cf.dev",

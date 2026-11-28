@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ConsoleHealth, type ConsoleHealthRow } from "../../console/health.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const fact = {
   id: "index.reachable",

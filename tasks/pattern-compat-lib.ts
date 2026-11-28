@@ -21,6 +21,7 @@
  */
 
 import type { JSONSchema, Pattern } from "@commonfabric/runner";
+import { inputsNeededToRun } from "@commonfabric/pattern-index/standalone";
 import { validateSchemaDefinition } from "@commonfabric/runner/cfc";
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
 import { JsonCodecEngine } from "@commonfabric/data-model/codec-json";
@@ -31,6 +32,7 @@ import {
 import {
   formatSchemaIncompatibility,
   patternSchemaIncompatibilities,
+  schemaWithoutVolatileWriterIdentity,
 } from "../runtime/piece/src/schema-compatibility.ts";
 import { readOnlyArguments } from "./only-arguments.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
@@ -73,7 +75,12 @@ export type Finding =
   /** The current contract is not a well-formed schema on its own terms. */
   | { kind: "invalid-schema"; pattern: string; role: string; detail: string }
   /** Baselines outlived their source: pieces tracking this path are pinned. */
-  | { kind: "retired"; pattern: string; baselines: string[] };
+  | { kind: "retired"; pattern: string; baselines: string[] }
+  /**
+   * A `main.tsx` entry, which a repository offers as standalone, requires
+   * these inputs and gives them no default, so it cannot run alone.
+   */
+  | { kind: "not-standalone"; pattern: string; inputs: string[] };
 
 /**
  * How much of the base64url SHA-256 goes in a filename. The hash only has to
@@ -87,11 +94,22 @@ const HASH_LENGTH = 16;
  * order (the same machinery `internSchema` hashes through), so a reordered but
  * structurally identical schema addresses to the same baseline instead of
  * minting a spurious one.
+ *
+ * The address is of the contract as the proof reads it, without the volatile
+ * identity of its writer claims (`schemaWithoutVolatileWriterIdentity`). That
+ * identity includes the content hash of the module that authorizes a write, so
+ * any edit to that module, a comment included, changes it. The proof gives the
+ * same verdict for two contracts that differ only in it, so the gate treats
+ * them as one contract: such an edit needs no new baseline, and two changes
+ * that each make one cannot leave the merged result with a contract no
+ * baseline records.
  */
 export function contractHash(contract: PatternContract): string {
   return hashStringOf({
-    argumentSchema: contract.argumentSchema,
-    resultSchema: contract.resultSchema,
+    argumentSchema: schemaWithoutVolatileWriterIdentity(
+      contract.argumentSchema,
+    ),
+    resultSchema: schemaWithoutVolatileWriterIdentity(contract.resultSchema),
   }).slice(0, HASH_LENGTH);
 }
 
@@ -213,11 +231,13 @@ export function checkPattern(
   );
 
   // A recorded contract is identical to a contract that the run recording it
-  // validated, so validating it again here would be pure waste, and it is not
-  // cheap: the definition validator blows up combinatorially on some real
-  // schemas (validating lobby/main.tsx's schemas alone takes ~55s). The subset
-  // proof below still runs against every other baseline, and it validates both
-  // contracts it compares, so that cost recurs once per baseline.
+  // validated, apart from the writer identity that neither this validation
+  // nor the proof reads, so validating it again here would be pure waste, and
+  // it is not cheap: the definition validator blows up combinatorially on
+  // some real schemas (validating lobby/main.tsx's schemas alone takes ~55s).
+  // The subset proof below still runs against every other baseline, and it
+  // validates both contracts it compares, so that cost recurs once per
+  // baseline.
   if (!recorded) {
     findings.push({ kind: "missing-baseline", pattern, hash });
     for (
@@ -226,7 +246,9 @@ export function checkPattern(
         ["result", current.resultSchema],
       ] as const
     ) {
-      const issue = validateSchemaDefinition(schema);
+      const issue = validateSchemaDefinition(
+        schemaWithoutVolatileWriterIdentity(schema),
+      );
       if (issue !== undefined) {
         findings.push({ kind: "invalid-schema", pattern, role, detail: issue });
       }
@@ -256,6 +278,26 @@ export function checkPattern(
   return findings;
 }
 
+/**
+ * Check that a pattern a repository offers as standalone can run alone.
+ *
+ * In a repository `<name>/main.tsx` is a pattern's standalone entry, so a
+ * `main.tsx` under `patterns/` (`offered`) has to run with no other piece
+ * wired in: every input it requires carries a default. Connector views, whose
+ * host fills their inputs in, live in other trees and are not offered.
+ */
+export function checkRunsAlone(
+  pattern: string,
+  offered: boolean,
+  current: PatternContract | undefined,
+): Finding[] {
+  if (!offered || current === undefined) return [];
+  const inputs = inputsNeededToRun(current.argumentSchema);
+  return inputs.length === 0
+    ? []
+    : [{ kind: "not-standalone", pattern, inputs }];
+}
+
 //
 // Baseline store
 //
@@ -263,8 +305,30 @@ export function checkPattern(
 // than only against the real `patterns` layout.
 //
 
-/** Read every recorded contract for a pattern. Absent directory → none. */
+/**
+ * Read every recorded contract for a pattern: those recorded under each of
+ * `recordedKeys`, which are `key` alone unless the pattern moved, when
+ * `baselineKeysByPattern` gives every key it had. A baseline never moves, so
+ * a pattern's move deletes none. Absent directories → none.
+ */
 export async function readBaselines(
+  baselinesDir: string,
+  key: string,
+  recordedKeys: readonly string[] = [key],
+): Promise<Baseline[]> {
+  const baselines: Baseline[] = [];
+  for (const recordedKey of recordedKeys) {
+    for (
+      const baseline of await readBaselinesUnder(baselinesDir, recordedKey)
+    ) {
+      baselines.push(baseline);
+    }
+  }
+  return baselines.sort((a, b) => a.label.localeCompare(b.label));
+}
+
+/** The contracts recorded under one key. Absent directory → none. */
+async function readBaselinesUnder(
   baselinesDir: string,
   key: string,
 ): Promise<Baseline[]> {

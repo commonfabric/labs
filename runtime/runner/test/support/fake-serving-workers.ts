@@ -16,6 +16,7 @@ import type {
   SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
 import type { HostOccupancy } from "../../src/executor/host.ts";
+import { RunBeacon, type RunEvent } from "../../src/executor/run-beacon.ts";
 import {
   type BridgeNotices,
   type BridgeRequests,
@@ -31,6 +32,7 @@ import {
   emptyServingLoopStats,
   type ServingLoopStats,
 } from "../../src/executor/stats.ts";
+import type { MemorySpace } from "../../src/storage/interface.ts";
 
 /** A notice the pool sent a stand-in worker, as its host would receive it. */
 export type ReceivedNotice = {
@@ -48,6 +50,7 @@ const NO_DIAGNOSTICS: ServingLoopDiagnostics = {
 
 /** The notices a worker's host receives, which a stand-in records. */
 const RECORDED_NOTICES = [
+  "host.failEvent",
   "observer.commitAdmitted",
   "observer.sessionOpened",
   "observer.demandChanged",
@@ -75,6 +78,9 @@ export class FakeServingWorker implements PortLike {
   readonly #toHost = new Set<(event: MessageEvent) => void>();
   #onerror: ((event: ErrorEvent) => void) | null = null;
   #init: ServingWorkerInit | undefined;
+  #beacon: RunBeacon | undefined;
+  /** The actions of the runs started so far, which no collection takes. */
+  readonly #actions: (() => void)[] = [];
   #terminated = false;
   #occupancy: HostOccupancy = "vacant";
   #finalStats: ServingLoopStats = emptyServingLoopStats();
@@ -212,6 +218,11 @@ export class FakeServingWorker implements PortLike {
   serve(heapSizeLimit = 0): void {
     this.#host.onRequest("worker.init", (init) => {
       this.#init = init;
+      this.#beacon = init.runBeacon === undefined ? undefined : new RunBeacon(
+        init.runBeacon,
+        (identity) => this.#host.notify("worker.runNamed", identity),
+        (runs) => this.#host.notify("worker.runsForgotten", { runs }),
+      );
       return { lifetimeLock: undefined, heapSizeLimit };
     });
     this.#host.notify("worker.ready", null);
@@ -262,6 +273,33 @@ export class FakeServingWorker implements PortLike {
       heapLimitReached: false,
       ...over,
     });
+  }
+
+  /**
+   * Plays the body of a run of `action` in `space` starting to hold the
+   * worker's thread, for `event` where given: the worker posts what the run's
+   * number stands for, and marks the beacon the pool handed it, until
+   * `endRun()`. The stand-in holds the run's action for as long as it lives,
+   * so the garbage collector never reports it collected; `collected()` does.
+   * Throws before the host has taken its `worker.init`.
+   */
+  startRun(space: MemorySpace, action: string, event?: RunEvent): void {
+    if (this.#beacon === undefined) {
+      throw new Error("the stand-in worker's host has not been started");
+    }
+    const body = () => {};
+    this.#actions.push(body);
+    this.#beacon.accessForTestingOnly.enter(space, body, action, event);
+  }
+
+  /** Plays the end of the body `startRun()` started. */
+  endRun(): void {
+    this.#beacon?.accessForTestingOnly.leave();
+  }
+
+  /** Plays the worker's realm collecting the action that `run` names. */
+  collected(run: number): void {
+    this.#beacon?.accessForTestingOnly.collected(run);
   }
 
   /** The notices of one method the pool has sent, in order. */

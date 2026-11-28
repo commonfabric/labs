@@ -148,6 +148,7 @@ import {
   parseAllowedSkillScriptSpec,
   uniqueAllowedSkillScripts,
 } from "./skills/scripts.ts";
+import { parseHarnessReviewedSkills } from "./skills/reviewed-skills.ts";
 import { resolveHarnessSkillsRoot } from "./skills/root.ts";
 import {
   describeHarnessSkillsRoot,
@@ -229,6 +230,7 @@ const CLI_STRING_FLAGS = [
   "focus-root",
   "allow-tool",
   "allow-skill-script",
+  "reviewed-skills",
   "allow-subagent-profile",
   "output-mode",
   "prompt-slot-role",
@@ -676,6 +678,9 @@ Options:
   --allow-skill-script <spec>   Allow one exact skill script (repeatable: skill:scripts/path,
                                 where skill is a registry name or an acquired pin owner/repo/slug@<commit sha>;
                                 a registry name requires --skills-root, a pin does not)
+  --reviewed-skills <path>      JSON file of reviewed skill bundles and the verifiers this run
+                                accepts. A child handed an acquired skill one of them fully
+                                covers keeps the delegating run's authority instead of quote
   --allow-subagent-profile <p>  Authorize delegate_task to spawn a profile (repeatable: default | browser | web_fetch | web_search)
   --output-mode <mode>          operator | batch (default: operator)
   --stream-events               Print transcript events as they happen
@@ -1960,6 +1965,11 @@ export const parseCfHarnessCliArgs = async (
     );
   }
   const readTextFile = deps.readTextFile ?? Deno.readTextFile;
+  const reviewedSkills = typeof args["reviewed-skills"] === "string"
+    ? parseHarnessReviewedSkills(
+      JSON.parse(await readTextFile(resolve(cwd, args["reviewed-skills"]))),
+    )
+    : undefined;
   const loomAuthoring = await readLoomAuthoringConfig(
     typeof args["loom-authoring-config"] === "string"
       ? args["loom-authoring-config"]
@@ -2253,6 +2263,7 @@ export const parseCfHarnessCliArgs = async (
     skillNames,
     allowSkillScripts: args["allow-skill-scripts"] === true,
     allowedSkillScripts,
+    ...(reviewedSkills !== undefined ? { reviewedSkills } : {}),
     skillScriptExecutionTarget,
     skillCatalogEnabled: args["no-skill-catalog"] !== true,
     ...(typeof args.model === "string"
@@ -2662,11 +2673,23 @@ const appendStructuredResultInstructions = (
   }
   lines.push(
     "- Object schemas are closed by default: include only properties the schema declares unless it explicitly allows additional properties.",
-    "",
-    "Result schema (JSON):",
-    JSON.stringify(structuredResult.schema),
+    "- The result schema follows these instructions as a message of its own.",
   );
 };
+
+/**
+ * The run's result schema as a system message of its own, sent after the
+ * system prompt, or `undefined` when the run configures none. The schema is
+ * commonly different in every run while the prompt before it is the same, and
+ * a provider that caches through message ends can reuse the prompt only when
+ * it ends where the runs stop agreeing (`toResponsesInput`).
+ */
+export const buildStructuredResultSchemaPrompt = (
+  structuredResult: CfHarnessStructuredResultConfig | undefined,
+): string | undefined =>
+  structuredResult === undefined
+    ? undefined
+    : `Result schema (JSON):\n${JSON.stringify(structuredResult.schema)}`;
 
 const appendHostMountInstructions = (
   lines: string[],
@@ -2731,9 +2754,10 @@ export const buildCfHarnessOperatorSystemPrompt = (
     "- Stop once you have enough evidence to answer.",
   ];
   appendHostMountInstructions(lines, config);
-  // The caller's instructions come before the result contract: a caller's
-  // standing instructions are commonly the same in every run while its result
-  // schema is per call, and the provider caches only the prefix runs share.
+  // The caller's standing instructions come before the result contract, which
+  // carries no schema: the schema is its own system message
+  // (`buildStructuredResultSchemaPrompt`), so the prompt is the same in every
+  // run of a caller whose schema is per call.
   appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
@@ -2780,9 +2804,10 @@ export const buildCfHarnessBatchSystemPrompt = (
     lines.push("");
     appendHostMountInstructions(lines, config);
   }
-  // The caller's instructions come before the result contract: a caller's
-  // standing instructions are commonly the same in every run while its result
-  // schema is per call, and the provider caches only the prefix runs share.
+  // The caller's standing instructions come before the result contract, which
+  // carries no schema: the schema is its own system message
+  // (`buildStructuredResultSchemaPrompt`), so the prompt is the same in every
+  // run of a caller whose schema is per call.
   appendAdditionalInstructions(lines, config.systemPrompt);
   appendStructuredResultInstructions(
     lines,
@@ -4059,12 +4084,15 @@ export const runCfHarnessCli = async (
           taskTags: shape.tags,
           taskDomains: shape.domains,
         });
-        if (systemPrompt !== undefined) {
-          continuation.transcript.unshift({
-            role: "system",
-            content: systemPrompt,
-          });
-        }
+        const schemaPrompt = buildStructuredResultSchemaPrompt(
+          effectiveStructuredResult,
+        );
+        continuation.transcript = [
+          ...[systemPrompt, schemaPrompt].flatMap((content) =>
+            content === undefined ? [] : [{ role: "system" as const, content }]
+          ),
+          ...continuation.transcript,
+        ];
       }
       requestAccepted = true;
       const engine = continuedEngine ??
@@ -4252,6 +4280,9 @@ export const runCfHarnessCli = async (
           ),
         ),
         systemPrompt: resolveCfHarnessCliSystemPrompt(promptConfig),
+        systemPromptLayers: [
+          buildStructuredResultSchemaPrompt(effectiveStructuredResult),
+        ].flatMap((layer) => layer === undefined ? [] : [layer]),
         contextMessages: orientContextMessages(contextMessages, shape),
         model: parsed.model,
         maxModelTurns: parsed.maxModelTurns,

@@ -2,6 +2,7 @@ import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { test } from "@commonfabric/test-support/test";
 import {
   cellTx,
   markRuntimeInjectedEventKeys,
@@ -2079,7 +2080,7 @@ describe("scheduler event receipts", () => {
   });
 });
 
-Deno.test("navigateTo handler results navigate once and deduplicate redelivery", async () => {
+test("navigateTo handler results navigate once and deduplicate redelivery", async () => {
   const navSigner = await Identity.fromPassphrase(
     "receipts navigate operator",
   );
@@ -2177,7 +2178,7 @@ Deno.test("navigateTo handler results navigate once and deduplicate redelivery",
   }
 });
 
-Deno.test("sanitizeRuntimeInjectedEventKeys: malformed persisted carriage degrades to absent instead of throwing in the drain (verdict blocker, 2026-08-12)", () => {
+test("sanitizeRuntimeInjectedEventKeys: malformed persisted carriage degrades to absent instead of throwing in the drain (verdict blocker, 2026-08-12)", () => {
   // Pre-fix the drain spread malformed carriage straight into the
   // mint: `[...42]` threw on EVERY scan pass — perpetual serving churn
   // from one poisoned entry. The sanitize maps malformed to absent;

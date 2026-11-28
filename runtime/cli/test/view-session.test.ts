@@ -9,6 +9,7 @@ import type { EditableSource } from "../lib/view/editsource.ts";
 import type { Key } from "../lib/view/keys.ts";
 import type { Semantics } from "../lib/view/languages/language.ts";
 import { wrappedRowAt } from "../lib/view/wrap.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function makeSession() {
   const doc = parseDocument(SAMPLE);
@@ -50,7 +51,7 @@ function expandableSession(
   );
 }
 
-Deno.test("session: vertical scrolling and clamping", () => {
+test("session: vertical scrolling and clamping", () => {
   // j/k scroll the pager (bare arrows scroll too; edit mode is entered with e).
   const s = makeSession();
   assertEquals(s.view().top, 0);
@@ -68,7 +69,7 @@ Deno.test("session: vertical scrolling and clamping", () => {
   assertEquals(s.view().top, 0);
 });
 
-Deno.test("session: the mouse wheel scrolls without moving the edit cursor", () => {
+test("session: the mouse wheel scrolls without moving the edit cursor", () => {
   const text = Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n");
   const source: EditableSource = {
     label: null,
@@ -94,7 +95,7 @@ Deno.test("session: the mouse wheel scrolls without moving the edit cursor", () 
   assertEquals(session.view().message, "", "the wheel cancelled the C-x chord");
 });
 
-Deno.test("session: the mouse wheel scrolls an overlay", () => {
+test("session: the mouse wheel scrolls an overlay", () => {
   const session = makeSession();
   press(session, "?");
   assertEquals(session.view().overlay?.scroll, 0);
@@ -102,7 +103,7 @@ Deno.test("session: the mouse wheel scrolls an overlay", () => {
   assertEquals(session.view().overlay?.scroll, 3);
 });
 
-Deno.test("session: an ordinary file ends at the bottom of the viewport", () => {
+test("session: an ordinary file ends at the bottom of the viewport", () => {
   const text = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
   const s = new Session(
     parseDocument(text),
@@ -121,7 +122,7 @@ Deno.test("session: an ordinary file ends at the bottom of the viewport", () => 
   assertEquals(s.view().top, 4, "down stops with the last line at the bottom");
 });
 
-Deno.test("session: a diff leaves three quarters below the final line", () => {
+test("session: a diff leaves three quarters below the final line", () => {
   const text = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
   const source: EditableSource = {
     label: null,
@@ -148,7 +149,7 @@ Deno.test("session: a diff leaves three quarters below the final line", () => {
   assertEquals(s.view().top, 10, "down stops at the padded diff end");
 });
 
-Deno.test("session: a trailing diff newline is not a padded content row", () => {
+test("session: a trailing diff newline is not a padded content row", () => {
   const source: EditableSource = {
     label: null,
     isDiff: true,
@@ -174,7 +175,7 @@ Deno.test("session: a trailing diff newline is not a padded content row", () => 
   );
 });
 
-Deno.test("session: edit-mode scrolling keeps the ordinary document limit", () => {
+test("session: edit-mode scrolling keeps the ordinary document limit", () => {
   const text = Array.from({ length: 12 }, (_, i) => `line ${i}`).join("\n");
   const source: EditableSource = {
     label: null,
@@ -196,7 +197,7 @@ Deno.test("session: edit-mode scrolling keeps the ordinary document limit", () =
   assertEquals(s.view().top, maxTop(s.doc.lines.length, s.view().height));
 });
 
-Deno.test("session: horizontal scrolling", () => {
+test("session: horizontal scrolling", () => {
   const s = makeSession();
   press(s, "l");
   assertEquals(s.view().left, 8);
@@ -206,7 +207,7 @@ Deno.test("session: horizontal scrolling", () => {
   assertEquals(s.view().left, 0, "left clamps at 0");
 });
 
-Deno.test("session: lines without diff annotations use the full width", () => {
+test("session: lines without diff annotations use the full width", () => {
   const s = expandableSession("abcde", 7);
   assertEquals(renderFrame(s.displayDoc(), s.view())[0], "abcde  ");
   press(s, "l");
@@ -214,7 +215,7 @@ Deno.test("session: lines without diff annotations use the full width", () => {
   assertEquals(renderFrame(s.displayDoc(), s.view())[0], "abcde  ");
 });
 
-Deno.test("session: full-width lines count displayed cells", () => {
+test("session: full-width lines count displayed cells", () => {
   const cases = [
     // Each emoji takes two columns.
     { text: "😀😀😀", expected: "😀😀😀 " },
@@ -229,14 +230,14 @@ Deno.test("session: full-width lines count displayed cells", () => {
   }
 });
 
-Deno.test("session: search keeps a fitting unannotated match in place", () => {
+test("session: search keeps a fitting unannotated match in place", () => {
   const s = expandableSession("abcdX", 7);
   press(s, "/", "X", "enter");
   assertEquals(s.view().left, 0);
   assertEquals(renderFrame(s.displayDoc(), s.view())[0], "abcdX  ");
 });
 
-Deno.test("session: a card jump uses the full unannotated width", () => {
+test("session: a card jump uses the full unannotated width", () => {
   const s = expandableSession("abcdX", 7);
   const target: CardTarget = {
     cardLine: 0,
@@ -248,7 +249,7 @@ Deno.test("session: a card jump uses the full unannotated width", () => {
   assertEquals(renderFrame(s.displayDoc(), s.view())[0], "▶abcdX ");
 });
 
-Deno.test("session: clearing a selection clamps expansion-margin panning", () => {
+test("session: clearing a selection clamps expansion-margin panning", () => {
   const s = expandableSession("const x = 123456789;", 5);
   press(s, "tab");
   assert(s.view().selected, "a guide is present");
@@ -290,7 +291,7 @@ function totalsSource(editable = false): EditableSource {
   };
 }
 
-Deno.test("session: a diff source carries whole-diff totals to the view", () => {
+test("session: a diff source carries whole-diff totals to the view", () => {
   const s = new Session(
     parseDocument(TOTALS_DIFF),
     { color: false, showLineNumbers: false },
@@ -323,7 +324,7 @@ Deno.test("session: a diff source carries whole-diff totals to the view", () => 
   assertEquals(noFiles.view().diffTotals, null, "no totals without diff files");
 });
 
-Deno.test("session: edit mode hides the whole-diff totals", () => {
+test("session: edit mode hides the whole-diff totals", () => {
   const s = new Session(
     parseDocument(TOTALS_DIFF),
     { color: false, showLineNumbers: false },
@@ -339,7 +340,7 @@ Deno.test("session: edit mode hides the whole-diff totals", () => {
   assertEquals(s.view().diffTotals, { adds: 2, dels: 1 });
 });
 
-Deno.test("session: a wrapped first line flows around the totals label", () => {
+test("session: a wrapped first line flows around the totals label", () => {
   const s = new Session(
     parseDocument(TOTALS_DIFF),
     { color: false, showLineNumbers: false },
@@ -353,7 +354,7 @@ Deno.test("session: a wrapped first line flows around the totals label", () => {
   assertEquals(rows[1], ".ts b/a.ts          ");
 });
 
-Deno.test("session: panning reaches content hidden under the totals label", () => {
+test("session: panning reaches content hidden under the totals label", () => {
   const PAN_DIFF = [
     "diff --git a/src/app.ts b/src/app.ts",
     "index 1111111..2222222 100644",
@@ -377,7 +378,7 @@ Deno.test("session: panning reaches content hidden under the totals label", () =
   );
 });
 
-Deno.test("session: removing the gutter clamps expansion-margin panning", () => {
+test("session: removing the gutter clamps expansion-margin panning", () => {
   const s = expandableSession("abcdefghijklmnopqrst", 10);
   press(s, "#");
   for (let i = 0; i < 10; i++) press(s, "l");
@@ -389,7 +390,7 @@ Deno.test("session: removing the gutter clamps expansion-margin panning", () => 
   assertEquals(s.view().left, atRightEdge, "right does not move left");
 });
 
-Deno.test("session: leaving edit mode clamps expansion-margin panning", () => {
+test("session: leaving edit mode clamps expansion-margin panning", () => {
   const s = expandableSession("abcdefghijklmnopqrst", 10, true);
   press(s, "e", "end", "left");
   for (let i = 0; i < 10; i++) {
@@ -402,14 +403,14 @@ Deno.test("session: leaving edit mode clamps expansion-margin panning", () => {
   assertEquals(s.view().left, 10, "right does not move left");
 });
 
-Deno.test("session: leaving edit mode keeps the former cursor column visible", () => {
+test("session: leaving edit mode keeps the former cursor column visible", () => {
   const s = expandableSession("abcde", 7, true);
   press(s, "e", "right", "right", "right", "right", "escape");
   assertEquals(s.view().left, 0);
   assertEquals(renderFrame(s.displayDoc(), s.view())[0], "abcde  ");
 });
 
-Deno.test("session: backslash cycles wrapping and keeps its content anchor", () => {
+test("session: backslash cycles wrapping and keeps its content anchor", () => {
   const doc = parseDocument("abcdefghijkl\nsecond");
   const s = new Session(
     doc,
@@ -439,7 +440,7 @@ Deno.test("session: backslash cycles wrapping and keeps its content anchor", () 
   assertEquals(s.view().message, "Line wrapping: off");
 });
 
-Deno.test("session: word wrapping indents continuations by the line prefix", () => {
+test("session: word wrapping indents continuations by the line prefix", () => {
   const s = new Session(
     parseDocument("  #  foo bar"),
     { color: false, showLineNumbers: false },
@@ -454,7 +455,7 @@ Deno.test("session: word wrapping indents continuations by the line prefix", () 
   assertEquals(rows[1], "     bar   ");
 });
 
-Deno.test("session: word wrapping restores the visible source at a word", () => {
+test("session: word wrapping restores the visible source at a word", () => {
   const s = new Session(
     parseDocument("alpha beta gamma delta\nnext"),
     { color: false, showLineNumbers: false },
@@ -473,7 +474,7 @@ Deno.test("session: word wrapping restores the visible source at a word", () => 
   assert(renderFrame(s.displayDoc(), view)[0].startsWith("beta "));
 });
 
-Deno.test("session: resizing a wrapped view keeps its top content in view", () => {
+test("session: resizing a wrapped view keeps its top content in view", () => {
   const doc = parseDocument("abcdefghijkl\nnext");
   const s = new Session(
     doc,
@@ -488,7 +489,7 @@ Deno.test("session: resizing a wrapped view keeps its top content in view", () =
   assertEquals(s.view().top, 0, "the line fits after a wide resize");
 });
 
-Deno.test("session: an empty wrapped document remains stable across resize", () => {
+test("session: an empty wrapped document remains stable across resize", () => {
   const parsed = parseDocument("");
   const s = new Session(
     { ...parsed, lines: [] },
@@ -501,7 +502,7 @@ Deno.test("session: an empty wrapped document remains stable across resize", () 
   assertEquals(s.view().wrapPlan?.rowCount, 0);
 });
 
-Deno.test("session: a gutter-width change reflows wrapped rows around the anchor", () => {
+test("session: a gutter-width change reflows wrapped rows around the anchor", () => {
   const doc = parseDocument("abcdefghijkl\nnext");
   const s = new Session(
     doc,
@@ -513,7 +514,7 @@ Deno.test("session: a gutter-width change reflows wrapped rows around the anchor
   assert(s.view().showLineNumbers, "line numbers are on");
 });
 
-Deno.test("session: removing a gutter reclamps a wrapped ordinary end", () => {
+test("session: removing a gutter reclamps a wrapped ordinary end", () => {
   const doc = parseDocument("abcdefghijklmnopqrst");
   const s = new Session(
     doc,
@@ -532,7 +533,7 @@ Deno.test("session: removing a gutter reclamps a wrapped ordinary end", () => {
   );
 });
 
-Deno.test("session: search reveals the wrapped row containing the match", () => {
+test("session: search reveals the wrapped row containing the match", () => {
   const doc = parseDocument("prefix----needle\nnext");
   const s = new Session(
     doc,
@@ -544,7 +545,7 @@ Deno.test("session: search reveals the wrapped row containing the match", () => 
   assertEquals(s.view().left, 0, "search does not pan wrapped content");
 });
 
-Deno.test("session: clearing a selection reflows a wrapped logical line", () => {
+test("session: clearing a selection reflows a wrapped logical line", () => {
   const doc = parseDocument("const value = 123456789;");
   const s = new Session(
     doc,
@@ -556,7 +557,7 @@ Deno.test("session: clearing a selection reflows a wrapped logical line", () => 
   assertEquals(s.view().top, 1, "the selected continuation stays in view");
 });
 
-Deno.test("session: changing display mode reflows a wrapped logical line", () => {
+test("session: changing display mode reflows a wrapped logical line", () => {
   const doc = parseDocument("ab\x1b[31mcdefghijklmnop");
   const s = new Session(
     doc,
@@ -568,7 +569,7 @@ Deno.test("session: changing display mode reflows a wrapped logical line", () =>
   assertEquals(s.view().top, 3, "the same source column stays in view");
 });
 
-Deno.test("session: selecting a node preserves the wrapped viewport anchor", () => {
+test("session: selecting a node preserves the wrapped viewport anchor", () => {
   const doc = parseDocument(Array(20).fill("abcdefghij").join("\n"));
   const node = {
     ...doc.flatStructure[0]!,
@@ -591,7 +592,7 @@ Deno.test("session: selecting a node preserves the wrapped viewport anchor", () 
   );
 });
 
-Deno.test("session: structure navigation reveals a node on a continuation", () => {
+test("session: structure navigation reveals a node on a continuation", () => {
   const text = `${"x".repeat(235)}TARGET${"x".repeat(10)}`;
   const doc = parseDocument(text);
   const node = {
@@ -616,7 +617,7 @@ Deno.test("session: structure navigation reveals a node on a continuation", () =
   );
 });
 
-Deno.test("session: a wrapped use jump reveals its exact continuation", () => {
+test("session: a wrapped use jump reveals its exact continuation", () => {
   const text = `const base = 1;${" ".repeat(70)}const use = base;${
     " ".repeat(70)
   }const tail = 2;`;
@@ -668,7 +669,7 @@ Deno.test("session: a wrapped use jump reveals its exact continuation", () => {
   );
 });
 
-Deno.test("session: navigation selects the node spanning the viewport top", () => {
+test("session: navigation selects the node spanning the viewport top", () => {
   const text = "x".repeat(220);
   const doc = parseDocument(text);
   const template = doc.flatStructure[0]!;
@@ -699,7 +700,7 @@ Deno.test("session: navigation selects the node spanning the viewport top", () =
   assertEquals(s.view().selected?.label, "visible");
 });
 
-Deno.test("session: bare arrows scroll and pan the view", () => {
+test("session: bare arrows scroll and pan the view", () => {
   const s = makeSession();
   press(s, "down", "down");
   assertEquals(s.view().top, 2, "down arrows scroll the view");
@@ -711,7 +712,7 @@ Deno.test("session: bare arrows scroll and pan the view", () => {
   assertEquals(s.view().left, 0);
 });
 
-Deno.test("session: alt+arrows scroll and pan the view", () => {
+test("session: alt+arrows scroll and pan the view", () => {
   const s = makeSession();
   const alt = (name: string): Key => ({ name, alt: true });
   s.handleKey(alt("down"));
@@ -725,7 +726,7 @@ Deno.test("session: alt+arrows scroll and pan the view", () => {
   assertEquals(s.view().left, 0);
 });
 
-Deno.test("session: incremental search then commit", () => {
+test("session: incremental search then commit", () => {
   const s = makeSession();
   press(s, "/");
   assertEquals(s.view().inputLine, "/");
@@ -743,7 +744,7 @@ Deno.test("session: incremental search then commit", () => {
   assert(s.view().currentMatch !== before || count === 1);
 });
 
-Deno.test("session: search columns count a lone surrogate the same either case", () => {
+test("session: search columns count a lone surrogate the same either case", () => {
   // Smartcase makes "B" a case-sensitive search and "b" a case-insensitive
   // one; both find the same character after the lone surrogate.
   for (const query of ["B", "b"]) {
@@ -761,7 +762,7 @@ Deno.test("session: search columns count a lone surrogate the same either case",
   }
 });
 
-Deno.test("session: search miss reports a message", () => {
+test("session: search miss reports a message", () => {
   const s = makeSession();
   press(s, "/");
   press(s, "z", "z", "z", "q", "q", "x");
@@ -772,7 +773,7 @@ Deno.test("session: search miss reports a message", () => {
   );
 });
 
-Deno.test("session: escape cancels search input", () => {
+test("session: escape cancels search input", () => {
   const s = makeSession();
   press(s, "/", "a", "b");
   assertEquals(s.view().inputLine, "/ab");
@@ -780,7 +781,7 @@ Deno.test("session: escape cancels search input", () => {
   assertEquals(s.view().inputLine, null);
 });
 
-Deno.test("session: WASD does four distinct moves (sibling/sibling/parent/child)", () => {
+test("session: WASD does four distinct moves (sibling/sibling/parent/child)", () => {
   const s = makeSession();
   assertEquals(s.view().selected, null);
   press(s, "s"); // first press just establishes a selection
@@ -807,7 +808,7 @@ Deno.test("session: WASD does four distinct moves (sibling/sibling/parent/child)
   assertEquals(s.view().selected, start, "a ascends to the parent");
 });
 
-Deno.test("session: Enter peeks the selected node, Esc closes", () => {
+test("session: Enter peeks the selected node, Esc closes", () => {
   const s = makeSession();
   press(s, "s", "s");
   const node = s.view().selected!;
@@ -819,7 +820,7 @@ Deno.test("session: Enter peeks the selected node, Esc closes", () => {
   assertEquals(s.view().overlay, null, "overlay closed");
 });
 
-Deno.test("session: Enter opens an info card; Tab toggles info ⇄ source", () => {
+test("session: Enter opens an info card; Tab toggles info ⇄ source", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -842,7 +843,7 @@ Deno.test("session: Enter opens an info card; Tab toggles info ⇄ source", () =
   assertEquals(backText, infoText, "tab toggled back to the info card");
 });
 
-Deno.test("session: definition lookup overlay", () => {
+test("session: definition lookup overlay", () => {
   const s = makeSession();
   press(s, "t"); // enter deflookup
   assert(s.view().inputLine?.startsWith("definition:"));
@@ -853,7 +854,7 @@ Deno.test("session: definition lookup overlay", () => {
   assert(ov!.title.includes("myPattern"));
 });
 
-Deno.test("session: line-number toggle cycles off → input → file → off", () => {
+test("session: line-number toggle cycles off → input → file → off", () => {
   const s = makeSession();
   assertEquals(s.view().showLineNumbers, false, "off to start");
   press(s, "#"); // → input position
@@ -870,7 +871,7 @@ Deno.test("session: line-number toggle cycles off → input → file → off", (
   assertEquals(s.view().lineNumbers, null);
 });
 
-Deno.test("session: help overlay opens with ?", () => {
+test("session: help overlay opens with ?", () => {
   const s = makeSession();
   press(s, "?");
   const ov = s.view().overlay;
@@ -878,7 +879,7 @@ Deno.test("session: help overlay opens with ?", () => {
   assert(ov!.title.toLowerCase().includes("keys"));
 });
 
-Deno.test("session: c cycles the non-printable display mode and reports it", () => {
+test("session: c cycles the non-printable display mode and reports it", () => {
   const s = makeSession();
   assertEquals(s.view().displayMode, "ansi", "starts in ANSI color mode");
   press(s, "c");
@@ -892,7 +893,7 @@ Deno.test("session: c cycles the non-printable display mode and reports it", () 
   assert(s.view().message.includes("ANSI color"));
 });
 
-Deno.test("session: a search reveal in a compacting mode scrolls to the display column", () => {
+test("session: a search reveal in a compacting mode scrolls to the display column", () => {
   // A wide line whose match sits far to the right of a control-code run, in a
   // narrow viewport so revealing it must scroll horizontally. Hidden mode
   // collapses the run, so the reveal counts display columns, not source columns.
@@ -914,7 +915,7 @@ Deno.test("session: a search reveal in a compacting mode scrolls to the display 
   assert(left > 0 && left <= 42, `reveal used a display column, left=${left}`);
 });
 
-Deno.test("session: ANSI-mode tabs widen how far a line can scroll", () => {
+test("session: ANSI-mode tabs widen how far a line can scroll", () => {
   // Thirty tabs draw 120 cells in ANSI mode but are only 30 source code
   // points, so the scroll limit has to count drawn cells to reach "NEEDLE".
   const tabbed = () => {
@@ -945,7 +946,7 @@ Deno.test("session: ANSI-mode tabs widen how far a line can scroll", () => {
   );
 });
 
-Deno.test("session: a search inside an overstrike scrolls as the drawn text would", () => {
+test("session: a search inside an overstrike scrolls as the drawn text would", () => {
   // `man` prints an underlined `q` as `_\bq`, so the match starts inside the
   // cell that draws it.
   const searched = (text: string) => {
@@ -962,7 +963,7 @@ Deno.test("session: a search inside an overstrike scrolls as the drawn text woul
   assertEquals(searched("q"), 56);
 });
 
-Deno.test("session: hidden escape sequences do not widen how far a line can scroll", () => {
+test("session: hidden escape sequences do not widen how far a line can scroll", () => {
   // Ten color sequences are 160 source code points but draw nothing in
   // hidden mode, so panning stops at the three drawn cells.
   const s = new Session(
@@ -976,7 +977,7 @@ Deno.test("session: hidden escape sequences do not widen how far a line can scro
   assertEquals(s.view().left, 3);
 });
 
-Deno.test("session: resize reclamps scroll to the ordinary end", () => {
+test("session: resize reclamps scroll to the ordinary end", () => {
   const s = makeSession();
   press(s, "G");
   const bottomTop = s.view().top;
@@ -988,7 +989,7 @@ Deno.test("session: resize reclamps scroll to the ordinary end", () => {
   assert(bottomTop >= 0);
 });
 
-Deno.test("session: WASD never scrolls when the whole document fits", () => {
+test("session: WASD never scrolls when the whole document fits", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -1006,7 +1007,7 @@ Deno.test("session: WASD never scrolls when the whole document fits", () => {
   assertEquals(s.view().top, 0);
 });
 
-Deno.test("session: WASD scrolls only when the selection anchor leaves the screen", () => {
+test("session: WASD scrolls only when the selection anchor leaves the screen", () => {
   const doc = parseDocument(SAMPLE);
   const height = 8;
   const rows = height - 1;
@@ -1051,7 +1052,7 @@ Deno.test("session: WASD scrolls only when the selection anchor leaves the scree
   assert(scrolled, "walking across the document scrolled at least once");
 });
 
-Deno.test("session: Tab / Shift-Tab navigate depth-first", () => {
+test("session: Tab / Shift-Tab navigate depth-first", () => {
   const s = makeSession();
   press(s, "tab"); // first press establishes a selection
   const a = s.view().selected!;
@@ -1072,7 +1073,7 @@ function selectByLabel(s: Session, label: string): void {
   throw new Error(`node not reached: ${label}`);
 }
 
-Deno.test("session: Enter in the card opens the selected reference's card", () => {
+test("session: Enter in the card opens the selected reference's card", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -1096,7 +1097,7 @@ Deno.test("session: Enter in the card opens the selected reference's card", () =
   assertEquals(ov.selectedLine, undefined, "selection reset after navigating");
 });
 
-Deno.test("session: z closes the card and centers the main view on the target", () => {
+test("session: z closes the card and centers the main view on the target", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -1112,7 +1113,7 @@ Deno.test("session: z closes the card and centers the main view on the target", 
   assert(s.view().selected, "a node is selected at the destination");
 });
 
-Deno.test("session: z frames the revealed node (centered when it fits)", () => {
+test("session: z frames the revealed node (centered when it fits)", () => {
   const doc = parseDocument(SAMPLE);
   const height = 14;
   const s = new Session(
@@ -1132,7 +1133,7 @@ Deno.test("session: z frames the revealed node (centered when it fits)", () => {
   );
 });
 
-Deno.test("session: z with no reference selected reveals the card's own node", () => {
+test("session: z with no reference selected reveals the card's own node", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -1151,7 +1152,7 @@ Deno.test("session: z with no reference selected reveals the card's own node", (
   );
 });
 
-Deno.test("session: card up at the first reference returns to scrolling the top", () => {
+test("session: card up at the first reference returns to scrolling the top", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -1166,12 +1167,13 @@ Deno.test("session: card up at the first reference returns to scrolling the top"
   assertEquals(s.view().overlay!.selectedLine, undefined, "deselected");
 });
 
-Deno.test("session: opening an external definition shows that file", () => {
+test("session: opening an external definition shows that file", () => {
   const fileText = "export function ext(): boolean {\n  return true;\n}\n";
   const filePath = "/workspace/ext.ts";
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: (p) => p === filePath ? parseDocument(fileText).lines : null,
     definitionOf: () => [
       {
@@ -1210,12 +1212,13 @@ const flag = ext();`);
   );
 });
 
-Deno.test("session: an external definition opens framed at its line", () => {
+test("session: an external definition opens framed at its line", () => {
   const fileText = Array.from({ length: 21 }, (_, i) => `line ${i}`).join("\n");
   const filePath = "/workspace/ext.ts";
   const stub: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: (p) => p === filePath ? parseDocument(fileText).lines : null,
     definitionOf: () => [
       { name: "ext", filePath, fileOffset: 0, line: 10, preview: "" },
@@ -1239,7 +1242,7 @@ const flag = ext();`);
   assertEquals(ov.scroll, 8, "framed two lines above the definition (line 10)");
 });
 
-Deno.test("session: WASD preserves horizontal scroll", () => {
+test("session: WASD preserves horizontal scroll", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,
@@ -1257,7 +1260,7 @@ Deno.test("session: WASD preserves horizontal scroll", () => {
   );
 });
 
-Deno.test("session: the help overlay documents file folding and scrolling", () => {
+test("session: the help overlay documents file folding and scrolling", () => {
   const s = makeSession();
   press(s, "?");
   const ov = s.view().overlay!;
@@ -1284,7 +1287,7 @@ Deno.test("session: the help overlay documents file folding and scrolling", () =
   );
 });
 
-Deno.test("session: an info card is a dialog; its source view is a blue window", () => {
+test("session: an info card is a dialog; its source view is a blue window", () => {
   const doc = parseDocument(SAMPLE);
   const s = new Session(
     doc,

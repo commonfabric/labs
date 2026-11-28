@@ -15,13 +15,13 @@
  * than swallowing it. What comes back is deep-frozen.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   fromBase64url,
   toUnpaddedBase64url,
 } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   DATA_URI_MEDIA_TYPE,
   dataUriFromValue,

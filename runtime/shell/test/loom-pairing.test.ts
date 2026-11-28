@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { urlToAppView } from "@commonfabric/navigation";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { StoredCredential } from "../src/lib/credentials.ts";
 import {
@@ -474,6 +474,19 @@ describe("loom-pairing", () => {
       );
       expect(error.reason).toBe("unreachable");
       expect(error.message).toContain("http://localhost:9900");
+    });
+
+    it("never follows a redirect, and throws `unreachable` for one", async () => {
+      const { calls, fetchImpl } = fakeFetch(() =>
+        Response.redirect("https://elsewhere.example/", 307)
+      );
+      const error = await redeemPairingCode(REQUEST, DEVICE, fetchImpl).then(
+        () => null,
+        (e) => e,
+      );
+      expect(calls[0].init.redirect).toBe("manual");
+      expect(error.reason).toBe("unreachable");
+      expect(error.message).toContain("redirected");
     });
 
     it("throws `unreachable` for a Loom without the redeem route", async () => {

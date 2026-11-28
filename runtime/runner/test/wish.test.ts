@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { hashOf } from "@commonfabric/data-model";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { fromFileUrl } from "@std/path";
 import { LINK_V1_TAG } from "../src/sigil-types.ts";
 import { createBuilder } from "../src/builder/factory.ts";
@@ -4945,7 +4951,13 @@ describe("parseWishTarget", () => {
   });
 
   it("throws for a profile's face field named below `#profile`, in the target or its path", () => {
-    for (const target of ["#profile/picture", "#profile/avatar/0"]) {
+    for (
+      const target of [
+        "#profile/pictureBlob",
+        "#profile/picture",
+        "#profile/avatar/0",
+      ]
+    ) {
       expect(() => parseWishTarget(target)).toThrow("does not exist");
     }
     expect(() => parseWishTarget("#profile", ["picture"])).toThrow(

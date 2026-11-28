@@ -15,7 +15,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import TextSwapper from "./text-swapper.tsx";
+import TextSwapper from "./main.tsx";
 
 const modalOpen = (root: unknown): unknown =>
   propValue(findElement(root, "cf-modal"), "$open");

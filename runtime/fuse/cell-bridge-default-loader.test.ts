@@ -2,9 +2,14 @@
 // caller injected none: the identity file the mount was started with, opened
 // against the mount's API.
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { CellBridge } from "./cell-bridge.ts";
 import { FsTree } from "./tree.ts";

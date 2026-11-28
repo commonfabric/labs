@@ -1,6 +1,6 @@
 import { action, assert, pattern, TESTS, UI } from "commonfabric";
 import { clickButton } from "../../tools/test-support/vnode-helpers.ts";
-import ReactiveNow from "./reactive-now.tsx";
+import ReactiveNow from "./main.tsx";
 
 // The time labels derive from the reactive #now clock: they read "…" until #now
 // resolves, and the harness re-runs the assertions once it does — so these assert

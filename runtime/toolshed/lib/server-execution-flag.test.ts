@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { SERVER_EXECUTION_DEFAULT_ENABLED } from "@commonfabric/memory/v2/server-execution-default";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   memoryAclPrincipalsFor,
   serverExecutionEnabledFromEnv,
@@ -75,27 +75,35 @@ describe("memoryAclPrincipalsFor", () => {
   // OW31 (RULED 2026-08-18/19): the process identity is a DELEGATING principal
   // under the flag (session-level acting-as-owner READ binding; ACL-only
   // service reads), NEVER an OWNER-class service DID by default — the
-  // operator's configured list is verbatim on BOTH arms, retiring the Phase-7
-  // implicit-OWNER blanket.
+  // operator's configured list is verbatim there, retiring the Phase-7
+  // implicit-OWNER blanket. OFF the flag the process identity is an
+  // OWNER-class service DID, for the indexed-collection host's sessions.
 
   const me = "did:key:z6MkToolshedProcess";
   const operator = "did:key:z6MkOperator";
 
-  it("OFF the flag: the configured list byte-identical, and an EMPTY delegating list (the binding is unreachable)", () => {
+  it("OFF the flag: the configured list with the process identity added, and an EMPTY delegating list (the binding is unreachable)", () => {
     expect(
       memoryAclPrincipalsFor({
         configured: [operator],
         processIdentityDid: me,
         serverExecution: false,
       }),
-    ).toEqual({ serviceDids: [operator], delegatingDids: [] });
+    ).toEqual({ serviceDids: [operator, me], delegatingDids: [] });
     expect(
       memoryAclPrincipalsFor({
         configured: [],
         processIdentityDid: me,
         serverExecution: false,
       }),
-    ).toEqual({ serviceDids: [], delegatingDids: [] });
+    ).toEqual({ serviceDids: [me], delegatingDids: [] });
+    expect(
+      memoryAclPrincipalsFor({
+        configured: [me, operator],
+        processIdentityDid: me,
+        serverExecution: false,
+      }),
+    ).toEqual({ serviceDids: [me, operator], delegatingDids: [] });
   });
 
   it("ON: the process identity is DELEGATING and — the absolute pin — NOT an OWNER-class service DID unless the operator configured it", () => {
@@ -139,7 +147,7 @@ describe("memoryAclPrincipalsFor", () => {
         serverExecution: false,
         listsPeer,
       }),
-    ).toEqual({ serviceDids: [], delegatingDids: [] });
+    ).toEqual({ serviceDids: [me], delegatingDids: [] });
   });
 
   it("operator-configured OWNER-class listing of the process identity is kept VERBATIM (scope report flag F1: explicit configuration wins; the route logs the combination)", () => {

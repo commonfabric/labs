@@ -1,0 +1,15 @@
+digraph {
+  subgraph {
+    App;
+  }
+  subgraph {
+    Syscall;
+    SyscallReinvoke [label="Reinvoke after
+    subgraph cluster_execve_and_its_creds_mutex {
+      style = dotted;
+      /* execve itself
+      ExecveAfterExecveCredsLock;
+    }
+  }
+
+  SyscallReinvoke -> SyscallInvoke [style=

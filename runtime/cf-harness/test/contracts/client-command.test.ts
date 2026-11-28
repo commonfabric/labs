@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import {
@@ -29,6 +28,7 @@ import {
   type HarnessChatStructuredEvent,
 } from "../../src/contracts/interactive-chat.ts";
 import { readHarnessClientAction } from "../../src/contracts/client-action.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = fromFileUrl(
   new URL("../fixtures/client-command-wire/", import.meta.url),

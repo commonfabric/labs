@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { TEST_ASSET, TEST_ASSET_CONTENT } from "@commonfabric/static/utils";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import env from "@/env.ts";
 import createApp from "@/lib/create-app.ts";
@@ -24,6 +24,15 @@ describe("Static Routes", () => {
     expect(response.status).toBe(200);
     const text = await response.text();
     expect(text.includes(TEST_ASSET_CONTENT)).toBe(true);
+  });
+
+  it("returns the JSON 404 for a name that is not an asset", async () => {
+    const response = await app.request("/static/types/missing.d.ts");
+    expect(response.status).toBe(404);
+    expect(response.headers.get("ETag")).toBeNull();
+    expect(await response.json()).toEqual({
+      message: "Not Found - /static/types/missing.d.ts",
+    });
   });
 });
 

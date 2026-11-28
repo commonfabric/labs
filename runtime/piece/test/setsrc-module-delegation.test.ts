@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 import type { FabricValue } from "@commonfabric/api";
@@ -11,6 +10,12 @@ import {
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   loadCompiledClosure,
   loadVerifiedSourceClosure,

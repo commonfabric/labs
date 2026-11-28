@@ -7,6 +7,7 @@ import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import type { FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import {
@@ -147,7 +148,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("time travel: diff + timelines", async (t) => {
+test("time travel: diff + timelines", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-tt-" });
   const dbPath = `${dir}/space.sqlite`;
   try {

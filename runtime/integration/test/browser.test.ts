@@ -5,10 +5,10 @@
 
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { removeDirectory } from "@commonfabric/test-support/remove-directory";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { Browser, PROFILE_DIRECTORY_PREFIX } from "../browser.ts";
 import type { Page } from "../page.ts";

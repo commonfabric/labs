@@ -7,7 +7,6 @@
  * them, until a write replaces them.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FieldAnchors } from "@commonfabric/api";
@@ -16,6 +15,12 @@ import {
   CODEMIRROR_CHANGESET_CODEC,
   toValuePath,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { CellScope, JSONSchema } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";

@@ -2,7 +2,12 @@ import { createTestSpace, env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { assertEquals } from "@std/assert";
 import { join } from "@std/path";
 import {
@@ -46,7 +51,7 @@ describe("cfc authorized save integration test", () => {
       "..",
       "examples",
       "cfc-authorized-save",
-      "main.tsx",
+      "cfc-authorized-save.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

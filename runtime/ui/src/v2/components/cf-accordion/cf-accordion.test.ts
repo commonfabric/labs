@@ -2,9 +2,9 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFAccordionItem } from "../cf-accordion-item/index.ts";
 import { CFAccordion } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * An accordion holding one item per entry of `values`, with `attributes` set,

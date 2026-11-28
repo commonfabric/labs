@@ -5,16 +5,17 @@
  *
  * A route marked `live` serves a page built by `livePage`, which carries
  * `LIVE_PAGE_CLIENT` and keeps everything that changes inside its `<main>`
- * element, apart from the tab's favicon. The page opens an event stream naming itself,
- * `/events?page=<its path and query>`. On every serving tick the server sends
- * a heartbeat down that stream and renders the page again, and it sends the
- * new markup whenever that differs from what it sent before. The page brings
- * its `<main>` up to date with the one in the new markup (`updateMain`). Every
- * page event also names the version the server is serving, and a page built
- * by a different version reloads instead, so the styles and script outside
- * `<main>` follow a deployment too. A page whose subject has a status shows
- * it in the tab's favicon, which the page takes from each new rendering
- * (`updateIcon`).
+ * element, apart from the tab's favicon. The page opens an event stream naming
+ * itself, `/events?page=<its path and query>`. On every serving tick the server
+ * sends a heartbeat down that stream and renders the page again, and whenever
+ * the new markup differs from what it sent before, it sends the edits that make
+ * the one into the other (`sent-text.ts`). A page that has just connected is
+ * sent the whole markup. The page brings its `<main>` up to date with the one
+ * in the new markup (`updateMain`). Every page event also names the version the
+ * server is serving, and a page built by a different version reloads instead,
+ * so the styles and script outside `<main>` follow a deployment too. A page
+ * whose subject has a status shows it in the tab's favicon, which the page
+ * takes from each new rendering (`updateIcon`).
  *
  * The page reopens its stream the way the dashboard does (`stream-client.ts`),
  * and its badge says whether it can hear the server.
@@ -36,6 +37,7 @@ import {
   updateIcon,
   updateMain,
 } from "./live-page-client.ts";
+import { receivedText, type SentText, textToSend } from "./sent-text.ts";
 import { followUpdates, liveUpdateStream } from "./stream-client.ts";
 import type { Route, Status } from "./types.ts";
 import { SERVING_VERSION } from "./version.ts";
@@ -46,10 +48,13 @@ import { SERVING_VERSION } from "./version.ts";
  */
 const SILENCE_MS = 3 * TICK_MS;
 
-/** The markup the server sends a page, as the event stream carries it. */
+/**
+ * The markup the server sends a page, as the event stream carries it: whole,
+ * or as the edits from the markup the stream carried before.
+ */
 export interface LivePageEvent {
   version: string;
-  html: string;
+  html: SentText;
 }
 
 type Client = ReadableStreamDefaultController<Uint8Array>;
@@ -108,15 +113,20 @@ export function livePages(
       const html = await response.text();
       if (rendering < page.applied) return;
       page.applied = rendering;
-      // Every client already holding this markup is left alone, and a client
-      // that joined while it was being rendered is sent it.
-      const recipients = html === page.html ? page.joined : page.clients;
+      // Every client already holding this markup is left alone, every other
+      // client holding the markup sent before is sent the edits to it, and a
+      // client that joined while it was being rendered is sent it whole.
+      const event = (sent: SentText) => {
+        const data: LivePageEvent = { version, html: sent };
+        return `event: page\ndata: ${JSON.stringify(data)}\n\n`;
+      };
+      const before = page.html;
       page.html = html;
-      const event: LivePageEvent = { version, html };
-      deliver(
-        recipients,
-        `event: page\ndata: ${JSON.stringify(event)}\n\n`,
-      );
+      if (html !== before) {
+        const holding = [...page.clients].filter((c) => !page.joined.has(c));
+        if (holding.length) deliver(holding, event(textToSend(before, html)));
+      }
+      if (page.joined.size) deliver(page.joined, event(html));
       page.joined.clear();
     } catch (error) {
       console.error(
@@ -177,14 +187,14 @@ export function livePages(
 }
 
 /** The styles of the badge a live page carries. */
-const LIVE_PAGE_STYLES = `
+export const LIVE_PAGE_STYLES = `
   .live-badge{font-size:11px;color:var(--status-good-text);border:1px solid ${
   statusLayer("good", 0.4)
 };border-radius:6px;padding:2px 8px}
   .live-badge.offline{color:var(--status-unknown-text);border-color:var(--status-unknown)}`;
 
 /** The badge saying whether a live page can hear the server. */
-const LIVE_PAGE_BADGE =
+export const LIVE_PAGE_BADGE =
   `<div class="live-badge" id="live-badge" role="status">● LIVE</div>`;
 
 /** Keeps the page it is placed in current. It belongs after `<main>`. */
@@ -194,6 +204,7 @@ export const LIVE_PAGE_CLIENT = `<script>{
   const liveUpdateStream = ${liveUpdateStream.toString()};
   const followUpdates = ${followUpdates.toString()};
   const reconcileMain = ${reconcileMain.toString()};
+  const receivedText = ${receivedText.toString()};
   const updateMain = ${updateMain.toString()};
   const updateIcon = ${updateIcon.toString()};
   const paint = () => {
@@ -203,6 +214,8 @@ export const LIVE_PAGE_CLIENT = `<script>{
     badge.textContent = hearing ? '● LIVE' : '● OFFLINE';
     badge.classList.toggle('offline', !hearing);
   };
+  // The markup as the stream last sent it, which each event's edits apply to.
+  let markup = '';
   const updates = followUpdates(
     () => new EventSource('/events?page=' +
       encodeURIComponent(location.pathname + location.search)),
@@ -212,7 +225,8 @@ export const LIVE_PAGE_CLIENT = `<script>{
       page: (data) => {
         const page = JSON.parse(data);
         if (page.version !== VERSION) { location.reload(); return; }
-        const fresh = new DOMParser().parseFromString(page.html, 'text/html');
+        markup = receivedText(markup, page.html);
+        const fresh = new DOMParser().parseFromString(markup, 'text/html');
         const next = fresh.querySelector('main');
         const main = document.querySelector('main');
         if (next && main) updateMain(main, next);

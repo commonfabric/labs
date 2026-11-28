@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { SchemaScope } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { emittedSchemas, parseModule } from "./transformed-ast.ts";

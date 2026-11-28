@@ -12,6 +12,7 @@ import {
   recordingLogger,
   refusingFetch,
 } from "@/test/fixtures/llm-models.ts";
+import { test } from "@commonfabric/test-support/test";
 
 if (env.ENV !== "test") {
   throw new Error("ENV must be 'test'");
@@ -129,7 +130,7 @@ function statusFor(
     }));
 }
 
-Deno.test("a provider outage is not reported as the caller's mistake", async () => {
+test("a provider outage is not reported as the caller's mistake", async () => {
   const { status, error } = await statusFor(
     rejectingWith(500, "Internal server error"),
   );
@@ -137,48 +138,48 @@ Deno.test("a provider outage is not reported as the caller's mistake", async () 
   assertStringIncludes(error, "Internal server error");
 });
 
-Deno.test("a rate limit is passed along so the caller can wait", async () => {
+test("a rate limit is passed along so the caller can wait", async () => {
   const { status } = await statusFor(
     rejectingWith(429, "Rate limit exceeded"),
   );
   assertEquals(status, 429);
 });
 
-Deno.test("a provider timeout is reported as a gateway timeout", async () => {
+test("a provider timeout is reported as a gateway timeout", async () => {
   const { status } = await statusFor(rejectingWith(408, "Request timeout"));
   assertEquals(status, 504);
 });
 
-Deno.test("a request the provider refused stays the caller's to fix", async () => {
+test("a request the provider refused stays the caller's to fix", async () => {
   const { status } = await statusFor(
     rejectingWith(400, "prompt is too long: 300000 tokens > 200000 maximum"),
   );
   assertEquals(status, 400);
 });
 
-Deno.test("an overloaded provider is reported as temporary", async () => {
+test("an overloaded provider is reported as temporary", async () => {
   const { status } = await statusFor(rejectingWith(529, "Overloaded"));
   assertEquals(status, 503);
 });
 
-Deno.test("a key the provider rejected is this service's to fix", async () => {
+test("a key the provider rejected is this service's to fix", async () => {
   const { status } = await statusFor(rejectingWith(401, "invalid x-api-key"));
   assertEquals(status, 500);
 });
 
-Deno.test("an output budget spent before the first token is the caller's", async () => {
+test("an output budget spent before the first token is the caller's", async () => {
   const { status, error } = await statusFor(silentModel());
   assertEquals(status, 400);
   assertStringIncludes(error, "finish reason: length");
 });
 
-Deno.test("a model this service does not carry is the caller's mistake", async () => {
+test("a model this service does not carry is the caller's mistake", async () => {
   const { status, error } = await statusFor(undefined, "mock:no-such-model");
   assertEquals(status, 400);
   assertStringIncludes(error, "Unknown model 'mock:no-such-model'");
 });
 
-Deno.test("a tool the model cannot serve is the caller's mistake", async () => {
+test("a tool the model cannot serve is the caller's mistake", async () => {
   const { status, error } = await statusFor(
     rejectingWith(500, "unreached"),
     MOCK_MODEL_NAME,
@@ -188,7 +189,7 @@ Deno.test("a tool the model cannot serve is the caller's mistake", async () => {
   assertStringIncludes(error, "is not supported by model");
 });
 
-Deno.test("a request that leaves `cache` out reaches the provider", async () => {
+test("a request that leaves `cache` out reaches the provider", async () => {
   // `cache` is optional, so the status is the provider's refusal rather than
   // the guard's. The body posted here is the one the OpenAPI document
   // publishes as valid: a model and a conversation, and nothing else.
@@ -210,7 +211,7 @@ Deno.test("a request that leaves `cache` out reaches the provider", async () => 
 // the handler unparsed.
 //
 
-Deno.test("a body that is not JSON is the caller's mistake", async () => {
+test("a body that is not JSON is the caller's mistake", async () => {
   const response = await app.request("/api/ai/llm", {
     method: "POST",
     headers: { "Content-Type": "text/plain" },
@@ -220,12 +221,12 @@ Deno.test("a body that is not JSON is the caller's mistake", async () => {
   assertStringIncludes((await response.json()).error, "not JSON");
 });
 
-Deno.test("a body that does not match the schema is reported as unprocessable", async () => {
+test("a body that does not match the schema is reported as unprocessable", async () => {
   const { status } = await post("/api/ai/llm", { messages: "not an array" });
   assertEquals(status, 422);
 });
 
-Deno.test("a system-role message names the field it belongs in", async () => {
+test("a system-role message names the field it belongs in", async () => {
   const response = await app.request("/api/ai/llm", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -241,7 +242,7 @@ Deno.test("a system-role message names the field it belongs in", async () => {
   assertStringIncludes(issues[0].message, "'system' field");
 });
 
-Deno.test("a schema that cannot compile is the caller's mistake", async () => {
+test("a schema that cannot compile is the caller's mistake", async () => {
   const { status, error } = await withMockModel(
     rejectingWith(500, "unreached"),
     () =>
@@ -256,7 +257,7 @@ Deno.test("a schema that cannot compile is the caller's mistake", async () => {
   assertStringIncludes(error, "Schema cannot be compiled");
 });
 
-Deno.test("a model generateObject does not carry is the caller's mistake", async () => {
+test("a model generateObject does not carry is the caller's mistake", async () => {
   const response = await app.request("/api/ai/llm/generateObject", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -281,7 +282,7 @@ Deno.test("a model generateObject does not carry is the caller's mistake", async
 // which is the path these three cover.
 //
 
-Deno.test("a system-role message sent as text is refused by generateObject", async () => {
+test("a system-role message sent as text is refused by generateObject", async () => {
   const { status, error } = await post(
     "/api/ai/llm/generateObject",
     {
@@ -296,7 +297,7 @@ Deno.test("a system-role message sent as text is refused by generateObject", asy
   assertStringIncludes(error, "'system' field");
 });
 
-Deno.test("a generateObject body that is not an object is the caller's mistake", async () => {
+test("a generateObject body that is not an object is the caller's mistake", async () => {
   const { status, error } = await post(
     "/api/ai/llm/generateObject",
     null,
@@ -306,7 +307,7 @@ Deno.test("a generateObject body that is not an object is the caller's mistake",
   assertStringIncludes(error, "must be an object");
 });
 
-Deno.test("an empty conversation sent to generateObject is the caller's mistake", async () => {
+test("an empty conversation sent to generateObject is the caller's mistake", async () => {
   const { status, error } = await post(
     "/api/ai/llm/generateObject",
     { messages: [], schema: { type: "object" }, cache: false },

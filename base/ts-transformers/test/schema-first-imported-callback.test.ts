@@ -1,12 +1,12 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import ts from "typescript";
 
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, literalToValue, parseModule } from "./transformed-ast.ts";
 import { transformFiles } from "./utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const HELPERS = `export interface Ping {
   word: string;

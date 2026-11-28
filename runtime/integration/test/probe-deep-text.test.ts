@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Browser } from "../browser.ts";
 import { waitForCondition } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("ProbeApi.deepText", () => {
   it("reads each nested shadow element once", async () => {

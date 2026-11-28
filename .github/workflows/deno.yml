@@ -170,6 +170,8 @@ jobs:
       LANE_JOB: Tests (${{ matrix.lane }}/${{ needs.plan.outputs.of }})
     strategy:
       fail-fast: false
+      # Limit this run to forty concurrent test jobs; its remaining lanes queue.
+      max-parallel: 40
       matrix:
         # Every lane of the run packs the same plan and takes its own share of
         # it, so nothing tells a lane what to run beyond its number.
@@ -326,8 +328,8 @@ jobs:
           if-no-files-found: ignore
 
       # The lane has already gathered every batch's records into its spool and
-      # marked each with its suite's variant, so this carries no variant and
-      # no JUnit specification of its own.
+      # marked each with its suite's variant, so this carries no variant of its
+      # own.
       - name: 📤 Ship test records
         if: always()
         uses: ./.github/actions/test-records-ship

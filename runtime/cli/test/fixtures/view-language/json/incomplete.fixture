@@ -1,4 +1,3 @@
 {
-  // Workspaces used by the root configuration.
-  "workspace": [
-    "./packages/runtime",
+  "toolshed": 8000,
+  "shell": 

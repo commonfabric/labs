@@ -2,6 +2,7 @@ import { debugStr } from "@commonfabric/data-model";
 import { type DID, type Identity, KeyStore } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
+  type PatternChange,
   resolveSpaceDid,
   RuntimeInternals,
   type SpaceFork,
@@ -67,7 +68,7 @@ import {
   SHELL_COMMAND,
 } from "./BaseView.ts";
 import type { LoadError } from "./BodyView.ts";
-import type { OpenHistory } from "./HistoryView.ts";
+import type { OpenHistory, PatternRestore } from "./HistoryView.ts";
 
 function getCommonfabricGlobal(): typeof globalThis & {
   commonfabric?: CommonfabricDebugState;
@@ -271,6 +272,17 @@ export class XRootView extends BaseView implements ShellApp {
    */
   #restoring: { fork: SpaceFork; ended: Promise<void> } | undefined = undefined;
 
+  /** What the history panel is told of a pattern restore under way. */
+  @state()
+  private accessor _patternRestore: PatternRestore | undefined = undefined;
+
+  /**
+   * How many changes this view has made that add to the space's history,
+   * which tells the history panel to list it again.
+   */
+  @state()
+  private accessor _historyChanges = 0;
+
   /** What the history panel is told of the fork. */
   @state()
   private accessor _openHistory: OpenHistory | undefined = undefined;
@@ -419,13 +431,14 @@ export class XRootView extends BaseView implements ShellApp {
   );
 
   /**
-   * The runtime task, its generation counter, and the unload handler, which
-   * a test drives directly.
+   * The runtime task, its generation counter, its current rejection, and the
+   * unload handler, which a test drives directly.
    */
   get accessForTestingOnly(): {
     readonly onBeforeUnload: (event: BeforeUnloadEvent) => void;
     rt: Task<[AppState | undefined], RuntimeInternals | undefined>;
     readonly runtimeGeneration: number;
+    readonly runtimeTaskError: unknown;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -439,6 +452,11 @@ export class XRootView extends BaseView implements ShellApp {
       },
       get runtimeGeneration() {
         return outerThis.#runtimeGeneration;
+      },
+      get runtimeTaskError() {
+        return outerThis.#rt.status === TaskStatus.ERROR
+          ? outerThis.#rt.error
+          : undefined;
       },
     };
   }
@@ -784,6 +802,8 @@ export class XRootView extends BaseView implements ShellApp {
         return this.closeHistory();
       case "restore-history":
         return this.restoreHistory();
+      case "restore-pattern":
+        return this.restorePattern(command);
     }
     throw new Error(
       debugStr`Received a non-command: $quote,long${command}`,
@@ -850,11 +870,17 @@ export class XRootView extends BaseView implements ShellApp {
     if (
       rt === undefined || space === undefined ||
       this._openHistory?.busy === true || !Number.isSafeInteger(seq) ||
+      // A pattern restore under way changes the space the fork would be
+      // taken beside.
+      this._patternRestore?.busy === true ||
       // Opening the step already open would replace its fork, and what was
       // done in it, with a new one.
       this.#fork?.seq === seq
     ) return;
     this._historyError = undefined;
+    // A warning about a pattern restore was given for the data as it stood,
+    // which a restore from the fork may change.
+    this._patternRestore = undefined;
     const view = this.app.view;
     const opening: OpenHistory = { seq, busy: true };
     this._openHistory = opening;
@@ -939,6 +965,91 @@ export class XRootView extends BaseView implements ShellApp {
   }
 
   /**
+   * Restores a piece's pattern code to the source revision `change` names,
+   * and leaves the piece's data as it is. Where the earlier source does not
+   * fit the data, the history panel is given the runtime's warning and the
+   * token that confirms the restore, which a second call carries. Where the
+   * source was restored and the piece could not then be run on it, the panel
+   * is given the runtime's warning of that.
+   */
+  async restorePattern(
+    change: {
+      pieceId: string;
+      revisionId: string;
+      scope?: PatternChange["scope"];
+      confirmationToken?: string;
+    },
+  ): Promise<void> {
+    const rt = this.#rt.value;
+    const space = this.space;
+    if (
+      rt === undefined || space === undefined ||
+      this._patternRestore?.busy === true || this.#fork !== undefined
+    ) return;
+    // What every state of this restore says of the change it was asked of.
+    const asked = {
+      pieceId: change.pieceId,
+      revisionId: change.revisionId,
+      ...(change.scope !== undefined ? { scope: change.scope } : {}),
+    };
+    const restoring: PatternRestore = { ...asked, busy: true };
+    this._patternRestore = restoring;
+    try {
+      const response = await rt.restorePiecePattern(
+        space,
+        change,
+        change.confirmationToken,
+      );
+      if (this._patternRestore !== restoring) return;
+      if (response.compatibilityWarning !== undefined) {
+        this._patternRestore = {
+          ...asked,
+          busy: false,
+          warning: response.compatibilityWarning,
+          ...(response.confirmationToken !== undefined
+            ? { confirmationToken: response.confirmationToken }
+            : {}),
+        };
+        return;
+      }
+      // The source changed whether or not the piece then ran on it, so the
+      // history is listed again either way.
+      this._patternRestore = response.executionWarning === undefined
+        ? undefined
+        : {
+          ...asked,
+          busy: false,
+          error: response.executionWarning,
+        };
+      this._historyChanges++;
+    } catch (error) {
+      console.error("[RootView] Failed to restore a pattern:", error);
+      if (this._patternRestore !== restoring) return;
+      this._patternRestore = {
+        ...asked,
+        busy: false,
+        error: describeFailure(error),
+      };
+    }
+  }
+
+  /** Returns the id of the piece in view, where the view names one by id. */
+  #viewedPieceId(): string | undefined {
+    const view = this.app.view;
+    return "pieceId" in view && !("pieceSlug" in view) && view.pieceId
+      ? view.pieceId
+      : undefined;
+  }
+
+  /** Returns the scope of the piece in view, where the view gives one. */
+  #viewedPieceScope(): PatternChange["scope"] {
+    const view = this.app.view;
+    return this.#viewedPieceId() !== undefined && "pieceScope" in view
+      ? view.pieceScope
+      : undefined;
+  }
+
+  /**
    * Lets go of the open fork, where there is one, and deletes it. Resolves
    * once the deletion has been answered, and rejects never.
    */
@@ -946,6 +1057,7 @@ export class XRootView extends BaseView implements ShellApp {
     const fork = this.#fork;
     this._historyError = undefined;
     this._openHistory = undefined;
+    this._patternRestore = undefined;
     this.#viewBeforeFork = undefined;
     if (fork === undefined) return Promise.resolve();
     this.#fork = undefined;
@@ -1026,6 +1138,10 @@ export class XRootView extends BaseView implements ShellApp {
               .space="${this.space}"
               .open="${this._openHistory}"
               .error="${this._historyError}"
+              .pieceId="${this.#viewedPieceId()}"
+              .pieceScope="${this.#viewedPieceScope()}"
+              .patternRestore="${this._patternRestore}"
+              .changes="${this._historyChanges}"
             ></x-history-view>
           `
           : undefined}

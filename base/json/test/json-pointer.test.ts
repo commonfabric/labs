@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   decodeJsonPointer,
   encodeJsonPointer,
 } from "@commonfabric/json/json-pointer";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("json-pointer", () => {
   describe("encodeJsonPointer()", () => {

@@ -1,9 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 import { runInServingContext } from "../../src/executor/serving-context.ts";
 import {
   inServingContext,
@@ -14,6 +15,12 @@ import { Runtime } from "../../src/runtime.ts";
 import type { StorageNotification } from "../../src/storage/interface.ts";
 import { StorageManager } from "../../src/storage/v2.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+
+// This file runs on the real clock because it runs the serving loop in a real
+// Worker, whose heartbeat timer ticks on the real clock. Auto-advance would run
+// the watchdog's timer at once, and it would kill a healthy worker for the
+// silence.
+useRealClock();
 
 const alice = await Identity.fromPassphrase("serving memory server alice");
 

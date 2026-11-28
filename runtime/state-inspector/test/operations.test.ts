@@ -1,6 +1,5 @@
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import {
   applyCommit,
@@ -19,6 +18,7 @@ import {
   operationBaselineHash,
   OperationCodecRegistry,
 } from "@commonfabric/memory/v2/operation-codec";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import { inspectOperationFields } from "../operations.ts";

@@ -1,12 +1,17 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path/join";
 import { toFileUrl } from "@std/path/to-file-url";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { HttpProgramResolver } from "@commonfabric/js-compiler/program";
 import { Engine, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createPatternsRoute } from "@/routes/patterns/patterns-server.ts";
 
@@ -125,7 +130,7 @@ describe("?identity parity with a worker HTTP compile", () => {
     // The worker attaches each file a `dataFile()` call names and folds it into
     // the entry's hash, so the endpoint has to find the same files.
 
-    const file = "examples/phonetic-speller/phonetic-speller.tsx";
+    const file = "examples/phonetic-speller/main.tsx";
     expect(await Deno.readTextFile(new URL(file, patternsRoot))).toContain(
       "dataFile(",
     );

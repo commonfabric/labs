@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import ts from "typescript";
 
 import {
@@ -22,6 +21,7 @@ import {
   isHandlerAppliedCall,
   isReactiveValueExpression,
 } from "../../src/ast/call-kind.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;

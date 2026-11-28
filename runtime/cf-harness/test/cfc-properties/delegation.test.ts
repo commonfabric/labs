@@ -25,7 +25,6 @@
  * AH-CFC-12 as written, and would leak.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { FileSystemHarnessArtifactStore } from "../../src/artifacts.ts";
@@ -46,6 +45,7 @@ import {
   seedLabeledSecret,
 } from "./support/episode.ts";
 import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const assistantToolCall = (
   id: string,

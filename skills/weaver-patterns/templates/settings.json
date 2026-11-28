@@ -1,8 +1,7 @@
 {
   "env": {
-    "CF_API_URL": "<homeSpace.host from the loom service's /config>",
-    "CF_SPACE": "<homeSpace.space from the loom service's /config>",
-    "CF_IDENTITY": "<absolute path of the key whose DID is /config's identityDid>"
+    "CF_SERVICE_URL": "<the address of their Common Fabric service>",
+    "CF_IDENTITY": "<absolute path of their identity key>"
   },
   "claudeMdExcludes": [
     "<absolute path of the labs root>/CLAUDE.md",

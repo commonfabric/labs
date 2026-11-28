@@ -11,7 +11,7 @@ import {
   findElement,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import PatternIndexUrl from "./pattern-index.tsx";
+import PatternIndexUrl from "./main.tsx";
 
 const inputValue = (view: unknown) =>
   propValue(findElement(view, "cf-input"), "$value");

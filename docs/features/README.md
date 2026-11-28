@@ -24,6 +24,9 @@ a line for each new document to the index below.
   unique-key lookup, membership ownership, and work limits
 - [`collection-aggregates.md`](collection-aggregates.md) — named incremental
   aggregates, their numeric contracts, public type surface, and update costs
+- [`indexed-collections.md`](indexed-collections.md) — collections whose
+  membership and chosen fields live in a SQLite database the runtime keeps
+  current, their derived tables, quiet query re-runs, and limits
 - [`read-accounting.md`](read-accounting.md) — opt-in reactive action read
   counters, execution boundaries, and per-step pattern-test reports
 - [`view-scoped-client-replication.md`](view-scoped-client-replication.md) —

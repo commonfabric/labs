@@ -1,18 +1,60 @@
 /**
- * The record a space's blob store keeps for each blob, and the rules that
- * decide what one may hold. A record is the document `cid:<id>` of the blob's
- * space, where `<id>`, the blob's id, is the hash of the whole record, so a
- * record never changes: the same bytes under another name are another blob.
- * The blob store's routes and `nameBlob()` both write records, and both hold
- * them to these rules.
+ * The record a space's blob store keeps for each blob, the rules that decide
+ * what one may hold, and how a blob is named. A record is the document
+ * `cid:<id>` of the blob's space, where `<id>`, the blob's id, is the hash of
+ * the whole record, so a record never changes: the same bytes under another
+ * name are another blob. `storeBlob()`, the blob store's upload route and
+ * `nameBlob()` all write records, and all hold them to these rules.
  */
 
+import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import type { DID } from "@commonfabric/identity";
+import { isDID } from "@commonfabric/identity/did";
 import type { URI } from "@commonfabric/memory/interface";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
+import type { Runtime } from "./runtime.ts";
+
 /** The most bytes a blob's file name may take as UTF-8. */
 export const MAX_BLOB_FILE_NAME_BYTES = 1024;
+
+/**
+ * The most bytes a blob record may take in its JSON encoding (see
+ * {@link encodedBlobRecordBytes}), which carries the bytes as unpadded
+ * base64url: a record of about 7.86 MB of bytes, with a short name and media
+ * type, fits.
+ *
+ * An upload is refused above this before anything is sent. The bound is well
+ * under what one commit can carry on a direct memory connection, which refuses
+ * a message over 64 MiB by closing the socket. A direct connection declares no
+ * bound of its own, so the memory client then sends the same commit again on
+ * each new connection: a record of 64 MiB of incompressible bytes takes the
+ * connection down again and again, for up to two minutes, before its commit
+ * fails. A routed connection takes 4 MiB in one request
+ * (`ROUTED_QUEUE_LIMIT`), and the memory client refuses a commit past what its
+ * connection takes, unsent, so there an upload of a record past about 4 MiB is
+ * refused that way.
+ */
+export const MAX_BLOB_RECORD_BYTES = 10 * 1024 * 1024;
+
+/** The extension a blob of each of these media types is served under. */
+const DEFAULT_SUFFIX_BY_TYPE: Record<string, string> = {
+  "image/gif": "gif",
+  "image/jpeg": "jpg",
+  "image/png": "png",
+  "image/webp": "webp",
+  "image/svg+xml": "svg",
+};
+
+/** An extension a blob may be served under. */
+const VALID_SUFFIX = /^[A-Za-z0-9]{1,8}$/;
+
+/**
+ * The codec of a record's JSON encoding, which keeps its bytes a `FabricBytes`
+ * whatever JSON flags the process runs with.
+ */
+const blobRecordCodec = newDefaultJsonCodecEngine();
 
 /**
  * A blob as its space's blob store keeps it: its media type, its bytes, and,
@@ -43,9 +85,100 @@ export function isBlobFileName(name: unknown): name is string {
     new TextEncoder().encode(name).byteLength <= MAX_BLOB_FILE_NAME_BYTES;
 }
 
+/** A blob, by the DID of the space whose blob store holds it and its id there. */
+export type BlobReference = { space: DID; id: string };
+
+/**
+ * Returns `value` as a reference to a blob when it names one, by a space's DID
+ * and a non-empty id, or `undefined` when it names none.
+ */
+export function blobReferenceOf(value: unknown): BlobReference | undefined {
+  if (!isObjectNotArray(value)) return undefined;
+  const { space, id } = value;
+  return isDID(space) && typeof id === "string" && id !== ""
+    ? { space, id }
+    : undefined;
+}
+
 /** Returns the id of the document holding the record of the blob `blobId`. */
 export function blobDocumentId(blobId: string): URI {
   return `cid:${blobId}`;
+}
+
+/**
+ * Returns the number of bytes `record` takes in its JSON encoding, the form
+ * the blob store's upload route takes it in, which
+ * {@link MAX_BLOB_RECORD_BYTES} bounds.
+ */
+export function encodedBlobRecordBytes(record: BlobRecord): number {
+  return new TextEncoder().encode(blobRecordCodec.encode(record)).byteLength;
+}
+
+/**
+ * Stores `record` in the blob store of `space`, and returns the blob's id. The
+ * record is staged as the document `cid:<id>` in a transaction committed on
+ * `runtime`'s session there, so the memory server admits it only for a
+ * principal holding `WRITE` on the space, and the call settles once the commit
+ * does. While the session's connection is down, it waits for the connection,
+ * and the commit is sent once it is back.
+ *
+ * @throws Error when `record` has a name that is not a file name a blob may
+ *   hold (see {@link isBlobFileName}), when it would take more than
+ *   {@link MAX_BLOB_RECORD_BYTES} encoded, or when the commit is refused. A
+ *   commit larger than the space's connection takes in one request is refused
+ *   without being sent.
+ */
+export async function storeBlob(
+  runtime: Runtime,
+  space: DID,
+  record: BlobRecord,
+): Promise<string> {
+  if (record.name !== undefined && !isBlobFileName(record.name)) {
+    throw new Error("The name given is not one a blob may hold");
+  }
+  const size = encodedBlobRecordBytes(record);
+  if (size > MAX_BLOB_RECORD_BYTES) {
+    throw new Error(
+      `Blob upload failed: a blob takes at most ${MAX_BLOB_RECORD_BYTES} ` +
+        `bytes encoded, and this one takes ${size}`,
+    );
+  }
+  const tx = runtime.edit();
+  const id = tx.stageContentAddressedDocument(space, record)
+    .slice("cid:".length);
+  runtime.prepareTxForCommit(tx);
+  const result = await tx.commit().settled;
+  if (result.error) {
+    throw new Error(`Blob upload failed: ${result.error.message}`);
+  }
+  return id;
+}
+
+/**
+ * Returns the extension a blob of media type `type` is served under when the
+ * name `fileName` is asked for it: the text after the name's last dot when it
+ * is one to eight ASCII letters and digits, or else the usual extension for
+ * `type`, or else `bin`.
+ */
+export function blobSuffix(fileName: string | undefined, type: string): string {
+  const extension = fileName?.includes(".")
+    ? fileName.split(".").pop()
+    : undefined;
+  if (extension && VALID_SUFFIX.test(extension)) return extension;
+  return Object.hasOwn(DEFAULT_SUFFIX_BY_TYPE, type)
+    ? DEFAULT_SUFFIX_BY_TYPE[type]
+    : "bin";
+}
+
+/**
+ * Returns the path, relative to its space's path, that the blob store serves
+ * the blob `blobId` at under the extension `suffix`.
+ */
+export function storedBlobPath(blobId: string, suffix: string): string {
+  const hash = blobId.startsWith("fid1:")
+    ? blobId.slice("fid1:".length)
+    : blobId;
+  return `blobs/${hash}.${suffix}`;
 }
 
 /**
