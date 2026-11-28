@@ -371,6 +371,30 @@ a record: archive it to `docs/history/plans/` following the procedure in
   factory's request. It carries the shape of program that has no home without
   one, the two routes a design could take and what each gives up, and the
   provider-side stack left standing in the meantime.
+- [Compiled pattern language: continuing the specification](compiled-pattern-language.md)
+  carries the design of the compiled pattern language on from its seven
+  specification documents: where the work is, the rulings that are fixed, the
+  questions the owner has to answer, and the reconciliation passes to make
+  next.
+- [Compiled pattern language: measuring it in the real runtime](compiled-pattern-language-integration.md)
+  runs the prototype's executor inside the runtime, on its storage
+  transactions and CFC preparation and later its scheduler and sandbox, to
+  get costs the prototype alone cannot give: the options weighed, two
+  tracks with Topics as their shared target, six milestones with what each
+  measures, and what stays in the prototype.
+- [Compiled pattern language: where each branch stands and what to do next](compiled-pattern-language-handoff.md)
+  is for a session that continues the build: which branch holds what, which
+  branches are not merged and in which order to merge them, the open lines
+  of work with the notes that hold their plans, and how a round is briefed
+  and checked.
+- [Compiled pattern language: what has to hold before it ships](compiled-pattern-language-ship-criteria.md)
+  lists the checks the compiled path has to pass before its option is turned
+  on for users, in eight groups, with where each stands and the order of
+  work.
+- [Derivation by demand on the compiled path](compiled-pattern-derivation-by-demand.md)
+  is a design, not yet ruled on, that derives a compiled piece's shared part
+  once and each session's part only where a client watches it, with the label
+  rules that follow, six questions for the owner and seven rounds of work.
 
 ## Concepts not planned for deployment
 

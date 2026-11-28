@@ -34,6 +34,9 @@ decision is reversed or superseded).
 - [Pattern imports](pattern-imports/README.md)
 - [TypeScript transformer](ts-transformer/README.md)
 - [Schema generator](schema-generator/README.md)
+- [Compiled pattern language](compiled-pattern-language/README.md) (proposed): a
+  TypeScript subset with its own compiler, which emits value code and a plan
+  that the runtime computes labels, storage, and scheduling from
 - [Computed-cell identity](computed-cell-identity.md)
 - [Content-addressed action identity](content-addressed-action-identity.md)
 - [Content-addressed module loading](module-loading.md)
