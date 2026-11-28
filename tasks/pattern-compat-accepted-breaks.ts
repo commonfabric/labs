@@ -430,6 +430,32 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/topics-mentionable-index-break.md",
   },
   {
+    // Another entry for this pattern, since no baseline here appears in any
+    // entry above.
+    //
+    // The collection board (#10025) merged and was reverted the same day,
+    // before any board had been migrated to it: the rollout is to start with
+    // a test migration of the real board. The baselines it recorded stay, as
+    // every baseline does, and the list-based board lacks the two outputs
+    // only the collection board published.
+    pattern: "apps/topics/main.tsx",
+    baselines: [
+      "20261121T012444Z-Q-VeHQzYK_RuIsiV",
+      "20261124T004805Z-dOfO6DiHwzroh4ML",
+      "20261124T022719Z-cuWchNVcu3UjvKbz",
+      "20261127T211045Z-SHh6SYdUFFjNXDlq",
+      "20261127T214607Z-Kt6a6Ck-dT6ognZ2",
+    ],
+    paths: ["result.adoptTopics", "result.board"],
+    reason:
+      "The board that holds its topics in an indexed collection (#10025) was " +
+      "reverted to the list-based board the day it merged, to be rolled out " +
+      "after a test migration of the team's board. Its `board` handle and " +
+      "the `adoptTopics` verb it carried while in review exist only on the " +
+      "collection board.",
+    record: "docs/history/topics-indexed-collection-rollback.md",
+  },
+  {
     // One entry per (pattern, BASELINE) pair, and that is a requirement
     // rather than tidiness: the gate keys accepted pairs into a Map, so a
     // second entry naming a baseline this one also names REPLACES its path
