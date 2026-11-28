@@ -4269,9 +4269,10 @@ describe("runtime-processor", () => {
      * adoption run for real. Its `ensurePrivateInbox` is a real stream, whose
      * handler records the event and runs `onEnsurePrivateInbox`, so a throw
      * from that is a failure of Home's handling, which the host's ensure
-     * waits for and reports. Its `createOwnPrivateInbox` is a real stream too,
-     * whose handler records the event; Home holds no inbox and none of its
-     * own, so the host's ensure has it create one first. Each
+     * waits for and reports. Its `createOwnPrivateInbox`, `addSpace` and
+     * `adoptSpace` are real streams too, whose handlers record the event; Home
+     * holds no inbox and none of its own, so the host's ensure has it create
+     * one first. Each
      * read the inbox ensure makes of Home waits for `inboxReadable`. Home
      * lists no profiles, so the profile root repair has none to repair. The
      * share intake's subscriptions to Home are recorded, and `onSubscribe` runs
@@ -4300,8 +4301,15 @@ describe("runtime-processor", () => {
       const sent: { stream: string; event: unknown }[] = [];
       const subscribed: string[] = [];
       const unsubscribed: string[] = [];
+      // Home's streams the worker sends to, each with a handler that records
+      // what it was sent.
       const streams = runtime.getCell<
-        { ensurePrivateInbox: unknown; createOwnPrivateInbox: unknown }
+        {
+          ensurePrivateInbox: unknown;
+          createOwnPrivateInbox: unknown;
+          addSpace: unknown;
+          adoptSpace: unknown;
+        }
       >(
         signer.did(),
         "home-worker-streams",
@@ -4310,6 +4318,8 @@ describe("runtime-processor", () => {
         streams.withTx(tx).setRaw({
           ensurePrivateInbox: { $stream: true },
           createOwnPrivateInbox: { $stream: true },
+          addSpace: { $stream: true },
+          adoptSpace: { $stream: true },
         })
       );
       const ensurePrivateInbox = streams.key("ensurePrivateInbox");
@@ -4320,12 +4330,19 @@ describe("runtime-processor", () => {
         },
         ensurePrivateInbox.getAsNormalizedFullLink(),
       );
-      const createOwnPrivateInbox = streams.key("createOwnPrivateInbox");
-      const cancelCreateOwnHandler = runtime.scheduler.addEventHandler(
-        (_tx, event: unknown) => {
-          sent.push({ stream: "createOwnPrivateInbox", event });
-        },
-        createOwnPrivateInbox.getAsNormalizedFullLink(),
+      const recordedStreams = new Map(
+        (["createOwnPrivateInbox", "addSpace", "adoptSpace"] as const).map(
+          (name) => [name, streams.key(name)],
+        ),
+      );
+      const cancelRecordedHandlers = [...recordedStreams].map(
+        ([name, stream]) =>
+          runtime.scheduler.addEventHandler(
+            (_tx, event: unknown) => {
+              sent.push({ stream: name, event });
+            },
+            stream.getAsNormalizedFullLink(),
+          ),
       );
       const home = {
         // Home's space, whose allocation record the inbox ensure reads for
@@ -4345,9 +4362,7 @@ describe("runtime-processor", () => {
             ? { get: typeof rows === "function" ? rows : () => rows }
             : name === "ensurePrivateInbox"
             ? ensurePrivateInbox
-            : name === "createOwnPrivateInbox"
-            ? createOwnPrivateInbox
-            : field(name),
+            : recordedStreams.get(name as "addSpace") ?? field(name),
       };
       // Any other field of Home's, as the inbox ensure, the profile root
       // repair and the share intake read and subscribe to it, and a field
@@ -4445,7 +4460,7 @@ describe("runtime-processor", () => {
         rootEnsures: () => ensure.calls.length,
         async [Symbol.asyncDispose]() {
           cancelEnsureHandler();
-          cancelCreateOwnHandler();
+          for (const cancel of cancelRecordedHandlers) cancel();
           ensure.restore();
           stored.restore();
           // A space context's first sync, unfinished at disposal, is logged

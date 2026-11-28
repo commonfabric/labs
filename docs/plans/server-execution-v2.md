@@ -40,6 +40,21 @@ The first-party default and flip records belong to the
 The default is ON again since 2026-11-11 and the ON soak runs on main; the
 post-soak removal PR (Phase 7 task 2) retires the flag and the OFF path.
 
+**Delta 2026-11-18 (a view client's space root): a client that replicates
+views no longer creates a space's root from a system source;
+`PiecesController.ensureDefaultPattern()` waits for the activation ensure
+to link it (`spaceRootLinked()`). This is the OW45 arm-B stage-2 retirement
+for that class of client only. Its gate, the runnability-repair pair moving
+to the server, does not bind it, because such a client starts no root and so
+never ran the pair. A client that starts roots still creates one. A root from
+a custom `defaultAppUrl` is still created by the client, since the server
+ensure does not read that setting. The same change sends Home's `addSpace`,
+`adoptSpace` and `ensurePrivateInbox` events with `echo: false`, so the
+browser no longer loads Home's compiled graph to run a speculative copy of a
+handler the server runs. A failed server ensure is retried only at the
+space's next activation, and a waiting client holds the space active, so
+re-arming the ensure while a client waits is the open follow-up.**
+
 **Delta 2026-11-11 (the re-FLIP): `SERVER_EXECUTION_DEFAULT_ENABLED` →
 `true` by the owner's rollout decision, as the data-only change the
 2026-09-02 hygiene provides for: the constant plus current-status prose, with

@@ -8027,8 +8027,11 @@ export class SpaceServer implements TransactionSealDestination {
    *
    * Failures are counted and cleared for the tenure (the next
    * activation retries): the ensure must never park or spin the loop —
-   * a space whose root cannot materialize still serves what it has,
-   * and the OFF-era client path still covers creation in stage 1.
+   * a space whose root cannot materialize still serves what it has.
+   * A client that starts roots creates one itself when it finds none.
+   * A client that replicates views creates none from a system source:
+   * it waits for this ensure to link the root, and so waits through a
+   * failed one until a later activation succeeds.
    */
   async #ensureSpaceRoot(runtime: Runtime): Promise<void> {
     const { engine, space, server } = this.#options;

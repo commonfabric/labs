@@ -15,10 +15,13 @@
 //
 // What deliberately does NOT live here:
 // - the START of the root and its runnability repair pair (the cold-start
-//   setup repair and `healDefaultRootByRollForward`) — client-side today,
-//   stage 2's gate: the ON client's creation retirement must not ship
-//   until the repair pair moves (design §2; this stage's report records
-//   the gate);
+//   setup repair and `healDefaultRootByRollForward`) — client-side, which
+//   is why a client that starts roots still creates one where it finds
+//   none: only its start repairs an aged root. A client that replicates
+//   views starts no root and so runs neither; it creates no root from a
+//   system source either, and waits for this ensure to link one
+//   (`spaceRootLinked`, which `PiecesController.ensureDefaultPattern`
+//   awaits);
 // - FRESHNESS. Following a root's origin is the ordinary piece
 //   reconciliation, and that runs on the piece's START: a user's open on a
 //   client that runs the piece (`SourceReconciler.reconcile`, called from
@@ -45,6 +48,7 @@ import type { GenesisRoot, SourcedGenesisRoot } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
 
 import type { Cell } from "./cell.ts";
+import { loadDocument } from "./document-readiness.ts";
 import {
   resolveSystemPatternSource,
   systemPatternSource,
@@ -55,6 +59,7 @@ import { type NameSchema, nameSchema } from "./schemas.ts";
 import type {
   CommitError,
   IExtendedStorageTransaction,
+  IStorageNotification,
   MemorySpace,
 } from "./storage/interface.ts";
 
@@ -290,6 +295,46 @@ export async function resolveSpaceRootPattern(
     return undefined;
   }
   return defaultPattern.resolveAsCell().asSchema<NameSchema>(nameSchema);
+}
+
+/**
+ * Resolves once the space cell of `space` links a root, whoever links it, and
+ * rejects with the `DocumentLoadError` when that cell does not load. It waits
+ * on the storage manager's notifications, so a root linked later is noticed
+ * when its commit arrives. It sets no deadline: a space whose root nobody
+ * creates leaves it pending.
+ */
+export function spaceRootLinked(
+  runtime: Runtime,
+  space: MemorySpace,
+): Promise<void> {
+  const spaceCell = runtime.getSpaceCell(space);
+  const slot = spaceCell.key("defaultPattern");
+  const { promise, resolve, reject } = Promise.withResolvers<void>();
+  let waiting = true;
+  const subscription: IStorageNotification = {
+    next() {
+      if (waiting && slot.getRaw() !== undefined) {
+        waiting = false;
+        resolve();
+      }
+      return waiting ? undefined : { done: true };
+    },
+  };
+  const stop = (settle: () => void): void => {
+    if (!waiting) return;
+    waiting = false;
+    runtime.storageManager.unsubscribe?.(subscription);
+    settle();
+  };
+  runtime.storageManager.subscribe(subscription);
+  loadDocument(runtime, spaceCell).then(
+    () => {
+      if (slot.getRaw() !== undefined) stop(resolve);
+    },
+    (failure: unknown) => stop(() => reject(failure)),
+  );
+  return promise;
 }
 
 export type EnsureSpaceRootResult = {

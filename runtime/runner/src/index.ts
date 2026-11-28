@@ -237,6 +237,7 @@ export {
   resolveSpaceRootPattern,
   SpaceNotFoundError,
   type SpaceRootCreationHooks,
+  spaceRootLinked,
   spaceRootPatternConfig,
 } from "./ensure-space-root.ts";
 export {
