@@ -632,9 +632,11 @@ describe("PatternIndexClient", () => {
     const { client, requests } = createClient([
       jsonResponse({ results: [] }),
       jsonResponse({ results: [] }),
+      jsonResponse({ results: [] }),
     ]);
     await client.searchPatterns({ text: "notes", standalone: true });
     await client.searchPatterns({ text: "notes", standalone: false });
+    await client.searchPatterns({ text: "notes" });
     expect(JSON.parse(requests[0].body)).toEqual({
       text: "notes",
       standalone: true,
@@ -643,6 +645,7 @@ describe("PatternIndexClient", () => {
       text: "notes",
       standalone: false,
     });
+    expect(JSON.parse(requests[2].body)).toEqual({ text: "notes" });
   });
 
   it("sends only the listPatterns filters the caller supplied", async () => {

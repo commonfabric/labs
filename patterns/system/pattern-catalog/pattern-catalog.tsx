@@ -164,8 +164,8 @@ export interface CatalogPageRequest {
   /**
    * `true` asks only for entries that are `standalone`, as a person choosing
    * what to place wants; blank text then asks for the default listing
-   * narrowed to them. Without it a host answers with every entry, parts
-   * included.
+   * narrowed to them, answered to this caller only (`entries` stays whole).
+   * Without it a host answers with every entry, parts included.
    */
   standalone?: boolean;
   result: Writable<CatalogPage | null>;
