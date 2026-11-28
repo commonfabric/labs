@@ -130,6 +130,7 @@ import {
   flowJoinObservationsOf,
   servedRunActsForNoOne,
 } from "./cfc/prepare.ts";
+import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
 import { cfcSchemaWithInheritedDefs } from "./cfc/schema-refs.ts";
 import { spaceReaderRole } from "./cfc/space-membership.ts";
 import { isTrustedGesture } from "./cfc/ui-contract.ts";
@@ -219,7 +220,10 @@ import {
   type PieceSourceRecord,
   type PreparedSourceUpdate,
 } from "./pattern-manager.ts";
-import { isCellResultForDereferencing } from "./query-result-proxy.ts";
+import {
+  isCellResultForDereferencing,
+  snapshotQueryResult,
+} from "./query-result-proxy.ts";
 import type { CommitRetryPullFailure, Runtime } from "./runtime.ts";
 import {
   type Action,
@@ -1477,6 +1481,17 @@ function positionalNumber(partialCause: unknown): number {
 }
 
 /**
+ * Whether `schema` declares a reclassification anywhere (`ifc.reclassify`,
+ * the lowered form of `Reclassified`).
+ */
+function declaresReclassification(schema: JSONSchema | undefined): boolean {
+  return schema !== undefined &&
+    cfcSchemaEntries(schema).some((entry) =>
+      (entry.schema.ifc as Record<string, unknown>).reclassify !== undefined
+    );
+}
+
+/**
  * The sub-pattern nodes of `pattern`, each with its child pattern and its
  * child's partial cause.
  */
@@ -2212,6 +2227,9 @@ type SetupValidationOptions = {
   /** See `RunnerRunOptions.parentPieceRootId`. */
   parentPieceRootId?: string;
 
+  /** See `RunnerRunOptions.parentPieceSpace`. */
+  parentPieceSpace?: MemorySpace;
+
   /** Optional invariant over the argument stored before setup changes it. */
   validateCurrentArgument?: (argumentCell: Cell<unknown>) => void;
 
@@ -2622,6 +2640,10 @@ export type RunnerRunOptions = {
   // instance) run supply resolves a nested piece's demanded instances
   // through the OUTER piece a client watches.
   parentPieceRootId?: string;
+  // The space `parentPieceRootId` lives in, where it is not the space of the
+  // piece this run sets up: a child placed in a space of its own
+  // (`inSpace()`). A setup reads the parent's creator record there.
+  parentPieceSpace?: MemorySpace;
   // Argument fields a collection builtin fills with a link to a cell that
   // exists already: a list's entry, the list itself. Each one whose staged
   // value is a link that is not a write redirect is recorded as a protected
@@ -3185,6 +3207,22 @@ export class Runner {
    * release of the parent re-instantiates it, whichever space it is in.
    */
   #handlerResultPatterns = new WeakSet<Pattern>();
+
+  /**
+   * The piece whose handler produced each receipt a handler's result is set
+   * up into, by the receipt's document key. A receipt is a keyless piece,
+   * which records no creator, so a child the result instantiates takes the
+   * producing piece's record instead (`#pieceCreatorFor`). The child is set
+   * up after the receipt's own setup returns, so an entry outlives that
+   * setup; a handler that returns no pattern adds none. Bounded like the
+   * pointer maps, since every handled event that returns a pattern adds one:
+   * a child whose entry was evicted records no creator, so nothing it writes
+   * is reclassified, which fails closed.
+   */
+  #receiptProducers = new BoundedKeyMap<
+    string,
+    { id: URI; space: MemorySpace }
+  >(RESULT_SHORTCUT_LIMIT);
 
   /** See {@link #releaseServedHandlerResult}: set for the length of its release. */
   #releasingServedResult = false;
@@ -5423,15 +5461,15 @@ export class Runner {
    * The principal a piece set up in `tx` records as its creator, or none.
    *
    * A child a piece instantiates names its parent's creator, read from the
-   * parent's record: the actor whose run instantiated it is not the creator
-   * of what the parent's code made, and a parent without a record leaves the
-   * child without one. A piece a builtin instantiates from a continuation of
-   * its action, which declines attribution and names no parent, records
-   * nothing. Any other piece names the acting principal of the transaction's
-   * trust snapshot, which is the principal every attributed claim in the same
-   * transaction names, unless the run acts for no one
-   * (`servedRunActsForNoOne`): a served run with no actor, or one under the
-   * serving runtime's own snapshot.
+   * parent's record in the space the parent lives in: the actor whose run
+   * instantiated it is not the creator of what the parent's code made, and a
+   * parent without a record leaves the child without one. A piece a builtin
+   * instantiates from a continuation of its action, which declines
+   * attribution and names no parent, records nothing. Any other piece names
+   * the acting principal of the transaction's trust snapshot, which is the
+   * principal every attributed claim in the same transaction names, unless
+   * the run acts for no one (`servedRunActsForNoOne`): a served run with no
+   * actor, or one under the serving runtime's own snapshot.
    */
   #pieceCreatorFor(
     tx: IExtendedStorageTransaction,
@@ -5439,13 +5477,26 @@ export class Runner {
     options: SetupValidationOptions,
   ): string | undefined {
     if (options.parentPieceRootId !== undefined) {
-      const { space } = resultCell.getAsNormalizedFullLink();
-      const recorded = this.#runtime.getCellFromLink(
+      const space = options.parentPieceSpace ??
+        resultCell.getAsNormalizedFullLink().space;
+      const parent = this.#runtime.getCellFromLink(
         { id: options.parentPieceRootId as URI, space, path: [] },
         undefined,
         tx,
+      );
+      const recorded = parent.getMetaRaw("creator", {
+        meta: ignoreReadForScheduling,
+      });
+      if (typeof recorded === "string") return recorded;
+      // A receipt records no creator; its producing piece does.
+      const producer = this.#receiptProducers.get(this.#getDocKey(parent));
+      if (producer === undefined) return undefined;
+      const produced = this.#runtime.getCellFromLink(
+        { ...producer, path: [] },
+        undefined,
+        tx,
       ).getMetaRaw("creator", { meta: ignoreReadForScheduling });
-      return typeof recorded === "string" ? recorded : undefined;
+      return typeof produced === "string" ? produced : undefined;
     }
     if (options.attributeInitialization === false) return undefined;
     const snapshot = tx.getCfcState().trustSnapshot;
@@ -10641,6 +10692,9 @@ export class Runner {
         droppedArgumentFields: options.droppedArgumentFields,
         attributeInitialization: options.attributeInitialization,
         parentPieceRootId: options.parentPieceRootId,
+        ...(options.parentPieceSpace !== undefined
+          ? { parentPieceSpace: options.parentPieceSpace }
+          : {}),
         ...(creatingPiece
           ? {
             initializePieceSourceHistory: true,
@@ -14925,6 +14979,17 @@ export class Runner {
       })()
       : undefined;
 
+    // A child the result places takes the producing piece's creator, the
+    // receipt recording none; every start path below, deferred or not, reads
+    // this.
+    {
+      const producer = patternResultCell.getAsNormalizedFullLink();
+      this.#receiptProducers.set(receiptKey, {
+        id: producer.id,
+        space: producer.space,
+      });
+    }
+
     if (deferForNavigate && result === undefined) {
       // navigateTo results are commit-gated (startAfterSuccessfulCommit);
       // the receipt precondition rides the deferred start's own create.
@@ -14961,6 +15026,7 @@ export class Runner {
         return setup.resultCell;
       })()
       : (() => {
+        const producer = patternResultCell.getAsNormalizedFullLink();
         const run = this.#runWithStartOwnership(
           tx,
           resultPattern,
@@ -14969,8 +15035,7 @@ export class Runner {
           {
             // A result-as-pattern child's demand roots include the producing
             // piece's chain (see RunnerRunOptions).
-            parentPieceRootId: patternResultCell.getAsNormalizedFullLink()
-              .id,
+            parentPieceRootId: producer.id,
           },
         );
         installedCancel = run.installedCancel;
@@ -15417,6 +15482,13 @@ export class Runner {
     narrowestReadScope?: CellScope,
   ): any {
     if (!resultHasReactives && frame.reactives.size === 0) {
+      // A reclassified result is the computation's own value: what it keeps
+      // of its inputs is stored as a copy, under the label the
+      // reclassification gives it. Stored as references into the inputs, its
+      // items would still be read under the inputs' labels.
+      if (declaresReclassification(resultSchema)) {
+        result = snapshotQueryResult(result, { keepInstances: true });
+      }
       recordOutputSchemaPolicyInputs(
         tx,
         this.#runtime,
@@ -18267,6 +18339,7 @@ export class Runner {
           schedulerRehydration,
         ),
         parentPieceRootId: parentResultCell.getAsNormalizedFullLink().id,
+        ...(crossSpace ? { parentPieceSpace: parentResultCell.space } : {}),
       };
       if (leftAlone && this.isRunning(childResultCell)) {
         this.#stopResult(childResultCell);

@@ -1,0 +1,150 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Fix": {
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "fixes": {
+        "description": "The owner's fixes, a link into the owner's space.",
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      },
+      "now": {
+        "description": "The instant the window ends at.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "fixes",
+      "now"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/test/share-space-declassify/share-live.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Fix": {
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "publish": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Copies `window` into `shared`."
+      },
+      "shared": {
+        "description": "The window as published to the share space.",
+        "ifc": {
+          "maxConfidentiality": [
+            {
+              "anyOf": [
+                {
+                  "subject": {
+                    "__ctCurrentPrincipal": true
+                  },
+                  "type": "https://commonfabric.org/cfc/atom/User"
+                },
+                {
+                  "moduleIdentity": "JjGlJ-DYl0fG5igGbpagoFnfHB8FbfMIW3m5f9U9isk",
+                  "policyDigest": "awBl557wkNu8HhAuhwFh6oGJIdm0RnXdwtYvf4uhfQY",
+                  "policyRefKind": "module",
+                  "subject": {
+                    "__ctOwningSpace": true
+                  },
+                  "symbol": "shareSpaceRules",
+                  "type": "https://commonfabric.org/cfc/atom/Policy"
+                }
+              ]
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      },
+      "space": {
+        "description": "The DID of the space the share was placed in.",
+        "type": [
+          "string",
+          "undefined"
+        ]
+      },
+      "window": {
+        "description": "The last five minutes, reclassified for the share space's readers.",
+        "ifc": {
+          "reclassify": [
+            {
+              "moduleIdentity": "JjGlJ-DYl0fG5igGbpagoFnfHB8FbfMIW3m5f9U9isk",
+              "policyDigest": "awBl557wkNu8HhAuhwFh6oGJIdm0RnXdwtYvf4uhfQY",
+              "policyRefKind": "module",
+              "subject": {
+                "__ctOwningSpace": true
+              },
+              "symbol": "shareSpaceRules",
+              "type": "https://commonfabric.org/cfc/atom/Policy"
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      }
+    },
+    "required": [
+      "space",
+      "window",
+      "shared",
+      "publish",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

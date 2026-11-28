@@ -51,6 +51,7 @@ import {
 import {
   type CfcConfClause,
   clauseAlternatives,
+  clauseReleasableBy,
   commitmentAwareEquals,
   isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
@@ -101,7 +102,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
-import { metaFieldsWritten } from "../meta-seam.ts";
+import { asPatternIdentityRef, metaFieldsWritten } from "../meta-seam.ts";
 import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
@@ -2345,52 +2346,36 @@ const updateAddedOwnerCreator = (
 };
 
 /**
- * The recorded creator of the piece the document `target` belongs to: the
- * document's own `creator` meta field for a result document, else the
- * `creator` of the piece's result document, which an argument document and an
- * internal document belong to two ways: the setup naming them for the piece
- * in this transaction (`runtime.piece-setup-store`, `runtime.owned-store`,
- * whose first source is the result document), and the `result` meta link a
- * setup writes on them. A result document without a record names no creator,
- * whatever its own `result` link, which names its parent piece.
+ * The result document of the piece the document `target` belongs to: the
+ * document itself where it records a `creator` or a `patternIdentity`, else
+ * the piece's result document, which an argument document and an internal
+ * document belong to two ways: the setup naming them for the piece in this
+ * transaction (`runtime.piece-setup-store`, `runtime.owned-store`, whose
+ * first source is the result document), and the `result` meta link a setup
+ * writes on them. A document that records a `creator` or a `patternIdentity`
+ * is a result document, whose own `result` link names its parent piece, so
+ * that link is not followed for it.
  */
-const pieceCreatorOfDocument = (
+const pieceResultOfDocument = (
   tx: IExtendedStorageTransaction,
   target: {
     space: MemorySpace;
     id: string;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-): string | undefined => {
-  const readMeta = (
-    document: {
-      space: MemorySpace;
-      id: string;
-      scope: ReturnType<typeof normalizeCellScope>;
-    },
-    field: "creator" | "patternIdentity" | "result",
-  ): unknown =>
-    tx.readOrThrow({
-      space: document.space,
-      id: document.id as URI,
-      scope: document.scope,
-      path: [field],
-    }, { meta: INTERNAL_VERIFIER_META });
-  const creatorOf = (
-    document: {
-      space: MemorySpace;
-      id: string;
-      scope: ReturnType<typeof normalizeCellScope>;
-    },
-  ): string | undefined => {
-    const recorded = readMeta(document, "creator");
-    return typeof recorded === "string" && isWellFormedDID(recorded)
-      ? recorded
-      : undefined;
-  };
-  const own = creatorOf(target);
-  if (own !== undefined) return own;
-  if (readMeta(target, "patternIdentity") !== undefined) return undefined;
+):
+  | {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  }
+  | undefined => {
+  if (
+    pieceCreatorRecordedOn(tx, target) !== undefined ||
+    readPieceMeta(tx, target, "patternIdentity") !== undefined
+  ) {
+    return target;
+  }
   const key = cfcDocumentKey(target);
   const named = writePolicyInputsForDocument(tx, target).find((input) =>
     input.kind === "structural-provenance" &&
@@ -2400,19 +2385,338 @@ const pieceCreatorOfDocument = (
     cfcDocumentKey(input.target) === key && input.sources.length > 0
   );
   if (named !== undefined && named.kind === "structural-provenance") {
-    return creatorOf(linkDocument(named.sources[0]));
+    return linkDocument(named.sources[0]);
   }
-  const result = parseLink(readMeta(target, "result"), {
+  const result = parseLink(readPieceMeta(tx, target, "result"), {
     ...target,
     id: target.id as URI,
     path: [],
   });
   if (result === undefined) return undefined;
-  return creatorOf({
+  return {
     space: result.space,
     id: result.id,
     scope: normalizeCellScope(result.scope),
+  };
+};
+
+/** One meta field of `document`, read as the verifier reads it. */
+const readPieceMeta = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  field: "creator" | "patternIdentity" | "result",
+): unknown =>
+  tx.readOrThrow({
+    space: document.space,
+    id: document.id as URI,
+    scope: document.scope,
+    path: [field],
+  }, { meta: INTERNAL_VERIFIER_META });
+
+/** The well-formed DID `document`'s own `creator` meta field records. */
+const pieceCreatorRecordedOn = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): string | undefined => {
+  const recorded = readPieceMeta(tx, document, "creator");
+  return typeof recorded === "string" && isWellFormedDID(recorded)
+    ? recorded
+    : undefined;
+};
+
+/**
+ * The recorded creator of the piece the document `target` belongs to
+ * (`pieceResultOfDocument`): the `creator` its result document records. A
+ * result document without a record names no creator.
+ */
+const pieceCreatorOfDocument = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): string | undefined => {
+  const result = pieceResultOfDocument(tx, target);
+  return result === undefined ? undefined : pieceCreatorRecordedOn(tx, result);
+};
+
+/**
+ * Whether `value` is one compiler-lowered `PolicyOf` marker: a module policy
+ * reference whose subject is the owning-space placeholder, with its module,
+ * symbol and digest named.
+ */
+const isPolicyOfMarker = (value: unknown): boolean =>
+  isObjectOrArray(value) && !Array.isArray(value) &&
+  value.type === CFC_ATOM_TYPE.Policy && value.policyRefKind === "module" &&
+  typeof value.moduleIdentity === "string" &&
+  typeof value.symbol === "string" &&
+  typeof value.policyDigest === "string" &&
+  isObjectOrArray(value.subject) &&
+  (value.subject as Record<string, unknown>)[OWNING_SPACE_PLACEHOLDER] ===
+    true;
+
+/** One `ifc.reclassify` declaration of a schema, at its logical path. */
+type ReclassifyDeclaration = {
+  readonly path: readonly string[];
+  readonly marker: unknown;
+  readonly conditional: boolean;
+};
+
+/**
+ * Every `ifc.reclassify` declaration of `schema` (the lowered form of
+ * `Reclassified`), at its logical value path. A declaration that is not
+ * exactly one well-formed `PolicyOf` marker (`isPolicyOfMarker`) throws, so
+ * a schema carrying one is refused whether or not reclassification is on,
+ * and a merge that unions two policies at one path is refused too.
+ */
+const reclassifyDeclarationsOf = (
+  schema: JSONSchema | undefined,
+): readonly ReclassifyDeclaration[] => {
+  if (schema === undefined) return [];
+  return cfcSchemaEntries(schema).flatMap((entry) => {
+    const declared = (entry.schema.ifc as Record<string, unknown>).reclassify;
+    if (declared === undefined) return [];
+    const path = canonicalizeLogicalPath(entry.path);
+    if (
+      !Array.isArray(declared) || declared.length !== 1 ||
+      !isPolicyOfMarker(declared[0])
+    ) {
+      throw new Error(
+        `reclassify at /${
+          path.join("/")
+        } must name exactly one compiler-lowered PolicyOf`,
+      );
+    }
+    return [{
+      path,
+      marker: declared[0],
+      conditional: entry.conditional === true,
+    }];
   });
+};
+
+/** Whether the declared path `declared` (`*` matching any key) covers `path`. */
+const declaredPathCovers = (
+  declared: readonly string[],
+  path: readonly string[],
+): boolean =>
+  declared.length <= path.length &&
+  declared.every((segment, index) =>
+    segment === "*" || segment === path[index]
+  );
+
+/**
+ * Whether `clause` is the piece creator's alone to release and names them
+ * only as a `User`: `clauseReleasableBy` admits it for `creator`, and every
+ * alternative is a `User` atom, plain or a commitment to the creator. The
+ * creator's `Context`, `Resource`, home `Space` and `PersonalSpace` clauses
+ * are kept as they are.
+ */
+const isCreatorUserClause = (
+  clause: CfcConfClause,
+  creator: string,
+): boolean =>
+  clauseReleasableBy(clause, creator) &&
+  clauseAlternatives(clause).every((alternative) =>
+    isObjectOrArray(alternative) &&
+    (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.User
+  );
+
+/** What `reclassifiedFlowConfidentiality` decides a write's join by. */
+type ReclassificationContext = {
+  /** The schemas the transaction's writers brought to the document. */
+  readonly declaring: JSONSchema | undefined;
+  /** The envelope the document stored before the transaction, if any. */
+  readonly stored: JSONSchema | undefined;
+  /** The envelope this commit persists. */
+  readonly merged: JSONSchema;
+  /** The authoring identities of the writers' schema inputs, by path. */
+  readonly identities:
+    | Map<string, ImplementationIdentity | undefined>
+    | undefined;
+  /** The value paths the transaction wrote on the document. */
+  readonly writtenPaths: readonly (readonly string[])[];
+};
+
+/**
+ * The confidentiality of the flow join `join` as the written document
+ * `target` stores it. A reclassification under a policy `P` that a writer's
+ * own schema declares (`ifc.reclassify`, the lowered form of `Reclassified`)
+ * replaces each clause the piece's recorded creator alone may release as a
+ * `User` (`isCreatorUserClause`) with that clause or `P`, `P`'s subject
+ * resolved to the target's space, whose manifest the resolution installs
+ * there. Every other clause is kept.
+ *
+ * Throws, which refuses the write, where a declaration is malformed
+ * (`reclassifyDeclarationsOf`), or where a write to a document the
+ * transaction did not create brings a declaration covering a value it writes
+ * that the document did not store, at that path and policy: an audience is
+ * the creating program's to choose, not a later writer's. A declaration
+ * covering no value the transaction writes, as when a link to a share's
+ * result is stored beneath it, is persisted without a refusal, since
+ * refusing it would refuse storing such a link in any existing record; a
+ * later write there is honored only under every condition below.
+ * (`PROPOSAL.md`, Risks.)
+ *
+ * Returns the join as it is, with a diagnostic saying why, unless all of
+ * these hold: the transaction's `patternReclassification` dial is on; one
+ * declaration, outside any union branch, covers every path the transaction
+ * wrote on the document, because the join is stamped document-wide; every
+ * writer at those paths (`identitiesForClaimPath`) is a module of the piece's
+ * own pattern, the module its `patternIdentity` names, so a declaration that
+ * any other writer brings, or one the document stores for a writer that
+ * brought none, releases nothing; the piece records a creator; and the join
+ * holds a clause that is theirs to release.
+ *
+ * The creator is the authority because a computation has no acting user:
+ * the creator installed the pattern that computes the value, and releasing a
+ * clause that is theirs alone is choosing the audience of their own content
+ * (§8.12.7's `canReleaseStoredClause`, applied to a new value).
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/111
+const reclassifiedFlowConfidentiality = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  context: ReclassificationContext,
+  join: readonly CfcConfClause[],
+): readonly CfcConfClause[] => {
+  const declared = reclassifyDeclarationsOf(context.declaring);
+  reclassifyDeclarationsOf(context.merged);
+  const storedDeclarations = reclassifyDeclarationsOf(context.stored);
+  // Only the write that creates the document declares a reclassification. A
+  // document that already exists keeps the one it stored, at the same path
+  // and under the same policy, whether or not it stored an envelope at all.
+  // A declaration covering no value this transaction writes releases nothing
+  // now, as when a link to another piece's result is stored beneath it.
+  if (
+    declared.length > 0 && !createdInTransaction(tx, { ...target, path: [] })
+  ) {
+    for (
+      const declaration of declared.filter((declaration) =>
+        context.writtenPaths.some((path) =>
+          declaredPathCovers(declaration.path, path)
+        )
+      )
+    ) {
+      const storedHere = storedDeclarations.some((stored) =>
+        arraysEqual(stored.path, declaration.path) &&
+        commitmentAwareEquals(
+          stored.marker as FabricValue,
+          declaration.marker as FabricValue,
+        )
+      );
+      if (!storedHere) {
+        throw new Error(
+          `reclassify at /${
+            declaration.path.join("/")
+          } of ${target.id} is not in its stored envelope; only the write that creates the document declares one`,
+        );
+      }
+    }
+  }
+  if (join.length === 0) return join;
+  const unchanged = (why: string): readonly CfcConfClause[] => {
+    tx.noteCfcDiagnostic(
+      `reclassify: ${target.id} keeps its flow join: ${why}`,
+    );
+    return join;
+  };
+  if (declared.length === 0) {
+    return storedDeclarations.length === 0 ? join : unchanged(
+      "its stored reclassification binds no writer that did not declare it",
+    );
+  }
+  if (tx.getCfcState().patternReclassification !== true) {
+    return unchanged("the cfcPatternReclassification dial is off");
+  }
+  const where = (path: readonly string[]) => `/${path.join("/")}`;
+  if (context.writtenPaths.length === 0) {
+    return unchanged("the transaction wrote no value on it");
+  }
+  const covering = declared.filter((declaration) =>
+    context.writtenPaths.every((path) =>
+      declaredPathCovers(declaration.path, path)
+    )
+  );
+  if (covering.length === 0) {
+    return unchanged(
+      `no reclassification covers every written path (declared at ${
+        declared.map((declaration) => where(declaration.path)).join(", ")
+      }; written at ${context.writtenPaths.map(where).join(", ")})`,
+    );
+  }
+  const declaration = covering[covering.length - 1];
+  if (
+    covering.some((other) =>
+      !commitmentAwareEquals(
+        other.marker as FabricValue,
+        declaration.marker as FabricValue,
+      )
+    )
+  ) {
+    return unchanged("its covering reclassifications name different policies");
+  }
+  if (covering.some((other) => other.conditional)) {
+    return unchanged(
+      `the reclassification at ${
+        where(declaration.path)
+      } sits in a union branch`,
+    );
+  }
+  const result = pieceResultOfDocument(tx, target);
+  const pieceModule = result === undefined
+    ? undefined
+    : asPatternIdentityRef(readPieceMeta(tx, result, "patternIdentity"))
+      ?.identity;
+  if (pieceModule === undefined) {
+    return unchanged("it belongs to no piece that names its pattern");
+  }
+  const writers = identitiesForClaimPath(
+    context.identities,
+    declaration.path,
+    context.writtenPaths,
+  );
+  if (
+    !writers.every((identity) =>
+      identity?.kind === "verified" && identity.moduleIdentity === pieceModule
+    )
+  ) {
+    return unchanged(
+      `a writer at ${where(declaration.path)} is not ${pieceModule}`,
+    );
+  }
+  const creator = pieceCreatorRecordedOn(tx, result!);
+  if (creator === undefined) {
+    return unchanged("its piece records no creator");
+  }
+  if (!join.some((clause) => isCreatorUserClause(clause, creator))) {
+    return unchanged(`no clause is ${creator}'s alone to release`);
+  }
+  const policy = resolvePolicyOfValue(
+    tx,
+    declaration.marker,
+    target.space,
+  ) as CfcAtom;
+  return join.map((clause) =>
+    isCreatorUserClause(clause, creator)
+      ? normalizeClause(
+        { anyOf: [...clauseAlternatives(clause), policy] } as CfcConfClause,
+      )
+      : clause
+  );
 };
 
 /**
@@ -13404,7 +13708,7 @@ export function* prepareBoundaryCommitSteps(
       // atoms.
       collectSources: writerFitRejects,
     });
-  const flowConfidentiality = flowJoin.confidentiality;
+  const joinConfidentiality = flowJoin.confidentiality;
   // The join's own sources, and not the egress collector's: that one counts
   // every entry a read overlaps, whatever its observation class, so it can
   // name a read whose entries the join left out. The join is the same for
@@ -13419,7 +13723,7 @@ export function* prepareBoundaryCommitSteps(
   // function that computed what it labels.
   const flowTransformedBy = flowIntegrity.filter(isTransformedByAtom);
   const flowLabeledSpaces = flowJoin.labeledSpaces;
-  const flowHasJoin = flowConfidentiality.length > 0 ||
+  const flowHasJoin = joinConfidentiality.length > 0 ||
     flowIntegrity.length > 0;
   // What the reads declared onward consumed counts as taint to land: the
   // persist loop runs and lands it on the target even when the join itself
@@ -13449,7 +13753,7 @@ export function* prepareBoundaryCommitSteps(
     flowHasLabels
   ) {
     tx.noteCfcDiagnostic(
-      `flow-labels(observe): would derive ${flowConfidentiality.length} ` +
+      `flow-labels(observe): would derive ${joinConfidentiality.length} ` +
         `confidentiality / ${flowIntegrity.length} integrity atom(s) onto ` +
         `${flowTargets.size} written doc(s)`,
     );
@@ -13770,6 +14074,26 @@ export function* prepareBoundaryCommitSteps(
         reasons.push(verdictReason(dropped));
         continue;
       }
+    }
+    // The join as this document stores it, which a reclassification its
+    // schema declares changes; everything below measures and stamps this.
+    let flowConfidentiality: readonly CfcConfClause[];
+    try {
+      flowConfidentiality = reclassifiedFlowConfidentiality(
+        tx,
+        target,
+        {
+          declaring: stampingSchemas.get(key),
+          stored: storedSchema,
+          merged: mergedSchema,
+          identities: writeAuthorIdentities.get(key),
+          writtenPaths: valueWritePathsOf(tx, { space, id, scope }),
+        },
+        joinConfidentiality,
+      );
+    } catch (error) {
+      reasons.push(describeFailure(error));
+      continue;
     }
 
     const linkWriteInputs = linkWrites.get(key) ?? [];

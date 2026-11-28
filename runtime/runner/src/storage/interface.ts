@@ -93,6 +93,7 @@ import type {
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
   CfcMetadata,
+  CfcPatternReclassification,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -2782,6 +2783,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * and the value is read when the transaction prepares.
    */
   setCfcContentAddressedLabels(enabled: CfcContentAddressedLabels): void;
+
+  /**
+   * Whether commit preparation stores a reclassified value's
+   * creator-releasable `User` clauses as that clause or the declared policy.
+   * Set by the runtime at creation; a change after prepare invalidates it.
+   */
+  setCfcPatternReclassification(enabled: CfcPatternReclassification): void;
 
   /**
    * Set the exchange-rule policy evaluation dial (Epic B5, spec §4.4.5).

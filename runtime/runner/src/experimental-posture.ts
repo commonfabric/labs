@@ -77,6 +77,9 @@ export const EXPERIMENTAL_ENV_VARS = {
   // can opt out with an explicit "false", restoring specs#49's §4.9.3.
   cfcCommittedSubjectCandidates:
     "EXPERIMENTAL_CFC_COMMITTED_SUBJECT_CANDIDATES",
+  // Pattern reclassification is default-off; env-reachable so a process can
+  // opt in with an explicit "true".
+  cfcPatternReclassification: "EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION",
   // Instance naming is default-off, and reachable programmatically only: one
   // process naming instances binds a parent's children to other documents
   // than the rest of its space does, so no environment may turn it on before
@@ -203,6 +206,10 @@ export const EXPERIMENTAL_FLAG_AUTHORITY = {
   // Decides which readers a display admits to a value, so every client of a
   // deployment must decide it alike.
   cfcCommittedSubjectCandidates: "server",
+  // Decides the label a serving run stores on a reclassified value, which is
+  // who may read it, so it is the deployment's decision as the record it
+  // reads is.
+  cfcPatternReclassification: "server",
   // Decides the identity a compiled pattern gives a `const`-bound child, so
   // two runtimes on different values bind one parent's children to
   // different documents.

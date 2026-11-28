@@ -444,6 +444,16 @@ dials.
   #49's text. This is a nonconforming semantic gap and does not satisfy the
   correspondence procedure's step 4; it needs #110's ruling and a reconciled
   pin.
+- With the default-off `cfcPatternReclassification` dial and
+  `pieceCreatorRecord` both on, commit preparation stores a value declaring
+  `ifc.reclassify` with each `User` clause its piece's recorded creator may
+  release widened to that clause or the declared policy
+  (`reclassifiedFlowConfidentiality` in `runtime/runner/src/cfc/prepare.ts`).
+  This implements [specs#111](https://github.com/commonfabric/specs/pull/111)
+  (SC-58), open and unruled, which the pinned §3.1.8 and §8.12.7 do not
+  permit. At the strict default the dial is off and nothing changes; with it
+  on this is a nonconforming semantic gap that needs #111's ruling and a
+  reconciled pin.
   The new clause is absent on `user` and `session` stores, even when their
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;
