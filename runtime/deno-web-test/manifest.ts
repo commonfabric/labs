@@ -68,7 +68,16 @@ export class Manifest {
     await removeDirectory(this.#runDir);
   }
 
-  static async create(projectDir: string, tests: string[]): Promise<Manifest> {
+  /**
+   * Makes the run's temporary directory and the two directories inside it,
+   * each through `makeDirectory`. When either of the two cannot be made, the
+   * temporary directory is removed before the error is rethrown.
+   */
+  static async create(
+    projectDir: string,
+    tests: string[],
+    makeDirectory: (path: string) => Promise<void> = (path) => Deno.mkdir(path),
+  ): Promise<Manifest> {
     const config = await getConfig(projectDir);
     const manifest = new Manifest(
       projectDir,
@@ -77,8 +86,8 @@ export class Manifest {
       config,
     );
     try {
-      await Deno.mkdir(manifest.serverDir);
-      await Deno.mkdir(manifest.profileDir);
+      await makeDirectory(manifest.serverDir);
+      await makeDirectory(manifest.profileDir);
     } catch (error) {
       // The temporary directory is already there, and nobody holds the
       // manifest to remove it with.

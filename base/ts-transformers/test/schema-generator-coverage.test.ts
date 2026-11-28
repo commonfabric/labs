@@ -1,6 +1,10 @@
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
-import { transformSource } from "./utils.ts";
+import {
+  type TransformationDiagnostic,
+  transformCfDirective,
+} from "../src/mod.ts";
+import { transformFiles, transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   collect,
@@ -15,8 +19,9 @@ import { test } from "@commonfabric/test-support/test";
  * test pins the emitted `toSchema<T>()` -> `{...} as const satisfies
  * __cfHelpers.JSONSchema` literal for a shape that the existing schema tests do
  * not exercise: non-finite and negative numeric literals, the write-authorized
- * identity marker, the CFC UI-contract hint on boolean and object schemas, and
- * the option-object value evaluator.
+ * identity marker, the CFC UI-contract hint on boolean and object schemas, the
+ * option-object value evaluator, and where a diagnostic about a type declared
+ * in another module is reported.
  */
 
 /**
@@ -211,6 +216,44 @@ export default pattern<{ title: string }, never>((state) => ({
   assertEquals((output.ifc as any).uiContract.action, "SubmitDirectCommand");
 });
 
+/**
+ * The emitted result schema of a pattern given its input schema and a
+ * callback whose declared return type is `returns`, returning `body`.
+ */
+async function annotatedResultSchema(
+  returns: string,
+  body: string,
+): Promise<unknown> {
+  const out = await transformSource(
+    `/// <cts-enable />
+import { pattern, toSchema, UiAction } from "commonfabric";
+export default pattern(toSchema<{ title: string }>(), (state): ${returns} => ${body});
+`,
+    { types: COMMONFABRIC_TYPES },
+  );
+  return patternSchemas(parseModule(out)).output;
+}
+
+test("UI-contract hint carried by the result schema call turns a boolean result schema into an ifc-only schema", async () => {
+  // With an input schema already supplied, the returned `<UiAction>` hands its
+  // contract to the injected result `toSchema` call rather than to the declared
+  // return type, so the boolean schema `any` and `never` generate is replaced
+  // by one carrying the contract.
+  const uiContract = { helper: "UiAction", action: "Go" };
+  const action = `<UiAction action="Go">Go</UiAction>`;
+  assertEquals(await annotatedResultSchema("any", action), {
+    ifc: { uiContract },
+  });
+  assertEquals(await annotatedResultSchema("never", action), {
+    not: true,
+    ifc: { uiContract },
+  });
+
+  // Without a UI helper there is no contract, and the boolean stays as is.
+  assertEquals(await annotatedResultSchema("any", `<div>Go</div>`), true);
+  assertEquals(await annotatedResultSchema("never", `<div>Go</div>`), false);
+});
+
 test("toSchema option object evaluates literals, arrays, nested objects and constants", async () => {
   // The options bag is spread onto the emitted schema; booleans, null, arrays,
   // nested object literals and enum-constant references are all evaluated, while
@@ -248,4 +291,48 @@ export { s };
   assertEquals(schema.wrappedCast, "c");
   assertEquals(schema.wrappedSatisfies, "t");
   assertEquals(schema.wrappedNonNull, "n");
+});
+
+test("a diagnostic about a type declared in another module is reported at the schema's use", async () => {
+  // The symbol member lives in `/keyed.ts`, so the error points into this file
+  // instead: at an authored `toSchema` call itself, and for the schema a
+  // pattern's type argument injects, which has no position of its own, at the
+  // nearest enclosing authored node, the pattern call.
+  const keyed = "export interface Keyed { k: string | symbol }\n";
+  const reported = async (body: string, local = "") => {
+    const source = `/// <cts-enable />
+import { pattern, toSchema } from "commonfabric";
+import type { Keyed } from "./keyed.ts";
+${local}export default ${body};
+`;
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformFiles({ "/test.tsx": source, "/keyed.ts": keyed }, {
+      types: COMMONFABRIC_TYPES,
+      pipelineDiagnostics: diagnostics,
+    });
+    const text = transformCfDirective(source);
+    return diagnostics.map(({ type, fileName, start, length }) => ({
+      type,
+      fileName,
+      at: text.slice(start!, start! + length!),
+    }));
+  };
+
+  const authored = "toSchema<Keyed>()";
+  assertEquals(await reported(authored), [
+    { type: "schema-type:symbol", fileName: "/test.tsx", at: authored },
+  ]);
+  const injected = "pattern<Keyed>((input) => ({ k: input.k }))";
+  assertEquals(await reported(injected), [
+    { type: "schema-type:symbol", fileName: "/test.tsx", at: injected },
+  ]);
+
+  // A type declared in this file is reported at the member it cannot read.
+  assertEquals(
+    await reported(
+      "toSchema<Local>()",
+      "interface Local { k: string | symbol }\n",
+    ),
+    [{ type: "schema-type:symbol", fileName: "/test.tsx", at: "symbol" }],
+  );
 });

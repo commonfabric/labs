@@ -15,7 +15,10 @@ import {
   type AgentRunnerEntry,
   type AgentRunnerOptions,
 } from "@commonfabric/agent-runner";
-import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
+import {
+  createHarnessAgentRunExecutor,
+  type HarnessAgentRunExecutorOptions,
+} from "@commonfabric/agent-runner/agent-run-harness";
 import type { LaneTransition } from "@commonfabric/agent-runner/local-jobs/readiness";
 import { selectHarnessJobSandboxRuntime } from "@commonfabric/agent-runner/harness-job";
 import {
@@ -345,6 +348,31 @@ const deployedConnections: AgentRunnerConnections = {
 };
 
 /**
+ * The options of the harness executor a runner with `config` hands its runs
+ * to when no other executor is supplied: runs act as the identity, and a
+ * request space's ACL is read from the toolshed the run is on.
+ */
+export function harnessExecutorOptions(
+  config: AgentRunnerCommandConfig,
+  report: (message: string) => void,
+): HarnessAgentRunExecutorOptions {
+  return {
+    identityKeyPath: config.identityPath,
+    requester: config.home,
+    workRoot: config.workRoot,
+    allowedTools: config.tools,
+    readSpaceAcl: (host, space) =>
+      getAcl({ apiUrl: host, space, identity: config.identityPath }),
+    ...(config.loomRetrievalConfigPath !== undefined
+      ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
+      : {}),
+    ...(config.commands !== undefined ? { commands: config.commands } : {}),
+    ...(config.model !== undefined ? { model: config.model } : {}),
+    report,
+  };
+}
+
+/**
  * Connects to the home toolshed, registers the runner, and starts it. The
  * production `start`.
  *
@@ -357,7 +385,7 @@ export async function startAgentRunner(
   execute?: AgentRunnerOptions["execute"],
   readiness?: (next: LaneTransition) => void,
 ): Promise<{ stop(): Promise<void> }> {
-  const { home, homeHost, identityPath } = config;
+  const { home, homeHost } = config;
   const homeSpace = home as `did:${string}:${string}`;
   const { runtime: homeRuntime, homePattern } = await connections.openHome(
     config,
@@ -416,20 +444,8 @@ export async function startAgentRunner(
       leaseMs: config.leaseMs,
       runtimeForHost,
       registerRunner,
-      execute: execute ?? createHarnessAgentRunExecutor({
-        identityKeyPath: identityPath,
-        requester: home,
-        workRoot: config.workRoot,
-        allowedTools: config.tools,
-        readSpaceAcl: (host, space) =>
-          getAcl({ apiUrl: host, space, identity: identityPath }),
-        ...(config.loomRetrievalConfigPath !== undefined
-          ? { loomRetrievalConfigPath: config.loomRetrievalConfigPath }
-          : {}),
-        ...(config.commands !== undefined ? { commands: config.commands } : {}),
-        ...(config.model !== undefined ? { model: config.model } : {}),
-        report,
-      }),
+      execute: execute ??
+        createHarnessAgentRunExecutor(harnessExecutorOptions(config, report)),
       report,
       readiness,
     });

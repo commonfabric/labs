@@ -430,6 +430,29 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/topics-mentionable-index-break.md",
   },
   {
+    // A THIRD entry for this pattern, for the reason the second gives: no
+    // baseline here appears in either entry above.
+    //
+    // The board's `adoptTopics` verb goes. An existing board moves to the
+    // collection by being recreated on a fresh board rather than by adopting
+    // its list in place, so nothing fills the list the verb read. Only the
+    // baselines recorded while the collection board was in review carry it.
+    pattern: "apps/topics/main.tsx",
+    baselines: [
+      "20261121T012444Z-Q-VeHQzYK_RuIsiV",
+      "20261124T004805Z-dOfO6DiHwzroh4ML",
+      "20261124T022719Z-cuWchNVcu3UjvKbz",
+    ],
+    paths: ["result.adoptTopics"],
+    reason:
+      "The board's `adoptTopics` verb, which added the topics of its legacy " +
+      "`topics` list to its collection a batch at a time, is removed with " +
+      "that list: an existing board moves by export and recreate on a fresh " +
+      "board (scripts/topics-recreate.ts), which files every topic through " +
+      "`addTopic`.",
+    record: "docs/history/topics-adopt-topics-removal-break.md",
+  },
+  {
     // One entry per (pattern, BASELINE) pair, and that is a requirement
     // rather than tidiness: the gate keys accepted pairs into a Map, so a
     // second entry naming a baseline this one also names REPLACES its path
@@ -463,7 +486,6 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
       "20260819T172917Z-K_8fL8hZtM4xYV7V",
     ],
     paths: [
-      "argument.boardCrossrefs",
       "result.crossrefs",
       "result.addLink.kind",
       // The unsigned caller retires: a comment always carries a structured author now, so the mirror beside it goes.
@@ -807,7 +829,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     // Two entries, one per pattern, for one ruling: `LLMMessageSchema` stopped
     // admitting the `system` role, and that schema reaches the argument
     // contract of every pattern whose `messages` it types.
-    pattern: "system/chatbot/chatbot.tsx",
+    pattern: "system/chatbot/main.tsx",
     baselines: [
       "20260729T022742Z-Wx_o-CaAUThcJygl",
       "20260818T183826Z-ibsxlvix5LQH7bfY",
@@ -918,7 +940,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat, same record.
-    pattern: "examples/scoped-group-chat/main-plain-inputs.tsx",
+    pattern: "examples/scoped-group-chat/plain-inputs/main.tsx",
     baselines: [
       "20260729T022742Z-Z-pkp9K1p6P_byR_",
       "20260909T184756Z-M530BSuyTtIuZ_9J",
@@ -930,7 +952,7 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   },
   {
     // The same break in the scoped chat's writable-input variant, same record.
-    pattern: "examples/scoped-group-chat/main-with-writable-inputs.tsx",
+    pattern: "examples/scoped-group-chat/writable-inputs/main.tsx",
     baselines: [
       "20260729T022742Z-_XyScfA2QEj14JnS",
       "20260909T184756Z-NMt89YDsQnt_urES",

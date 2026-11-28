@@ -1035,13 +1035,16 @@ request. The second and the fourth create the pull request after any push that
 succeeds, including one that had nothing new to push, unless the branch already
 has an open pull request, which they look for as `L` does, below. The pull
 request goes to the GitHub repository of the remote named `upstream`, `github`,
-or `origin`, whichever is the first to name one, and merges into that remote's
-default branch, as its server names it then, from the branch on `origin`. When
-the viewer has to ask GitHub for the open pull request, it asks that remote's
-server for its default branch at the same time. The created pull request's title
-and description are the subject and the rest of the message of the branch's
-oldest commit that the default branch, as last fetched, does not have, leaving
-out merges and commits whose changes that branch already has.
+or `origin`, whichever is the first to name one, and merges into that
+repository's default branch from the branch on `origin`. When that remote is
+`origin`, its default branch is the one the push already asked `origin`'s server
+for. Otherwise, when the viewer has to ask GitHub for the open pull request, it
+asks GitHub for the repository's default branch at the same time, which makes no
+git connection to the remote. Create PR, after a creation fails, keeps to that
+default branch once it has learned it. The created pull request's title and
+description are the subject and the rest of the message of the branch's oldest
+commit that the default branch, as last fetched, does not have, leaving out
+merges and commits whose changes that branch already has.
 
 - "Just push, and link to them": the summary gives the page's address, which the
   status line makes a link for terminals that open links.
@@ -2090,6 +2093,21 @@ changes a piece's source in this process. The contract, including the refusals
 and their codes, is
 [`server-pattern-lifecycle.md`](../../docs/features/server-pattern-lifecycle.md).
 
+A command that compiles in this process, as `cf piece new` does against a
+deployment that does not run the serving loop, compiles through a directory of
+compiled modules at `common-fabric/compiled-modules` under `$XDG_CACHE_HOME` or
+`~/.cache`. The directory takes the form a host's toolsheds share among
+themselves (`openSharedCompileCache()`), though it is not theirs. A module that
+any earlier `cf` process compiled from the same source with the same compiler is
+read from there rather than type-checked, transformed and emitted again, and two
+processes that compile the same modules at once compile them once.
+`lib/compile-byte-cache.ts` opens the directory once per process, when the first
+compile asks it for anything, so a command that compiles nothing does not touch
+it. From the first failure of the directory, whether opening it, reading it or
+locking in it, the command keeps what it compiles in memory for the rest of the
+process, and the connection whose compile met the failure says why, through its
+caller's report where it has one and on stderr otherwise.
+
 ## Piece discovery
 
 `cf piece describe --cell <piece>` documents a piece's readable fields and
@@ -2726,6 +2744,12 @@ harness admits one level of delegation, so depth is `1`. Only a child's
 `browser` tool steps carry `action` (such as `click` or `snapshot`), without the
 operation's arguments or page content. Other child tool steps, such as
 `submit_result`, omit `action`.
+
+A local job profile can set `taskDelivery: "file"` for jobs that consume a
+structured task in the workspace. On the opening run, the runner writes the
+submitted task verbatim to `.job-task` before the first turn and puts its
+location in the task's prompt slot. The workspace must have that name free.
+Follow-up messages arrive inline in the same conversation and workspace.
 
 A profile may grant `hostMounts`, a list of
 `{name, hostPath, sandboxPath, mode}` objects. Each names an existing host

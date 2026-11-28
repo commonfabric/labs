@@ -17,7 +17,7 @@ async function transform(call: string): Promise<ts.SourceFile> {
   const output = await transformSource(
     `/// <cts-enable />
 import { pattern } from "commonfabric";
-interface Item { name: string; kind: string }
+interface Item { name: string; kind: string; tags: string[] }
 export default pattern<{ items: Item[]; ctx: number }>(({ items, ctx }) => {
   const result = ${call};
   return { result };
@@ -51,6 +51,22 @@ describe("array-method-transform", () => {
       expect(selector.statements.at(-1)?.getText(root)).toBe(
         "return __cfHelpers.tagCollectionKey(void 0);",
       );
+    });
+
+    it("tags a selector's own return but not the returns of a callback nested in it", async () => {
+      const root = await transform(`items.keyBy((item) => {
+    const others = item.tags.filter((tag) => {
+      return tag !== item.kind;
+    });
+    return others.length;
+  })`);
+
+      const tagged = callsNamed(root, "tagCollectionKey").map((call) =>
+        call.arguments.map((arg) =>
+          ts.isPropertyAccessExpression(arg) ? arg.name.text : arg.kind
+        )
+      );
+      expect(tagged).toEqual([["length"]]);
     });
   });
 });

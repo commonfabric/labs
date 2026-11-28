@@ -54,10 +54,7 @@ import {
   publishPatterns,
   UNTOUCHED,
 } from "./inductor-pool-test-fixture.ts";
-import InductorPool, {
-  type Contribution,
-  type ReleasedRule,
-} from "./inductor-pool.tsx";
+import InductorPool, { type Contribution, type ReleasedRule } from "./main.tsx";
 import {
   type ContributionEvent,
   releaseConsensus,

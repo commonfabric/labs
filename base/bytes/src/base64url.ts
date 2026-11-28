@@ -10,10 +10,12 @@ const useBase64Polyfill = !Uint8Array.fromBase64;
  * Encodes a `Uint8Array` to an unpadded base64url string (no trailing `=`).
  * Uses the base64url alphabet (RFC 4648 section 5).
  */
-export function toUnpaddedBase64url(bytes: Uint8Array): string {
-  return useBase64Polyfill
-    ? toBase64Polyfill(bytes)
-    : bytes.toBase64({ alphabet: "base64url", omitPadding: true });
+export const toUnpaddedBase64url: (bytes: Uint8Array) => string =
+  useBase64Polyfill ? toBase64Polyfill : toBase64Native;
+
+/** {@link toUnpaddedBase64url} for platforms with native base64 support. */
+function toBase64Native(bytes: Uint8Array): string {
+  return bytes.toBase64({ alphabet: "base64url", omitPadding: true });
 }
 
 /** Shared text encoder, created once. */
@@ -56,11 +58,12 @@ export function toUnpaddedBase64urlFromText(text: string): string {
  * byte sequence has one unpadded form: `AQ` decodes to the byte `0x01`, and
  * `AR` throws.
  */
-export function fromBase64url(encoded: string): Uint8Array {
-  if (useBase64Polyfill) {
-    return fromBase64Polyfill(encoded);
-  }
+export const fromBase64url: (encoded: string) => Uint8Array = useBase64Polyfill
+  ? fromBase64Polyfill
+  : fromBase64Native;
 
+/** {@link fromBase64url} for platforms with native base64 support. */
+function fromBase64Native(encoded: string): Uint8Array {
   // `Uint8Array.fromBase64()` skips ASCII whitespace and ignores the bits past
   // the last whole byte, so both are refused here.
   if (/[\t\n\f\r ]/.test(encoded)) {

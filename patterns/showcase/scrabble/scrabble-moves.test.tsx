@@ -8,7 +8,7 @@
  * `cf-drop-zone` does.
  */
 import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
-import Scrabble, { type Letter, type PlacedTile } from "./scrabble.tsx";
+import Scrabble, { type Letter, type PlacedTile } from "./main.tsx";
 import {
   findNodeByProp,
   fireEvent,

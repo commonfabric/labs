@@ -96,28 +96,26 @@ benefited (see the contract doc's "Lessons" section).
 
 `dev/catalog/` (type-checked component catalog + `dev/catalog/stories/`),
 `examples/counter/`, `examples/do-list/`, `examples/fair-share/`,
-`examples/form-demo/form-demo.tsx`, `system/notes/`, `examples/reading-list/`
+`examples/form-demo/main.tsx`, `system/notes/`, `examples/reading-list/`
 (canonical list-detail example), `examples/simple-list/`, `examples/todo-list/`.
 
 ## demo
 
 Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
-`apps/annotation-manager/main.tsx`, `examples/aside/aside.tsx`,
-`apps/bookmarks/main.tsx`, `system/chatbot/chatbot.tsx`,
-`apps/cheeseboard/main.tsx`, `examples/compiler/compiler.tsx`,
-`apps/deep-research/main.tsx`, `showcase/dice/dice.tsx` (+
-`showcase/dice/dice-handlers.ts`),
-`examples/group-chat-lobby/group-chat-lobby.tsx`,
-`examples/group-chat-room/group-chat-room.tsx`, `examples/image/image.tsx`,
-`apps/image-analysis/main.tsx`, `examples/link-preview/link-preview.tsx`,
-`examples/map-demo/map-demo.tsx`,
-`examples/mobile-app-demo/mobile-app-demo.tsx`,
-`examples/pattern-index/pattern-index.tsx`,
+`apps/annotation-manager/main.tsx`, `examples/aside/main.tsx`,
+`apps/bookmarks/main.tsx`, `system/chatbot/main.tsx`,
+`apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
+`apps/deep-research/main.tsx`, `showcase/dice/main.tsx` (+
+`showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
+`examples/group-chat-room/group-chat-room.tsx`, `examples/image/main.tsx`,
+`apps/image-analysis/main.tsx`, `examples/link-preview/main.tsx`,
+`examples/map-demo/main.tsx`, `examples/mobile-app-demo/main.tsx`,
+`examples/pattern-index/main.tsx`,
 `examples/profile-roster-live-demo/profile-roster-live-demo.tsx` (demo: live
 multi-user profile roster — every participant's cross-space profile badge),
 `system/self/self.tsx`, `apps/self-improving-classifier/main.tsx`,
 `apps/shopping-list/main.tsx`, `apps/store-mapper/main.tsx`,
-`examples/text-swapper/text-swapper.tsx`.
+`examples/text-swapper/main.tsx`.
 
 App and integration directories: `apps/activity-log/`, `apps/agent/`,
 `apps/base/`, `showcase/battleship/`, `apps/book-recommendations/`,
@@ -293,63 +291,65 @@ addPiece.send({ piece: ann });
 **Topics — a multi-user tracker over #topic pieces** (durable units of shared
 attention; CT-1878): title, living body document, flat chronological comment
 thread, typed links out. Deliberately minimal — no statuses, labels, or
-assignees. The board publishes a bounded discovery index — the topics
-themselves, declared through a narrow row schema of summary scalars, so a row's
-address IS its topic's and a survey and the follow-up read name one document.
-`addTopic` returns the piece it created, so a caller addresses a new topic
-straight from the create. The board owns a member namespace through
+assignees. The board holds its topics in an
+[indexed collection](../docs/features/indexed-collections.md) rather than a
+list: `addTopic` adds the topic it creates, the runtime mirrors each topic's
+title, body, number, activity and author into a SQLite table, and every listing
+is a query over it — the cards, the count, the mention universe, and the
+`topics` and `index` outputs, whose rows are the topics themselves as
+references. `addTopic` returns the piece it created, so a caller addresses a new
+topic straight from the create. The board owns a member namespace through
 `product/collection-naming/naming.ts`: `addTopic` allocates the next decimal
 number and passes it into the topic it creates, in the same transaction as the
-append; each topic stores that number and publishes it as `shortName`, reading
-nothing of its board to report it; and `backfillNames` numbers what the board
-held before it numbered anything, asking each such topic to store its number
-through the topic's own `recordName`. Every surface that shows a number reads
-the one a topic publishes — the header badge, the card, the survey row, and the
-mention universe row a `#42` query matches. Topics reference each other by CELL:
-the board derives the whole graph once by scanning what each topic points at
-with `equals`, and each topic reads its own inbound edges out of that pivot.
-Demonstrates: reading-list-style piece-in-list composition, profile-native
+add; each topic stores that number and publishes it as `shortName`, reading
+nothing of its board to report it; and `backfillNames` numbers any topic of the
+collection the namespace lacks. Topics reference each other by CELL: the
+collection mirrors what each topic points at into two relation tables, and each
+topic asks them which topics mention it. Demonstrates: an indexed collection as
+a board's only membership, queries that return members as references, a join
+over a relation table by the asking piece's own reference, profile-native
 browser authorship on a shared piece, mergeable comment appends, session-scoped
-drafts, bounding a whole-list derivation with a narrow declared `lift`
-parameter, passing topics through a sort so an activity-ordered list keeps the
-identity its elements already have, `multiUserTest` coverage.
+drafts, `multiUserTest` coverage.
 
 **Keywords:** topics, issues, tracker, discussion, thread, comments, multi-user,
-profile, mergeable, index, discovery, bounded read, row identity, references,
-backlinks, cell identity, equals, mentions, member names, shortName, namespace,
-backfill
+profile, mergeable, index, discovery, indexed collection, SQLite, query,
+references, backlinks, cell identity, mentions, member names, shortName,
+namespace, backfill
 
 ### Input Schema
 
 ```ts
 interface TopicsInput {
-  topics?: Writable<TopicDemand[] | Default<[]>>;
   // The member namespace: each decimal name to the topic it names, held as an
   // unread reference
   names?: Writable<Default<NamesMap, {}>>;
 }
-// TopicInput additionally takes the three wirings addTopic gives a child —
-// mentionable (the @-mention universe for the body editor), boardCrossrefs
-// (the reference pivot), and boardCrossrefIndex (that pivot's positions by
-// topic number, which lets a topic read its own row alone) — plus shortName,
-// the number the create allocated, which the topic stores and reports.
+// TopicInput additionally takes the two wirings addTopic gives a child —
+// mentionable (the @-mention universe for the body editor) and board (the
+// board's collection, which a topic asks for the topics that mention it) —
+// plus shortName, the number the create allocated, which the topic stores and
+// reports.
 ```
 
 ### Output Schema
 
 ```ts
 interface TopicsOutput {
+  // The topics as references, in filing order, read out of the collection
   topics: TopicDemand[];
-  // { [NAME], title, shortName, piece } per topic — one document of copies
+  // The board's topics as an indexed collection: the table `topics`, and the
+  // relation tables `topics_mentioned` and `topics_mentions`
+  board: TopicBoard;
+  // { [NAME], title, shortName, piece } per topic, read out of the collection
   mentionable: MentionableRow[];
   topicCount: number;
   // The topics, read through { title, createdAt, createdBy, commentCount,
   //   lastActivityAt, shortName } — a row addresses the topic it describes
   index: TopicIndexRow[];
-  // { topic, mentionedBy, name? } per topic — the reference graph, derived
-  // once here; a row carries its topic's number when the topic has one
+  // { topic, mentionedBy, name? } per topic — the reference graph, read out
+  // of the collection; a row carries its topic's number when it has one
   crossrefs: TopicCrossrefNamedRow[];
-  // { source, byName } — the pivot's positions grouped by topic number
+  // { byName } — those rows grouped by topic number
   crossrefIndex: TopicCrossrefIndex;
   // The namespace, the reverse lookup a caller reads a topic's number out of
   // by identity, and the policy the numbers are held to
@@ -358,8 +358,9 @@ interface TopicsOutput {
   naming: NamingDeclaration;
   // Returns { topic, name } — the piece it created and the number it allocated
   addTopic: Stream<AddTopicEvent, AddTopicResult>;
-  // Numbers every member the namespace lacks and asks each unnumbered topic to
-  // store its number; returns { assigned, named, pending }; idempotent
+  // Numbers every topic of the collection the namespace lacks and asks each
+  // unnumbered topic to store its number; returns
+  // { assigned, named, pending }; idempotent
   backfillNames: Stream<BackfillNamesEvent, BackfillNamesResult>;
   submitTopic: Stream<void>;
 }
@@ -367,14 +368,14 @@ interface TopicsOutput {
 
 ## `apps/topics/topic.tsx`
 
-A single #topic piece: the durable object the tracker's list holds. Body edits
-go through an explicit Edit→Save toggle (one whole-value `set` per save keeps
-the concurrent-edit window small); comments and links are mergeable appends.
-Stores the number its board calls it by as its own input and publishes it as
-`shortName`, rendering it as a badge beside the title. A topic nobody has
-numbered stores none and publishes none. `recordName` is how a number reaches a
-topic the board did not pass one to at create. Use from `apps/topics/main.tsx`
-via `navigateTo()`, or standalone.
+A single #topic piece, a member of its board's indexed collection, which it asks
+for the topics that mention it. Body edits go through an explicit Edit→Save
+toggle (one whole-value `set` per save keeps the concurrent-edit window small);
+comments and links are mergeable appends. Stores the number its board calls it
+by as its own input and publishes it as `shortName`, rendering it as a badge
+beside the title. A topic nobody has numbered stores none and publishes none.
+`recordName` is how a number reaches a topic the board did not pass one to at
+create. Use from `apps/topics/main.tsx` via `navigateTo()`, or standalone.
 
 **Keywords:** topic, detail, thread, comment, links, body, navigateTo,
 shortName, member name, badge
@@ -456,7 +457,7 @@ self.markIdle.send({
 
 ---
 
-## `examples/counter/counter.tsx`
+## `examples/counter/main.tsx`
 
 A simple counter demo.
 
@@ -478,7 +479,7 @@ interface CounterOutput {
 }
 ```
 
-## `examples/do-list/do-list.tsx`
+## `examples/do-list/main.tsx`
 
 A task list pattern with AI suggestions per item, indent-based subtasks, and
 LLM-friendly title-based handlers.
@@ -522,7 +523,7 @@ interface DoListOutput {
 }
 ```
 
-## `examples/todo-list/todo-list.tsx`
+## `examples/todo-list/main.tsx`
 
 A todo list with AI suggestions.
 
@@ -550,7 +551,7 @@ interface TodoListOutput {
 }
 ```
 
-## `examples/simple-list/simple-list.tsx`
+## `examples/simple-list/main.tsx`
 
 A checklist with indent support. Runs standalone, and embeds in another pattern
 as a JSX tag.
@@ -1643,7 +1644,7 @@ interface MealOrchestratorOutput {
 }
 ```
 
-## `examples/reading-list/reading-list.tsx`
+## `examples/reading-list/main.tsx`
 
 **Canonical list-detail example.** Track books, articles, papers, and videos.
 Demonstrates: footer forms, `navigateTo()` for details, `lift()` for filtering.
@@ -1840,7 +1841,7 @@ interface SharedNoteOutput {
 }
 ```
 
-## `examples/cfc-agent-prompt-injection-demo/main.tsx`
+## `examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx`
 
 Interactive side-by-side chatbot demo for the new observation ceiling and
 subagent behavior. One chat reads a hostile prompt-influencing briefing directly
@@ -1879,7 +1880,7 @@ type Output = {
 };
 ```
 
-## `system/chatbot/chatbot.tsx`
+## `system/chatbot/main.tsx`
 
 Full-featured AI chat assistant with tool support, model selection, and
 mentionables. Deploy this to have a conversational AI interface.
@@ -1912,7 +1913,7 @@ type ChatOutput = {
 };
 ```
 
-## `examples/group-chat-lobby/group-chat-lobby.tsx`
+## `examples/group-chat-lobby/main.tsx`
 
 Multiplayer group chat lobby where users join with their shared profile
 (`wish({ query: "#profile" })` — the wish UI covers profile create/pick) and
@@ -1960,7 +1961,7 @@ interface LobbyOutput {
 }
 ```
 
-## `product/lobby/main.tsx`
+## `product/lobby/lobby.tsx`
 
 Simple multiplayer presence lobby. Each viewer joins by contributing their live
 Fabric profile cell from `wish({ query: "#profile" })`; every participant is
@@ -2055,7 +2056,7 @@ interface Output {
 }
 ```
 
-## `examples/image/image.tsx`
+## `examples/image/main.tsx`
 
 Display an image from a URL or data URI with optional caption. Useful for
 rendering images when an LLM has a URL to display.
@@ -2147,7 +2148,7 @@ type ImageChatOutput = {
 };
 ```
 
-## `examples/clock/clock.tsx`
+## `examples/clock/main.tsx`
 
 Example pattern: a live wall clock driven by the reactive `#now` wish
 (`wish({ query: "#now/1" })`, ticking once per second). Shows the sanctioned way
@@ -2158,7 +2159,7 @@ formatting.
 
 **Keywords:** now, wish, clock, time, reactive, capability-gate, timing
 
-## `examples/reactive-now/reactive-now.tsx`
+## `examples/reactive-now/main.tsx`
 
 Example pattern demonstrating both pattern-facing surfaces of the timing
 side-channel mitigations. Reading time: a one-shot `#now` snapshot (the piece's
@@ -2172,7 +2173,7 @@ mashing/typing is throttled, and nothing is dropped.
 **Keywords:** now, wish, time, elapsed, relative-time, reactive,
 capability-gate, timing, delivery-shaping, token-bucket, input
 
-## `examples/profile-aware-writer/profile-aware-writer.tsx`
+## `examples/profile-aware-writer/main.tsx`
 
 Example pattern demonstrating how to use the `#profile` wish to personalize LLM
 output. Fetches the user's profile summary and injects it into the system prompt
@@ -2197,7 +2198,7 @@ type Output = {
 };
 ```
 
-## `showcase/inductor/lofi/lofi-inductor.tsx`
+## `showcase/inductor/lofi/main.tsx`
 
 A hi-fi model labels each item for a yes-or-no goal while a lo-fi regex rule set
 shadows it. Disagreements become graded examples; an LLM proposes a new rule
@@ -2265,7 +2266,7 @@ interface LofiInductorOutput {
 }
 ```
 
-## `showcase/inductor/pool/inductor-pool.tsx`
+## `showcase/inductor/pool/main.tsx`
 
 Lo-fi rule sets for one goal, contributed under per-goal pseudonyms and
 confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its
@@ -2746,7 +2747,7 @@ interface BookmarksOutput {
 }
 ```
 
-## `examples/link-preview/link-preview.tsx`
+## `examples/link-preview/main.tsx`
 
 A simple pattern that renders a rich link preview for a single URL. Uses
 cf-input for URL entry and cf-link-preview to display the preview card with
@@ -2774,7 +2775,7 @@ interface LinkPreviewOutput {
 
 ---
 
-## `examples/cfc-row-label-mailbox/main.tsx`
+## `examples/cfc-row-label-mailbox/cfc-row-label-mailbox.tsx`
 
 Demo of CFC Phase 3 per-row, data-derived SQLite labels: each email row's
 confidentiality is computed from the row's own columns (sender ∧ regex-split
@@ -2809,7 +2810,7 @@ interface MailboxOutput {
 
 ---
 
-## `examples/cfc-row-label-records/main.tsx`
+## `examples/cfc-row-label-records/cfc-row-label-records.tsx`
 
 Demo of per-row (Phase 3) and per-column (Phase 2) CFC labels COMPOSING on one
 row entity: a patient-records table whose row rule derives the patient from the

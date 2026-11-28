@@ -66,6 +66,12 @@ interface CollectionState {
   readonly pending: Set<string>;
 
   /**
+   * Ids of documents owed for maintenance withdrawn too many times in a row,
+   * held for the drain the next write to the space starts.
+   */
+  readonly held: Set<string>;
+
+  /**
    * Rows of members a handler added since the last drain started, as `add()`
    * stored them. The next drain re-reads each without asking the database
    * for it, which may not answer yet for a row written a moment ago.
@@ -147,6 +153,20 @@ export class IndexedCollectionMaintainer {
 
   /** Per space, what settles once its last queued event's wave has. */
   readonly #turns = new Map<MemorySpace, Promise<void>>();
+
+  /** See `subscribeDrained()`. */
+  readonly #drainedObservers = new Set<() => void>();
+
+  /**
+   * The cells a drain or a reconciliation has synced and goes on to read in
+   * maintenance transactions: a collection's handle, and the members it
+   * re-reads. A release pass keeps the document of a cell still reachable
+   * (`IStorageManager.holdDocument()`), so holding them here keeps each one
+   * loaded until the transactions that read it have ended (`#hold()`). A
+   * member whose document a pass dropped in between would read there as
+   * absent, and project to empty rows.
+   */
+  readonly #reading = new Set<readonly Cell<unknown>[]>();
   readonly #subscription: IStorageSubscription;
   #disposed = false;
 
@@ -168,9 +188,24 @@ export class IndexedCollectionMaintainer {
           notification.type === "integrate" ||
           notification.type === "revert"
         ) {
+          // A release pass or a retraction has the session let go of a
+          // document, which arrives here as a change to a document the
+          // replica no longer covers. Nothing wrote it, and re-reading the
+          // members read from it would only load it again.
           const ids = new Set<string>();
           for (const change of notification.changes) {
-            ids.add(change.address.id);
+            const { id, scope } = change.address;
+            if (
+              notification.type === "integrate" &&
+              runtime.storageManager.documentCovered?.(
+                  notification.space,
+                  id,
+                  scope,
+                ) === false
+            ) {
+              continue;
+            }
+            ids.add(id);
           }
           this.noteWrites(notification.space, ids);
         }
@@ -178,6 +213,39 @@ export class IndexedCollectionMaintainer {
       },
     };
     if (this.#enabled) runtime.storageManager.subscribe(this.#subscription);
+  }
+
+  /**
+   * The per-space turns each maintenance event waits for before it is
+   * queued, which a test fills to hold a drain between reading its members
+   * and the transaction that projects them; and the state of each space,
+   * whose latest registry read (`loaded`) a test waits for, since the
+   * runtime does not track it as async work.
+   */
+  get accessForTestingOnly(): {
+    readonly turns: Map<MemorySpace, Promise<void>>;
+    readonly spaces: Map<MemorySpace, SpaceState>;
+  } {
+    return { turns: this.#turns, spaces: this.#spaces };
+  }
+
+  /**
+   * Calls `observer` each time the maintenance of a collection has re-read
+   * every member it was asked to and has nothing left to re-read: after a
+   * drain, or after the tables were brought up to a declaration, when no
+   * drain is under way or owed. Returns a cancel that removes it.
+   *
+   * The maintainer asks for no release pass itself
+   * (`Runtime.releaseUnreadDocuments()`). A runtime that runs its members'
+   * pieces reads their documents on their own account, and is asked for
+   * passes by what stops those pieces; a pass costs work in proportion to
+   * every document the runtime holds, so one after each drain would cost such
+   * a runtime that much on every write. In a runtime that runs nothing else,
+   * only a pass asked for here releases what a re-read loaded.
+   */
+  subscribeDrained(observer: () => void): () => void {
+    this.#drainedObservers.add(observer);
+    return () => this.#drainedObservers.delete(observer);
   }
 
   /**
@@ -268,6 +336,8 @@ export class IndexedCollectionMaintainer {
     const written = [...state.early];
     state.early.clear();
     for (const collection of state.collections.values()) {
+      for (const id of collection.held) collection.pending.add(id);
+      collection.held.clear();
       for (const id of written) {
         if (id === collection.handle.id) {
           this.#redeclare(collection);
@@ -299,13 +369,15 @@ export class IndexedCollectionMaintainer {
       if (!this.#disposed) {
         logger.warn("reconcile-failed", () => [collection.handle.id, error]);
       }
-    });
+    }).then(() => this.#noteDrained(collection));
     this.#runtime.trackAsyncWork(collection.reconciled);
   }
 
   /** Stops maintaining. Writes reported afterward are dropped. */
   dispose(): void {
     this.#disposed = true;
+    this.#drainedObservers.clear();
+    this.#reading.clear();
     if (this.#enabled) {
       this.#runtime.storageManager.unsubscribe?.(this.#subscription);
     }
@@ -378,6 +450,7 @@ export class IndexedCollectionMaintainer {
       handle,
       stream,
       pending: new Set(),
+      held: new Set(),
       added: new Map(),
       draining: undefined,
       withdrawn: 0,
@@ -394,14 +467,21 @@ export class IndexedCollectionMaintainer {
       if (!this.#disposed) {
         logger.warn("reconcile-failed", () => [handle.id, error]);
       }
-    });
+    }).then(() => this.#noteDrained(collection));
     this.#runtime.trackAsyncWork(collection.reconciled);
     return collection;
   }
 
-  /** Reads the handle of `collection`, as a database and as a declaration. */
+  /**
+   * Reads the handle of `collection`, as a database and as a declaration,
+   * and returns them with the cell it read the handle through.
+   */
   async #open(collection: CollectionState): Promise<
-    | { db: SqliteDbRef; descriptor: IndexedCollectionDescriptor }
+    | {
+      handle: Cell<unknown>;
+      db: SqliteDbRef;
+      descriptor: IndexedCollectionDescriptor;
+    }
     | undefined
   > {
     const handle = this.#runtime.getCellFromLink(collection.handle);
@@ -409,7 +489,13 @@ export class IndexedCollectionMaintainer {
     const value: unknown = handle.getRaw({ lastNode: "value" });
     const descriptor = indexedCollectionDescriptorOf(value);
     if (descriptor === undefined || !isSqliteDbRef(value)) return undefined;
-    return { db: toDbRef(value), descriptor };
+    return { handle, db: toDbRef(value), descriptor };
+  }
+
+  /** Holds `cells` until the returned function is called (`#reading`). */
+  #hold(cells: readonly Cell<unknown>[]): () => void {
+    this.#reading.add(cells);
+    return () => this.#reading.delete(cells);
   }
 
   /**
@@ -419,7 +505,9 @@ export class IndexedCollectionMaintainer {
    * ended together, a commit may write one database only, and a wave that is
    * refused takes every transaction in it along. So the events of a space go
    * one at a time, each after the wave of the one before has settled, and an
-   * event whose transaction a wave withdrew is owed again.
+   * event whose transaction a wave withdrew is owed again. Once the
+   * maintainer is disposed, its handlers are cancelled, so an event whose
+   * turn comes afterward is not queued.
    */
   async #dispatch(
     collection: CollectionState,
@@ -430,6 +518,7 @@ export class IndexedCollectionMaintainer {
     const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
     this.#turns.set(space, settled);
     await before;
+    if (this.#disposed) return settle();
     const { promise: ended, resolve: end } = Promise.withResolvers<void>();
     this.#runtime.scheduler.queueEvent(
       collection.stream,
@@ -471,8 +560,9 @@ export class IndexedCollectionMaintainer {
       if (again) void this.#dispatch(collection, event);
       return;
     }
+    const owed = again ? collection.pending : collection.held;
     for (const rows of event.members) {
-      for (const doc of rows.deps) collection.pending.add(doc);
+      for (const doc of rows.deps) owed.add(doc);
     }
     if (again) this.#schedule(collection);
   }
@@ -482,12 +572,17 @@ export class IndexedCollectionMaintainer {
     collection: CollectionState,
     members: readonly MemberRows[],
   ): Promise<void> {
-    await Promise.all(members.map((rows) => this.#memberCell(rows).sync()));
-    for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
-      if (this.#disposed) return;
-      await this.#dispatch(collection, {
-        members: members.slice(start, start + MEMBERS_PER_EVENT),
-      });
+    const cells = members.map((rows) => this.#memberCell(rows));
+    const release = this.#hold(cells);
+    try {
+      await Promise.all(cells.map((cell) => cell.sync()));
+      for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
+        await this.#dispatch(collection, {
+          members: members.slice(start, start + MEMBERS_PER_EVENT),
+        });
+      }
+    } finally {
+      release();
     }
   }
 
@@ -504,23 +599,28 @@ export class IndexedCollectionMaintainer {
       collection.handle.space,
     );
     if (opened === undefined || provider.sqliteQuery === undefined) return;
-    const declaration = JSON.stringify(opened.descriptor);
-    const recorded = await provider.sqliteQuery(
-      opened.db,
-      `SELECT value FROM ${COLLECTION_META_TABLE} WHERE key = 'declaration'`,
-    );
-    const [row] = recorded.rows as { value?: unknown }[];
-    if (row?.value === declaration) collection.declaration = declaration;
-    if (this.#disposed || row?.value === declaration) return;
-    await this.#dispatch(collection, { record: "migrating", declaration });
-    const { rows } = await provider.sqliteQuery(
-      opened.db,
-      memberRowsSql(opened.descriptor, allMembersSql(opened.descriptor)),
-    );
-    await this.#reread(collection, groupMemberRows(opened.descriptor, rows));
-    if (this.#disposed) return;
-    await this.#dispatch(collection, { record: "declaration", declaration });
-    collection.declaration = declaration;
+    // A declaration's record is written through the handle as well.
+    const release = this.#hold([opened.handle]);
+    try {
+      const declaration = JSON.stringify(opened.descriptor);
+      const recorded = await provider.sqliteQuery(
+        opened.db,
+        `SELECT value FROM ${COLLECTION_META_TABLE} WHERE key = 'declaration'`,
+      );
+      const [row] = recorded.rows as { value?: unknown }[];
+      if (row?.value === declaration) collection.declaration = declaration;
+      if (this.#disposed || row?.value === declaration) return;
+      await this.#dispatch(collection, { record: "migrating", declaration });
+      const { rows } = await provider.sqliteQuery(
+        opened.db,
+        memberRowsSql(opened.descriptor, allMembersSql(opened.descriptor)),
+      );
+      await this.#reread(collection, groupMemberRows(opened.descriptor, rows));
+      await this.#dispatch(collection, { record: "declaration", declaration });
+      collection.declaration = declaration;
+    } finally {
+      release();
+    }
   }
 
   /** Returns the member cell `rows` is stored under. */
@@ -528,11 +628,11 @@ export class IndexedCollectionMaintainer {
     rows: MemberRows,
     tx?: IExtendedStorageTransaction,
   ): Cell<unknown> {
-    const sigil = parseCfLinkToSigil(rows.member);
-    if (sigil === null) {
-      throw new TypeError("an indexed collection row names no member");
-    }
-    return this.#runtime.getCellFromLink(sigil, undefined, tx);
+    return this.#runtime.getCellFromLink(
+      parseCfLinkToSigil(rows.member),
+      undefined,
+      tx,
+    );
   }
 
   #schedule(collection: CollectionState): void {
@@ -551,12 +651,28 @@ export class IndexedCollectionMaintainer {
       return false;
     }).then((drained) => {
       collection.draining = undefined;
-      if (drained !== false && !this.#disposed) this.#schedule(collection);
+      if (drained === false || this.#disposed) return;
+      this.#schedule(collection);
+      this.#noteDrained(collection);
     });
     collection.draining = draining;
     // `runtime.settled()` waits for tracked work, which neither `idle()` nor
     // `synced()` covers.
     this.#runtime.trackAsyncWork(draining);
+  }
+
+  /**
+   * Tells the observers of `subscribeDrained()` that `collection` has
+   * nothing left to re-read, unless a drain of it is under way or owed.
+   */
+  #noteDrained(collection: CollectionState): void {
+    if (
+      this.#disposed || collection.draining !== undefined ||
+      collection.pending.size > 0 || collection.added.size > 0
+    ) {
+      return;
+    }
+    for (const observer of [...this.#drainedObservers]) observer();
   }
 
   /**
@@ -585,17 +701,23 @@ export class IndexedCollectionMaintainer {
         collection.handle.space,
       );
       if (opened === undefined || provider.sqliteQuery === undefined) return;
-      const { rows } = await provider.sqliteQuery(
-        opened.db,
-        memberRowsSql(opened.descriptor, AFFECTED_MEMBERS_SQL),
-        { docs: JSON.stringify(docs) },
-      );
-      const members = groupMemberRows(opened.descriptor, rows);
-      const found = new Set(members.map(memberId));
-      for (const rows of added) {
-        if (!found.has(memberId(rows))) members.push(rows);
+      // Each transaction reads the declaration off the handle.
+      const release = this.#hold([opened.handle]);
+      try {
+        const { rows } = await provider.sqliteQuery(
+          opened.db,
+          memberRowsSql(opened.descriptor, AFFECTED_MEMBERS_SQL),
+          { docs: JSON.stringify(docs) },
+        );
+        const members = groupMemberRows(opened.descriptor, rows);
+        const found = new Set(members.map(memberId));
+        for (const rows of added) {
+          if (!found.has(memberId(rows))) members.push(rows);
+        }
+        await this.#reread(collection, members);
+      } finally {
+        release();
       }
-      await this.#reread(collection, members);
     } catch (error) {
       owe();
       throw error;

@@ -1,8 +1,9 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertStringIncludes } from "@std/assert";
 import {
   commandDraftError,
   type CommandDraftFields,
   commandPayload,
+  formatJson,
   linkedCellJson,
   materializeRootCell,
   providerSessionRetrieval,
@@ -202,4 +203,26 @@ test("linked cell JSON keeps links explicit without following them", () => {
     },
   );
   assertEquals(materializeRootCell("plain"), "plain");
+});
+
+test("formatJson indents JSON and names a value that has none", () => {
+  assertEquals(
+    formatJson({ id: "command-1", path: ["a"] }),
+    '{\n  "id": "command-1",\n  "path": [\n    "a"\n  ]\n}',
+  );
+  assertEquals(formatJson(null), "null");
+  assertEquals(formatJson(undefined), "undefined");
+});
+
+test("formatJson describes a value JSON cannot represent", () => {
+  const cyclic: Record<string, unknown> = { id: "cyclic" };
+  cyclic.self = cyclic;
+  const described = formatJson(cyclic);
+  assertStringIncludes(described, "Could not serialize value: TypeError");
+  assertStringIncludes(described, "circular");
+
+  assertStringIncludes(
+    formatJson({ count: 1n }),
+    "Could not serialize value: TypeError",
+  );
 });

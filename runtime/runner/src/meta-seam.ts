@@ -70,7 +70,8 @@ export const META_FIELDS = Object.freeze(
     "creator", // the DID of the principal the piece was created for, written
     // once, by the setup that brings the piece into being or by the first
     // source transition of a piece from before the record, and admitted by no
-    // other write (`cfc/prepare.ts`); a child names its parent's creator
+    // other write (`cfc/prepare.ts`, and the memory store's
+    // `cfc-creator-record.ts`); a child names its parent's creator
     "internal",
     "instanceChildren", // [{name, child: {space, id, scope}}] a named instance runs
     "instanceName", // the named instance whose child this result cell is

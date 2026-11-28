@@ -23,7 +23,7 @@ test("scoped group chat pattern schema generates scoped input cells", async () =
       "--allow-run",
       join(ROOT, "runtime/cli/mod.ts"),
       "check",
-      "patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx",
+      "patterns/examples/scoped-group-chat/writable-inputs/main.tsx",
       "--pattern-json",
       "--no-check",
     ],

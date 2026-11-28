@@ -1317,6 +1317,16 @@ export class CfHarnessEngine {
     return structuredClone(this.#runState);
   }
 
+  /** `CfHarnessEngine.#isHostPathWithinWorkspace`, for a test to ask directly. */
+  get accessForTestingOnly(): {
+    isHostPathWithinWorkspace(path: string): Promise<boolean>;
+  } {
+    return {
+      isHostPathWithinWorkspace: (path) =>
+        this.#isHostPathWithinWorkspace(path),
+    };
+  }
+
   /**
    * Whether the run can build a fabric session for `run_pattern` — either
    * an injected factory or `fabricSession` connection config. The prompt
@@ -1814,12 +1824,22 @@ export class CfHarnessEngine {
 
   async recordCfcModelContextObservations(
     observations: readonly HarnessCfcModelContextObservationInput[],
+    frames?: HarnessRunState["observedImageFrames"],
   ): Promise<HarnessRunState> {
     this.#runState = appendHarnessCfcModelContextObservations(
       this.#runState,
       observations,
       this.#now(),
     );
+    if (frames !== undefined) {
+      this.#runState = {
+        ...this.#runState,
+        observedImageFrames: {
+          ...this.#runState.observedImageFrames,
+          ...frames,
+        },
+      };
+    }
     await this.persistRunState();
     return this.getRunState();
   }

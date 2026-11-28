@@ -26,6 +26,14 @@
  * - Items can be removed using equals() to find them
  * - No manual ID generation is needed for any of this to work
  * - The pattern uses object references (cells) instead of string IDs
+ *
+ * The runtime does otherwise. Selecting writes a copy of the item, as
+ * test-cell-equals-diagnostic.test.tsx shows, and equals() compares
+ * identity, so it never matches the copy to the item in the list: no row is
+ * highlighted, clicking the selected row selects it again rather than
+ * deselecting it, and Remove Selected removes nothing.
+ * test-cell-equals.test.tsx asserts that behavior of the runtime, which this
+ * pattern does not intend.
  */
 import {
   computed,
@@ -35,6 +43,7 @@ import {
   NAME,
   pattern,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 
@@ -48,7 +57,12 @@ interface TestCellEqualsInput {
   selectedItem: Writable<Item | null>;
 }
 
-export interface TestCellEqualsOutput extends TestCellEqualsInput {}
+export interface TestCellEqualsOutput {
+  [NAME]: string;
+  [UI]: VNode;
+  items: Item[];
+  selectedItem: Item | null;
+}
 
 // Handler to add a new item at the END of the list
 // (Adding at end keeps indices stable for existing items)

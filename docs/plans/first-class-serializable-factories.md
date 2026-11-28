@@ -889,7 +889,7 @@ For every caller, replace
 input contains only the caller-supplied fields and whose closure invokes the
 original pattern with `entries`.
 
-- [ ] Migrate `patterns/examples/cfc-agent-prompt-injection-demo/main.tsx`.
+- [ ] Migrate `patterns/examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx`.
 - [ ] Migrate `patterns/apps/deep-research/main.tsx`.
 - [ ] Migrate `patterns/system/notes/note.tsx`.
 - [ ] Migrate `patterns/apps/shopping-list/main.tsx`.

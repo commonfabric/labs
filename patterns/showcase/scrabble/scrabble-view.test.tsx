@@ -4,7 +4,7 @@
  * from a fixed bag, so each step names the tile it places by id.
  */
 import { assert, NAME, pattern, TESTS, UI, Writable } from "commonfabric";
-import Scrabble, { type Letter } from "./scrabble.tsx";
+import Scrabble, { type Letter } from "./main.tsx";
 import {
   findElement,
   findElementByText,

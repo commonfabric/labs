@@ -20,6 +20,7 @@ import type {
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
   MemorySpace,
+  UnproducedScopedInstance,
 } from "../storage/interface.ts";
 import {
   endLocalReadValidationStretch,
@@ -526,23 +527,19 @@ export type UnproducedRead = {
 };
 
 /**
- * The read `unproduced` names, as a transaction records it
- * (`unproducedScopedInstance`: `<space>/<scope>/<id>`), made by the run at
+ * The read of `unproduced` (`unproducedScopedInstance`) made by the run at
  * `instance`. `undefined` where the scope is none the run's identity names
  * an instance of.
  */
 function unproducedReadOf(
-  unproduced: string,
+  { space, id, scope }: UnproducedScopedInstance,
   instance: FanOutInstance,
 ): UnproducedRead | undefined {
-  // Neither a space DID nor a scope holds a slash.
-  const [space, scope, ...rest] = unproduced.split("/");
-  if (scope !== "user" && scope !== "session") return undefined;
   if (!canResolveScopeKey(scope, instance.identity)) return undefined;
   return {
     slice: instance.key,
-    space: space as MemorySpace,
-    id: rest.join("/"),
+    space,
+    id,
     scopeKey: resolveScopeKey(scope, instance.identity),
   };
 }
@@ -1430,7 +1427,8 @@ function finalizeReactiveActionCommit(
     } else if (unproduced !== undefined) {
       args.tx.abort(
         new Error(
-          `served derivation read a scoped instance not yet produced: ${unproduced}`,
+          "served derivation read a scoped instance not yet produced: " +
+            `${unproduced.space}/${unproduced.scope}/${unproduced.id}`,
         ),
       );
     }
@@ -1683,21 +1681,17 @@ function finalizeReactiveActionCommit(
     owner.pendingWaveRun = token;
     const outcome = await settlement;
     if (owner.pendingWaveRun !== token) return;
-    const canRunAgain = () => {
-      if (
-        node.registrationToken !== registrationToken ||
-        (!state.nodes.isEffect(args.action) &&
-          !state.nodes.isComputation(args.action))
-      ) return false;
-      const record = state.nodes.get(args.action);
-      return fanOutRun === undefined
-        ? record === node
-        : record?.fanOut === fanOutRun.state &&
-          fanOutRun.state.instances.get(
-              keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
-                fanOutRun.instance.key,
-            ) === instanceRecord;
-    };
+    // Unsubscribing an action deletes its node's `pendingWaveRun` and fan-out
+    // state, so a node that still holds `token` is registered as it was when
+    // it ran. A fanned-out run can run again only while its node keeps the
+    // fan-out state and instance it ran at.
+    const canRunAgain = () =>
+      fanOutRun === undefined ||
+      (node.fanOut === fanOutRun.state &&
+        fanOutRun.state.instances.get(
+            keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+              fanOutRun.instance.key,
+          ) === instanceRecord);
     const superseded = outcome.error?.supersededOutputs ??
       outcome.ok?.supersededOutputs;
     let owed: boolean | Promise<boolean> =
@@ -1712,10 +1706,9 @@ function finalizeReactiveActionCommit(
       if (owner.pendingWaveRun !== token) return;
     }
     delete owner.pendingWaveRun;
-    const record = state.nodes.get(args.action);
-    if (!owed || record === undefined || !canRunAgain()) return;
+    if (!owed || !canRunAgain()) return;
     for (const cause of args.invalidCauses ?? []) {
-      addInvalidCause(record, cause);
+      addInvalidCause(node, cause);
     }
     restoreInstanceTriggers();
     commitState.markInvalid(args.action, { retry: true });

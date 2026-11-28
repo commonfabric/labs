@@ -1,6 +1,7 @@
 import { expect } from "@std/expect";
 import { valueEqual } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
@@ -16,8 +17,9 @@ import {
   describe,
   it,
 } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
-import { stub } from "@std/testing/mock";
+import { spy, stub } from "@std/testing/mock";
 import { ExecutorHost } from "../../src/executor/host.ts";
 import { DEFAULT_CURRENCY_EPOCH } from "../../src/executor/space-server.ts";
 import { readWatermarkSeq } from "../../src/executor/watermark-engine.ts";
@@ -228,6 +230,10 @@ type Demanded = {
 
 /** The epoch the hosts of these tests record under. */
 const EPOCH = "test-epoch";
+
+/** How many warnings the serving loop has logged under `key`. */
+const warnings = (key: string): number =>
+  getLogger("space-server").countsByKey[key]?.warn ?? 0;
 
 describe("SpaceServer", () => {
   let server: MemoryV2Server.Server;
@@ -1666,6 +1672,108 @@ describe("SpaceServer", () => {
           expect(serves(piece.root)).toBe(false);
           expect(await recordOf(piece.root)).toEqual({ mark: 0, epoch: EPOCH });
         });
+      });
+    });
+
+    describe("park()", () => {
+      // Each case holds one request the loop makes of the currency index
+      // until the tenure that made it has parked. The parked tenure acts on
+      // nothing the request returns, and the next tenure serves the space.
+
+      /**
+       * A gate for one request: `pass()` holds the first call made through
+       * it until `release()`, and `entered` resolves once that call is made.
+       */
+      const gate = () => {
+        const entered = Promise.withResolvers<void>();
+        const released = Promise.withResolvers<void>();
+        let held = false;
+        return {
+          entered: entered.promise,
+          release: () => released.resolve(),
+          pass: async () => {
+            if (held) return;
+            held = true;
+            entered.resolve();
+            await released.promise;
+          },
+        };
+      };
+
+      /** Parks the space's tenure while `release` lets its request go. */
+      const parkAcross = async (release: () => void) => {
+        const loop = host!.spaceServer(space)!;
+        const parking = loop.park("test-park");
+        expect(loop.active).toBe(false);
+        release();
+        await parking;
+        await loop.whenParked;
+      };
+
+      it("ends the demand pass on a judgment that returns after the tenure parked, under `skip`", async () => {
+        host = newHost("skip");
+        const piece = await setUpTripler();
+        await serveAndPark(piece);
+        const judging = gate();
+        const judge = server.judgeCurrencyRoots.bind(server);
+        using _judge = stub(
+          server,
+          "judgeCurrencyRoots",
+          async (...args: Parameters<typeof server.judgeCurrencyRoots>) => {
+            await judging.pass();
+            return await judge(...args);
+          },
+        );
+        const failures = warnings("structure-load-pass-failed");
+
+        await touchSpace();
+        await judging.entered;
+        await parkAcross(judging.release);
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore === 2,
+        );
+        await settled();
+
+        expect(warnings("structure-load-pass-failed")).toBe(failures);
+        expect(serves(piece.root)).toBe(false);
+        await outIs(6);
+      });
+
+      it("ends the wave on an advance of the marks that returns after the tenure parked, under `skip`", async () => {
+        host = newHost("skip");
+        const piece = await setUpTripler();
+        await serveAndPark(piece);
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore === 1,
+        );
+        await settled();
+        const advancing = gate();
+        const advance = server.advanceCurrency.bind(server);
+        using _advance = stub(
+          server,
+          "advanceCurrency",
+          async (...args: Parameters<typeof server.advanceCurrency>) => {
+            await advancing.pass();
+            return await advance(...args);
+          },
+        );
+
+        await setValue(5);
+        await advancing.entered;
+        const parked = servingRuntime!;
+        using settles = spy(parked, "idle");
+        await parkAcross(advancing.release);
+        await clock.settle();
+
+        // The parked tenure's wave settles nothing on its runtime.
+        expect(settles.calls.length).toBe(0);
+        await touchSpace();
+        await awaitEach(cycles, () => serves(piece.root));
+        await outIs(15);
       });
     });
   });

@@ -61,6 +61,9 @@ const IFC_KEYS = [
   "exactCopyOf",
   "projection",
   "collection",
+  // The module policy a creator-releasable clause of the value is stored
+  // beside (`Reclassified`).
+  "reclassify",
   // Reserved legacy key: minted by nothing (the list builtins' per-element
   // transactions make pointwise precision structural) and consumed by
   // nothing, but already-persisted link schemas embed it, so merging
@@ -367,26 +370,22 @@ const mergeSetLikeIfcArray = (
           writePolicyRelease,
           storedSide === "existing",
         );
-    case "exactCopyOf":
-    case "projection":
-    case "collection":
-    case "ownerPrincipal":
-      if (!deepEqual(existing, candidate)) {
-        throw new CfcEnvelopeStabilityError(
-          `${key} must remain stable at ${path || "/"}`,
-        );
-      }
-      return existing;
-    case "flowPrecisionClaim":
-    case "uiContract":
-      if (!deepEqual(existing, candidate)) {
-        throw new CfcEnvelopeStabilityError(
-          `${key} must remain stable at ${path || "/"}`,
-        );
-      }
-      return existing;
     default:
-      throw new Error(`No merge rule for the ifc key ${key satisfies never}`);
+      // The keys left are those both sides must declare alike.
+      key satisfies
+        | "exactCopyOf"
+        | "projection"
+        | "collection"
+        | "reclassify"
+        | "ownerPrincipal"
+        | "flowPrecisionClaim"
+        | "uiContract";
+      if (!deepEqual(existing, candidate)) {
+        throw new CfcEnvelopeStabilityError(
+          `${key} must remain stable at ${path || "/"}`,
+        );
+      }
+      return existing;
   }
 };
 
@@ -528,19 +527,18 @@ export const writePolicyAlternativeAdmissible = (
   stored: readonly unknown[],
   release: WritePolicyRelease,
 ): boolean => {
-  const module = alternativeModuleIdentity(added);
-  if (module === undefined || !release.installs(module)) return false;
+  const appended = stampedAlternative(added);
+  if (appended === undefined || !release.installs(appended.module)) {
+    return false;
+  }
   return stored.some((base) => {
-    const baseModule = alternativeModuleIdentity(base);
-    return baseModule !== undefined &&
-      isObjectNotArray(base) && isObjectNotArray(added) &&
-      sameKeys(base, added) &&
-      deepEqual(base.uiContract, added.uiContract) &&
-      writerClaimsDifferOnlyInSymbol(
-        base.writeAuthorizedBy,
-        added.writeAuthorizedBy,
-      ) &&
-      (baseModule === module || release.succeeds(module, baseModule));
+    const kept = stampedAlternative(base);
+    return kept !== undefined &&
+      sameKeys(kept.alternative, appended.alternative) &&
+      deepEqual(kept.alternative.uiContract, appended.alternative.uiContract) &&
+      writerClaimsDifferOnlyInSymbol(kept.writer, appended.writer) &&
+      (kept.module === appended.module ||
+        release.succeeds(appended.module, kept.module));
   });
 };
 
@@ -550,12 +548,9 @@ export const writePolicyAlternativeAdmissible = (
  * `base` is, its stamp and file spelling apart.
  */
 const writerClaimsDifferOnlyInSymbol = (
-  base: unknown,
-  added: unknown,
+  base: WriterIdentityClaim,
+  added: WriterIdentityClaim,
 ): boolean => {
-  if (!isWriterIdentityClaim(base) || !isWriterIdentityClaim(added)) {
-    return false;
-  }
   const baseBinding = base.__ctWriterIdentityOf;
   const addedBinding = added.__ctWriterIdentityOf;
   const { path } = addedBinding;
@@ -602,17 +597,26 @@ export const writerClaimStamp = (
 };
 
 /**
- * Helper for `writePolicyAlternativeAdmissible()`: the module identity an
- * alternative's writer claim is stamped with, or `undefined` for an
- * alternative whose writer carries no such stamp.
+ * Helper for `writePolicyAlternativeAdmissible()`: an alternative, its writer
+ * claim, and the module identity that claim is stamped with, or `undefined`
+ * for an alternative whose writer carries no such stamp.
  */
-const alternativeModuleIdentity = (
+const stampedAlternative = (
   alternative: unknown,
-): string | undefined => {
-  const moduleIdentity = isObjectNotArray(alternative)
-    ? writerClaimStamp(alternative.writeAuthorizedBy)?.moduleIdentity
+):
+  | {
+    alternative: Record<string, unknown>;
+    writer: WriterIdentityClaim;
+    module: string;
+  }
+  | undefined => {
+  if (!isObjectNotArray(alternative)) return undefined;
+  const writer = alternative.writeAuthorizedBy;
+  if (!isWriterIdentityClaim(writer)) return undefined;
+  const module = writer.__ctWriterIdentityOf.moduleIdentity;
+  return typeof module === "string" && module !== ""
+    ? { alternative, writer, module }
     : undefined;
-  return moduleIdentity === "" ? undefined : moduleIdentity;
 };
 
 /** Whether two objects hold the same set of keys. */

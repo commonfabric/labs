@@ -404,7 +404,7 @@ test("the flake tile counts what selection held back, and points at them", async
   // A source with no history adds no chart or test names to the tile.
   assertEquals(view.extra, undefined);
   assertEquals(view.href, "/test-selection#flaky");
-  assertEquals(view.hint, "flakes ↗");
+  assertEquals(view.hint, "flakes ↗ · as JSON at /test-selection/flaky.json");
 });
 
 test("the selection tile says what share of the corpus's tests and test time would run", async () => {

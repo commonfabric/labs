@@ -419,6 +419,15 @@ describe("iframe-ring-loops/guest", () => {
     canvas().dispatchEvent(new MouseEvent("click", point));
   }
 
+  /** Rings the guest refuses to draw. */
+  const UNDRAWABLE = {
+    setup: { ...DEFAULT_SETUP, rings: [] },
+    viewerName: "Ada",
+  };
+
+  /** The report shown for {@link UNDRAWABLE} rings. */
+  const UNDRAWABLE_REPORT = "The setup needs 1 to 6 rings and has 0.";
+
   /** Builds the page's resources and doubles, with stored notes by default. */
   function resources(options: {
     setup?: unknown;
@@ -765,6 +774,41 @@ describe("iframe-ring-loops/guest", () => {
       expect(byTestId("ring-status").textContent).toBe("1 note on the rings");
     });
 
+    it("keeps the report of rings that cannot be drawn, taking no edit until they are fixed", async () => {
+      const jam = new MemoryPresenceRoom();
+      jam.upsert(peer("p1", "Grace"));
+      const { page, input, state } = await open({ jam });
+
+      input.value = UNDRAWABLE;
+      await page.until(() => alertText().includes(UNDRAWABLE_REPORT));
+      // The controls that empty the alert, as the document now holds them.
+      const disabled = () =>
+        [
+          button("play-toggle"),
+          button("follow"),
+          button("clear-notes"),
+          slider("tempo"),
+          slider("volume"),
+          ...document.querySelectorAll<HTMLButtonElement>(".swatch"),
+        ].map((control) => control.disabled);
+      expect(disabled()).toEqual(disabled().map(() => true));
+      expect(document.querySelectorAll(".ring-row").length).toBe(0);
+
+      clickAt(cellPoint(1, 3, 2));
+      await page.settled();
+      expect(state.writes).toEqual([]);
+      expect(alertText()).toContain(UNDRAWABLE_REPORT);
+
+      input.value = { setup: DEFAULT_SETUP, viewerName: "Ada" };
+      await page.until(() => alertText() === "");
+      expect(disabled()).toEqual(disabled().map(() => false));
+      clickAt(cellPoint(1, 3, 2));
+      await page.settled();
+      expect(state.writes.map((write) => write.path)).toEqual([
+        ["notes", "bells:3:2"],
+      ]);
+    });
+
     it("toggles nothing for a click in the hub", async () => {
       const { page, state } = await open();
 
@@ -914,6 +958,27 @@ describe("iframe-ring-loops/guest", () => {
 
       expect(engine.contexts).toBe(1);
       expect(button("play-toggle").textContent).toBe("Stop");
+    });
+
+    it("starts no clock when the rings turn undrawable while audio starts", async () => {
+      const { page, engine, input, jam } = await open();
+      engine.hold();
+
+      button("play-toggle").click();
+      input.value = UNDRAWABLE;
+      await page.until(() => alertText().includes(UNDRAWABLE_REPORT));
+      engine.release();
+      await engine.resuming;
+      await page.settled();
+
+      expect(engine.state).toBe("running");
+      expect(button("play-toggle").textContent).toBe("Play");
+      expect(jam.facets.has("hand")).toBe(false);
+
+      input.value = { setup: DEFAULT_SETUP, viewerName: "Ada" };
+      await page.until(() => alertText() === "");
+      await play(page);
+      await page.until(() => jam.facets.has("hand"));
     });
 
     it("leaves the notes of a ring this user muted unplayed", async () => {
@@ -1253,6 +1318,26 @@ describe("iframe-ring-loops/guest", () => {
       expect(people()[0]).toBe("Ada (you)jammed snare");
     });
 
+    it("sounds no pad pressed before audio started once the rings turn undrawable", async () => {
+      const { page, engine, input } = await open();
+      engine.hold();
+
+      pointerDown("pad-0-0");
+      input.value = UNDRAWABLE;
+      await page.until(() => alertText().includes(UNDRAWABLE_REPORT));
+      engine.release();
+      await engine.resuming;
+      await page.settled();
+
+      expect(engine.state).toBe("running");
+      expect(engine.sounds()).toEqual([]);
+
+      input.value = { setup: DEFAULT_SETUP, viewerName: "Ada" };
+      await page.until(() => alertText() === "");
+      pointerDown("pad-0-0");
+      expect(soundsSince(engine, 0)).toEqual(["sine 150"]);
+    });
+
     it("shows why a pad could not start audio", async () => {
       const { page, engine } = await open();
       engine.resumeFailure = new Error("Audio refused.");
@@ -1415,6 +1500,33 @@ describe("iframe-ring-loops/guest", () => {
 
       expect(button("play-toggle").textContent).toBe("Play");
       expect(roomLine()).toBe("Nobody else is here right now.");
+    });
+
+    it("follows nobody when the rings turn undrawable while audio starts", async () => {
+      const jam = new MemoryPresenceRoom();
+      jam.upsert(peer("p1", "Grace", {
+        hand: { step: 0, at: Date.now(), bpm: 120 },
+      }));
+      const { page, engine, input } = await open({ jam });
+      engine.hold();
+
+      button("follow").click();
+      input.value = UNDRAWABLE;
+      await page.until(() => alertText().includes(UNDRAWABLE_REPORT));
+      engine.release();
+      await engine.resuming;
+      await page.settled();
+
+      expect(engine.state).toBe("running");
+      expect(roomLine()).toBe("1 other here.");
+      expect(button("play-toggle").textContent).toBe("Play");
+      expect(jam.facets.has("hand")).toBe(false);
+
+      input.value = { setup: DEFAULT_SETUP, viewerName: "Ada" };
+      await page.until(() => alertText() === "");
+      button("follow").click();
+      await page.until(() => roomLine() === "Playing in step with Grace.");
+      await page.until(() => jam.facets.has("hand"));
     });
 
     it("shows why following could not start audio", async () => {

@@ -191,7 +191,7 @@ drives has a body that runs in neither path, so it sits at zero on every run
 rather than moving between them. That is permanent debt rather than flap, and it
 costs one more action apiece to clear.
 
-`patterns/examples/cfc-spec-gallery/main.test.tsx` is the worked example. It
+`patterns/examples/cfc-spec-gallery/cfc-spec-gallery.test.tsx` is the worked example. It
 reads its view, states its name and the four inputs it reports back out, and
 drives every stream the gallery exposes, which takes the file from 385 of its
 522 measured lines to all of them. Before that the integration path was the only
@@ -851,11 +851,13 @@ A Deno process that a test starts inherits `DENO_COVERAGE_DIR` and writes a
 profile of its own. When that process loads a module from V8's code cache,
 which Deno keeps in its cache directory, V8 reports the module's top-level code
 as one range with a single count. Every line of that code then reads as
-covered, including a branch that never ran. `tasks/build-binaries.ts` ends with
-`if (import.meta.main) { await runBuildBinaries(Deno.args); }`. The test that
-runs the script expects that call to throw, so the closing brace is never
-reached. The brace counts as covered only when the script was loaded from the
-code cache.
+covered, including a branch that never ran. A script that ends with
+`if (import.meta.main) { await main(Deno.args); }`, run by a test that expects
+that call to throw, never reaches the closing brace, and the brace counts as
+covered only when the script was loaded from the code cache. Writing the guard
+on one line, as `tasks/build-binaries.ts` does with
+`if (import.meta.main) await runBuildBinaries(Deno.args);`, leaves no line that
+only a call that returns reaches.
 
 `deno run` writes a module into the code cache the first time it compiles it,
 so within one lane a process that runs a module after another process has run it
@@ -970,7 +972,7 @@ To see the per-group counts of a local run, score its profile directory:
 
 ```bash
 DENO_COVERAGE_DIR="$(pwd)/coverage-raw/local" deno task test
-deno run --allow-read --allow-write --allow-run --allow-env \
+deno run --allow-read --allow-run --allow-env \
   tasks/coverage-metrics.ts \
   --profile-dir="$(pwd)/coverage-raw/local" --root="$(pwd)"
 ```
@@ -1010,7 +1012,7 @@ looks like, and what a report read against the wrong root looks like.
 
 ```bash
 gsutil cp gs://commontools-build-artifacts/workspace-artifacts/labs-<commit-sha>.lcov .
-deno run --allow-read --allow-write --allow-run --allow-env \
+deno run --allow-read --allow-run --allow-env \
   tasks/coverage-metrics.ts \
   --lcov=labs-<commit-sha>.lcov --root="$(pwd)" \
   --by-file --under=runtime/memory
@@ -1054,10 +1056,13 @@ Three things read them:
   `tasks/test-selection/baselines.ts` is where that happens.
 - The dashboard's coverage debt tile
   (`dashboard/coverage-debt-history.ts`) takes the `workspace`
-  figure of one `main` run attempt a day, the newest of the day's attempts
-  that has one, was not measured on a cold compile cache, and passed, and
-  charts the run of them. The record store does not say whether an attempt
-  passed, so the tile asks GitHub.
+  figure of every `main` run attempt of a day that has one, was not
+  measured on a cold compile cache, passed, is its run's latest attempt,
+  and belongs to a run created no more than a day before that day, and
+  charts the mean of each day's figures. The record store
+  does not say whether an attempt passed, so the tile reads that from the
+  dashboard's shared lists of GitHub workflow runs, and asks GitHub for
+  the record of a run whose attempt is newer than those lists hold.
 - The report a `main` run posts on the pull request behind it
   (`tasks/post-main-report.ts`) reads the figures out of the newest coverage
   artifact of the run and of the run before it, and compares the two. A run

@@ -780,19 +780,7 @@ const FoodRecipe = pattern<FoodRecipeInput, FoodRecipeOutput>(
               <h1 style={styles.title}>{displayName}</h1>
               <cf-hstack gap="2" align="center">
                 <span style={styles.muted}>{totalLabel}</span>
-                <cf-button
-                  variant="secondary"
-                  onClick={() =>
-                    navigateTo(
-                      Viewer({
-                        recipeName: name,
-                        servings,
-                        ingredients,
-                        stepGroups,
-                        done: cookProgress,
-                      }),
-                    )}
-                >
+                <cf-button variant="secondary" onClick={cook}>
                   👨‍🍳 Cook
                 </cf-button>
               </cf-hstack>

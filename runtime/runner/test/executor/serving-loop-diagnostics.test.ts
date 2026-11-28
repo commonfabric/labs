@@ -7,7 +7,10 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 
-import { servingLoopDiagnostics } from "../../src/executor/serving-loop-diagnostics.ts";
+import {
+  compileWorkerLoopDiagnostics,
+  servingLoopDiagnostics,
+} from "../../src/executor/serving-loop-diagnostics.ts";
 import {
   COMPILE_WORKER_LOGGER_PREFIX,
   ModuleCompileWorker,
@@ -36,7 +39,7 @@ const PROGRAM: RuntimeProgram = {
 // statistics from the compile worker's.
 const REALM_LOGGER = "serving-loop-diagnostics-test";
 
-describe("servingLoopDiagnostics()", () => {
+describe("serving loop diagnostics", () => {
   let worker: ModuleCompileWorker;
   let storageManager: ReturnType<typeof StorageManager.emulate>;
   let runtime: Runtime;
@@ -58,7 +61,7 @@ describe("servingLoopDiagnostics()", () => {
     await storageManager.close();
   });
 
-  it("returns this realm's timing statistics and no compile worker's without one", () => {
+  it("servingLoopDiagnostics() returns this realm's timing statistics and no compile worker's without one", () => {
     const { timingStats, loggerCounts } = servingLoopDiagnostics();
 
     expect(timingStats[REALM_LOGGER]?.probe?.count).toBeGreaterThan(0);
@@ -69,7 +72,7 @@ describe("servingLoopDiagnostics()", () => {
     ).toBe(false);
   });
 
-  it("returns the compile worker's phase timings and log counts beside this realm's", async () => {
+  it("servingLoopDiagnostics() returns the compile worker's phase timings and log counts beside this realm's", async () => {
     await runtime.harness.compileToRecordGraph(PROGRAM);
 
     const { timingStats, loggerCounts } = servingLoopDiagnostics(worker);
@@ -87,5 +90,31 @@ describe("servingLoopDiagnostics()", () => {
         expect(loggerCounts[name]?.[key]).toEqual(counts);
       }
     }
+  });
+
+  it("compileWorkerLoopDiagnostics() returns the compile worker's diagnostics without this realm's", async () => {
+    await runtime.harness.compileToRecordGraph(PROGRAM);
+
+    const { timingStats, loggerCounts } = compileWorkerLoopDiagnostics(worker);
+
+    const workerDiagnostics = worker.diagnostics();
+    expect(timingStats).toEqual(workerDiagnostics.timingStats);
+    expect(timingStats[REALM_LOGGER]).toBeUndefined();
+    const { total, ...byLogger } = loggerCounts;
+    const workerCounts = Object.entries(workerDiagnostics.loggerCounts);
+    expect(workerCounts.length).toBeGreaterThan(0);
+    expect(Object.keys(byLogger).sort()).toEqual(
+      workerCounts.map(([name]) => name).sort(),
+    );
+    let expectedTotal = 0;
+    for (const [name, byKey] of workerCounts) {
+      const loggerTotal = Object.values(byKey).reduce(
+        (sum, counts) => sum + counts.total,
+        0,
+      );
+      expect(loggerCounts[name]).toEqual({ ...byKey, total: loggerTotal });
+      expectedTotal += loggerTotal;
+    }
+    expect(total).toBe(expectedTotal);
   });
 });

@@ -5,6 +5,46 @@ export interface CellLink {
   scope?: string;
 }
 
+interface LinkedCell {
+  getAsNormalizedFullLink(): {
+    id?: unknown;
+    space?: unknown;
+    path?: unknown;
+    scope?: unknown;
+  } | undefined;
+}
+
+function isLinkedCell(value: unknown): value is LinkedCell {
+  return typeof value === "object" && value !== null &&
+    "getAsNormalizedFullLink" in value &&
+    typeof value.getAsNormalizedFullLink === "function";
+}
+
+/**
+ * The full link of the Fabric cell `value`, with a path of its own.
+ *
+ * @throws If `value` is not a cell, or if its link lacks a string id, a string
+ *   space, or a path.
+ */
+export function readableCellLink(value: unknown): CellLink {
+  if (!isLinkedCell(value)) {
+    throw new Error("Raw data source does not expose a Fabric cell");
+  }
+  const link = value.getAsNormalizedFullLink();
+  if (
+    typeof link?.id !== "string" || typeof link.space !== "string" ||
+    !Array.isArray(link.path)
+  ) {
+    throw new Error("Raw data source has an incomplete Fabric cell link");
+  }
+  return {
+    id: link.id,
+    space: link.space,
+    path: [...link.path],
+    ...(typeof link.scope === "string" ? { scope: link.scope } : {}),
+  };
+}
+
 function shellQuote(value: string): string {
   return `'${value.replaceAll("'", "'\\''")}'`;
 }

@@ -81,7 +81,7 @@ export type CapabilityParamSummary = {
   readonly name: string;
   readonly capability: ReactiveCapability;
   readonly readPaths: readonly (readonly string[])[];
-  readonly fullShapePaths?: readonly (readonly string[])[];
+  readonly fullShapePaths: readonly (readonly string[])[];
   readonly writePaths: readonly (readonly string[])[];
   readonly opaquePaths?: readonly (readonly string[])[];
 

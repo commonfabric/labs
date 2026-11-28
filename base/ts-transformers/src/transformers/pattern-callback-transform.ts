@@ -45,13 +45,6 @@ function buildPlainCaptureAccessExpression(
   binding: DestructureBinding,
   factory: ts.NodeFactory,
 ): ts.Expression {
-  if (binding.directKeyExpression) {
-    return factory.createElementAccessExpression(
-      root,
-      cloneKeyExpression(binding.directKeyExpression, factory),
-    );
-  }
-
   let current = root;
   for (const segment of binding.path) {
     current = typeof segment === "string"

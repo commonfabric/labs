@@ -18,6 +18,8 @@ interface Write {
 /** What one run of the poster did and said. */
 interface Run {
   writes: Write[];
+  /** The `Authorization` header of each request, in the order made. */
+  authorizations: string[];
   logged: string[];
   errors: string[];
   warnings: string[];
@@ -37,6 +39,9 @@ interface RunOptions {
   /** `HEAD_SHA`, or `null` to leave it unset. */
   tested?: string | null;
 
+  /** The token the poster is given to write with. */
+  token?: string;
+
   /** Where the run records its writes, for a caller reading a run that throws. */
   writes?: Write[];
 }
@@ -49,6 +54,7 @@ async function run(
     listingStatus = 200,
     head = TESTED,
     tested = TESTED,
+    token = "token",
     writes = [],
   }: RunOptions = {},
 ): Promise<Run> {
@@ -58,6 +64,7 @@ async function run(
 
   const result: Run = {
     writes,
+    authorizations: [],
     logged: [],
     errors: [],
     warnings: [],
@@ -75,6 +82,9 @@ async function run(
   globalThis.fetch = (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     const method = init?.method ?? "GET";
+    result.authorizations.push(
+      new Headers(init?.headers).get("Authorization") ?? "",
+    );
     if (method !== "GET") {
       result.writes.push({
         method,
@@ -101,7 +111,7 @@ async function run(
   if (tested === null) Deno.env.delete("HEAD_SHA");
   else Deno.env.set("HEAD_SHA", tested);
   try {
-    await postCoverageComment();
+    await postCoverageComment(token);
   } finally {
     globalThis.fetch = originals.fetch;
     console.log = originals.log;
@@ -148,6 +158,26 @@ describe("postCoverageComment()", () => {
     await expect(
       run(JSON.stringify(regressed), { tested: null, writes }),
     ).rejects.toThrow("`HEAD_SHA` is required");
+    expect(writes).toEqual([]);
+  });
+
+  it("sends the token it is given with every request, reading and writing", async () => {
+    const posted = await run(JSON.stringify(regressed), { token: "given" });
+    const updated = await run(JSON.stringify(regressed), {
+      existing: [`${COVERAGE_SUGGESTION_MARKER}\nstale`],
+      token: "given",
+    });
+    expect(posted.writes.map((write) => write.method)).toEqual(["POST"]);
+    expect(updated.writes.map((write) => write.method)).toEqual(["PATCH"]);
+    expect(posted.authorizations).toEqual(Array(3).fill("Bearer given"));
+    expect(updated.authorizations).toEqual(Array(3).fill("Bearer given"));
+  });
+
+  it("throws, posting nothing, when it is given no token to write with", async () => {
+    const writes: Write[] = [];
+    await expect(
+      run(JSON.stringify(regressed), { token: "", writes }),
+    ).rejects.toThrow("`GITHUB_TOKEN` is required");
     expect(writes).toEqual([]);
   });
 
@@ -265,5 +295,59 @@ describe("postCoverageComment()", () => {
       const { writes } = await run(JSON.stringify(regressed));
       expect(writes).toHaveLength(1);
     });
+  });
+});
+
+describe("post-coverage-comment as a program", () => {
+  // The Pull Request Comments workflow reads the script's exit code, which
+  // only running it as a program states. It is started through
+  // `Deno.execPath()`, since a coverage profile one Deno version writes
+  // cannot be reported by another, and with `--frozen` so that the spawn
+  // resolves the checked-in dependency graph. Neither run reaches GitHub:
+  // one stops before reading anything, and the other has no payload.
+
+  /** Runs the script with `env` added to its environment. */
+  async function program(env: Record<string, string>) {
+    const dir = await Deno.makeTempDir({ prefix: "coverage-comment-program-" });
+    try {
+      const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--frozen",
+          "--allow-net",
+          "--allow-env",
+          "--allow-read",
+          "tasks/post-coverage-comment.ts",
+        ],
+        cwd: new URL("../", import.meta.url),
+        env: {
+          HEAD_SHA: TESTED,
+          COVERAGE_COMMENT_FILE: path.join(dir, "coverage-comment.json"),
+          ...env,
+        },
+      }).output();
+      const decoder = new TextDecoder();
+      return {
+        code,
+        stdout: decoder.decode(stdout),
+        stderr: decoder.decode(stderr),
+      };
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  }
+
+  it("fails a run given no token, naming the variable", async () => {
+    const { code, stdout, stderr } = await program({ GITHUB_TOKEN: "" });
+    expect(code).toBe(1);
+    expect(stdout).toBe("");
+    expect(stderr).toContain("`GITHUB_TOKEN` is required.");
+  });
+
+  it("succeeds for a run given a token and no payload to post", async () => {
+    const { code, stdout, stderr } = await program({ GITHUB_TOKEN: "token" });
+    expect(code).toBe(0);
+    expect(stdout).toMatch(/^No .*coverage-comment\.json present/);
+    expect(stderr).not.toContain("GITHUB_TOKEN");
   });
 });

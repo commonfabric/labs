@@ -29,6 +29,7 @@ import { writeChokepointMark } from "../src/storage/write-chokepoint.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { isCfcEnforcementRejection } from "../src/storage/rejection.ts";
+import { isVerdictReason } from "../src/cfc/verdict-reason.ts";
 
 const signer = await Identity.fromPassphrase("cfc PolicyOf label test");
 const space = signer.did();
@@ -182,7 +183,11 @@ describe("PolicyOf label-time binding", () => {
     deletion.abort();
   });
 
-  it("rejects a zero-write prepared decision after manifest tampering", async () => {
+  // A consultation adds no precondition (spec §4.4.1, commonfabric/specs#109,
+  // pending): a present manifest is verified against its digest when read, and
+  // a missing one fails the resolution closed. A change after prepare leaves
+  // the decision no less safe, and a fresh consultation sees it.
+  it("commits a zero-write prepared decision after manifest tampering", async () => {
     runtime.registerCfcPolicyManifests(space, [artifact]);
     const installTx = runtime.edit();
     runtime.getCell(space, "tamper-policy", schema, installTx).set("secret");
@@ -216,10 +221,18 @@ describe("PolicyOf label-time binding", () => {
     expect(tamperResult.ok).toBeDefined();
     expect((await tamper.commit().settled).ok).toBeDefined();
 
-    expect((await decision.commit().settled).error).toBeDefined();
+    expect((await decision.commit().settled).error).toBeUndefined();
+    const fresh = runtime.edit();
+    const freshResolver = createTxCfcModulePolicyResolver(
+      fresh,
+      (candidate) => fresh.resolveCfcPolicyManifest(candidate, space),
+    );
+    expect(freshResolver(reference), "a forged body fails closed")
+      .toBeUndefined();
+    fresh.abort();
   });
 
-  it("rejects a zero-write prepared miss when the manifest appears", async () => {
+  it("commits a zero-write prepared miss when the manifest appears", async () => {
     const missingReference = {
       type: CFC_ATOM_TYPE.Policy,
       policyRefKind: "module",
@@ -247,7 +260,7 @@ describe("PolicyOf label-time binding", () => {
     expect(writeResult.ok).toBeDefined();
     expect((await writer.commit().settled).ok).toBeDefined();
 
-    expect((await decision.commit().settled).error).toBeDefined();
+    expect((await decision.commit().settled).error).toBeUndefined();
   });
 
   it("rejects a raw module-policy object in authored schema metadata", async () => {
@@ -773,7 +786,135 @@ describe("PolicyOf label-time binding", () => {
     }
   });
 
-  it("rejects a prepared sink when any consumed manifest origin changes", async () => {
+  it("refuses a sink whose consumed manifest does not resolve, though its clause fits the ceiling", async () => {
+    runtime.registerCfcPolicyManifests(space, [artifact]);
+    const installTx = runtime.edit();
+    runtime.getCell(space, "sink-policy-source", schema, installTx).set(
+      "secret",
+    );
+    installTx.prepareCfc();
+    expect((await installTx.commit().settled).ok).toBeDefined();
+
+    const destinationSchema = internSchema(
+      {
+        type: "object",
+        properties: { secret: { type: "string" } },
+        required: ["secret"],
+      } satisfies JSONSchema,
+      true,
+    );
+    const target = runtime.getCell(
+      destinationSpace,
+      "sink-missing-manifest-fits",
+      destinationSchema.schema,
+    );
+    const targetLink = target.getAsNormalizedFullLink();
+    const reference = {
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      moduleIdentity: artifact.manifest.moduleIdentity,
+      symbol: artifact.manifest.symbol,
+      policyDigest: artifact.policyDigest,
+      subject: space,
+    } as const;
+    // The stored envelope is written beneath any extended transaction, so
+    // the write carries the mark the write chokepoint puts on what it
+    // forwards.
+    const seed = storageManager.edit();
+    expect(
+      seed.write({
+        space: destinationSpace,
+        id: targetLink.id,
+        scope: targetLink.scope,
+        type: "application/json",
+        path: [],
+      }, {
+        value: { secret: "rosebud" },
+        cfc: {
+          version: 1,
+          schemaHash: destinationSchema.taggedHashString,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: ["secret"],
+              label: {
+                confidentiality: [reference],
+                integrity: [{ type: "IntegrityEvidence" }],
+              },
+            }],
+          },
+        },
+      }, writeChokepointMark()).ok,
+    ).toBeDefined();
+    expect(
+      seed.write({
+        space: destinationSpace,
+        id: `cid:${destinationSchema.taggedHashString}`,
+        type: "application/json",
+        path: [],
+      }, { value: destinationSchema.schema }).ok,
+    ).toBeDefined();
+    expect((await seed.commit().settled).ok).toBeDefined();
+
+    const sinkRuntime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+      // The sink gate resolves module policy manifests against the
+      // destination space in this mode, which is the lookup the rejection
+      // below turns on.
+      cfcPolicyEvaluation: "enforce",
+      // The ceiling admits the clause unrewritten, so only the missing
+      // manifest refuses: its rules could have dropped an alternative
+      // (spec §5.3.2; §4.4.1, commonfabric/specs#109, pending).
+      cfcSinkMaxConfidentiality: { fetchJson: [reference] },
+    });
+    try {
+      const tx = sinkRuntime.edit();
+      // The same policy artifact labels consumed values in both spaces. The
+      // valid source-space copy must not mask the destination's missing local
+      // artifact.
+      expect(
+        sinkRuntime.getCell(
+          space,
+          "sink-policy-source",
+          schema,
+          tx,
+        ).get(),
+      ).toBe("secret");
+      expect(target.withTx(tx).key("secret").get()).toBe("rosebud");
+      let flushed = false;
+      enqueueSinkRequestPostCommitEffect(
+        tx,
+        "fetchJson",
+        "fetchJson:missing-manifest-fits",
+        createFrozenRequestSnapshot({ url: "https://example.com/exfil" }),
+        "fetchJson-start",
+        () => {
+          flushed = true;
+        },
+      );
+      tx.prepareCfc();
+      const prepared = tx.getCfcState().prepare;
+      const reasons = prepared.status === "invalidated" ? prepared.reasons : [];
+      const missing = reasons.filter((reason) =>
+        reason.includes("module policy did not resolve")
+      );
+      expect(missing).toHaveLength(1);
+      expect(isVerdictReason(missing[0]), "the manifest may yet arrive")
+        .toBe(false);
+      const result = await tx.commit().settled;
+      expect(isCfcEnforcementRejection(result.error)).toBe(true);
+      expect(flushed).toBe(false);
+    } finally {
+      await sinkRuntime.dispose();
+    }
+  });
+
+  it("releases a prepared sink after a consumed manifest origin changes", async () => {
+    // A consultation adds no precondition (spec §4.4.1, commonfabric/specs#109,
+    // pending). This release writes nothing, and its ceiling admits both
+    // origins' clauses as read, so what it pins is that a change in an origin's
+    // manifest after prepare does not reject it at commit.
     runtime.registerCfcPolicyManifests(undefined, [artifact]);
     for (
       const [origin, id] of [
@@ -787,14 +928,24 @@ describe("PolicyOf label-time binding", () => {
       expect((await installTx.commit().settled).ok).toBeDefined();
     }
 
+    const originReference = (subject: string) => ({
+      type: CFC_ATOM_TYPE.Policy,
+      policyRefKind: "module",
+      moduleIdentity: artifact.manifest.moduleIdentity,
+      symbol: artifact.manifest.symbol,
+      policyDigest: artifact.policyDigest,
+      subject,
+    });
     const sinkRuntime = new Runtime({
       apiUrl: new URL(import.meta.url),
       storageManager,
-      // The sink gate binds every consumed manifest origin into the commit in
-      // this mode, which is what the tampering below has to disturb for the
-      // commit to reject.
       cfcPolicyEvaluation: "enforce",
-      cfcSinkMaxConfidentiality: { fetchJson: [] },
+      cfcSinkMaxConfidentiality: {
+        fetchJson: [
+          originReference(space),
+          originReference(destinationSpace),
+        ],
+      },
     });
     try {
       const decision = sinkRuntime.edit();
@@ -833,8 +984,8 @@ describe("PolicyOf label-time binding", () => {
       ).toBeDefined();
       expect((await tamper.commit().settled).ok).toBeDefined();
 
-      expect((await decision.commit().settled).error).toBeDefined();
-      expect(flushed).toBe(false);
+      expect((await decision.commit().settled).error).toBeUndefined();
+      expect(flushed).toBe(true);
     } finally {
       await sinkRuntime.dispose();
     }

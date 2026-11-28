@@ -43,7 +43,7 @@ contribute their own entry when they join**:
   is **visitable** (clicking it opens that user's live profile). No cross-user
   profile enumeration is ever required.
 
-This is the same shape used by `patterns/showcase/scrabble/scrabble.tsx`
+This is the same shape used by `patterns/showcase/scrabble/main.tsx`
 (a `PerSpace` `players` roster + a join handler that `push`es the current
 player — its join sources the name and profile from the shared profile this
 way) and `patterns/examples/scoped-user-directory/main.tsx` (a `PerSpace`
@@ -140,13 +140,13 @@ elsewhere in the repo:
 
 - `wish<string>({ query: "#profileName" })` and reading `.result` —
   `patterns/examples/shared-profile-demo/main.tsx`,
-  `patterns/system/chatbot/chatbot.tsx`; `profileFace()` on the profile cell
-  in the join handler — `patterns/examples/group-chat-lobby/group-chat-lobby.tsx`.
+  `patterns/system/chatbot/main.tsx`; `profileFace()` on the profile cell
+  in the join handler — `patterns/examples/group-chat-lobby/main.tsx`.
 - `PerSpace` / `PerUser` roster + writable-cell aliases + a join handler that
-  writes the roster — `patterns/showcase/scrabble/scrabble.tsx`,
-  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`.
+  writes the roster — `patterns/showcase/scrabble/main.tsx`,
+  `patterns/examples/scoped-group-chat/plain-inputs/main.tsx`.
 - `Date.now()` for timestamps in handlers —
-  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`.
+  `patterns/examples/scoped-group-chat/plain-inputs/main.tsx`.
 - picture rendering from a snapshot with `<cf-avatar bytes name>` —
   `patterns/examples/group-chat-room/group-chat-room.tsx`.
 
@@ -467,8 +467,8 @@ Two deployable versions:
 - `patterns/examples/shared-profile-demo/main.tsx` — minimal `#profile` consumer.
 - `runtime/ui/src/v2/components/cf-profile-badge/` — trusted, visitable identity
   badge (verified seal + bio / pinned-piece tooltip).
-- `patterns/showcase/scrabble/scrabble.tsx`,
+- `patterns/showcase/scrabble/main.tsx`,
   `patterns/examples/scoped-user-directory/main.tsx`,
-  `patterns/examples/scoped-group-chat/main-plain-inputs.tsx` — `PerSpace`
+  `patterns/examples/scoped-group-chat/plain-inputs/main.tsx` — `PerSpace`
   roster + join-handler precedents.
 - `docs/common/patterns/multi-user-patterns.md` — scope-boundary guidance.

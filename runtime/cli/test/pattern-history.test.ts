@@ -1,9 +1,11 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import type {
-  PatternIndexLineage,
-  PatternIndexProgram,
-  PatternIndexVersionSummary,
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexLineage,
+  type PatternIndexProgram,
+  type PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
 import { decodeDataFile } from "@commonfabric/text/data-file";
 import {
@@ -16,9 +18,14 @@ import {
   entryHistory,
   historyLines,
   type HistoryRow,
+  lineageLines,
+  makeStable,
   PatternHistoryError,
+  patternLink,
   type RollbackDeps,
   rollbackEntry,
+  rollbackLines,
+  standing,
 } from "../lib/pattern-history.ts";
 import { entrySlot, type SlotSources } from "../lib/pattern-versions.ts";
 
@@ -48,6 +55,22 @@ const summary = (
   ...more,
 });
 
+/** A lineage of `versions` versions whose newest is `head`. */
+const lineageOf = (
+  head: PatternIndexVersionSummary,
+  more: Partial<PatternIndexLineage> = {},
+): PatternIndexLineage => ({
+  lineageId: "lin-1",
+  origin: "self",
+  pseudonym: "a-xyz",
+  description: "Counts",
+  head,
+  versions: head.seq,
+  sharedVersions: 0,
+  tier: 0,
+  ...more,
+});
+
 describe("pattern-history", () => {
   let dir: string;
   let entry: string;
@@ -64,11 +87,12 @@ describe("pattern-history", () => {
 
   /**
    * A client holding one lineage for `entry` with versions v1 (source V1)
-   * and v2 (source V2, current), recording rollbacks.
+   * and v2 (source V2, current), recording rollbacks. A version `extra`
+   * maps to `undefined` is served without its source.
    */
   const indexWith = async (
     slotEntry = entry,
-    extra: Record<string, PatternIndexProgram> = {},
+    extra: Record<string, PatternIndexProgram | undefined> = {},
   ) => {
     const lineage: PatternIndexLineage = {
       lineageId: "lin-1",
@@ -81,7 +105,7 @@ describe("pattern-history", () => {
       sharedVersions: 0,
       tier: 0,
     };
-    const programs: Record<string, PatternIndexProgram> = {
+    const programs: Record<string, PatternIndexProgram | undefined> = {
       "ver-1": {
         main: "/count.tsx",
         files: [{ name: "/count.tsx", contents: V1 }],
@@ -166,6 +190,65 @@ describe("pattern-history", () => {
       await expect(entryHistory(deps.client, entry, SOURCES)).rejects.toThrow(
         PatternHistoryError,
       );
+    });
+  });
+
+  describe("standing()", () => {
+    it("says why a private version is not shared, and gives any other visibility alone", () => {
+      const cases: [Parameters<typeof standing>[0], string][] = [
+        [{ visibility: "private", share: "none" }, "private"],
+        [
+          { visibility: "private", share: "pending" },
+          "private, being checked to share",
+        ],
+        [
+          { visibility: "private", share: "held" },
+          "private, held by the privacy check",
+        ],
+        [
+          { visibility: "private", share: "error" },
+          "private, the check to share failed",
+        ],
+        [
+          { visibility: "private", share: "public_elsewhere" },
+          "private, the same source is already shared by someone else",
+        ],
+        [{ visibility: "shared", share: "held" }, "shared"],
+        [{ visibility: "published", share: "exposed" }, "published"],
+      ];
+
+      for (const [version, expected] of cases) {
+        expect(standing(version)).toBe(expected);
+      }
+    });
+  });
+
+  describe("lineageLines()", () => {
+    it("says how versions come to be kept when none are", () => {
+      const lines = lineageLines([]);
+
+      expect(lines).toHaveLength(1);
+      expect(lines[0]).toContain("No patterns of yours are kept yet");
+    });
+
+    it("gives each lineage's name, count, newest version, and whose name it shows", () => {
+      const profile = { space: "did:key:z6Mk-ada" };
+
+      expect(lineageLines([
+        lineageOf(summary(1, { head: true }), { name: "Counter" }),
+        lineageOf(
+          summary(3, { head: true, visibility: "published", share: "exposed" }),
+          { published: { profile, displayName: "Ada", since: "2026-11-16" } },
+        ),
+        lineageOf(
+          summary(2, { head: true, share: "held" }),
+          { published: { profile, since: "2026-11-16" } },
+        ),
+      ])).toEqual([
+        "Counter: 1 version, newest v1 private (shown as a-xyz)",
+        "Counts: 3 versions, newest v3 published (published under your name, Ada)",
+        "Counts: 2 versions, newest v2 private, held by the privacy check (published under your name)",
+      ]);
     });
   });
 
@@ -432,6 +515,216 @@ describe("pattern-history", () => {
         "There is no version 7",
       );
       expect(rollbacks).toEqual([]);
+    });
+
+    it("refuses, writing nothing, a version the index serves without its source", async () => {
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-1": undefined,
+      });
+
+      await expect(rollbackEntry(entry, "1", { force: true }, deps)).rejects
+        .toThrow("The index returned no source for v1; nothing was restored.");
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      expect(rollbacks).toEqual([]);
+    });
+
+    it("refuses without force, writing nothing, when the current version comes without its source, and restores with force", async () => {
+      const { deps, rollbacks } = await indexWith(entry, {
+        "ver-2": undefined,
+      });
+
+      await expect(rollbackEntry(entry, "1", {}, deps)).rejects.toThrow(
+        "The index returned no source for the current version",
+      );
+      expect(await Deno.readTextFile(entry)).toBe(V2);
+      expect(rollbacks).toEqual([]);
+
+      await rollbackEntry(entry, "1", { force: true }, deps);
+
+      expect(await Deno.readTextFile(entry)).toBe(V1);
+      expect(rollbacks).toHaveLength(1);
+    });
+  });
+
+  describe("rollbackLines()", () => {
+    it("names the new version and the files written, or says the files already matched", () => {
+      expect(rollbackLines("my count.tsx", {
+        restored: 1,
+        version: { patternId: "pat-1", created: true, seq: 3 },
+        written: ["count.tsx", "helper.ts"],
+      })).toEqual([
+        "Restored v1 of my count.tsx as v3, writing count.tsx, helper.ts.",
+        "Running pieces still have the old source: cf piece setsrc --cell <piece> 'my count.tsx' deploys it.",
+      ]);
+      expect(rollbackLines("count.tsx", { restored: 2, written: [] })[0])
+        .toBe(
+          "Restored v2 of count.tsx; the files on disk already matched it.",
+        );
+    });
+  });
+
+  describe("makeStable()", () => {
+    const shared = lineageOf(
+      summary(2, { head: true, visibility: "shared", share: "exposed" }),
+      { channels: { latest: 1, beta: 1 } },
+    );
+    /**
+     * A client whose v1 holds share #1, recording each version made stable
+     * into `stabled` once `outcome` resolves.
+     */
+    const clientSharing = (
+      outcome: () => Promise<void>,
+      stabled: unknown[] = [],
+    ): Pick<PatternIndexClient, "listVersions" | "shareVersion"> => ({
+      listVersions: () =>
+        Promise.resolve({
+          lineageId: "lin-1",
+          versions: [
+            summary(2, { head: true }),
+            summary(1, { shared: { number: 1, stable: false } }),
+          ],
+        }),
+      shareVersion: async (request) => {
+        await outcome();
+        stabled.push(request);
+        return {
+          versionId: request.versionId,
+          patternId: "pat-1",
+          visibility: "shared",
+          share: "exposed",
+          changed: true,
+        };
+      },
+    });
+
+    it("makes a share still being checked stable, rather than an older share", async () => {
+      const stabled: unknown[] = [];
+      const report = await makeStable(
+        clientSharing(() => Promise.resolve(), stabled),
+        lineageOf(summary(2, { head: true, share: "pending" }), {
+          channels: { latest: 1, beta: 1 },
+        }),
+        "count.tsx",
+      );
+
+      expect(report).toEqual({ status: "pending" });
+      expect(stabled).toEqual([{ versionId: "ver-2", channel: "stable" }]);
+    });
+
+    it("changes nothing when the newest share is stable already", async () => {
+      const stabled: unknown[] = [];
+      const report = await makeStable(
+        clientSharing(() => Promise.resolve(), stabled),
+        lineageOf(shared.head, { channels: { latest: 1, stable: 1 } }),
+        "count.tsx",
+      );
+
+      expect(report).toEqual({ status: "stable", number: 1, changed: false });
+      expect(stabled).toEqual([]);
+    });
+
+    it("refuses, changing nothing, a lineage that is unshared, never shared, or whose newest share is no longer kept", async () => {
+      const stabled: unknown[] = [];
+      const client = clientSharing(() => Promise.resolve(), stabled);
+
+      await expect(
+        makeStable(client, { ...shared, withdrawn: true }, "count.tsx"),
+      ).rejects.toThrow("count.tsx is not shared");
+      await expect(
+        makeStable(client, { ...shared, channels: {} }, "count.tsx"),
+      ).rejects.toThrow("Nothing of count.tsx is shared yet");
+      await expect(
+        makeStable(client, { ...shared, channels: { latest: 4 } }, "count.tsx"),
+      ).rejects.toThrow("shared as #4 of count.tsx is no longer kept");
+      expect(stabled).toEqual([]);
+    });
+
+    it("makes the version holding the newest share stable", async () => {
+      const stabled: unknown[] = [];
+      const report = await makeStable(
+        clientSharing(() => Promise.resolve(), stabled),
+        shared,
+        "count.tsx",
+      );
+
+      expect(report).toEqual({ status: "stable", number: 1, changed: true });
+      expect(stabled).toEqual([{ versionId: "ver-1", channel: "stable" }]);
+    });
+
+    it("says to run again when the index answers that a newer version was shared, and passes any other failure on", async () => {
+      await expect(makeStable(
+        clientSharing(() =>
+          Promise.reject(new PatternIndexError("shareVersion", 409))
+        ),
+        shared,
+        "count.tsx",
+      )).rejects.toThrow(
+        new PatternHistoryError(
+          "A newer version of count.tsx was shared since this looked; run cf pattern stable again.",
+        ),
+      );
+
+      const failure = new PatternIndexError("shareVersion", 500);
+      await expect(makeStable(
+        clientSharing(() => Promise.reject(failure)),
+        shared,
+        "count.tsx",
+      )).rejects.toBe(failure);
+    });
+  });
+
+  describe("patternLink()", () => {
+    const lineage = lineageOf(summary(2, { head: true }));
+    const beta = {
+      ref: "a-xyz@beta",
+      channel: "beta" as const,
+      number: 1,
+      stable: false,
+    };
+
+    it("gives beta when asked for stable and nothing is stable", async () => {
+      const asked: string[] = [];
+      const report = await patternLink(
+        {
+          getPattern: ({ ref = "" }) => {
+            asked.push(ref);
+            return ref === "a-xyz"
+              ? Promise.reject(new PatternIndexError("getPattern", 404))
+              : Promise.resolve({
+                patternId: "pat-1",
+                createdAt: "2026-11-16T10:01:00.000Z",
+                description: "Counts",
+                hashtags: [],
+                dependencies: [],
+                link: beta,
+              });
+          },
+        },
+        lineage,
+        "count.tsx",
+        "stable",
+      );
+
+      expect(asked).toEqual(["a-xyz", "a-xyz@beta"]);
+      expect(report).toEqual({ ref: "a-xyz@beta", link: beta });
+    });
+
+    it("passes on a failure other than finding nothing, trying no other channel", async () => {
+      const asked: string[] = [];
+      const failure = new PatternIndexError("getPattern", 500);
+
+      await expect(patternLink(
+        {
+          getPattern: ({ ref = "" }) => {
+            asked.push(ref);
+            return Promise.reject(failure);
+          },
+        },
+        lineage,
+        "count.tsx",
+        "stable",
+      )).rejects.toBe(failure);
+      expect(asked).toEqual(["a-xyz"]);
     });
   });
 });

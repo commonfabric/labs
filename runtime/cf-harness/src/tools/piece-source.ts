@@ -534,7 +534,7 @@ export const resolvePiece = async (
     };
   }
   const id = pieceId(cell);
-  if (getPatternIdentityRef(cell) === undefined || id === undefined) {
+  if (getPatternIdentityRef(cell) === undefined) {
     return {
       ok: false,
       message: `${toolId} token does not refer to a piece`,

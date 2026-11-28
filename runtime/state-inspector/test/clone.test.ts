@@ -670,6 +670,47 @@ test("a symlinked spelling of the live store is still refused", async () => {
   });
 });
 
+test("a target several levels from existing resolves through a symlinked ancestor", async () => {
+  await withDirs(async ({ root, source }) => {
+    const real = `${await Deno.realPath(root)}/real`;
+    await Deno.mkdir(real);
+    const alias = `${root}/alias`;
+    await Deno.symlink(real, alias);
+
+    // Neither the target nor the forbidden directory exists yet; both still
+    // resolve to the same place, so the overlap is caught.
+    await assertRejects(
+      () =>
+        createClone({
+          source,
+          space: SPACE,
+          targetDir: `${alias}/a/b/c`,
+          forbiddenDirs: [`${real}/a`],
+          now: NOW,
+        }),
+      Error,
+      "overlaps the live store directory",
+    );
+    assertEquals(await exists(`${real}/a`), false);
+
+    // The missing components are re-appended in order beneath the resolved
+    // ancestor, and the clone records that resolved spelling.
+    await createClone({
+      source,
+      space: SPACE,
+      targetDir: `${alias}/a/b/c`,
+      forbiddenDirs: [`${real}/x`],
+      now: NOW,
+    });
+    const dir = `${real}/a/b/c`;
+    assert(await exists(clonePaths(dir, SPACE).workingPath));
+    assertEquals(await exists(`${real}/c`), false);
+    const marker = await Deno.readTextFile(`${dir}/.cf-clone`);
+    assert(marker.includes(`cf space reset ${dir}\n`), marker);
+    assert(!marker.includes(`cf space reset ${alias}`), marker);
+  });
+});
+
 test("refuses to clone into the snapshot's own directory", async () => {
   await withDirs(async ({ source }) => {
     await assertRejects(

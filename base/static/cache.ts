@@ -5,14 +5,15 @@ import { join } from "@std/path/posix/join";
 // is shimmed, causing a fail to access `os` from `undefined`.
 import { toFileUrl } from "@std/path/posix/to-file-url";
 
-import { isDeno } from "@commonfabric/platform/env";
-
 import { assets } from "./assets.ts";
 import { generateETag } from "./etag.ts";
 
-const FS_URL = (import.meta.dirname && isDeno())
-  ? toFileUrl(join(import.meta.dirname, "assets"))
-  : undefined;
+const ASSETS_DIR = import.meta.dirname && join(import.meta.dirname, "assets");
+
+/** The part of a `Deno` namespace a cache reads `file:` assets through. */
+export interface FileReader {
+  readFile(path: URL): Promise<Uint8Array<ArrayBuffer>>;
+}
 
 /**
  * Represents a cached static asset with its content and ETag.
@@ -32,31 +33,47 @@ export interface CachedAsset {
 /**
  * The cache of static assets served from one base location, holding each
  * asset's content together with a strong ETag over that content. An asset is
- * read at most once per instance: from a `file:` base it is read off the file
+ * read successfully at most once per instance, and a failed read is tried
+ * again on the next request. From a `file:` base it is read off the file
  * system, and from any other base it is fetched over the network.
  */
 export class StaticCache {
   #cache: Map<string, Promise<CachedAsset>> = new Map();
   #baseUrl: URL;
+  #files: FileReader | undefined;
 
   /**
-   * Constructs an instance which resolves asset names against `baseUrl`.
+   * Constructs an instance which resolves asset names against `baseUrl`, and
+   * reads a `file:` asset through `files`, the ambient `Deno` unless a caller
+   * names another.
    */
-  constructor(baseUrl: URL) {
+  constructor(baseUrl: URL, files?: FileReader) {
     this.#baseUrl = baseUrl;
+    this.#files = files;
   }
 
   /**
-   * Constructs an instance reading the assets bundled alongside this module,
-   * which requires the file system and so is available only under Deno.
+   * Constructs an instance reading the assets bundled alongside this module
+   * through the `Deno` of `scope`, `globalThis` unless a caller names
+   * another. It needs the file system, and so is available only when `scope`
+   * has a `Deno` and this module was loaded from a local path.
    */
-  static fromFileSystem(): StaticCache {
-    if (!FS_URL) {
+  static fromFileSystem(
+    scope: { readonly Deno?: FileReader } = globalThis,
+  ): StaticCache {
+    if (!ASSETS_DIR || !scope.Deno) {
       throw new Error(
         "`StaticCache.fromFileSystem()` is only available in Deno.",
       );
     }
-    return new StaticCache(new URL(FS_URL));
+    return new StaticCache(toFileUrl(ASSETS_DIR), scope.Deno);
+  }
+
+  /** `StaticCache.#cache`, the map of asset names to their requests. */
+  get accessForTestingOnly(): {
+    readonly cache: Map<string, Promise<CachedAsset>>;
+  } {
+    return { cache: this.#cache };
   }
 
   /**
@@ -69,7 +86,10 @@ export class StaticCache {
 
   /**
    * Gets a static asset's content together with the ETag a caller validates
-   * it against.
+   * it against. Rejects when `assetName` is not one this package ships, or
+   * when the read fails. The cache keeps only requests that succeed or are
+   * still pending, so a rejected name leaves no entry behind and the next
+   * call for it reads again.
    */
   getWithETag(assetName: string): Promise<CachedAsset> {
     const currentValue = this.#cache.get(assetName);
@@ -78,6 +98,7 @@ export class StaticCache {
     }
     const promise = this.#requestWithETag(assetName);
     this.#cache.set(assetName, promise);
+    promise.catch(() => this.#cache.delete(assetName));
     return promise;
   }
 
@@ -90,11 +111,19 @@ export class StaticCache {
   }
 
   /**
+   * Returns whether `assetName` names an asset this package ships, which is
+   * the condition under which `getUrl()` returns rather than throws.
+   */
+  has(assetName: string): boolean {
+    return assets.includes(assetName);
+  }
+
+  /**
    * Gets the location of a static asset, and throws when `assetName` is not
    * one this package ships.
    */
   getUrl(assetName: string): URL {
-    if (!assets.includes(assetName)) {
+    if (!this.has(assetName)) {
       throw new Error(`No static asset "${assetName}" found.`);
     }
 
@@ -114,7 +143,7 @@ export class StaticCache {
     if (url.protocol === "file:") {
       // Use readFile rather than `fetch`, as `fetch` doesn't seem to play
       // well with included assets in "compiled" builds.
-      bytes = await Deno.readFile(url);
+      bytes = await (this.#files ?? Deno).readFile(url);
     } else {
       const res = await fetch(url);
       if (!res.ok) {

@@ -1,9 +1,10 @@
 /**
  * Codenames Helper tests.
  *
- * LLM calls do not run under `cf test`, so the photo reading and clue steps
- * are tested as the pure functions they are built from (`board.ts`), and the
- * flows through the pattern drive its streams with readings supplied by hand.
+ * The rules behind the photo reading and clue steps are tested as the pure
+ * functions they are built from (`board.ts`). The flows through the pattern
+ * drive its streams and rendered controls, with the model's photo readings
+ * and clue ideas answered by `llmMocks`.
  *
  * Run: deno task cf test patterns/apps/codenames-helper/codenames-helper.test.tsx --verbose
  */
@@ -12,8 +13,12 @@ import {
   clickButton,
   findElement,
   findNodeByProp,
+  fireClick,
   fireEvent,
   hasText,
+  innermostNode,
+  propsOf,
+  viewShows,
 } from "../../tools/test-support/vnode-helpers.ts";
 import {
   applyReading,
@@ -86,11 +91,13 @@ export const llmMocks = [
   },
   // A request re-sent when the board changes under an open request.
   { when: { lastMessageContains: "Team:" }, object: { clues: [] } },
-  // The placeholder photo the steps add is read once.
+  // The steps add two photos, read in turn: the first is not a Codenames
+  // photo, the second is the key card.
   {
     when: { lastMessageContains: "Read this photo" },
     object: { kind: "unknown", notes: "test photo" },
   },
+  { when: { lastMessageContains: "Read this photo" }, object: keyReading },
 ];
 
 export default pattern(() => {
@@ -253,6 +260,48 @@ export default pattern(() => {
     helper.board.filter((c) => c.owner === "blue").length === 0
   );
 
+  // A click on a card's edge, outside its word input, selects it too.
+  const action_click_second_card = action(() =>
+    fireClick(
+      innermostNode(
+        helper[UI],
+        (node) =>
+          propsOf(node)?.onClick !== undefined &&
+          findNodeByProp(node, "placeholder", "2") !== undefined,
+      ),
+      "the second card",
+    )
+  );
+  const assert_second_selected = assert(() =>
+    helper.selectedIndex === 1 &&
+    viewShows(helper[UI], ["Coloring this card (row 1, column 2)"])
+  );
+  // Typing into a card's input sets that card's word; an edit event without
+  // a value clears it.
+  const action_type_into_second = action(() =>
+    fireEvent(
+      findNodeByProp(helper[UI], "placeholder", "2"),
+      "oncf-change",
+      { detail: { value: "bank" } },
+      "the second card's word input",
+    )
+  );
+  const assert_second_word_typed = assert(() =>
+    helper.board[1].word === "BANK" && helper.board[0].word === "APPLE" &&
+    viewShows(helper[UI], ["Coloring BANK (row 1, column 2)"])
+  );
+  const action_clear_second_word = action(() =>
+    fireEvent(
+      findNodeByProp(helper[UI], "placeholder", "2"),
+      "oncf-change",
+      {},
+      "the second card's word input",
+    )
+  );
+  const assert_second_word_cleared = assert(() =>
+    helper.board[1].word === "" && helper.board[0].word === "APPLE"
+  );
+
   // Photos: apply a board reading and a key reading.
   const action_apply_board_photo = action(() =>
     helper.applyPhotoReading.send({ reading: boardReading })
@@ -304,8 +353,36 @@ export default pattern(() => {
     helper.board.every((c) => c.owner === "unassigned") &&
     helper.board[3].word === "WORD4"
   );
-  const action_reapply_key = action(() =>
-    helper.applyPhotoReading.send({ reading: keyReading })
+
+  // A second photo reads as the key card; applying it colors the board.
+  const action_upload_key_photo = action(() =>
+    fireEvent(findElement(helper[UI], "cf-image-input"), "oncf-change", {
+      detail: {
+        images: [{
+          id: "photo-2",
+          name: "key.jpg",
+          url: "",
+          data: "data:image/png;base64,BBBB",
+          size: 4,
+          type: "image/png",
+        }],
+      },
+    })
+  );
+  const assert_key_photo_shown = assert(() =>
+    viewShows(helper[UI], ["Photo 2: key card", "Apply to board"], [
+      "Photo 1",
+    ])
+  );
+  const action_apply_key_photo_button = action(() =>
+    clickButton(helper[UI], "Apply to board")
+  );
+  const assert_key_photo_applied = assert(() =>
+    helper.board[24].owner === "assassin" && helper.board[0].owner === "red" &&
+    helper.board[3].word === "WORD4" && helper.keyWarnings.length === 0 &&
+    viewShows(helper[UI], ["✓ Photo 2 applied to the board"], [
+      "Apply to board",
+    ])
   );
 
   // Play: taps mark cards guessed and can be undone.
@@ -338,10 +415,22 @@ export default pattern(() => {
     !helper.clueRequest.includes("WORD1,") &&
     helper.clueRequest.includes("WORD2")
   );
+  const assert_red_clues_shown = assert(() =>
+    viewShows(helper[UI], [
+      "OCEAN (2)",
+      "Connects: WORD2, WORD3",
+      "both are at sea",
+    ], ["FOREST"])
+  );
   const action_switch_team = action(() => myTeam.set("blue"));
   const action_request_again = action(() => helper.requestClues.send());
   const assert_blue_request = assert(() =>
     helper.clueRequest.startsWith("Team: BLUE")
+  );
+  const assert_blue_clues_shown = assert(() =>
+    viewShows(helper[UI], ["FOREST (2)", "Connects: WORD10, WORD11"], [
+      "OCEAN",
+    ])
   );
 
   const assert_fs_projection = assert(() =>
@@ -392,6 +481,12 @@ export default pattern(() => {
       { assertion: assert_first_colored },
       { action: action_color_without_selection },
       { assertion: assert_no_selection_no_change },
+      { action: action_click_second_card },
+      { assertion: assert_second_selected },
+      { action: action_type_into_second },
+      { assertion: assert_second_word_typed },
+      { action: action_clear_second_word },
+      { assertion: assert_second_word_cleared },
       { action: action_apply_board_photo },
       { action: action_apply_key_photo },
       { assertion: assert_photos_applied },
@@ -403,7 +498,10 @@ export default pattern(() => {
       { assertion: assert_photo_hidden },
       { action: action_clear_colors },
       { assertion: assert_colors_cleared },
-      { action: action_reapply_key },
+      { action: action_upload_key_photo },
+      { assertion: assert_key_photo_shown },
+      { action: action_apply_key_photo_button },
+      { assertion: assert_key_photo_applied },
       { action: action_start_play },
       { action: action_reveal_two },
       { assertion: assert_revealed },
@@ -412,9 +510,11 @@ export default pattern(() => {
       { assertion: assert_no_request_yet },
       { action: action_request_clues },
       { assertion: assert_request_made },
+      { assertion: assert_red_clues_shown },
       { action: action_switch_team },
       { action: action_request_again },
       { assertion: assert_blue_request },
+      { assertion: assert_blue_clues_shown },
       { assertion: assert_fs_projection },
       { action: action_new_board },
       { assertion: assert_reset },

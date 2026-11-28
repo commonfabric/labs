@@ -378,9 +378,13 @@ describe("Server", () => {
         });
       });
 
-      it("returns no result for invalid back-links, a cycle, or a pattern pointer no record names", async () => {
+      it("returns no result for invalid back-links, a back-link naming no document, a cycle, or a pattern pointer no record names", async () => {
         write({
           "of:invalid": { value: 2, result: link("of:missing") },
+          "of:unaddressed": {
+            value: 5,
+            result: { "/": { "link@1": { path: [] } } },
+          },
           "of:cycle": { value: 3, result: link("of:cycle") },
           "of:unstarted": {
             value: 4,
@@ -391,14 +395,14 @@ describe("Server", () => {
         expect(
           await server.judgeCurrencyRoots(
             SPACE,
-            ["of:invalid", "of:cycle", "of:unstarted"],
+            ["of:invalid", "of:unaddressed", "of:cycle", "of:unstarted"],
             { epoch: EPOCH },
           ),
         ).toEqual({
           servable: [],
           held: [],
           upstream: [],
-          refused: { "no-record": 3 },
+          refused: { "no-record": 4 },
           marked: [],
         });
       });

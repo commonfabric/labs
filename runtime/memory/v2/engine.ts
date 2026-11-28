@@ -35,6 +35,10 @@ import {
   parseOwnerReleaseByIntentRecord,
   type VerifiedOwnerReleaseByIntent,
 } from "./cfc-owner-release-by-intent.ts";
+import {
+  CREATOR_RECORD_MEMBER,
+  creatorRecordRefusal,
+} from "./cfc-creator-record.ts";
 import { broaderCellScopes } from "./cfc-scoped-instance-labels.ts";
 import { isCfcLabelDocumentContent } from "./cfc-stored-envelope.ts";
 import {
@@ -1793,6 +1797,13 @@ export type ApplyCommitOptions = {
      *  refused too — the declaration names a chain with NO actor. */
     sessionlessSpaceScope?: boolean;
   };
+
+  /**
+   * The root issuer of the proof chain the committing session presented,
+   * whose capability the session acts under: a creator record may name it as
+   * well as the session's own principal.
+   */
+  capabilityPrincipal?: string;
 
   /** Server-owned OW54 Retry admission. The commit retains a distinct
    *  server transaction identity while the new event is attributed to the
@@ -3618,14 +3629,9 @@ export const dataVersion = (engine: Engine): number =>
 // where producer and admitter are one trust environment and only the
 // entry's stream `seq` needs stamping.
 
-/** Where one declared appended entry sits inside the commit's operations,
- * plus the `firedAt` admission resolved for it. The stamp step clones the
- * op (the caller's operation objects are shared with replica overlays —
- * wave batches hold the sealed commits' own arrays) and writes `seq` +
- * `firedAt` into the clone only. */
+/** Where one declared appended entry sits inside its operation, plus the
+ * `firedAt` admission resolved for it. */
 type EventAppendStamp = {
-  opIndex: number;
-
   /** Index into the op's `patches` array; absent for a whole-doc `set`. */
   patchIndex?: number;
 
@@ -3634,6 +3640,16 @@ type EventAppendStamp = {
   valueIndex: number;
 
   firedAt: StreamEventFiredAt;
+};
+
+/** One operation's stamp plan: the `set` or `patch` of a stream sidecar doc
+ * and where each of its declared appended entries sits. The stamp step
+ * copies the operation (the caller's operation objects are shared with
+ * replica overlays — wave batches hold the sealed commits' own arrays) and
+ * writes `seq` + `firedAt` into the copy only. */
+export type EventAppendPlan = {
+  operation: SetOperation | PatchOperation;
+  stamps: EventAppendStamp[];
 };
 
 const isStreamEntriesDocId = (id: string): boolean =>
@@ -3827,7 +3843,7 @@ const validateEventAppends = (
      * dedupe read of scoped sidecars. */
     scopeKeyByOpIndex: ReadonlyMap<number, string>;
   },
-): Map<number, EventAppendStamp[]> => {
+): Map<number, EventAppendPlan> => {
   const {
     commit,
     commitClass,
@@ -3838,7 +3854,7 @@ const validateEventAppends = (
     systemEventActor,
   } = args;
   const decls = commit.eventAppends ?? [];
-  const plan = new Map<number, EventAppendStamp[]>();
+  const plan = new Map<number, EventAppendPlan>();
   const flagOn = getServerExecutionConfig();
   if (decls.length > 0 && !flagOn) {
     throw new ProtocolError(
@@ -4007,7 +4023,7 @@ const validateEventAppends = (
       for (const [valueIndex, entry] of entries.entries()) {
         located.push({
           entry: entry as StreamEventEntry,
-          stamp: { opIndex, valueIndex },
+          stamp: { valueIndex },
         });
       }
     } else {
@@ -4037,7 +4053,7 @@ const validateEventAppends = (
         for (const [valueIndex, entry] of appended.values.entries()) {
           located.push({
             entry: entry as StreamEventEntry,
-            stamp: { opIndex, patchIndex, valueIndex },
+            stamp: { patchIndex, valueIndex },
           });
         }
       }
@@ -4302,9 +4318,9 @@ const validateEventAppends = (
         );
       }
 
-      const stamps = plan.get(stamp.opIndex) ?? [];
-      stamps.push({ ...stamp, firedAt });
-      plan.set(stamp.opIndex, stamps);
+      const planned = plan.get(opIndex) ?? { operation, stamps: [] };
+      planned.stamps.push({ ...stamp, firedAt });
+      plan.set(opIndex, planned);
     }
   }
 
@@ -4318,107 +4334,87 @@ const validateEventAppends = (
   return plan;
 };
 
-/** A fresh entry list whose OBJECT entries are shallow-copied — the
- * stamping writes (seq, firedAt) land on the copies; every deeper value
- * (payload included) stays SHARED by reference. */
-const spineCloneEntryList = (entries: readonly unknown[]): unknown[] =>
-  entries.map((entry) =>
-    isObjectNotArray(entry) ? { ...(entry as Record<string, unknown>) } : entry
+/** A copy of the planned operation whose declared appended entries carry
+ * this commit's `seq` and their admitted `firedAt`. The input operation is
+ * shared with replica overlays and is never mutated. The copy is fresh
+ * along the spine the stamping writes: the operation object, the
+ * containers down to `/value/entries`, the entry lists, and each entry
+ * object. Every deeper value, payloads included, is shared with the input
+ * by reference, never `structuredClone`d: the co-hosted wave sink hands
+ * this path the runner's own op objects, whose FabricValue payloads can
+ * carry registry symbols that `structuredClone` cannot copy. Throws when a
+ * stamp names an entry the operation does not hold, since its entry would
+ * otherwise be stored without a `seq`. */
+export const stampEventAppendOperation = (
+  { operation, stamps }: EventAppendPlan,
+  seq: number,
+): SetOperation | PatchOperation => {
+  const positionOf = (valueIndex: number, patchIndex?: number) =>
+    `${patchIndex ?? "set"}/${valueIndex}`;
+  const unclaimed = new Map(
+    stamps.map((stamp) => [
+      positionOf(stamp.valueIndex, stamp.patchIndex),
+      stamp.firedAt,
+    ]),
   );
+  const stampEntries = (
+    entries: readonly unknown[],
+    patchIndex?: number,
+  ): never[] =>
+    entries.map((entry, valueIndex) => {
+      const position = positionOf(valueIndex, patchIndex);
+      const firedAt = unclaimed.get(position);
+      unclaimed.delete(position);
+      return {
+        ...(entry as StreamEventEntry),
+        ...(firedAt === undefined ? {} : { seq, firedAt }),
+      } as never;
+    });
+  const stamped = stampPlannedEntries(operation, stampEntries);
+  if (unclaimed.size > 0) {
+    throw new ProtocolError(
+      "event-append stamp plan does not match the operation shape " +
+        `(engine bug — no entry at ${[...unclaimed.keys()].join(", ")})`,
+    );
+  }
+  return stamped;
+};
 
-/** Clone exactly the SPINE the stamping mutates: the operation object,
- * the containers down to `/value/entries`, and the entry objects
- * themselves. NEVER `structuredClone` (verdict blocker, 2026-08-12):
- * the co-hosted wave sink hands this path the runner's own op objects,
- * whose FabricValue payloads can carry registry symbols —
- * `structuredClone` throws `DataCloneError` on those and demotes
- * fabric classes it can copy. Payload values are never mutated here,
- * so sharing them is sound. */
-const spineCloneSidecarOperation = <
-  Op extends Exclude<Operation, SqliteOperation>,
->(operation: Op): Op => {
+/** A copy of `operation` with each entry list it writes at `/value/entries`
+ * replaced by `stampEntries`'s copy of it. */
+const stampPlannedEntries = (
+  operation: SetOperation | PatchOperation,
+  stampEntries: (entries: readonly unknown[], patchIndex?: number) => never[],
+): SetOperation | PatchOperation => {
   if (operation.op === "set") {
-    const outer = (operation.value ?? undefined) as
-      | Record<string, unknown>
-      | undefined;
-    const inner = (outer?.value ?? undefined) as
-      | Record<string, unknown>
-      | undefined;
-    if (inner === undefined || !Array.isArray(inner.entries)) {
-      return { ...operation };
-    }
+    const value = operation.value.value as StreamEventsDocValue;
     return {
       ...operation,
       value: {
-        ...outer,
-        value: { ...inner, entries: spineCloneEntryList(inner.entries) },
+        ...operation.value,
+        value: { ...value, entries: stampEntries(value.entries ?? []) },
       },
-    } as Op;
+    };
   }
-  if (operation.op === "patch") {
-    return {
-      ...operation,
-      patches: operation.patches.map((patch) => {
-        if (
-          (patch.op === "append" || patch.op === "add-unique") &&
-          patch.path === STREAM_ENTRIES_POINTER
-        ) {
-          return {
-            ...patch,
-            values: spineCloneEntryList(patch.values as unknown[]) as never,
-          };
-        }
-        if (
-          (patch.op === "add" || patch.op === "replace") &&
-          patch.path === STREAM_ENTRIES_POINTER &&
-          Array.isArray((patch as unknown as { value?: unknown }).value)
-        ) {
-          return {
-            ...patch,
-            value: spineCloneEntryList(
-              (patch as unknown as { value: unknown[] }).value,
-            ) as never,
-          };
-        }
-        return patch;
-      }),
-    } as Op;
-  }
-  return { ...operation };
-};
-
-/** Apply one op's stamp plan onto a CLONE (the input operation object is
- * shared with replica overlays and must never be mutated). */
-const stampEventAppendOperation = <
-  Op extends Exclude<Operation, SqliteOperation>,
->(
-  operation: Op,
-  stamps: readonly EventAppendStamp[],
-  seq: number,
-): Op => {
-  const cloned = spineCloneSidecarOperation(operation);
-  for (const stamp of stamps) {
-    let entry: StreamEventEntry | undefined;
-    if (cloned.op === "set") {
-      const value = (cloned.value?.value ?? {}) as StreamEventsDocValue;
-      entry = value.entries?.[stamp.valueIndex];
-    } else if (cloned.op === "patch" && stamp.patchIndex !== undefined) {
-      const patch = cloned.patches[stamp.patchIndex];
-      const appended = appendedEntriesOfPatch(patch);
-      entry = appended?.values[stamp.valueIndex] as
-        | StreamEventEntry
-        | undefined;
-    }
-    if (entry === undefined) {
-      throw new ProtocolError(
-        "event-append stamp plan does not match the operation shape " +
-          "(engine bug — the plan and the clone diverged)",
-      );
-    }
-    entry.seq = seq;
-    entry.firedAt = stamp.firedAt;
-  }
-  return cloned;
+  return {
+    ...operation,
+    patches: operation.patches.map((patch, patchIndex) => {
+      if (
+        (patch.op === "append" || patch.op === "add-unique") &&
+        patch.path === STREAM_ENTRIES_POINTER
+      ) {
+        return { ...patch, values: stampEntries(patch.values, patchIndex) };
+      }
+      if (
+        (patch.op === "add" || patch.op === "replace") &&
+        patch.path === STREAM_ENTRIES_POINTER &&
+        Array.isArray(patch.value)
+      ) {
+        return { ...patch, value: stampEntries(patch.value, patchIndex) };
+      }
+      return patch;
+    }),
+  };
 };
 
 /** An effect-intent-shaped entry (protocol.md §5's `{nonce, kind, args,
@@ -7385,6 +7381,7 @@ const applyCommitTransaction = (
     consequenceOf,
     derivedThrough,
     delegated,
+    capabilityPrincipal,
     systemEventActor,
     scopeKeys,
     releasesOperationFields = false,
@@ -8030,6 +8027,17 @@ const applyCommitTransaction = (
       metadataPointer(patch.path) ||
       metadataPointer("from" in patch ? patch.from : undefined)
     );
+  // A patch can land a piece's creator record the same ways, and the record
+  // is judged on the document the patch leaves (`creatorRecordRefusal()`).
+  const creatorPointer = (pointer: string | undefined): boolean =>
+    pointer !== undefined &&
+    (pointer === `/${CREATOR_RECORD_MEMBER}` ||
+      pointer.startsWith(`/${CREATOR_RECORD_MEMBER}/`));
+  const patchTouchesCreator = (patches: PatchOp[] | undefined): boolean =>
+    (patches ?? []).some((patch) =>
+      creatorPointer(patch.path) ||
+      creatorPointer("from" in patch ? patch.from : undefined)
+    );
   // Scoped rows key exactly as the write loop below keys them: a
   // delegated commit's scoped writes carry the validated acting identity,
   // and a derived commit's annotation supplies the row key outright.
@@ -8052,7 +8060,10 @@ const applyCommitTransaction = (
   const metadataPatchDocKeys = new Set<string>();
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op !== "patch" || operation.id.startsWith("cid:")) continue;
-    if (patchTouchesMetadata(operation.patches)) {
+    if (
+      patchTouchesMetadata(operation.patches) ||
+      patchTouchesCreator(operation.patches)
+    ) {
       metadataPatchDocKeys.add(opDocKey(opIndex, operation));
     }
   }
@@ -8088,6 +8099,7 @@ const applyCommitTransaction = (
       readonly operation: { id: string; scope?: unknown };
       lastOpIndex: number;
       cfc: unknown;
+      creator: unknown;
       deleted: boolean;
     }
   >();
@@ -8099,6 +8111,8 @@ const applyCommitTransaction = (
   ): void => {
     const docKey = opDocKey(opIndex, operation);
     const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    const creator = (document as Record<string, unknown> | null | undefined)
+      ?.[CREATOR_RECORD_MEMBER];
     const known = envelopeWrites.get(docKey);
     if (known === undefined) {
       envelopeWrites.set(docKey, {
@@ -8106,11 +8120,13 @@ const applyCommitTransaction = (
         operation,
         lastOpIndex: opIndex,
         cfc,
+        creator,
         deleted,
       });
     } else {
       known.lastOpIndex = opIndex;
       known.cfc = cfc;
+      known.creator = creator;
       known.deleted = deleted;
     }
   };
@@ -8147,8 +8163,9 @@ const applyCommitTransaction = (
       }
     }
     if (!operation.id.startsWith("cid:")) {
-      // A patch that touches no metadata leaves the `cfc` member as it
-      // found it, which after a delete in this commit is no member at all.
+      // A patch that touches no metadata leaves the `cfc` and `creator`
+      // members as it found them, which after a delete in this commit is no
+      // member at all.
       if (operation.op === "patch") {
         const known = envelopeWrites.get(opDocKey(opIndex, operation));
         if (
@@ -8157,6 +8174,7 @@ const applyCommitTransaction = (
         ) {
           known.lastOpIndex = opIndex;
           known.cfc = undefined;
+          known.creator = undefined;
           known.deleted = false;
         }
       }
@@ -8665,20 +8683,28 @@ const applyCommitTransaction = (
       ? undefined
       : document.value;
   };
-  const storedCfcOf = (
+  // The document a write's address holds before the commit, at the scope
+  // instance the write lands in.
+  const storedDocumentOf = (
     write: {
       readonly opIndex: number;
       readonly operation: { id: string; scope?: unknown };
     },
-  ): unknown =>
-    (readState(engine, {
+  ): Record<string, unknown> | null | undefined =>
+    readState(engine, {
       id: write.operation.id,
       branch,
       scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
       principal: scanPrincipal,
       sessionId: scanSession,
       scopeKey: scopeKeyByOpIndex.get(write.opIndex),
-    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+    })?.document as Record<string, unknown> | null | undefined;
+  const storedCfcOf = (
+    write: {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+    },
+  ): unknown => storedDocumentOf(write)?.cfc;
   const releasesByIntent = verifyOwnerReleasesByIntent({
     engine,
     branch,
@@ -8722,6 +8748,47 @@ const applyCommitTransaction = (
           dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
         }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
       );
+    }
+  }
+
+  // A session's commit may record a piece's creator only as the principal
+  // the session authenticated, and may not change or remove a stored record
+  // (`cfc-creator-record.ts`). A `derived`, `system` or delegated commit is
+  // not judged: the server makes each itself, and a serving runtime's writes
+  // reach the store as `derived` commits. A content-addressed document is never a
+  // piece, so a session's commit writes no record on one.
+  if (commitClass === "authored" && delegated === undefined) {
+    const recorders = [principal, capabilityPrincipal].filter(
+      (each): each is string => each !== undefined,
+    );
+    // A session's stale whole-document `set` that omits a record stored
+    // since it read the document is refused with the rest, as a forged
+    // removal would be; only a legacy record a serving runtime writes lands
+    // on a document that already exists, so the race is narrow.
+    for (const write of envelopeWrites.values()) {
+      if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
+      const stored = storedDocumentOf(write)?.[CREATOR_RECORD_MEMBER];
+      const refusal = creatorRecordRefusal(stored, write.creator, recorders);
+      if (refusal !== undefined) {
+        throw new ProtocolError(
+          `memory v2 commit writes the creator record of document ${write.operation.id}: ${refusal}`,
+        );
+      }
+    }
+    for (const [opIndex, operation] of commit.operations.entries()) {
+      if (
+        operation.op !== "set" || !operation.id.startsWith("cid:") ||
+        elidedOpIndexes.has(opIndex)
+      ) continue;
+      if (
+        (operation.value as Record<string, unknown> | null | undefined)?.[
+          CREATOR_RECORD_MEMBER
+        ] !== undefined
+      ) {
+        throw new ProtocolError(
+          `memory v2 commit writes a creator record on content-addressed document ${operation.id}, which is never a piece`,
+        );
+      }
     }
   }
 
@@ -8905,10 +8972,10 @@ const applyCommitTransaction = (
     // shared with replica overlays and stay pristine; `original` (encoded
     // above, pre-stamp) records the as-received payload so replay
     // comparison stays stable.
-    const stamps = eventAppendPlan.get(opIndex);
-    const appendStamped = stamps === undefined
+    const planned = eventAppendPlan.get(opIndex);
+    const appendStamped = planned === undefined
       ? operation
-      : stampEventAppendOperation(operation, stamps, seq);
+      : stampEventAppendOperation(planned, seq);
     // The effects-doc transform (Phase 4, protocol.md §5): a
     // derived-class write of the well-known effects doc gets its intent
     // entries' `issuedIn` sentinels stamped with this commit's seq and
@@ -9959,7 +10026,6 @@ const hasSetOrDelete = (
       through_seq: throughSeq,
     }) as SetDeleteConflictRow;
     if (row.seq !== null) return true;
-    if (from === DEFAULT_BRANCH) return false;
     const lineage = requireLineage(engine, from);
     throughSeq = Math.min(throughSeq, lineage.forkSeq ?? 0);
     from = lineage.parentBranch;

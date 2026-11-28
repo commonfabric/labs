@@ -80,7 +80,6 @@ export class IndexedCollectionHost {
 
   /** Stops watching, and disposes the runtime with its storage. */
   async close(): Promise<void> {
-    if (this.#closed) return;
     this.#closed = true;
     this.#unwatch();
     await Promise.all(this.#reads);
@@ -94,7 +93,7 @@ export class IndexedCollectionHost {
    * space the commit landed in lists a collection.
    */
   #admitted(notice: AdmittedCommitNotice): void {
-    if (this.#closed || notice.writes.length === 0) return;
+    if (notice.writes.length === 0) return;
     const ids = notice.writes.map((write) => write.id);
     const known = this.#spaces.get(notice.space);
     const held = Array.isArray(known)
@@ -155,10 +154,29 @@ export class IndexedCollectionHost {
    * when there is none yet.
    */
   #forward(space: string, ids: readonly string[]): void {
-    this.#runtime ??= new Runtime({
+    this.#runtime ??= this.#newRuntime();
+    this.#runtime.indexedCollections.noteWrites(space as MemorySpace, ids);
+  }
+
+  /**
+   * Helper for `#forward()`, which constructs the maintenance runtime. That
+   * runtime runs no piece, so nothing in it would ask for a release pass
+   * (`Runtime.releaseUnreadDocuments()`), and its session would keep a watch
+   * on every member a drain ever re-read. So it asks for one each time a
+   * collection's maintenance has nothing left to re-read. The pass keeps
+   * what a cell the maintainer still holds has loaded, and once those cells
+   * have been collected, the pass that follows releases it
+   * (`docs/features/document-release.md`).
+   */
+  #newRuntime(): Runtime {
+    const runtime = new Runtime({
       ...this.#runtimeOptions(),
       indexedCollectionMaintenance: "listed",
     });
-    this.#runtime.indexedCollections.noteWrites(space as MemorySpace, ids);
+    runtime.indexedCollections.subscribeDrained(() =>
+      // `runtime.settled()` waits for it, as for the drain that asked.
+      runtime.trackAsyncWork(runtime.releaseUnreadDocuments())
+    );
+    return runtime;
   }
 }

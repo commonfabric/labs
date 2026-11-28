@@ -178,6 +178,19 @@ describe("runtime-processor", () => {
       }
     });
 
+    it("refuses a space host that is no URL before the check runs, so a report names only hosts the check parsed", async () => {
+      let asked = 0;
+      await expect(initialize(() => {
+        asked++;
+        return Promise.resolve(false);
+      }, {
+        awaitHealth: true,
+        spaceHostMap: { [federatedSpace]: "not a host" },
+      })).rejects.toThrow(`Invalid spaceHostMap entry for ${federatedSpace}`);
+      expect(asked).toBe(0);
+      expect(notices).toEqual([]);
+    });
+
     it("posts no notice for a check that fails after the processor was disposed", async () => {
       const check = Promise.withResolvers<boolean>();
       const processor = await initialize(() => check.promise);

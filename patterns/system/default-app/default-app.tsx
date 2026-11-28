@@ -175,7 +175,7 @@ const addPiece = handler<
  * document reads as present: an unresolved profile arrives as an empty cell,
  * and linking it would record no profile at all.
  */
-const joinAsViewer = handler<
+export const joinAsViewer = handler<
   void,
   {
     join: Stream<{ profile: ParticipantProfile }>;

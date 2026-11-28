@@ -11,7 +11,8 @@
 
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { conflictMarkerAt, main, scan } from "./check-conflict-markers.ts";
 import { describe, it } from "@commonfabric/test-support/test";
 
@@ -216,6 +217,57 @@ describe("check-conflict-markers", () => {
         });
         expect(code).toBe(0);
         expect(out).toContain("No unresolved merge-conflict markers");
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+  });
+
+  describe("as a command", () => {
+    const REPO_ROOT = fromFileUrl(new URL("..", import.meta.url));
+
+    /** Runs the script over `root` with only the permissions its task grants. */
+    function runScript(root: string): Promise<Deno.CommandOutput> {
+      return runDenoCommandWithTemporaryLock({
+        root: REPO_ROOT,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(REPO_ROOT, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-run=git",
+          join(REPO_ROOT, "tasks/check-conflict-markers.ts"),
+          root,
+        ],
+      });
+    }
+
+    it("exits 1 and names the file for the repository it is given", async () => {
+      // The exit status is what fails CI, so the command must carry the
+      // verdict of `main()` out of the process.
+      const root = await fixtureRepo(["intact", `${CLOSE} other`].join("\n"));
+      try {
+        const output = await runScript(root);
+        expect(output.code).toBe(1);
+        expect(new TextDecoder().decode(output.stderr)).toContain(
+          `subject.md:2: ${CLOSE}`,
+        );
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    });
+
+    it("exits 0 for a clean repository it is given", async () => {
+      const root = await fixtureRepo("nothing to see");
+      try {
+        const output = await runScript(root);
+        const stderr = new TextDecoder().decode(output.stderr);
+        expect(output.code, `exited non-zero:\n${stderr}`).toBe(0);
+        expect(new TextDecoder().decode(output.stdout)).toContain(
+          "No unresolved merge-conflict markers",
+        );
       } finally {
         await Deno.remove(root, { recursive: true });
       }

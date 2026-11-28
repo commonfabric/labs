@@ -12,7 +12,9 @@
 import {
   type AliasResolver,
   enclosingNames,
+  isDay,
   isMainRun,
+  parseCiJob,
   parseReportGroups,
   type RunContext,
   type StoredReport,
@@ -37,7 +39,6 @@ import {
   type FoldContext,
   foldObservations,
   type IdentityState,
-  isDay,
   isDaySamples,
   latestOrdersOnMain,
   MAIN_ORDERS_COUNTED,
@@ -48,6 +49,7 @@ import {
   orderDay,
   parseContext,
   readCostsForward,
+  readDisagreementsForward,
   readNewRealTestFailuresForward,
   renameInContext,
   sampleDuration,
@@ -422,6 +424,14 @@ export function parseAggregate(value: unknown): AggregateState | undefined {
   for (const identity of Object.values(states)) {
     readCostsForward(identity);
     readNewRealTestFailuresForward(identity);
+    readDisagreementsForward(identity);
+    // An aggregate written before failures on `main` were counted apart
+    // does not say which of its failures were there. That count is read
+    // as empty, so the last failure comes from the disagreements alone
+    // until `main` fails the test again.
+    if (!isObjectNotArray(identity.mainFailuresByDay)) {
+      identity.mainFailuresByDay = {};
+    }
     // Only what reads as a day is kept, and the next record of the
     // identity on `main` adds to it.
     const held: unknown = identity.ordersOnMain;
@@ -584,6 +594,15 @@ export function readReport(
     const committedOn = group.context.ci?.event === "push"
       ? orderDay(group.context.shuffleSeed)
       : undefined;
+    // One object for the job, shared by every observation it recorded,
+    // and absent where it is not one a manifest can carry. A workstation's
+    // run carries no continuous-integration facts.
+    const ci = group.context.ci;
+    const job = ci === undefined ? undefined : parseCiJob({
+      runId: ci.workflowRunId,
+      runAttempt: ci.runAttempt,
+      job: ci.job,
+    });
     // What a lane spent on its own setup and on each of its batches is
     // not scored, and not discarded either: it is what the packer's
     // charges for both are fitted from. One group is one lane's
@@ -645,6 +664,7 @@ export function readReport(
         ...(committedOn === undefined ? {} : { committedOn }),
         source: where.source,
         place: where.place,
+        ...(job === undefined ? {} : { ci: job }),
         // A cost predicts what a lane will spend running this test again,
         // and only a passing execution measures that. A failure ended
         // where the failure was reached, and where a wait's safety net
@@ -988,10 +1008,31 @@ export interface BuildInput {
  * reads as the longest unrun of all.
  */
 export function lastRun(state: IdentityState): string | undefined {
+  return latestDay([state.runsByDay]);
+}
+
+/**
+ * The last day this identity is known to have failed on `main`, for
+ * whatever reason, or to have disagreed with itself anywhere. A failure on
+ * a pull request or a workstation counts only as part of a disagreement,
+ * since on its own it may be the change being worked on breaking the
+ * test. A test held back has a disagreement inside the flake window, so it
+ * always has an answer here.
+ */
+export function lastFailure(state: IdentityState): string | undefined {
+  return latestDay([state.mainFailuresByDay, state.flakesByDay]);
+}
+
+/** The latest day any of `counts` has counted anything on. */
+function latestDay(
+  counts: readonly Record<string, number>[],
+): string | undefined {
   let latest: string | undefined;
-  for (const [day, runs] of Object.entries(state.runsByDay)) {
-    if (runs <= 0) continue;
-    if (latest === undefined || day > latest) latest = day;
+  for (const byDay of counts) {
+    for (const [day, count] of Object.entries(byDay)) {
+      if (count <= 0) continue;
+      if (latest === undefined || day > latest) latest = day;
+    }
   }
   return latest;
 }
@@ -1015,6 +1056,8 @@ export function buildManifest(input: BuildInput): Manifest {
     // shows one to a person rounds it there.
     const rate = flakeRate(state, input.today);
     const ran = lastRun(state);
+    const failed = lastFailure(state);
+    const flaky = rate > FLAKE_EXCLUSION_RATE;
     entries.push({
       test,
       suite: surface.suite,
@@ -1024,10 +1067,16 @@ export function buildManifest(input: BuildInput): Manifest {
       inputs,
       flakeRate: rate,
       flakeEvidence: evidence,
+      // Only for a test held back, which is the one someone is asked to
+      // fix, so that every lane does not download the rest.
+      ...(state.disagreements === undefined || !flaky
+        ? {}
+        : { disagreements: state.disagreements }),
+      ...(failed === undefined || !flaky ? {} : { lastFailure: failed }),
       repeats: executionsFor(rate),
       ...(ran === undefined ? {} : { lastRun: ran }),
     });
-    if (rate > FLAKE_EXCLUSION_RATE) {
+    if (flaky) {
       withheld.push({ test, suite: surface.suite, reason: "flaky" });
     }
   }
@@ -1191,14 +1240,21 @@ export class Fold {
   readonly #resolver: AliasResolver;
   readonly #today: string;
   readonly #resolved: number;
+  readonly #spool: () => ObservationSpool;
   #observations = 0;
   #intact = true;
 
+  /**
+   * `spool` gives the spool each batch `addUnordered()` folds is read aside
+   * into.
+   */
   constructor(
     aggregate: AggregateState,
     resolver: AliasResolver,
     today: string,
+    spool: () => ObservationSpool = () => new ObservationSpool(),
   ) {
+    this.#spool = spool;
     this.#states = new Map(
       Object.entries(aggregate.states)
         // An aggregate written before lane measurements stopped being
@@ -1418,7 +1474,7 @@ export class Fold {
 
   /** Reads a batch aside and folds it, holding the spool meanwhile. */
   async #foldBatch(reports: AsyncIterable<StoredReport>): Promise<void> {
-    using observations = new ObservationSpool();
+    using observations = this.#spool();
     const batch = noContributions();
     for await (const report of reports) {
       const name = report.objectName;

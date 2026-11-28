@@ -13,6 +13,7 @@ import { isDID } from "@commonfabric/identity/did";
 import { configuredStorePath } from "@commonfabric/memory/v2/storage-path";
 
 import { openSpace } from "./db.ts";
+import { resolveListedFiles } from "./listed-files.ts";
 import { rootCacheDir } from "./remote.ts";
 
 export interface DiscoveredSpace {
@@ -88,21 +89,11 @@ export function discoverSpaceDbs(
   const seen = new Set<string>();
   const out: DiscoveredSpace[] = [];
   for (const root of roots) {
-    for (const path of walkSqlite(root, 4)) {
-      let real: string;
-      try {
-        real = Deno.realPathSync(path);
-      } catch {
-        real = path;
-      }
+    for (
+      const { path, real, stat } of resolveListedFiles(walkSqlite(root, 4))
+    ) {
       if (seen.has(real)) continue;
       seen.add(real);
-      let stat: Deno.FileInfo;
-      try {
-        stat = Deno.statSync(path);
-      } catch {
-        continue;
-      }
       out.push({
         did: Path.basename(path, ".sqlite"),
         path,

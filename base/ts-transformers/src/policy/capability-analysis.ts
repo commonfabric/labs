@@ -1236,10 +1236,8 @@ function isBooleanConditionUsage(expression: ts.Expression): boolean {
   return false;
 }
 
-function isPassThroughIdentifierUsage(node: ts.Identifier): boolean {
-  const usage = outermostTransparentWrapper(node);
+function isPassThroughIdentifierUsage(usage: ts.Expression): boolean {
   const parent = usage.parent;
-  if (!parent) return false;
 
   if (ts.isArrowFunction(parent) && parent.body === usage) return true;
   if (ts.isReturnStatement(parent) && parent.expression === usage) return true;
@@ -1402,11 +1400,8 @@ function isAliasableObjectLiteral(
  * widened.
  */
 function isDeclaredByEnclosingFunction(name: string, from: ts.Node): boolean {
-  let enclosing: ts.Node | undefined = from.parent;
-  while (enclosing && !ts.isFunctionLike(enclosing)) {
-    enclosing = enclosing.parent;
-  }
-  if (!enclosing || !ts.isFunctionLike(enclosing)) return true;
+  const enclosing = ts.findAncestor(from.parent, ts.isFunctionLike);
+  if (!enclosing) return true;
 
   const declares = (binding: ts.BindingName): boolean =>
     ts.isIdentifier(binding)
@@ -1415,21 +1410,19 @@ function isDeclaredByEnclosingFunction(name: string, from: ts.Node): boolean {
         !ts.isOmittedExpression(element) && declares(element.name)
       );
 
-  if (enclosing.parameters.some((parameter) => declares(parameter.name))) {
-    return true;
-  }
-  const body = (enclosing as { body?: ts.Node }).body;
-  if (!body) return false;
   let found = false;
   const visit = (node: ts.Node): void => {
-    if (found || (node !== body && ts.isFunctionLike(node))) return;
-    if (ts.isVariableDeclaration(node) && declares(node.name)) {
+    if (found || (node !== enclosing && ts.isFunctionLike(node))) return;
+    if (
+      (ts.isParameter(node) || ts.isVariableDeclaration(node)) &&
+      declares(node.name)
+    ) {
       found = true;
       return;
     }
     ts.forEachChild(node, visit);
   };
-  visit(body);
+  visit(enclosing);
   return found;
 }
 
@@ -1639,7 +1632,6 @@ function isCallOrNewArgumentUsage(
   usage: ts.Expression,
 ): boolean {
   const parent = usage.parent;
-  if (!parent) return false;
   if (ts.isCallExpression(parent)) {
     return parent.arguments.includes(usage);
   }
@@ -1768,7 +1760,7 @@ function getIdentityArrayLocalNameForElementUsage(
       return parentNode.name.text;
     }
 
-    return undefined;
+    break;
   }
 
   return undefined;
@@ -2713,11 +2705,11 @@ export function analyzeFunctionCapabilities(
 
     // The type the declaration of `ref`'s parameter gives the value at its
     // path, followed through cells, properties and array elements; undefined
-    // for a root no parameter declares or a path the type does not name.
+    // for a path the type does not name. Every ref's root is the state key
+    // of one of `fn`'s parameters.
     const declaredTypeAt = (ref: SourceRef): ts.Type | undefined => {
       if (!checker || ref.dynamic) return undefined;
       const parameter = fn.parameters[parameterStateKeys.indexOf(ref.root)];
-      if (!parameter) return undefined;
       let type: ts.Type | undefined = typeRegistry?.get(parameter) ??
         checker.getTypeAtLocation(parameter);
       for (const segment of materializeSourceRef(ref).path) {
@@ -4492,7 +4484,7 @@ export function analyzeFunctionCapabilities(
                 }
               } else if (
                 isCallOrNewArgumentUsage(usage) ||
-                isPassThroughIdentifierUsage(node) ||
+                isPassThroughIdentifierUsage(usage) ||
                 wholeValueEscape ||
                 identityOnlyArrayElementUse ||
                 identityOnlyArrayWriterArgumentUse

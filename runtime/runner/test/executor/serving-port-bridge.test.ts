@@ -254,6 +254,72 @@ describe("ServingPortBridge", () => {
       expect(await changes.promise).toBe(`${space} a`);
     });
 
+    it("carries the server's currency changes to the worker's observer, for the space each names", async () => {
+      start();
+      const other = "did:key:z6MkServingPortBridgeOther";
+      const changed: string[] = [];
+      const views = Promise.withResolvers<void>();
+      plane.observer = {
+        currencyChanged: (space) => changed.push(space),
+        viewsChanged: () => views.resolve(),
+      };
+      bridge.observer.currencyChanged(space);
+      bridge.observer.currencyChanged(other);
+      // The port delivers in order, so the currency changes have arrived
+      // once the view change has.
+      bridge.observer.viewsChanged(space, "a");
+      await views.promise;
+      expect(changed).toEqual([space, other]);
+    });
+
+    it("replaces the demand a space carries through the server, which refuses a row of a serving session of the excluded principal", async () => {
+      start();
+      const client = await MemoryClient.connect({
+        instanceNames: namesInstancesByDefault(),
+        transport: MemoryClient.loopback(server),
+      });
+      try {
+        await client.mount(
+          space,
+          { sessionId: "alice-session" },
+          (_space, _session, context) => ({
+            invocation: {
+              aud: context.audience,
+              challenge: context.challenge.value,
+            },
+            authorization: { principal: alice },
+          }),
+        );
+        const rows = [{
+          id: "of:far",
+          scope: "space" as const,
+          scopeKey: "space" as const,
+          origin: { space, sessionId: "alice-session" },
+        }];
+        const absent = [{
+          ...rows[0],
+          origin: { space, sessionId: "absent-session" },
+        }];
+
+        expect(await plane.server.setCarriedDemand(space, space, rows))
+          .toEqual({ refused: 0 });
+        expect(
+          await plane.server.setCarriedDemand(space, space, rows, {
+            excludePrincipal: bob,
+          }),
+        ).toEqual({ refused: 0 });
+        expect(
+          await plane.server.setCarriedDemand(space, space, rows, {
+            excludePrincipal: alice,
+          }),
+        ).toEqual({ refused: 1 });
+        expect(await plane.server.setCarriedDemand(space, space, absent))
+          .toEqual({ refused: 1 });
+      } finally {
+        await client.close();
+      }
+    });
+
     describe("access-list changes", () => {
       const change = {
         space,

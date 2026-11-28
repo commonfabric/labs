@@ -7,10 +7,12 @@ import {
 // The compiled-module-byte cache, in full. The runtime defines only the
 // `ModuleByteCache` interface it consults during a compile; this module owns
 // the implementation and its disk persistence. A runtime holds one only where
-// something installs it: the test harnesses and `cf` through
-// `createCompileByteCache`, and a toolshed's serving host, whose per-space
-// runtimes share one `ProcessModuleByteCache` so a space's root pattern is
-// transformed and emitted once per process rather than once per space.
+// something installs it: the test harnesses and `cf test` through
+// `createCompileByteCache`; the connections other `cf` commands open, through
+// a directory `openSharedCompileCache()` opens; and a toolshed's serving host,
+// whose per-space runtimes share one, in memory or over such a directory, so
+// a space's root pattern is transformed and emitted once rather than once per
+// space.
 //
 // `createCompileByteCache` returns the instance to inject into test runtimes.
 // The in-memory cache is always created for cross-runtime reuse within the
@@ -556,7 +558,13 @@ function writeCompileByteCache(
   }
 }
 
-function writeTextFileAtomicSync(path: string, text: string): void {
+/**
+ * Writes `text` to `path` whole: to a temporary name beside it, then renamed,
+ * so that a reader sees all of the file or none of it. A failed write throws
+ * what failed, having first removed the temporary file where it can; a
+ * temporary file that cannot be removed then is left behind.
+ */
+export function writeTextFileAtomicSync(path: string, text: string): void {
   const tempPath = `${path}.${crypto.randomUUID()}.tmp`;
   try {
     Deno.writeTextFileSync(tempPath, text);
@@ -565,7 +573,8 @@ function writeTextFileAtomicSync(path: string, text: string): void {
     try {
       Deno.removeSync(tempPath);
     } catch {
-      // The temp file may not have been created yet.
+      // The temporary file may not have been created, and what failed is
+      // what this throws.
     }
     throw error;
   }

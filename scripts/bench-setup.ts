@@ -25,7 +25,7 @@ import {
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 const NOTE_PATTERN = `${REPO_ROOT}/patterns/system/notes/note.tsx`;
-const TODO_PATTERN = `${REPO_ROOT}/patterns/examples/todo-list/todo-list.tsx`;
+const TODO_PATTERN = `${REPO_ROOT}/patterns/examples/todo-list/main.tsx`;
 
 //
 // Content

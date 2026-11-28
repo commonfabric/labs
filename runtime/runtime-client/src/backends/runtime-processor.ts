@@ -84,7 +84,6 @@ import {
   loadDocument,
   markDurableReadTx,
   type NormalizedFullLink,
-  normalizeSpaceHost,
   parseLink,
   PatternCoverageCollector,
   popFrame,
@@ -99,9 +98,7 @@ import {
   RuntimeTelemetryEvent,
   sendEvent,
   setPatternEnvironment,
-  type SigilLink,
   SlugResolutionError,
-  SpaceHostValidationError,
   SpaceNotFoundError,
   transactionFailureMessage,
 } from "@commonfabric/runner";
@@ -140,6 +137,7 @@ import {
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { readHttpOrigin } from "@commonfabric/runner/space-host";
 import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
@@ -407,19 +405,25 @@ const MAX_CONSOLE_DEBUG_DEPTH = 7;
 /** How many commits of a space's history one page of its steps reads. */
 const HISTORY_PAGE_COMMITS = 500;
 
-/** Each registered logger's enabled state and level. */
-function loggerMetadata(): LoggerMetadata {
+/**
+ * The loggers registered in this realm, by name. The registry lives on
+ * `globalThis`, where `getLogger()` keeps it.
+ */
+function registeredLoggers(): Record<string, Logger> {
   const global = globalThis as unknown as {
     commonfabric?: { logger?: Record<string, Logger> };
   };
+  return global.commonfabric?.logger ?? {};
+}
+
+/** Each registered logger's enabled state and level. */
+function loggerMetadata(): LoggerMetadata {
   const result: LoggerMetadata = {};
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      result[name] = {
-        enabled: !logger.disabled,
-        level: (logger.level ?? "info") as LogLevel,
-      };
-    }
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    result[name] = {
+      enabled: !logger.disabled,
+      level: (logger.level ?? "info") as LogLevel,
+    };
   }
   return result;
 }
@@ -686,6 +690,10 @@ export function renderConfidentialityResolverFor(
     // the reconciler's, so the manifests it watches and the ones this
     // resolves are one cache.
     modulePolicyResolver: modulePolicySource?.resolve,
+    // A committed policy subject nominates the derivation space it digests,
+    // pending commonfabric/specs#110.
+    committedSubjectCandidates:
+      runtime.experimental.cfcCommittedSubjectCandidates === true,
   });
 }
 
@@ -734,14 +742,9 @@ export function renderModulePolicySourceFor(
  * Returns a string like "[Cell: of:fid1:abc.../path/to/prop]"
  */
 function formatCellLink(cell: Cell<unknown>): string {
-  try {
-    const link: SigilLink = cell.getAsLink();
-    const inner = linkRefPayload(link);
-    const pathStr = inner.path?.length ? `/${inner.path.join("/")}` : "";
-    return `[Cell: ${inner.id ?? "?"}${pathStr}]`;
-  } catch {
-    return "[Cell]";
-  }
+  const inner = linkRefPayload(cell.getAsLink());
+  const pathStr = inner.path?.length ? `/${inner.path.join("/")}` : "";
+  return `[Cell: ${inner.id ?? "?"}${pathStr}]`;
 }
 
 /**
@@ -932,17 +935,11 @@ export function securityContextFrom(
  * The message reporting a host that did not answer the boot-time health
  * check. The check gives one verdict over the backend and every space host,
  * so the message names them all where there is more than one. Hosts are
- * compared as the check compares them, as parsed URLs; one that does not
- * parse is named as written, since that is what failed the check.
+ * compared as the check compares them, as parsed URLs. Every one of them
+ * parses, since the runtime the check ran in refuses a host that does not.
  */
 function unreachableHostMessage(data: InitializationData): string {
-  const asChecked = (host: string) => {
-    try {
-      return new URL(host).toString();
-    } catch {
-      return host;
-    }
-  };
+  const asChecked = (host: string) => new URL(host).toString();
   const backend = asChecked(data.apiUrl);
   const spaceHosts = new Set<string>();
   for (const host of Object.values(data.spaceHostMap ?? {})) {
@@ -1521,17 +1518,15 @@ export class RuntimeProcessor {
               ) {
                 continue;
               }
-              let host: URL;
-              try {
-                host = normalizeSpaceHost(entry.host);
-              } catch (error) {
-                if (!(error instanceof SpaceHostValidationError)) throw error;
+              const read = readHttpOrigin(entry.host, "space host");
+              if ("refused" in read) {
                 console.warn(
                   `[RuntimeProcessor] Ignoring invalid site-table entry for ${entry.did}:`,
-                  error.message,
+                  read.refused,
                 );
                 continue;
               }
+              const host = read.origin;
               // A loopback entry names the toolshed from the machine that
               // wrote it, so a page served from anywhere else cannot reach it
               // — and a browser on an https page refuses the ws:// socket it
@@ -1814,7 +1809,7 @@ export class RuntimeProcessor {
 
     for (const [subscriptionId, membership] of [...this.#presenceMemberships]) {
       if (membership.client.id !== client.id) continue;
-      void this.#endPresenceMembership(subscriptionId);
+      void this.#endPresenceMembership(subscriptionId, membership);
     }
 
     this.#releaseIdleSpaceContexts();
@@ -2286,13 +2281,15 @@ export class RuntimeProcessor {
     if (state === undefined || state.client.id !== client.id) {
       return { value: false };
     }
-    await this.#endPresenceMembership(request.subscriptionId);
+    await this.#endPresenceMembership(request.subscriptionId, state);
     return { value: true };
   }
 
-  async #endPresenceMembership(subscriptionId: string): Promise<void> {
-    const state = this.#presenceMemberships.get(subscriptionId);
-    if (state === undefined) return;
+  /** Forgets the membership `state` held at `subscriptionId`, and leaves it. */
+  async #endPresenceMembership(
+    subscriptionId: string,
+    state: RuntimePresenceMembership,
+  ): Promise<void> {
     this.#presenceMemberships.delete(subscriptionId);
     state.ended = true;
     await state.membership?.leave();
@@ -4366,17 +4363,12 @@ export class RuntimeProcessor {
   }
 
   #getLoggers(loggerName?: string): Logger[] {
-    const global = globalThis as unknown as {
-      commonfabric?: { logger?: Record<string, Logger> };
-    };
-    if (!global.commonfabric?.logger) {
-      return [];
-    }
+    const loggers = registeredLoggers();
     if (loggerName) {
-      const logger = global.commonfabric.logger[loggerName];
+      const logger = loggers[loggerName];
       return logger ? [logger] : [];
     }
-    return Object.values(global.commonfabric.logger);
+    return Object.values(loggers);
   }
 
   #onTelemetry = (event: Event) => {

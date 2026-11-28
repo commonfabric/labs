@@ -82,6 +82,4 @@ export async function runCompileTypeLib(
 
 export type { CompileOptions };
 
-if (import.meta.main) {
-  Deno.exit(await runCompileTypeLib(Deno.args));
-}
+if (import.meta.main) Deno.exit(await runCompileTypeLib(Deno.args));

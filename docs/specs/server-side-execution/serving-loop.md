@@ -461,15 +461,27 @@ input marks it or the policy names another epoch. Impl: `StoreCurrency` in `runt
 **A piece a handler starts.** A handler's result pattern runs on the serving
 runtime so that its setup stages into the wave, and each pattern it starts
 registers its nodes there. Nothing demands those nodes, so once the handler's
-transaction commits the result is released (`#releaseServedHandlerResult` in
-`runner.ts`), and what remains is what the store holds, with the basis rows of
-any of its actions that ran. A demand for one of its values, or an event to one
+transaction commits and the scheduler is idle after it, the result is released
+(`#releaseServedHandlerResult` in `runner.ts`), and what remains is what the
+store holds, with the basis rows of any of its actions that ran. The wait for
+idle is what puts the piece's derived values in the store for the derivations
+that read them: the commit sets off every derivation that reads what a new
+piece derives, as a board's index reads what each of its topics derives, and
+each of those runs before the scheduler is idle, so it reads the value from a
+piece that still runs. A piece released at the commit itself would have written
+none of those values, and a derivation reading one through a link starts
+nothing. A demand for one of its values, or an event to one
 of its streams, starts the piece as either starts a piece on a fresh runtime.
 A session demands one of its values when it is sent a document the piece's
-setup wrote, other than its argument, which holds inputs current without it. A
-read that stops at a link to the piece is sent only its result document, and
-starts nothing (`carriesPieceMeta` in `runtime/memory/v2/server-sync.ts`). A
-piece whose document a client session tracks at that commit keeps running,
+setup wrote, other than its argument, which holds inputs current without it,
+and other than a `computed:` document that holds a value, which the store
+serves as it stands. A `computed:` document the piece has not written holds
+none, so a read that reaches one through a link starts the piece until it has
+derived it, and releases it again ("A computed document a demand names"
+below). A read that stops at a link to the piece is sent only its result
+document, and starts nothing (`carriesPieceMeta` in
+`runtime/memory/v2/server-sync.ts`). A piece whose document a client session
+tracks at the release keeps running,
 because that session's demand has already made its attempt to load it. The result
 pattern's index entry goes with the release, and so do the watches of the
 documents only the stopped pieces read: the release asks for the pass a stop
@@ -542,7 +554,8 @@ second in a row gives up on everything stale upstream
 pinned in
 `runtime/runner/test/executor/space-server-currency-upstream.test.ts`.
 
-**A computed document a demand names.** *(RULED 2026-11-21.)* A `computed:`
+**A computed document a demand names.** *(RULED 2026-11-21; AMENDED
+2026-11-25.)* A `computed:`
 document holds what a derivation wrote, with a `result` back-link to the piece
 that derives it and no pattern pointer of its own. A demand that names one as
 a root, as a session's watch of it or a row carried from another space (§3b)
@@ -554,12 +567,43 @@ that demands it: the serving identity's own instance is not the one
 demanded, and the space may hold none. An instance that does not exist yet
 has no back-link to read, so a demand carried from another space brings the
 piece with it (§3b). A `computed:` document a session was
-only sent, because a document it names links to it, is no root. A session
-watching a piece is sent every document the piece derives, and the piece
-starts from the root that reached them. A `computed:` root that holds no
-back-link parks as any root that is no piece's does. Impl: `isComputedId()` and
-the demand pass in `runtime/runner/src/executor/space-server.ts`; pinned in
-`runtime/runner/test/executor/space-server-computed-root.test.ts`.
+only sent, because a document it names links to it, is no root while it holds
+a value or a node of the serving runtime writes it. One that holds a value is
+the store's to serve as it stands, whether or not its piece runs. One a node
+writes belongs to a running piece, and the session's demand of it has that node
+derive it: a session watching a piece is sent every document the piece derives,
+and the piece starts from the root that reached them. One that holds no value
+and that no node writes is a root. Its piece is stopped and has not written
+it, as a piece a handler started is once the loop releases it before it runs
+("A piece a handler starts" above), and only a run of the piece can answer the
+read. The memory server marks the session's row for such a document
+`valueless` (`trackedAndPieceKeysFromEntries()` in
+`runtime/memory/v2/server-sync.ts`), and the demand pass structure-loads the
+row's key as it does a root a demand names, so where the loop keeps a currency
+index the root is judged first ("A root the store can serve" above). The load
+starts each piece it starts as a read's start (`RunnerStartOptions.forRead`),
+and releases it again (`Runner.releaseReadStart()`) once it has settled
+(`Runtime.settledFor()`): its derivations have run, and so has the async work
+its builtins began, a fetch's answer and what it derives included, which the
+runtime's idle does not wait for. The store then holds what the read reached.
+The pieces one pass started for reads are released together, once all of them
+have settled, so the document release they ask for is one pass. A piece something else has asked for since,
+another root's load, an event, a run, or an enclosing pattern, keeps running,
+and so does the piece of a key that a demand other than a read has made a root
+since. The row loses the mark
+once the piece writes the document, and its key stops being a root. A
+derivation that produced `undefined` leaves its document holding no value, as
+one that never ran does, so a read that reaches such a document of a stopped
+piece starts the piece again, briefly, each time the document's key is newly
+demanded. A list read whose items are
+links to pieces, with a schema that reaches only what each piece stores or
+derived before it stopped, starts none of them. A `computed:` root that holds
+no back-link parks as any root that is no piece's does. Impl: `isComputedId()`,
+`#rowRootReason()` and `#releaseReadStarts()` in the demand pass in
+`runtime/runner/src/executor/space-server.ts`, and `Runner.releaseReadStart()`;
+pinned in `runtime/runner/test/executor/space-server-computed-root.test.ts`,
+`runtime/piece/test/served-handler-child.test.ts` and
+`runtime/runner/test/runner-event-starts.test.ts`.
 
 **A nested piece a demand reaches.** A demand that reaches a nested instance's
 values starts the instances that enclose it first, whether or not it reaches
@@ -1827,23 +1871,48 @@ action's public write. Therefore, normatively:
 - Handler runs are actions: a server-side handler run gets per-run CFC
   exactly as its client run did. D-v2-1 moves WHERE handlers run, never
   the enforcement unit.
-- **The run carries the READ CEILING of the session it acts as.** The
-  stamp reads the memory server's session record for the run's
-  `scopeKeyIdentity.sessionId` (`Server.sessionReadCeiling`) and
-  attaches it as `WaveRunContext.readCeiling` — the ceiling the
-  client declared in its signed `session.open` descriptor
-  (protocol.md §1), or one the server assigned to the session. The
-  sqlite builtin resolves one effective ceiling per run: the serving
-  runtime's own option met with the carried one, `onExceed` meeting
-  toward `fail` — and reads under it exactly as a client's own run
-  reads under its option (06-cfc.md, "Runtime read ceiling"): the
-  meet joins the request hash and filters rows for a session-scoped
-  result. A shared result materializes under its query contract and
-  carries labels on its array shape and rows; cell reads meet the
-  carried session ceiling with the runtime ceiling before returning content. Never
-  for a bookkeeping run, which acts as no session; a run acting as a
-  session that declared none reads under the serving runtime's option
-  alone. Verification-coverage.md OW64 is the coverage row.
+- **The run reads under the READ CEILING of the session it acts as.**
+  The ceiling is the one the client declared in its signed
+  `session.open` descriptor (protocol.md §1), or one the server
+  assigned to the session; the memory server records it and
+  `Server.sessionReadCeiling` returns it. The stamp looks it up for the
+  session the run's scoped addresses resolve to (its
+  `scopeKeyIdentity.sessionId`) and carries it as
+  `WaveRunContext.sessionReadCeiling`. That session is not always the
+  one the run acts as: a space or user instance resolves against one of
+  its demanders, but it is shared by all of them and acts as none. So
+  the stamp carries a second field, `WaveRunContext.readCeiling`, the
+  ceiling cell reads are bounded by, set when
+  - the run is a handler acting as a session, or
+  - the run is a derivation whose instance is that session's, or
+  - the serving runtime's writes do not carry labels (flow labels not
+    persisted, or enforcement disabled). A shared result then would not
+    carry its inputs' labels to its readers, so the run reads under the
+    ceiling of the session it resolves against.
+
+  A shared instance's derivation, on a runtime whose writes carry
+  labels, reads without the ceiling: its result carries its inputs'
+  labels, and each reader's own read of it meets that reader's ceiling.
+  A query whose result is materialized for the session alone reads
+  under `sessionReadCeiling` whatever the run, since only that session
+  sees it. The sqlite builtin meets that ceiling with the serving
+  runtime's own option, `onExceed` meeting toward `fail`, and reads
+  under it exactly as a client's own run reads under its option
+  (06-cfc.md, "Runtime read ceiling"): the meet joins the request hash
+  and filters the rows. A shared result materializes under its query
+  contract and carries labels on its array shape and rows.
+
+  The stamp decides before the run's first read, from the instance it
+  was demanded as. A derivation stamped as a shared instance that
+  discovers session scope as it runs has read without the session's
+  ceiling, so its seal refuses it, the same way the early-emit guard
+  refuses a run that outgrew its stamp. The rerun is stamped as the
+  session's instance and reads under the ceiling, and
+  `sessionCeilingRefusals` counts the refusal.
+  No ceiling binds a bookkeeping run, which acts as no session; a run
+  acting as a session that declared none reads under the serving
+  runtime's option alone. Verification-coverage.md OW64 is the coverage
+  row.
 - **The run's CFC trust snapshot carries the run's ACTING principal** —
   the event's server-stamped actor, the demanded instance's principal,
   or the delegated carriage's actor — never the serving runtime's
@@ -1966,6 +2035,18 @@ create cannot rebase, so it is dropped rather than landing over the
 write, and the seed runs once more against the viewer's instance loaded
 fresh, filling the default's missing fields under what the viewer wrote
 (scopes.md §2). A fourth kind is a spec edit here first.
+
+The runner retries a dropped piece start once in place. The settlement of a
+bookkeeping contribution dropped whole over a concurrent write it cannot
+rebase over names every document it wrote, each with the store's head
+when it was dropped, as the settlement of a superseded derivation write
+does (below). The retry waits until the
+replica has taken each of those commits
+(`Runtime.awaitCommitRetryReadiness`). A retry started sooner writes
+every document again over what the replica holds, past a commit the
+replica has not taken. A client's start that stored a computed document
+then loses that document's `value`, and a send that resolves its target
+through the document addresses a place no handler is registered for.
 
 **The flag-ON client's speculative-consequence deferred start
 (RULED 2026-08-13; the Phase-4 P1-5 flag).** A flag-ON CLIENT's
@@ -2496,6 +2577,17 @@ triggered them has ended. Each crosses on that run's carriage, which
 its caller passes explicitly. They are the compile-cache and program
 writeback into a piece's own space, and the `agent` effect's index
 entry in the requester's home space (builtins.md).
+
+A commit precondition is part of the write it gates. A foreign seal
+that carries only preconditions still lands a commit in the foreign
+store, which takes a seq and a commit row and wakes that space's
+subscribers, so the gate holds it to the same carriage and grant as
+any other foreign write. A run that only observes a foreign document
+does not seal one. The CFC boundary's consultation of a module-policy
+manifest is such an observation: it adds no precondition to the commit
+(CFC spec §4.4.1 as commonfabric/specs#109 proposes; the ruling is
+pending), so a run that reads a policy-labeled value in another
+space commits to its own space alone.
 
 **No run writes an access list.** The wave commits engine-direct, past
 the memory server's INV-12 check (`09-invariants.md`), and nothing on

@@ -82,13 +82,14 @@ export async function writeHeapProfiles(
 }
 
 /**
- * Writes heap profiles each time this process receives SIGUSR2, as the
- * module's header describes, logging where they went, and starts sampling the
- * main thread's heap where `sampleMainThread` asks for it. The signal is
- * handled from the call on; one that arrives before sampling has started
- * waits for it.
+ * Writes heap profiles at each call of `handle`, which the process makes on
+ * SIGUSR2 as the module's header describes, logging where they went, and
+ * starts sampling the main thread's heap where `sampleMainThread` asks for it,
+ * `sampling` settling once it has started. A call before sampling has started
+ * waits for it; one while profiles are being written is ignored. `handle`
+ * settles once its round has been logged.
  */
-export async function listenForHeapProfileSignal(options: {
+export function createHeapProfileSignal(options: {
   directory: string;
   sampleMainThread: boolean;
   workerHeapProfiles: (
@@ -96,23 +97,29 @@ export async function listenForHeapProfileSignal(options: {
   ) => Promise<WorkerHeapProfile[] | undefined>;
   log: (...data: unknown[]) => void;
   error: (...data: unknown[]) => void;
-}): Promise<void> {
+}): { handle: () => Promise<void>; sampling: Promise<void> } {
   const { sampleMainThread } = options;
-  const sampling = sampleMainThread ? startHeapSampling() : undefined;
+  const sampling = sampleMainThread ? startHeapSampling() : Promise.resolve();
   let writing = false;
-  Deno.addSignalListener("SIGUSR2", () => {
-    if (writing) {
-      options.log("heap-profile: SIGUSR2 ignored; profiles are being written");
-      return;
-    }
-    writing = true;
-    options.log(
-      `heap-profile: writing the heap profile of every sampling isolate to ${options.directory}`,
-    );
-    writeHeapProfiles(options.directory, options.workerHeapProfiles, {
-      sampleMainThread,
-    })
-      .then(({ path, manifest }) => {
+  return {
+    sampling,
+    async handle() {
+      if (writing) {
+        options.log(
+          "heap-profile: SIGUSR2 ignored; profiles are being written",
+        );
+        return;
+      }
+      writing = true;
+      options.log(
+        `heap-profile: writing the heap profile of every sampling isolate to ${options.directory}`,
+      );
+      try {
+        const { path, manifest } = await writeHeapProfiles(
+          options.directory,
+          options.workerHeapProfiles,
+          { sampleMainThread },
+        );
         const failed = (manifest.workers ?? []).filter((worker) =>
           "error" in worker.outcome
         ).length;
@@ -126,11 +133,11 @@ export async function listenForHeapProfileSignal(options: {
             failed > 0 ? `, ${failed} worker(s) failed` : ""
           }; manifest ${path}`,
         );
-      })
-      .catch((cause) => options.error("heap-profile: failed", cause))
-      .finally(() => {
+      } catch (cause) {
+        options.error("heap-profile: failed", cause);
+      } finally {
         writing = false;
-      });
-  });
-  await sampling;
+      }
+    },
+  };
 }

@@ -47,7 +47,7 @@ import {
   sendMessage,
   viewShows,
 } from "../../tools/test-support/vnode-helpers.ts";
-import DoList, { type DoItem } from "./do-list.tsx";
+import DoList, { type DoItem } from "./main.tsx";
 
 const titles = (items: readonly DoItem[]): string =>
   items.map((item) => item.title).join(",");

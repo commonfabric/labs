@@ -1525,6 +1525,35 @@ describe("github-runs", () => {
             expect(read2[0].status).toBe("completed");
           });
 
+          it("takes a copy the list shows updated at the same moment over one it read before, once a delivered copy is no longer held", async () => {
+            using time = new FakeTime();
+            const relay = new FakeRelay();
+            await relay.open();
+            const github = new FakeGitHub(runs(10, 1));
+            const lists = new RunLists(undefined, relay.webhooks);
+            await read(lists, github);
+            await deliver(relay, run(5, { conclusion: "failure" }));
+            expect((await read(lists, github))[5].conclusion).toBe("failure");
+            // A shallower reading stops holding the delivered copy, and a
+            // deeper one reads the run from the list again.
+            await read(lists, github, { until: (held) => held.id === 10 });
+            const deep = await read(lists, github);
+            expect(deep[5].conclusion).toBe("success");
+            github.list = [
+              ...runs(10, 6),
+              run(5, { conclusion: "cancelled" }),
+              ...runs(4, 1),
+            ];
+            await relay.end();
+            await relay.deliver("ping", {});
+            time.tick(HEAD_REUSE_MS);
+
+            const read2 = await read(lists, github);
+
+            expect(ids(read2)).toEqual(ids(runs(10, 1)));
+            expect(read2[5].conclusion).toBe("cancelled");
+          });
+
           it("keeps a delivered copy of a run over an older copy the list shows", async () => {
             const relay = new FakeRelay();
             await relay.open();

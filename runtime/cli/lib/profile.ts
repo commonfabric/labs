@@ -22,11 +22,11 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   type Cell,
   cellRuntime,
-  DocumentLoadError,
   getMetaLink,
   type IExtendedStorageTransaction,
   loadProfileCandidates,
   loadProfileOwnerDocuments,
+  type MemorySpace,
   orderProfileCandidates,
   profileOwnership,
   type Runtime,
@@ -46,7 +46,6 @@ import {
   blobReferenceOf,
   storeBlob,
 } from "@commonfabric/runner/blob-record";
-import { isDID } from "@commonfabric/identity/did";
 
 import { canonicalAddress } from "./callable.ts";
 import { loadPieces, type SpaceConfig } from "./piece.ts";
@@ -191,30 +190,18 @@ export async function createdByThisCall(
 
 /**
  * Sends `event` on `stream` and resolves with the transaction its handler
- * committed.
+ * committed, or with an error-status view of it when the event's append was
+ * refused, as `sendEvent()` reports a refusal to its commit callback.
  *
  * The append's own outcome is not the answer: the handler runs after the
  * append, and what it does exists once the handler's transaction has
- * committed. A refused append is the one outcome that never reaches a commit
- * callback, so it rejects here.
+ * committed.
  */
 function sendAndCommit(
   stream: Cell<unknown>,
   event: unknown,
 ): Promise<IExtendedStorageTransaction> {
-  return new Promise((resolve, reject) => {
-    try {
-      sendEvent(stream, event, resolve, {
-        onAppended: (delivery, appendedTx) => {
-          if (!delivery.delivered && appendedTx.status().status !== "error") {
-            reject(new Error(`event append refused: ${delivery.refused}`));
-          }
-        },
-      });
-    } catch (error) {
-      reject(error);
-    }
-  });
+  return new Promise((resolve) => sendEvent(stream, event, resolve));
 }
 
 /**
@@ -590,8 +577,8 @@ async function listedRow(
  * in the order the home retired them. A profile whose document is absent is
  * left out, as a live one is.
  *
- * @throws Error when one of them failed to load, or a label that says whose
- * it is cannot be read.
+ * @throws Error naming the space of one that failed to load, or whose label
+ * saying whose it is cannot be read, with the failure as its cause.
  */
 async function ownRetiredProfiles(
   root: Cell<unknown>,
@@ -611,7 +598,6 @@ async function ownRetiredProfiles(
         found.push(link.resolveAsCell());
       }
     } catch (error) {
-      if (!(error instanceof DocumentLoadError)) throw error;
       throw new Error(`Cannot read the profile in ${space}.`, {
         cause: error,
       });
@@ -842,10 +828,10 @@ interface ProfileSend {
 
 /**
  * Sends each of the events `sends` returns, given the runtime acting on the
- * profile's space, in order and each in a commit of its own, to the profile
- * of `config.identity` whose space is `config.profileSpace`, which the home
- * lists and has not retired, running the profile so that its handlers exist,
- * and waits for the commits to reach storage. The home root
+ * profile's space and that space, in order and each in a commit of its own,
+ * to the profile of `config.identity` whose space is `config.profileSpace`,
+ * which the home lists and has not retired, running the profile so that its
+ * handlers exist, and waits for the commits to reach storage. The home root
  * is read and not started. `doing` names the act in a failure's message.
  *
  * @throws Error when the home lists no such profile or retired it, when a
@@ -856,7 +842,10 @@ interface ProfileSend {
  */
 async function sendToProfile(
   config: ProfileTargetConfig,
-  sends: (runtime: Runtime) => Promise<readonly ProfileSend[]>,
+  sends: (
+    runtime: Runtime,
+    space: MemorySpace,
+  ) => Promise<readonly ProfileSend[]>,
   doing: string,
   landed: (
     stored: { name?: string; picture?: Uint8Array; avatar?: string },
@@ -891,7 +880,9 @@ async function sendToProfile(
       undefined,
       target.scope,
     );
-    for (const { stream, event } of await sends(pieces.runtime)) {
+    for (
+      const { stream, event } of await sends(pieces.runtime, piece.space)
+    ) {
       const committed = await sendAndCommit(
         piece.asSchema(undefined).key(stream),
         event,
@@ -975,8 +966,8 @@ export type ProfileNameAttestation =
  * @throws Error when the home lists no such profile of the identity's own,
  * when the profile's name policy names another owner or a layout the repair
  * does not support, when the profile changed since
- * `config.expectedInspection` was taken, or when the name still carries no
- * label afterward.
+ * `config.expectedInspection` was taken, or when the name is still not
+ * attested to the identity afterward.
  */
 export async function attestProfileName(
   config: ProfileNameAttestationConfig,
@@ -1032,7 +1023,7 @@ export async function attestProfileName(
   if (!after.labeled) {
     throw new Error(
       `Attesting the name of profile ${config.profileSpace} committed, but ` +
-        "its name still carries no label.",
+        `its name is still not attested to ${config.space}.`,
     );
   }
   return { status: "attested", name: after.name };
@@ -1181,7 +1172,7 @@ export async function setProfilePicture(
   }
   await sendToProfile(
     config,
-    async (runtime) => {
+    async (runtime, space) => {
       if (stored === undefined) {
         return [
           { stream: "setPicture", event: { clear: true } },
@@ -1191,10 +1182,6 @@ export async function setProfilePicture(
       // The picture is stored as a blob in the profile's own space, and sent
       // both ways: the profile keeps the blob, and a profile whose
       // `setPicture` predates blobs keeps the bytes.
-      const space = config.profileSpace;
-      if (!isDID(space)) {
-        throw new Error(`${space} names no space.`);
-      }
       const picture = new FabricBytes(stored.bytes);
       const id = await storeBlob(runtime, space, {
         type: stored.type,

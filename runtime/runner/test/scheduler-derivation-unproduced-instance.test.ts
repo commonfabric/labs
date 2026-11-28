@@ -7,6 +7,7 @@ import {
   createSigilLinkFromParsedLink,
   toMemorySpaceAddress,
 } from "../src/link-utils.ts";
+import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { Runtime } from "../src/runtime.ts";
 import { RetryImmediately } from "../src/scheduler/retry-immediately.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
@@ -15,15 +16,20 @@ import {
   type ScopeKeyIdentity,
 } from "@commonfabric/memory/v2";
 import { describe, it } from "@commonfabric/test-support/test";
+import { captureLogs } from "./support/captured-logs.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 
 /**
  * A runtime whose storage manager serves its signer's space when `serving`
  * is set, as a serving runtime's does, and a client runtime otherwise.
- * `holder` holds, at `state`, a link to `state`, a user-scoped document, and
- * at `upstream`, a link to `upstream`, another.
+ * `holder` holds, at `state`, a link to `state`, a document at `stateScope`,
+ * and at `upstream`, a link to `upstream`, a user-scoped document.
  */
-async function fixture(name: string, serving: boolean) {
+async function fixture(
+  name: string,
+  serving: boolean,
+  stateScope: "user" | "session" = "user",
+) {
   const signer = await Identity.fromPassphrase(`unproduced instance ${name}`);
   const space = signer.did();
   const storage = EmulatedStorageManager.emulate({
@@ -40,7 +46,7 @@ async function fixture(name: string, serving: boolean) {
     `unproduced-instance-state-${name}`,
     undefined,
     undefined,
-    "user",
+    stateScope,
   );
   const upstream = runtime.getCell<string>(
     space,
@@ -156,6 +162,24 @@ async function fixture(name: string, serving: boolean) {
       ),
 
     /**
+     * The key the scheduler reports for the session instance of `state`'s
+     * document when a writer that owes it is coming to produce it, asked for
+     * a served run under `identity`, and undefined when none is.
+     */
+    sessionStateComing(identity: ScopeKeyIdentity) {
+      const tx = runtime.edit();
+      stampWaveRunContext(tx, {
+        actionId: "served-reader",
+        kind: "derivation",
+        scopeKeyIdentity: identity,
+      });
+      return runtime.scheduler.comingOwedScopedInstance(
+        { ...state.getAsNormalizedFullLink(), scope: "session" },
+        tx,
+      );
+    },
+
+    /**
      * Registers a derivation that declares a write to `state` and an effect
      * that reads `state`, which makes the derivation live, so the scheduler
      * queues it. Neither has run when this returns.
@@ -181,7 +205,10 @@ async function fixture(name: string, serving: boolean) {
      * user-scoped document, marks every instance it has invalid, and
      * registers an effect that reads `state` through the space slot, which
      * makes it live. The writer
-     * has not run again when this returns.
+     * has not run again when this returns. With `invalidate: false` its
+     * instances are left current, and with `rooted: false` the writer is
+     * registered again after its run under an identity that names no piece
+     * root.
      */
     async runFannedOutWriter(
       demanders: () => ScopeKeyIdentity[],
@@ -189,6 +216,8 @@ async function fixture(name: string, serving: boolean) {
         /** Whether the run after the first throws `RetryImmediately` until
          * the scheduler retries it no more. */
         givenUp?: boolean;
+        invalidate?: boolean;
+        rooted?: boolean;
       } = {},
     ) {
       stub(runtime, "serverRunDemandersFor", () => demanders());
@@ -212,21 +241,25 @@ async function fixture(name: string, serving: boolean) {
           pieceRootId: "fanned-out-root",
         },
       });
-      runtime.scheduler.subscribe(writer, {
+      const writes = {
         reads: [],
         shallowReads: [],
         writes: [toMemorySpaceAddress(slot)],
-      });
+      };
+      runtime.scheduler.subscribe(writer, writes);
       await runtime.scheduler.run(writer);
       await runtime.idle();
       throws = options.givenUp === true;
-      runtime.scheduler.invalidateAction(writer);
+      if (options.rooted === false) {
+        runtime.scheduler.subscribe(writer, writes, {
+          observationIdentity: { pieceId: "fanned-out-unrooted" },
+        });
+      }
+      if (options.invalidate !== false) {
+        runtime.scheduler.invalidateAction(writer);
+      }
       if (throws) {
-        runtime.scheduler.subscribe(writer, {
-          reads: [],
-          shallowReads: [],
-          writes: [toMemorySpaceAddress(slot)],
-        }, { isEffect: true });
+        runtime.scheduler.subscribe(writer, writes, { isEffect: true });
         await runtime.scheduler.idleWithPendingCommits();
       }
       // A reader of `state` reads the space slot's redirect on its way to
@@ -251,6 +284,23 @@ async function fixture(name: string, serving: boolean) {
     },
 
     /**
+     * Registers a derivation that writes `upstream`, runs it, and waits for
+     * it to settle.
+     */
+    async runUpstreamWriter() {
+      const writer = (tx: IExtendedStorageTransaction) =>
+        upstream.withTx(tx).set("upstream value");
+      runtime.scheduler.subscribe(writer, {
+        reads: [],
+        shallowReads: [],
+        writes: [toMemorySpaceAddress(upstream.getAsNormalizedFullLink())],
+      });
+      await runtime.scheduler.run(writer);
+      await runtime.idle();
+      await storage.synced();
+    },
+
+    /**
      * Starts the consumer, which reads `state` through `holder`'s link, and
      * waits for it to settle.
      */
@@ -258,6 +308,23 @@ async function fixture(name: string, serving: boolean) {
       subscribeConsumer(
         consumerOf((tx) => holder.withTx(tx).key("state").get()),
       ),
+
+    /**
+     * Starts a consumer that reads `state` through `holder`'s link, which the
+     * run supply fans out over `demanders` (a piece root resolving to them),
+     * and waits for it to settle.
+     */
+    runFannedOutConsumer(demanders: ScopeKeyIdentity[]) {
+      stub(runtime, "serverRunDemandersFor", () => demanders);
+      const consumer = consumerOf((tx) => holder.withTx(tx).key("state").get());
+      Object.assign(consumer, {
+        schedulerObservationIdentity: {
+          pieceId: "fanned-out-consumer",
+          pieceRootId: "fanned-out-consumer",
+        },
+      });
+      return subscribeConsumer(consumer);
+    },
 
     /**
      * Starts a consumer that reads `state` through `holder`'s link and throws
@@ -318,6 +385,7 @@ describe("scheduler-derivation-unproduced-instance", () => {
     const f = await fixture("thrown", true);
     const errors: Error[] = [];
     f.runtime.scheduler.onError((error) => errors.push(error));
+    using logs = captureLogs("scheduler");
     try {
       f.registerWriter();
       await f.runThrowingConsumer();
@@ -325,6 +393,12 @@ describe("scheduler-derivation-unproduced-instance", () => {
       expect(f.consumerRuns()).toBe(1);
       expect(errors).toEqual([]);
       expect(f.output.get()).toBe("as it was");
+      expect(logs.textsOf("schedule-error")).toEqual([]);
+      expect(logs.textsOf("schedule-withdrawn-error")).toEqual([
+        expect.stringMatching(
+          /withdrawn: .* Error: TypeError: read nothing$/,
+        ),
+      ]);
 
       const produce = f.runtime.edit();
       f.state.withTx(produce).set("the instance");
@@ -343,11 +417,16 @@ describe("scheduler-derivation-unproduced-instance", () => {
     const f = await fixture("thrown-authored", true);
     const errors: Error[] = [];
     f.runtime.scheduler.onError((error) => errors.push(error));
+    using logs = captureLogs("scheduler");
     try {
       await f.runThrowingConsumer();
 
       expect(f.consumerRuns()).toBe(1);
       expect(errors.map((error) => error.message)).toEqual(["read nothing"]);
+      expect(logs.textsOf("schedule-withdrawn-error")).toEqual([]);
+      expect(logs.textsOf("schedule-error")).toEqual([
+        expect.stringMatching(/Error: TypeError: read nothing$/),
+      ]);
     } finally {
       await f.close();
     }
@@ -422,6 +501,67 @@ describe("scheduler-derivation-unproduced-instance", () => {
     }
   });
 
+  it("names the instance a fanned-out served derivation was withdrawn for reading, at its demander's scope key", async () => {
+    // The serving loop demands each instance named here, so that its writer
+    // runs for it.
+
+    const f = await fixture("fanned-out", true);
+    try {
+      f.registerWriter();
+      await f.runFannedOutConsumer([f.runtime.scopeKeyIdentity]);
+
+      expect(f.output.get()).toBe("as it was");
+      const { space, id } = f.state.getAsNormalizedFullLink();
+      expect(f.runtime.scheduler.unproducedReads()).toEqual([{
+        slice: "space",
+        space,
+        id,
+        scopeKey: resolveScopeKey("user", f.runtime.scopeKeyIdentity),
+      }]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("names no instance for a fanned-out served derivation withdrawn for reading at a scope its demander's identity names no instance of", async () => {
+    // A demander with no session has no session instance for the serving
+    // loop to demand.
+
+    const f = await fixture("fanned-out-sessionless", true, "session");
+    try {
+      f.registerWriter();
+      await f.runFannedOutConsumer([
+        { principal: f.runtime.scopeKeyIdentity.principal },
+      ]);
+
+      expect(f.consumerRuns()).toBe(1);
+      expect(f.output.get()).toBe("as it was");
+      expect(f.runtime.scheduler.unproducedReads()).toEqual([]);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("wakes no watch on a document when a writer of another document finishes a run", async () => {
+    const f = await fixture("watch-produced-other", true);
+    try {
+      let woken = 0;
+      f.runtime.scheduler.watchProducedDocument(
+        f.state.getAsNormalizedFullLink(),
+        () => woken++,
+      );
+      await f.runUpstreamWriter();
+
+      expect(woken).toBe(0);
+
+      await f.runEmptyWriter();
+
+      expect(woken).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("reports an owed instance as coming while a writer that owes it is queued to run", async () => {
     const f = await fixture("coming-queued", true);
     try {
@@ -477,6 +617,56 @@ describe("scheduler-derivation-unproduced-instance", () => {
       });
 
       expect(f.stateComing()).toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as not coming from a fanned-out writer that is current for the reading principal", async () => {
+    // A fanned-out writer runs again for an instance only once an input
+    // changes under it.
+
+    const f = await fixture("coming-fanned-out-current", true);
+    try {
+      await f.runFannedOutWriter(() => [f.runtime.scopeKeyIdentity], {
+        invalidate: false,
+      });
+
+      expect(f.stateComing()).toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports an owed instance as not coming from a fanned-out writer that names no piece root", async () => {
+    // The run supply finds a fanned-out node's demanders through the piece
+    // roots it names, so one naming none runs for no principal.
+
+    const f = await fixture("coming-fanned-out-unrooted", true);
+    try {
+      await f.runFannedOutWriter(() => [f.runtime.scopeKeyIdentity], {
+        rooted: false,
+      });
+
+      expect(f.stateComing()).toBeUndefined();
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("reports a session instance as coming only to a served run whose identity names a session", async () => {
+    // A run under an identity with no session names no session instance, so
+    // no writer is coming to produce one for it.
+
+    const f = await fixture("coming-session", true);
+    try {
+      f.registerQueuedWriter();
+      const { principal, sessionId } = f.runtime.scopeKeyIdentity;
+
+      expect(f.sessionStateComing({ principal, sessionId })).toBe(
+        resolveScopeKey("session", { principal, sessionId }),
+      );
+      expect(f.sessionStateComing({ principal })).toBeUndefined();
     } finally {
       await f.close();
     }

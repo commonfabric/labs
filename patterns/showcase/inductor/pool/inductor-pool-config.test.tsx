@@ -15,7 +15,7 @@ import {
   type Writable,
 } from "commonfabric";
 import { INVOICE } from "./inductor-pool-test-fixture.ts";
-import InductorPool, { type InductorPoolOutput } from "./inductor-pool.tsx";
+import InductorPool, { type InductorPoolOutput } from "./main.tsx";
 
 interface Setup {
   pool: InductorPoolOutput;

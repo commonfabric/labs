@@ -34,7 +34,7 @@ import {
   publishPatterns,
   UNTOUCHED,
 } from "./inductor-pool-test-fixture.ts";
-import InductorPool, { type ReleasedRule } from "./inductor-pool.tsx";
+import InductorPool, { type ReleasedRule } from "./main.tsx";
 import { type StoredContribution, tallyEveryRule } from "./pool-policy.tsx";
 
 /**

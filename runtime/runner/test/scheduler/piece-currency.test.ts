@@ -36,6 +36,7 @@ import type {
 } from "../../src/storage/interface.ts";
 
 const SPACE = "did:key:z6Mk-piece-currency-test-space" as MemorySpace;
+const FAR = "did:key:z6Mk-another-space" as MemorySpace;
 const PIECE = "of:piece";
 const ALICE: ScopeKeyIdentity = {
   principal: "did:key:alice",
@@ -60,6 +61,9 @@ describe("piece-currency", () => {
   /** The computations that name no piece in that registry, in order. */
   let unattributedWriters: Action[];
 
+  /** The piece's own computation in that registry. */
+  let pieceComputation: Action;
+
   /**
    * A snapshot of a piece with one live computation, of `status`, that
    * declares a write of `computed:out` at `declared`. `instances` are the
@@ -76,8 +80,11 @@ describe("piece-currency", () => {
    * document that the runtime registered the piece under, `space` unless
    * given. Each of `unattributed` is a
    * computation that names no piece, clean and live unless it says
-   * otherwise, with the document it writes and what it read. With
-   * `live: false` the piece's computation is registered and not live.
+   * otherwise, with the document it writes and what it read. Each of
+   * `attributed` is a document a computation of another piece writes, and
+   * `foreignWrite` a document of another space that the piece's computation
+   * declares a write of besides `computed:out`. With `live: false` the
+   * piece's computation is registered and not live.
    */
   const snapshotOf = (options: {
     declared?: CellScope;
@@ -95,6 +102,8 @@ describe("piece-currency", () => {
     unattributed?: Array<
       { writes: Read["id"]; reads: Read[]; status?: NodeStatus; live?: boolean }
     >;
+    attributed?: Read["id"][];
+    foreignWrite?: Read["id"];
   } = {}) => {
     const instances = options.instances ?? [];
     const nodes = new NodeRegistry();
@@ -105,6 +114,7 @@ describe("piece-currency", () => {
       pieceId: `${options.root ?? "space"}:${PIECE}`,
       pieceRootId: PIECE,
     };
+    pieceComputation = action;
     const node = nodes.register(action, "computation");
     nodes.setStatus(action, options.status ?? "clean");
     node.liveRefs = options.live === false ? 0 : 1;
@@ -154,6 +164,14 @@ describe("piece-currency", () => {
       path: [],
       scope: options.declared ?? "space",
     } as IMemorySpaceAddress];
+    if (options.foreignWrite !== undefined) {
+      surface.push({
+        space: FAR,
+        id: options.foreignWrite,
+        type: "application/json",
+        path: [],
+      });
+    }
     const dependencies = new WeakMap<Action, ReactivityLog>();
     if (options.reads !== undefined) {
       dependencies.set(action, logOf(options.reads));
@@ -168,6 +186,17 @@ describe("piece-currency", () => {
       dependencies.set(write, logOf(writer.reads));
       writersByEntity.set(
         entityNameKey({ space: SPACE, id: writer.writes, scope: "space" }),
+        new Set([write]),
+      );
+    }
+    for (const id of options.attributed ?? []) {
+      const write: Action & Partial<TelemetryAnnotations> = function other() {};
+      write.schedulerObservationIdentity = {
+        pieceId: "space:of:other-piece",
+        pieceRootId: "of:other-piece",
+      };
+      writersByEntity.set(
+        entityNameKey({ space: SPACE, id, scope: "space" }),
         new Set([write]),
       );
     }
@@ -194,6 +223,25 @@ describe("piece-currency", () => {
     };
     return snapshotPieceCurrency(state, SPACE, PIECE)!;
   };
+
+  /**
+   * The state of a scheduler that registered `nodes` and holds no
+   * dependencies, declared writes, writers, or clocks.
+   */
+  const bareStateOf = (nodes: NodeRegistry): PieceCurrencyState => ({
+    nodes,
+    liveness: {
+      nodes,
+      materializerIndex: { isMaterializer: () => false },
+    } as unknown as SchedulerLivenessState,
+    dependencies: new WeakMap(),
+    writeIndex: {
+      writersByEntity: new Map(),
+      getSchedulingWrites: () => [],
+    },
+    clockDocuments: new Map(),
+    sourceSeqOf: () => undefined,
+  });
 
   /** The slice of `snapshot` at `key`. */
   const sliceOf = (
@@ -253,6 +301,30 @@ describe("piece-currency", () => {
       it("is the user slice, for the session's instance, for a session write of a run at a user instance", () => {
         expect(answersOf("session", [user])).toEqual([
           { slice: user, at: session },
+        ]);
+      });
+
+      it("is none for a session write of a run at the space instance whose identity names no session, and the user slice for a user write of that run", () => {
+        const sessionless: ScopeKeyIdentity = { principal: ALICE.principal };
+        const answers = (declared: CellScope) =>
+          snapshotOf({
+            declared,
+            instances: [{ key: "space", identity: sessionless }],
+          }).slices.map(({ key, vouches, decides }) => ({
+            key,
+            vouches,
+            decides,
+          }));
+
+        expect(answers("session")).toEqual([
+          { key: "space", vouches: [], decides: [] },
+        ]);
+        expect(answers("user")).toEqual([
+          {
+            key: "space",
+            vouches: [],
+            decides: [{ id: "computed:out", scopeKey: user }],
+          },
         ]);
       });
 
@@ -495,6 +567,17 @@ describe("piece-currency", () => {
         );
       });
 
+      it("names a read once that the slice made itself and a writer that names no piece made too", () => {
+        const taken = snapshotOf({
+          reads: [{ id: "of:shared" }, { id: "of:source" }],
+          unattributed: [{ writes: "of:shared", reads: [{ id: "of:source" }] }],
+        });
+
+        expect(sliceOf(taken, "space")?.reads.map((read) => read.id)).toEqual(
+          ["of:shared", "of:source"],
+        );
+      });
+
       it("has the registry report the piece as changed when a writer that names no piece, whose output it read, has its status written", () => {
         snapshotOf({
           reads: [{ id: "of:shared" }],
@@ -518,26 +601,26 @@ describe("piece-currency", () => {
         });
         const [before] = unattributedWriters;
         const nodes = registry;
-        snapshotPieceCurrency(
-          {
-            nodes,
-            liveness: {
-              nodes,
-              materializerIndex: { isMaterializer: () => false },
-            } as unknown as SchedulerLivenessState,
-            dependencies: new WeakMap(),
-            writeIndex: {
-              writersByEntity: new Map(),
-              getSchedulingWrites: () => [],
-            },
-            clockDocuments: new Map(),
-            sourceSeqOf: () => undefined,
-          },
-          SPACE,
-          PIECE,
-        );
+        snapshotPieceCurrency(bareStateOf(nodes), SPACE, PIECE);
         nodes.trackChangedPieces();
 
+        nodes.setStatus(before, "invalid");
+
+        expect(nodes.takeChangedPieces()).toEqual([]);
+      });
+
+      it("is no snapshot for a piece no computation names, and has the registry stop reporting the piece for a writer an earlier snapshot of it answered for", () => {
+        snapshotOf({
+          reads: [{ id: "of:shared" }],
+          unattributed: [{ writes: "of:shared", reads: [] }],
+        });
+        const [before] = unattributedWriters;
+        const nodes = registry;
+        nodes.remove(pieceComputation);
+
+        expect(snapshotPieceCurrency(bareStateOf(nodes), SPACE, PIECE))
+          .toBeUndefined();
+        nodes.trackChangedPieces();
         nodes.setStatus(before, "invalid");
 
         expect(nodes.takeChangedPieces()).toEqual([]);
@@ -578,6 +661,30 @@ describe("piece-currency", () => {
       }
     });
 
+    describe("a write in another space", () => {
+      it("keeps every slice of the piece from being vouched for, and is neither among its writes nor vouched for", () => {
+        const taken = snapshotOf({
+          foreignWrite: "of:far",
+          instances: [{ key: user }],
+        });
+
+        expect(taken.unvouched).toEqual(["foreign-write"]);
+        expect(taken.writes).toEqual(["computed:out"]);
+        expect(sliceOf(taken, user)?.vouches).toEqual(["computed:out"]);
+        expect(sliceOf(taken, user)?.decides).toEqual([
+          { id: "computed:out", scopeKey: "space" },
+        ]);
+      });
+
+      it("is not vouched for by a run with no fan-out state", () => {
+        const taken = snapshotOf({ foreignWrite: "of:far" });
+
+        expect(taken.unvouched).toEqual(["foreign-write"]);
+        expect(sliceOf(taken, "space")?.vouches).toEqual(["computed:out"]);
+        expect(snapshotOf().unvouched).toEqual([]);
+      });
+    });
+
     describe("a read of the output of a piece that is not started", () => {
       it("is reported for a read of a derived document no registered computation writes", () => {
         expect(snapshotOf({ reads: [{ id: "computed:far" }] }).readsUnstarted)
@@ -587,6 +694,22 @@ describe("piece-currency", () => {
       it("is not reported for a read of the piece's own derived document", () => {
         expect(snapshotOf({ reads: [{ id: "computed:out" }] }).readsUnstarted)
           .toBe(false);
+      });
+
+      it("is not reported for a read of a derived document a computation of another piece writes, which is reported as derived", () => {
+        const taken = snapshotOf({
+          reads: [{ id: "computed:theirs" }],
+          attributed: ["computed:theirs"],
+        });
+
+        expect(taken.readsUnstarted).toBe(false);
+        expect(sliceOf(taken, "space")?.reads).toEqual([{
+          space: SPACE,
+          id: "computed:theirs",
+          scopeKey: "space",
+          derived: true,
+        }]);
+        expect(sliceOf(taken, "space")?.unvouched).toEqual([]);
       });
 
       it("is not reported for a read of a document that is no derived one", () => {

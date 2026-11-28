@@ -130,8 +130,11 @@ export interface HarnessJobFabric {
 
 /** One job, as plain data. */
 export interface HarnessJobSpec extends HarnessModelLimits {
-  /** The task text, given to the model as the prompt. */
+  /** The submitted task text. */
   task: string;
+
+  /** Gives the opening task to the model by file. Follow-ups keep their message inline. */
+  taskDelivery?: "file";
 
   /** The predecessor's run root, whose checkpoint seeds this follow-up. */
   continueFrom?: { runRoot: string };
@@ -358,6 +361,16 @@ export type HarnessJobResult =
     | { outcome: "cancelled" }
   );
 
+/** Helper for the job, which reports the tool calls and artifacts of a run. */
+const runStateReport = (
+  runState: HarnessPromptLoopResult["runState"],
+): AgentRunReport => ({
+  toolCalls: runState.toolOutputs.length,
+  ...(runState.artifactRoot !== undefined
+    ? { runRef: runState.artifactRoot }
+    : {}),
+});
+
 /** Helper for the job, which turns a loop result into a report. */
 const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
   const usage = result.totalUsage ?? result.usage;
@@ -378,10 +391,7 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
         modelAttributionComplete: result.modelAttributionComplete,
       }
       : {}),
-    toolCalls: result.runState.toolOutputs.length,
-    ...(result.runState.artifactRoot !== undefined
-      ? { runRef: result.runState.artifactRoot }
-      : {}),
+    ...runStateReport(result.runState),
   };
 };
 
@@ -571,6 +581,15 @@ export const runHarnessJob = async (
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
   }
+  let filePrompt: string | undefined;
+  if (spec.taskDelivery === "file" && spec.continueFrom === undefined) {
+    await Deno.writeTextFile(join(workspace, ".job-task"), spec.task, {
+      createNew: true,
+      mode: 0o400,
+    });
+    filePrompt =
+      "Your task is in .job-task in the workspace. Follow the job instructions to use it.";
+  }
   const argv = argvOf(
     spec,
     workspace,
@@ -702,11 +721,18 @@ export const runHarnessJob = async (
       };
       return {
         runPrompt: (promptOptions) =>
-          run(promptOptions, (wrapped) => loop.runPrompt(wrapped)),
+          run(
+            promptOptions,
+            (wrapped) =>
+              loop.runPrompt(
+                filePrompt === undefined
+                  ? wrapped
+                  : { ...wrapped, prompt: filePrompt },
+              ),
+          ),
         runTranscript: (transcriptOptions) =>
           run(transcriptOptions, (wrapped) => loop.runTranscript(wrapped)),
-        // The harness classifies the task before it assembles the prompt; a
-        // wrapper without this seam runs every job with full orientation.
+        // The harness classifies the submitted task before it assembles the prompt.
         ...(loop.classifyTask !== undefined
           ? {
             classifyTask: (task: string) => loop.classifyTask!(task),
@@ -720,25 +746,21 @@ export const runHarnessJob = async (
   const failedTurns = promptLoopModelTurnsFromError(loopError);
   const failedState = readRunState?.();
   // These are partial measurements, not a completeness claim. A failed
-  // provider call may have spent tokens it never reported.
-  const failedReport: AgentRunReport | undefined =
-    failedTurns !== undefined || reportedUsage !== undefined
-      ? {
-        ...(reportedUsage !== undefined
-          ? {
-            usage: { ...reportedUsage },
-            usageCoverage: reportedUsageCoverage,
-          }
-          : {}),
-        ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
-        ...(failedState !== undefined
-          ? { toolCalls: failedState.toolOutputs.length }
-          : {}),
-        ...(failedState?.artifactRoot !== undefined
-          ? { runRef: failedState.artifactRoot }
-          : {}),
-      }
-      : undefined;
+  // provider call may have spent tokens it never reported. Only a loop the
+  // harness built counts turns and usage, and that loop has run state.
+  const failedReport: AgentRunReport | undefined = failedState !== undefined &&
+      (failedTurns !== undefined || reportedUsage !== undefined)
+    ? {
+      ...(reportedUsage !== undefined
+        ? {
+          usage: { ...reportedUsage },
+          usageCoverage: reportedUsageCoverage,
+        }
+        : {}),
+      ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
+      ...runStateReport(failedState),
+    }
+    : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
   const recordedRun = runRef !== undefined &&
     await canContinueRecordedRun(runRef);

@@ -209,24 +209,27 @@ test(
 test(
   "opaque-get does not flag .get() on an unresolvable identifier",
   async () => {
-    // isReactiveExpression bails out when the receiver identifier has no
-    // resolved symbol: an unresolvable receiver cannot be proven reactive, so
-    // no opaque-get diagnostic is produced for it (the structural fallback
-    // returns false at the missing-symbol guard).
+    // The checker gives an unresolvable receiver its error type rather than
+    // throwing, and isReactiveExpression finds no symbol for it: such a
+    // receiver cannot be proven reactive, so no opaque-get diagnostic is
+    // produced for it and the rest of the file is still validated.
 
     const source = `      import { pattern } from "commonfabric";
 
-      export default pattern(() => {
+      export default pattern<{ title: string }>(({ title }) => {
         // @ts-ignore intentional unresolved reference
         const v = undeclaredThing.get();
-        return { v };
+        const t = title.get();
+        return { v, t };
       });
     `;
     const { diagnostics } = await validateSource(source, {
       types: COMMONFABRIC_TYPES,
     });
     const errors = getOpaqueGetErrors(diagnostics);
-    assertEquals(errors.length, 0);
+    assertEquals(errors.length, 1);
+    assertStringIncludes(errors[0]!.message, "'title.get()'");
+    assertEquals(errors[0]!.message.includes("undeclaredThing"), false);
   },
 );
 

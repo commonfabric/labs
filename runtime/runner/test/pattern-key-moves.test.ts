@@ -91,7 +91,7 @@ describe("pattern-key-moves", () => {
         "system/home/home.tsx",
       );
       expect(currentPatternKey("counter.tsx")).toBe("counter.tsx");
-      expect(currentPatternKey("dice.tsx")).toBe("showcase/dice/dice.tsx");
+      expect(currentPatternKey("dice.tsx")).toBe("showcase/dice/main.tsx");
     });
 
     it("returns the new key of a file below a directory the table names", () => {
@@ -138,7 +138,7 @@ describe("pattern-key-moves", () => {
       for (
         const key of [
           "system/profile-home.tsx",
-          "examples/clock.tsx",
+          "examples/cf-tags.tsx",
           "examples/data/phonetic-alphabet.json",
           "topics/topic.tsx",
           "test/vnode-helpers.ts",
@@ -179,7 +179,7 @@ describe("pattern-key-moves", () => {
       expect(
         mainNamesPattern(
           "/patterns/apps/foo/chatbot.tsx",
-          "system/chatbot/chatbot.tsx",
+          "system/chatbot/main.tsx",
         ),
       ).toBe(false);
       expect(

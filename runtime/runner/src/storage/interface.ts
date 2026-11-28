@@ -93,6 +93,7 @@ import type {
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
   CfcMetadata,
+  CfcPatternReclassification,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -387,6 +388,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * was installed). Optional, like the observer.
    */
   openedSpaces?(): MemorySpace[];
+
+  /**
+   * Whether the replica of `space` covers the document `id` names under
+   * `scope` (`IStorageProvider.hasLocalDocumentCoverage()`), or `undefined`
+   * when this manager holds no provider for `space`. Unlike `open()`, it opens
+   * nothing and is no use of the space, so a release pass under way can
+   * still release the space.
+   */
+  documentCovered?(
+    space: MemorySpace,
+    id: URI,
+    scope?: CellScope,
+  ): boolean | undefined;
 
   /**
    * Declares the read ceiling every session this manager opens carries in
@@ -872,15 +886,22 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   pendingCrossSpacePromiseCount?(): number;
 
   /**
-   * Whether a link target in `space` should be background-pulled because this
-   * replica has never seen the doc (fresh-replica read asymmetry): selector
+   * Whether a link target in `space` should be background-pulled, because
+   * nothing shows that the replica's session watches the doc. One case is a
+   * doc the replica has never seen (fresh-replica read asymmetry): selector
    * driven syncs only deliver what a schema covered, so a link can point at a
    * same-space doc no selector ever walked — without a pull such reads mask
-   * as `undefined`, indistinguishable from absence. Returns true exactly once
-   * per (space, id, scope) per manager lifetime and only when the local
-   * replica holds no state for the doc; the caller kicks the actual sync (see
-   * the link-resolution hop loop). Optional: managers without lazy remote
-   * replication (e.g. test mocks) simply don't implement it.
+   * as `undefined`, indistinguishable from absence. The other is a doc the
+   * replica holds from its own commit alone
+   * (`ISpaceReplica.lacksWatchEvidence()`): the read is served, and without
+   * a pull it keeps returning the replica's own version while other sessions
+   * change the doc. Returns true only in those two cases, and at most once
+   * per (space, id, scope) until the replica drops the doc, the kicked sync
+   * rejects and its caller retracts the reservation
+   * (`retractDocPullKick()`), or the manager releases the space; the caller
+   * kicks the actual sync (see the link-resolution hop loop). Optional: managers
+   * without lazy remote replication (e.g. test mocks) simply don't implement
+   * it.
    */
   shouldPullDoc?(
     space: MemorySpace,
@@ -1877,6 +1898,16 @@ export interface TransactionCommitReceipt {
 }
 
 /**
+ * A user- or session-scoped instance of a document
+ * (`IStorageTransaction.unproducedScopedInstance`).
+ */
+export type UnproducedScopedInstance = {
+  space: MemorySpace;
+  id: URI;
+  scope: "user" | "session";
+};
+
+/**
  * Representation of a storage transaction, which can be used to query state and
  * assert / retract while maintaining consistency guarantees. Storage ensures
  * that transactions retain consistent view of the whole storage through it's
@@ -1928,15 +1959,14 @@ export interface IStorageTransaction {
   derivedWrites?: boolean;
 
   /**
-   * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
-   * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the document
-   * and has not yet run for that instance. Set by link resolution on a serving
-   * runtime only, where such an instance is one the serving loop has not
-   * produced yet, and read by the reactive action's commit, which a run that
-   * read one does not make.
+   * The first user- or session-scoped instance that this transaction read
+   * through a link while the instance was missing and another derivation
+   * registered in the same runtime writes the document and has not yet run for
+   * that instance. Set by link resolution on a serving runtime only, where
+   * such an instance is one the serving loop has not produced yet, and read by
+   * the reactive action's commit, which a run that read one does not make.
    */
-  unproducedScopedInstance?: string;
+  unproducedScopedInstance?: UnproducedScopedInstance;
 
   /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
@@ -2764,6 +2794,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcContentAddressedLabels(enabled: CfcContentAddressedLabels): void;
 
   /**
+   * Whether commit preparation stores a reclassified value's
+   * creator-releasable `User` clauses as that clause or the declared policy.
+   * Set by the runtime at creation; a change after prepare invalidates it.
+   */
+  setCfcPatternReclassification(enabled: CfcPatternReclassification): void;
+
+  /**
    * Set the exchange-rule policy evaluation dial (Epic B5, spec §4.4.5).
    * Anti-downgrade pinned: once `enforce`, weakening throws.
    */
@@ -3198,7 +3235,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown;
 
   /** Whether the exact manifest is installed for a destination space. */
@@ -4114,6 +4150,26 @@ export interface ISpaceReplica extends ISpace {
     scope?: CellScope,
     instance?: ScopeKey,
   ): Promise<Error | PullError | undefined>;
+
+  /**
+   * Whether the replica holds the document from its own commit alone, with
+   * nothing to show that its session watches it: no frame has delivered the
+   * document, and no watch of the replica's is rooted at it. Where no watch
+   * reaches such a document, it stays at the replica's own version while
+   * other sessions change it, until something loads it. The replica cannot
+   * rule out that a watch rooted at another document reaches it, so this
+   * returns `true` in two such cases as well: a document a load reaches
+   * whose answer has not arrived, and one the commit created within the
+   * reach of a watch that already existed, since the refresh that follows a
+   * commit leaves the committing session's own write out of its frame.
+   * `instance` names a scoped document's instance where it is not the
+   * replica's own.
+   */
+  lacksWatchEvidence?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean;
 
   /**
    * Whether the replica holds a known stored version of the document, with

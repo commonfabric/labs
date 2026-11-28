@@ -75,5 +75,46 @@ describe("structured-result", () => {
         sealedPaths: [["record", "text"]],
       });
     });
+
+    describe("under a tuple slot that declares one opaque link", () => {
+      // Validation measures `items`, not `prefixItems`, so a link the slot
+      // refuses passes validation; the sanitizer measures each element against
+      // its slot.
+      const schema = {
+        type: "array",
+        prefixItems: [{
+          type: "object",
+          properties: {
+            "@link": { type: "string", enum: ["opaque:child-run-1#/allowed"] },
+          },
+          required: ["@link"],
+          additionalProperties: false,
+        }],
+      } satisfies JSONSchema;
+
+      it("returns the link the slot declares as it is", () => {
+        expect(validateAndSanitizeSchemaValueWithOpaqueLinks({
+          schema,
+          value: [{ "@link": "opaque:child-run-1#/allowed" }],
+          opaqueHandleId: "run-1",
+        })).toEqual({
+          value: [{ "@link": "opaque:child-run-1#/allowed" }],
+          linkedStringCount: 0,
+          sealedPaths: [],
+        });
+      });
+
+      it("returns a link the slot refuses with its handle sealed", () => {
+        expect(validateAndSanitizeSchemaValueWithOpaqueLinks({
+          schema,
+          value: [{ "@link": "opaque:child-run-1#/other" }],
+          opaqueHandleId: "run-1",
+        })).toEqual({
+          value: [{ "@link": { "@link": "opaque:run-1#/0/@link" } }],
+          linkedStringCount: 1,
+          sealedPaths: [[0, "@link"]],
+        });
+      });
+    });
   });
 });

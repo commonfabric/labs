@@ -60,6 +60,7 @@ import {
 } from "./sync.ts";
 import { redact } from "./labels.ts";
 import type { Opening, WriteOutcome, WriteRequest } from "./browser.ts";
+import type { Programs } from "./browse.ts";
 import { similarTopics } from "./similar.ts";
 import {
   type Clock,
@@ -152,11 +153,11 @@ export interface TopicsDeps {
 
   env: (name: string) => string | undefined;
 
-  /** Opens `url` in a web browser, for `browse`. */
-  openUrl: (url: string) => Promise<void>;
-
-  /** Puts `text` on the clipboard, for `browse`. */
-  copyText: (text: string) => Promise<void>;
+  /**
+   * The programs `browse` opens an address in a web browser and puts text on
+   * the clipboard with.
+   */
+  programs: Programs;
 
   /** The DID of the identity the keyfile at `path` holds, for `browse`. */
   identityDid: (path: string) => Promise<string>;
@@ -182,16 +183,21 @@ const defaultDeps: TopicsDeps = {
   write: console.log,
   warn: console.error,
   env: Deno.env.get,
-  openUrl: async (url) => {
-    const { runQuietly, systemPrograms } = await loadBrowser();
-    await runQuietly([...systemPrograms(Deno.build.os).open, url]);
-  },
-  copyText: async (text) => {
-    const { runQuietly, systemPrograms } = await loadBrowser();
-    await runQuietly(systemPrograms(Deno.build.os).copy, text);
-  },
+  programs: systemPrograms(Deno.build.os),
   identityDid,
 };
+
+/**
+ * The program that opens an address in a web browser, and the one that
+ * puts text on the clipboard, on the operating system `os`.
+ */
+export function systemPrograms(os: typeof Deno.build.os): Programs {
+  return os === "darwin"
+    ? { open: ["open"], copy: ["pbcopy"] }
+    : os === "windows"
+    ? { open: ["explorer"], copy: ["clip"] }
+    : { open: ["xdg-open"], copy: ["xclip", "-selection", "clipboard"] };
+}
 
 /**
  * Whether the deployment `board` is on publishes server execution. One that
@@ -1539,7 +1545,7 @@ export async function main(
       const agentName = (options.agentName ?? deps.env("CF_AGENT_NAME"))
         ?.trim();
       const viewer = await deps.identityDid(board.identity);
-      const { browseBoard } = await loadBrowser();
+      const { browseBoard, programHost } = await loadBrowser();
       return await browseBoard(
         {
           ...board,
@@ -1558,8 +1564,7 @@ export async function main(
           connect: () => deps.openSession(board),
           write: (request, signer, invocation) =>
             browseWrite(deps, options, request, signer, invocation),
-          open: deps.openUrl,
-          copy: deps.copyText,
+          ...programHost(deps.programs),
         },
         { open: opened, ...(agentName ? { agentName } : {}) },
       );

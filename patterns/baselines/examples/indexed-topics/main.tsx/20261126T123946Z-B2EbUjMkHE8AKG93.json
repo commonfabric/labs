@@ -1,0 +1,218 @@
+{
+  "argumentSchema": {
+    "additionalProperties": false,
+    "properties": {},
+    "type": "object"
+  },
+  "pattern": "examples/indexed-topics/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "ListedTopic": {
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "topic": {
+            "$ref": "#/$defs/OpaqueCell"
+          }
+        },
+        "required": [
+          "topic",
+          "title"
+        ],
+        "type": "object"
+      },
+      "MentioningTopic": {
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "topic": {
+            "$ref": "#/$defs/TopicFields"
+          }
+        },
+        "required": [
+          "topic",
+          "title"
+        ],
+        "type": "object"
+      },
+      "OpaqueCell": {
+        "$ref": "#/$defs/TopicFields"
+      },
+      "SelectedTopic": {
+        "properties": {
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          "mention": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "topic": {
+                "$ref": "#/$defs/OpaqueCell"
+              }
+            },
+            "required": [
+              "topic"
+            ],
+            "type": "object"
+          },
+          "mentionedBy": {
+            "properties": {
+              "error": {
+                "type": "unknown"
+              },
+              "pending": {
+                "type": "boolean"
+              },
+              "result": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "$ref": "#/$defs/MentioningTopic"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "undefined"
+                  }
+                ]
+              }
+            },
+            "required": [
+              "pending"
+            ],
+            "type": "object"
+          },
+          "rename": {
+            "asCell": [
+              "stream"
+            ],
+            "properties": {
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "title"
+            ],
+            "type": "object"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "TopicFields": {
+        "properties": {
+          "mentions": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "mentions"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addTopic": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "select": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "topic": {
+            "$ref": "#/$defs/OpaqueCell"
+          }
+        },
+        "required": [
+          "topic"
+        ],
+        "type": "object"
+      },
+      "selected": {
+        "anyOf": [
+          {
+            "type": "undefined"
+          },
+          {
+            "$ref": "#/$defs/SelectedTopic"
+          }
+        ]
+      },
+      "titles": {
+        "properties": {
+          "error": {
+            "type": "unknown"
+          },
+          "pending": {
+            "type": "boolean"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/$defs/ListedTopic"
+                },
+                "type": "array"
+              },
+              {
+                "type": "undefined"
+              }
+            ]
+          }
+        },
+        "required": [
+          "pending"
+        ],
+        "type": "object"
+      },
+      "topicCount": {
+        "type": "number"
+      }
+    },
+    "required": [
+      "titles",
+      "topicCount",
+      "selected",
+      "addTopic",
+      "select",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

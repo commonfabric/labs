@@ -8,6 +8,7 @@ import {
 import type { HarnessRunDepth } from "../src/contracts/run-depth.ts";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
+import { observedImageRead } from "./support/observed-image.ts";
 import { decodeBase64 } from "@std/encoding/base64";
 import { parentToolIdsForBacking } from "../src/contracts/tool-descriptor.ts";
 import { join } from "@std/path";
@@ -37,6 +38,7 @@ import type {
 } from "../src/contracts/research.ts";
 import type { HarnessSkillActivations } from "../src/contracts/skill.ts";
 import {
+  BROWSER_SUBAGENT_PROFILE_CONFIG,
   type HarnessSubagentRunRef,
   PATTERN_AUTHOR_SUBAGENT_SKILL_NAMES,
 } from "../src/contracts/subagent.ts";
@@ -71,6 +73,7 @@ import type {
 } from "../src/model/client.ts";
 import { OpenAICodexResponsesClient } from "../src/model/openai-codex-responses.ts";
 import {
+  buildSubagentSystemPrompt,
   CfHarnessPromptLoop,
   promptLoopModelTurnsFromError,
 } from "../src/prompt-loop.ts";
@@ -4470,7 +4473,9 @@ test("CfHarnessPromptLoop attaches images loaded by view_image on the next model
   const loop = new CfHarnessPromptLoop({
     apiKey: "test-key",
     engine: new CfHarnessEngine({
-      sandboxRuntime: new FakeSandboxRuntime(),
+      sandboxRuntime: new FakeSandboxRuntime([
+        observedImageRead(ONE_PIXEL_PNG),
+      ]),
       workspaceHostPath: workspace,
       runId: "run-view-image",
       model: "gpt-5.4",
@@ -6641,6 +6646,27 @@ test("CfHarnessPromptLoop gives the browser tool only to the authorized browser 
   ]);
   assertEquals(output.subagent.manifest.skillScriptExecutionTarget, "host");
   assertEquals(result.finalAssistantText, "Browser-profile parent completed.");
+});
+
+test("buildSubagentSystemPrompt tells a child about host skill script execution only when its scripts run on the host", () => {
+  const scriptsLine =
+    "Exact allowlisted skill scripts: agent-browser:scripts/form-automation.sh, agent-browser:scripts/capture-workflow.sh";
+  const hostLine =
+    "This profile runs allowlisted skill scripts through host execution.";
+
+  const hostPrompt = buildSubagentSystemPrompt(
+    "/workspace",
+    BROWSER_SUBAGENT_PROFILE_CONFIG,
+  );
+  assertStringIncludes(hostPrompt, scriptsLine);
+  assertStringIncludes(hostPrompt, hostLine);
+
+  const sandboxPrompt = buildSubagentSystemPrompt("/workspace", {
+    ...BROWSER_SUBAGENT_PROFILE_CONFIG,
+    skillScriptExecutionTarget: "sandbox",
+  });
+  assertStringIncludes(sandboxPrompt, scriptsLine);
+  assertEquals(sandboxPrompt.includes(hostLine), false);
 });
 
 test("CfHarnessPromptLoop activates browser subagent skills and host skill scripts", async () => {
@@ -11051,6 +11077,7 @@ test("CfHarnessPromptLoop withholds opaque CFC stdout from the model", async (t)
           exitCode: {
             policy: "observed",
             label: { confidentiality: ["public"] },
+            outcome: "passed",
             value: 0,
           },
         },
@@ -12440,6 +12467,42 @@ describe("CfHarnessPromptLoop denied tool-call records", () => {
 describe("CfHarnessPromptLoop model-facing output bounds", () => {
   const hugeStream = `${"a".repeat(70_000)}MIDDLE${"z".repeat(30_000)}`;
 
+  it("reports a command outcome only from the released exit observation", async () => {
+    const exits: Array<[CfcSandboxResult["exitCode"], string]> = [
+      [{ policy: "observed", label: {}, value: 0 }, "passed"],
+      [{ policy: "observed", label: {}, value: 2 }, "failed"],
+      [{ policy: "observed", label: {}, value: null }, "unavailable"],
+      [{ policy: "opaque", label: {} }, "unavailable"],
+      [{ policy: "denied", label: {} }, "unavailable"],
+    ];
+    for (const [exitCode, outcome] of exits) {
+      const loop = new CfHarnessPromptLoop({
+        engine: new CfHarnessEngine({
+          sandboxRuntime: new FakeSandboxRuntime([{
+            stdout: "passed",
+            stderr: "",
+            exitCode: 0,
+            cfcResult: {
+              ...observedCfcResult("failed", { stderrPolicy: "denied" }),
+              exitCode,
+            },
+          }]),
+          model: "gpt-test",
+          cfcEnforcementMode: "enforce-explicit",
+        }),
+        modelClient: scriptedModelClient([
+          toolCallsTurn([["bash", { command: "check model" }]]),
+        ]),
+      });
+      const result = await loop.runPrompt({
+        prompt: "Run the model check.",
+        promptSlotBinding: directPromptSlotBinding,
+      });
+      expect(toolMessageContent(result.transcript, "call-1").cfc)
+        .toMatchObject({ exitCode: { outcome } });
+    }
+  });
+
   it("truncates a large stderr without mediation metadata in observe mode", async () => {
     const loop = new CfHarnessPromptLoop({
       engine: new CfHarnessEngine({
@@ -12598,6 +12661,108 @@ describe("CfHarnessPromptLoop web_fetch results", () => {
   });
 });
 
+test("image-review returns prose with only the author's previously observed frames", async () => {
+  const workspace = await Deno.realPath(await Deno.makeTempDir());
+  try {
+    await Deno.writeFile(join(workspace, "frame.png"), ONE_PIXEL_PNG);
+    const label = { confidentiality: ["fixture"] };
+    const runId = "review-frames";
+    const sandbox = new FakeSandboxRuntime([
+      observedImageRead(ONE_PIXEL_PNG, label),
+    ]);
+    const frame = runId + ":view_image:1";
+    const delegate = (args: Record<string, unknown>) =>
+      toolCallsTurn([["delegate_task", {
+        profile: "image-review",
+        goal: "Review the second viewer's phone.",
+        ...args,
+      }]]);
+    const finding = "The large Return button belongs to the current borrower.";
+    const turns = [
+      delegate({ imageOutputIds: [frame] }),
+      toolCallsTurn([["view_image", { path: "frame.png" }]]),
+      delegate({ imageOutputIds: [frame], skillHandle: "unseen" }),
+      delegate({ imageOutputIds: [frame] }),
+      { role: "assistant" as const, content: finding },
+      { role: "assistant" as const, content: "Done." },
+    ];
+    let reviews = 0;
+    const loop = new CfHarnessPromptLoop({
+      engine: new CfHarnessEngine({
+        sandboxRuntime: sandbox,
+        runId,
+        workspaceHostPath: workspace,
+        model: "gpt-test",
+      }),
+      allowedSubagentProfiles: ["image-review"],
+      modelClient: {
+        providerId: "openai-compatible-gateway",
+        complete(request) {
+          if (request.runId !== runId) {
+            reviews++;
+            expect(request.tools).toEqual([]);
+            expect(request.nativeModelToolIds).toEqual([]);
+            const images = request.transcript.flatMap((m) =>
+              m.role === "user" ? m.imageAttachments ?? [] : []
+            );
+            expect(images.map((i) => i.bytes)).toEqual([ONE_PIXEL_PNG.length]);
+          }
+          const assistant = turns.shift();
+          if (!assistant) throw new Error("unexpected model call");
+          return Promise.resolve({ assistant });
+        },
+      },
+    });
+    const result = await loop.runPrompt({
+      prompt: "Review",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    expect(reviews).toBe(1);
+    expect(result.runState.cfcModelContext?.observations[0]).toMatchObject({
+      label,
+      toolId: "view_image",
+      channels: ["output"],
+    });
+    const replies = result.transcript.filter((m) =>
+      m.role === "tool" && m.toolName === "delegate_task"
+    ).map((m) => JSON.parse(m.content));
+    expect(replies[0]).toMatchObject({
+      reason: "invalid-argument",
+      field: "imageOutputIds",
+    });
+    expect(replies[1]).toMatchObject({ reason: "invalid-argument" });
+    expect(replies[2].subagent).toMatchObject({
+      status: "completed",
+      summary: finding,
+      manifest: { allowedToolIds: [] },
+    });
+    const resumed = new CfHarnessPromptLoop({
+      engine: new CfHarnessEngine({
+        runState: result.runState,
+        sandboxRuntime: new FakeSandboxRuntime(),
+        workspaceHostPath: workspace,
+      }),
+      allowedSubagentProfiles: ["image-review"],
+      modelClient: scriptedModelClient([delegate({ imageOutputIds: [frame] }), {
+        role: "assistant",
+        content: finding,
+      }]),
+    });
+    const continued = await resumed.runPrompt({
+      prompt: "Review the same frame again.",
+      promptSlotBinding: directPromptSlotBinding,
+    });
+    const reply = continued.transcript.find((m) =>
+      m.role === "tool" && m.toolName === "delegate_task"
+    );
+    expect(JSON.parse(reply?.content ?? "{}")).toMatchObject({
+      subagent: { summary: finding },
+    });
+  } finally {
+    await Deno.remove(workspace, { recursive: true });
+  }
+});
+
 describe("CfHarnessPromptLoop transcript events", () => {
   it("reports the image a view_image call attaches to the transcript listener", async () => {
     const workspace = await Deno.realPath(await Deno.makeTempDir());
@@ -12605,7 +12770,9 @@ describe("CfHarnessPromptLoop transcript events", () => {
       await Deno.writeFile(join(workspace, "capture.png"), ONE_PIXEL_PNG);
       const loop = new CfHarnessPromptLoop({
         engine: new CfHarnessEngine({
-          sandboxRuntime: new FakeSandboxRuntime(),
+          sandboxRuntime: new FakeSandboxRuntime([
+            observedImageRead(ONE_PIXEL_PNG),
+          ]),
           workspaceHostPath: workspace,
           runId: "run-view-image-event",
           model: "gpt-test",

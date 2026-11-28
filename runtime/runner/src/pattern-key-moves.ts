@@ -99,59 +99,151 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "do-list/": "examples/do-list/",
   "examples/arbitrary-wish-example.tsx":
     "examples/arbitrary-wish-example/arbitrary-wish-example.tsx",
+  "examples/arbitrary-wish-example/arbitrary-wish-example.tsx":
+    "examples/arbitrary-wish-example/main.tsx",
   "examples/array-in-cell-with-remove-editable.tsx":
     "examples/array-in-cell-with-remove-editable/array-in-cell-with-remove-editable.tsx",
+  "examples/array-in-cell-with-remove-editable/array-in-cell-with-remove-editable.tsx":
+    "examples/array-in-cell-with-remove-editable/main.tsx",
+  "examples/aside/aside.tsx": "examples/aside/main.tsx",
   "examples/cf-chart-demo.tsx": "examples/cf-chart-demo/cf-chart-demo.tsx",
+  "examples/cf-chart-demo/cf-chart-demo.tsx": "examples/cf-chart-demo/main.tsx",
   "examples/cf-checkbox-cell.tsx":
     "examples/cf-checkbox-cell/cf-checkbox-cell.tsx",
+  "examples/cf-checkbox-cell/cf-checkbox-cell.tsx":
+    "examples/cf-checkbox-cell/main.tsx",
   "examples/cf-code-editor-cell.tsx":
     "examples/cf-code-editor-cell/cf-code-editor-cell.tsx",
   "examples/cf-picker.test.tsx": "examples/cf-picker/cf-picker.test.tsx",
   "examples/cf-picker.tsx": "examples/cf-picker/cf-picker.tsx",
+  "examples/cf-picker/cf-picker.tsx": "examples/cf-picker/main.tsx",
   "examples/cf-render-subpath.tsx":
     "examples/cf-render-subpath/cf-render-subpath.tsx",
   "examples/cf-render.tsx": "examples/cf-render/cf-render.tsx",
+  "examples/cf-render/cf-render.tsx": "examples/cf-render/main.tsx",
   "examples/cf-tags.tsx": "examples/cf-tags/cf-tags.tsx",
+  "examples/cfc-agent-prompt-injection-demo/main.test.tsx":
+    "examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.test.tsx",
+  "examples/cfc-agent-prompt-injection-demo/main.tsx":
+    "examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx",
+  "examples/cfc-authorized-save/main.test.tsx":
+    "examples/cfc-authorized-save/cfc-authorized-save.test.tsx",
+  "examples/cfc-authorized-save/main.tsx":
+    "examples/cfc-authorized-save/cfc-authorized-save.tsx",
+  "examples/cfc-authorship-chat/main.test.tsx":
+    "examples/cfc-authorship-chat/cfc-authorship-chat.test.tsx",
+  "examples/cfc-authorship-chat/main.tsx":
+    "examples/cfc-authorship-chat/cfc-authorship-chat.tsx",
+  "examples/cfc-render-policy-demo/main.test.tsx":
+    "examples/cfc-render-policy-demo/cfc-render-policy-demo.test.tsx",
+  "examples/cfc-render-policy-demo/main.tsx":
+    "examples/cfc-render-policy-demo/cfc-render-policy-demo.tsx",
+  "examples/cfc-row-label-mailbox/main.test.tsx":
+    "examples/cfc-row-label-mailbox/cfc-row-label-mailbox.test.tsx",
+  "examples/cfc-row-label-mailbox/main.tsx":
+    "examples/cfc-row-label-mailbox/cfc-row-label-mailbox.tsx",
+  "examples/cfc-row-label-records/main.test.tsx":
+    "examples/cfc-row-label-records/cfc-row-label-records.test.tsx",
+  "examples/cfc-row-label-records/main.tsx":
+    "examples/cfc-row-label-records/cfc-row-label-records.tsx",
+  "examples/cfc-spec-gallery/main.test.tsx":
+    "examples/cfc-spec-gallery/cfc-spec-gallery.test.tsx",
+  "examples/cfc-spec-gallery/main.tsx":
+    "examples/cfc-spec-gallery/cfc-spec-gallery.tsx",
+  "examples/cfc-staged-publish/main.test.tsx":
+    "examples/cfc-staged-publish/cfc-staged-publish.test.tsx",
+  "examples/cfc-staged-publish/main.tsx":
+    "examples/cfc-staged-publish/cfc-staged-publish.tsx",
+  "examples/cfc-trusted-component-examples/main.test.tsx":
+    "examples/cfc-trusted-component-examples/cfc-trusted-component-examples.test.tsx",
+  "examples/cfc-trusted-component-examples/main.tsx":
+    "examples/cfc-trusted-component-examples/cfc-trusted-component-examples.tsx",
+  "examples/cfc-trusted-surfaces/main.test.tsx":
+    "examples/cfc-trusted-surfaces/cfc-trusted-surfaces.test.tsx",
+  "examples/cfc-trusted-surfaces/main.tsx":
+    "examples/cfc-trusted-surfaces/cfc-trusted-surfaces.tsx",
   "examples/clock.test.tsx": "examples/clock/clock.test.tsx",
   "examples/clock.tsx": "examples/clock/clock.tsx",
+  "examples/clock/clock.tsx": "examples/clock/main.tsx",
+  "examples/compiler/compiler.tsx": "examples/compiler/main.tsx",
+  "examples/counter/counter.tsx": "examples/counter/main.tsx",
   "examples/data/phonetic-alphabet.json":
     "examples/phonetic-speller/data/phonetic-alphabet.json",
+  "examples/do-list/do-list.tsx": "examples/do-list/main.tsx",
   "examples/drag-drop-demo.tsx": "examples/drag-drop-demo/drag-drop-demo.tsx",
+  "examples/drag-drop-demo/drag-drop-demo.tsx":
+    "examples/drag-drop-demo/main.tsx",
   "examples/fetch-delay.test.tsx": "examples/fetch-json/fetch-delay.test.tsx",
   "examples/fetch-json.tsx": "examples/fetch-json/fetch-json.tsx",
+  "examples/fetch-json/fetch-json.tsx": "examples/fetch-json/main.tsx",
   "examples/fetch-mock.test.tsx": "examples/fetch-json/fetch-mock.test.tsx",
   "examples/fetch-program-test.tsx":
     "examples/fetch-program-test/fetch-program-test.tsx",
+  "examples/form-demo/form-demo.tsx": "examples/form-demo/main.tsx",
+  "examples/group-chat-lobby/group-chat-lobby.tsx":
+    "examples/group-chat-lobby/main.tsx",
+  "examples/image/image.tsx": "examples/image/main.tsx",
   "examples/instantiate-pattern.test.tsx":
     "examples/instantiate-pattern/instantiate-pattern.test.tsx",
   "examples/instantiate-pattern.tsx":
     "examples/instantiate-pattern/instantiate-pattern.tsx",
+  "examples/instantiate-pattern/instantiate-pattern.tsx":
+    "examples/instantiate-pattern/main.tsx",
+  "examples/link-preview/link-preview.tsx": "examples/link-preview/main.tsx",
   "examples/llm.tsx": "examples/llm/llm.tsx",
+  "examples/llm/llm.tsx": "examples/llm/main.tsx",
+  "examples/map-demo/map-demo.tsx": "examples/map-demo/main.tsx",
+  "examples/mobile-app-demo/mobile-app-demo.tsx":
+    "examples/mobile-app-demo/main.tsx",
   "examples/multi-option-selection.tsx":
     "examples/multi-option-selection/multi-option-selection.tsx",
+  "examples/multi-option-selection/multi-option-selection.tsx":
+    "examples/multi-option-selection/main.tsx",
   "examples/nested-counter.tsx": "examples/nested-counter/nested-counter.tsx",
+  "examples/nested-counter/nested-counter.tsx":
+    "examples/nested-counter/main.tsx",
   "examples/nested-mentionables.tsx":
     "examples/nested-mentionables/nested-mentionables.tsx",
   "examples/output_schema.tsx": "examples/output_schema/output_schema.tsx",
+  "examples/output_schema/output_schema.tsx": "examples/output_schema/main.tsx",
+  "examples/pattern-index/pattern-index.tsx": "examples/pattern-index/main.tsx",
   "examples/phonetic-speller.test.tsx":
     "examples/phonetic-speller/phonetic-speller.test.tsx",
   "examples/phonetic-speller.tsx":
     "examples/phonetic-speller/phonetic-speller.tsx",
+  "examples/phonetic-speller/phonetic-speller.tsx":
+    "examples/phonetic-speller/main.tsx",
   "examples/profile-aware-writer.tsx":
     "examples/profile-aware-writer/profile-aware-writer.tsx",
+  "examples/profile-aware-writer/profile-aware-writer.tsx":
+    "examples/profile-aware-writer/main.tsx",
   "examples/queue-test.tsx": "examples/queue-test/queue-test.tsx",
   "examples/reactive-now.test.tsx":
     "examples/reactive-now/reactive-now.test.tsx",
   "examples/reactive-now.tsx": "examples/reactive-now/reactive-now.tsx",
+  "examples/reactive-now/reactive-now.tsx": "examples/reactive-now/main.tsx",
+  "examples/reading-list/reading-list.tsx": "examples/reading-list/main.tsx",
+  "examples/scoped-group-chat/main-plain-inputs.tsx":
+    "examples/scoped-group-chat/plain-inputs/main.tsx",
+  "examples/scoped-group-chat/main-with-writable-inputs.tsx":
+    "examples/scoped-group-chat/writable-inputs/main.tsx",
+  "examples/scoped-group-chat/main.test.tsx":
+    "examples/scoped-group-chat/writable-inputs.test.tsx",
+  "examples/simple-list/simple-list.tsx": "examples/simple-list/main.tsx",
   "examples/suggestion-test.tsx":
     "examples/suggestion-test/suggestion-test.tsx",
   "examples/summary-index-tester.tsx":
     "examples/summary-index-tester/summary-index-tester.tsx",
+  "examples/text-swapper/text-swapper.tsx": "examples/text-swapper/main.tsx",
+  "examples/todo-list/todo-list.tsx": "examples/todo-list/main.tsx",
   "examples/ui-variants-demo.tsx": "examples/ui-variants/ui-variants-demo.tsx",
   "examples/ui-variants-host.tsx": "examples/ui-variants/ui-variants-host.tsx",
   "examples/wish-note-example.tsx":
     "examples/wish-note-example/wish-note-example.tsx",
+  "examples/wish-note-example/wish-note-example.tsx":
+    "examples/wish-note-example/main.tsx",
   "examples/write-and-run.tsx": "examples/write-and-run/write-and-run.tsx",
+  "examples/write-and-run/write-and-run.tsx": "examples/write-and-run/main.tsx",
   "experimental/": "dev/experimental/",
   "fabrichat/": "system/fabrichat/",
   "fabrifile/": "system/fabrifile/",
@@ -194,6 +286,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "person-workbench/": "apps/person-workbench/",
   "plain-array-callback-locals/": "dev/plain-array-callback-locals/",
   "primitives/": "product/primitives/",
+  "product/lobby/main.test.tsx": "product/lobby/lobby.test.tsx",
+  "product/lobby/main.tsx": "product/lobby/lobby.tsx",
   "profile-group-chat/": "examples/profile-group-chat/",
   "profile-roster-live-demo.tsx":
     "examples/profile-roster-live-demo/profile-roster-live-demo.tsx",
@@ -222,6 +316,12 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "shared-profile-roster/": "examples/shared-profile-roster/",
   "shopping-list.test.tsx": "apps/shopping-list/shopping-list.test.tsx",
   "shopping-list.tsx": "apps/shopping-list/shopping-list.tsx",
+  "showcase/battleship/multiplayer/lobby.tsx":
+    "showcase/battleship/multiplayer/main.tsx",
+  "showcase/dice/dice.tsx": "showcase/dice/main.tsx",
+  "showcase/inductor/lofi/lofi-inductor.tsx": "showcase/inductor/lofi/main.tsx",
+  "showcase/inductor/pool/inductor-pool.tsx": "showcase/inductor/pool/main.tsx",
+  "showcase/scrabble/scrabble.tsx": "showcase/scrabble/main.tsx",
   "simple-list/": "examples/simple-list/",
   "store-mapper.test.tsx": "apps/store-mapper/store-mapper.test.tsx",
   "store-mapper.tsx": "apps/store-mapper/store-mapper.tsx",
@@ -233,6 +333,7 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/backlinks-index.test.tsx":
     "system/backlinks-index/backlinks-index.test.tsx",
   "system/backlinks-index.tsx": "system/backlinks-index/backlinks-index.tsx",
+  "system/chatbot/chatbot.tsx": "system/chatbot/main.tsx",
   "system/common-fabric.tsx": "system/common-fabric/common-fabric.tsx",
   "system/default-app-ben.test.tsx":
     "dev/default-app-ben/default-app-ben.test.tsx",
@@ -251,7 +352,10 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/home.test.tsx": "system/home/home.test.tsx",
   "system/home.tsx": "system/home/home.tsx",
   "system/journal.tsx": "system/journal/journal.tsx",
+  "system/journal/journal.tsx": "system/journal/main.tsx",
   "system/knowledge-graph.tsx": "system/knowledge-graph/knowledge-graph.tsx",
+  "system/knowledge-graph/knowledge-graph.tsx":
+    "system/knowledge-graph/main.tsx",
   "system/link-tool.tsx": "system/link-tool/link-tool.tsx",
   "system/mentionables-inspector.tsx":
     "system/mentionables-inspector/mentionables-inspector.tsx",
@@ -301,6 +405,7 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/shared-space-profiles.test.tsx":
     "system/shared-space/shared-space-profiles.test.tsx",
   "system/space-overview.tsx": "system/space-overview/space-overview.tsx",
+  "system/space-overview/space-overview.tsx": "system/space-overview/main.tsx",
   "system/suggestion-history.tsx":
     "system/suggestion-history/suggestion-history.tsx",
   "system/suggestion.tsx": "system/suggestion/suggestion.tsx",

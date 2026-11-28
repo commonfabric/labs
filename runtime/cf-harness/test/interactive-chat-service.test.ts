@@ -3299,6 +3299,142 @@ describe("HarnessInteractiveChatService", () => {
           ),
         ).toEqual(["completed", "completed"]);
       });
+
+      /**
+       * A service whose session-1 its store reloads while turn-1, canceled,
+       * is still running. Each run ignores its abort signal, so it keeps
+       * running until the test answers it: `entered` settles as a run starts,
+       * and `answers` lets it end. `firstSettled` settles once turn-1's task
+       * has.
+       */
+      const reloadedWhileCanceling = async () => {
+        const entered = [
+          Promise.withResolvers<void>(),
+          Promise.withResolvers<void>(),
+        ];
+        const answers = [
+          Promise.withResolvers<void>(),
+          Promise.withResolvers<void>(),
+        ];
+        let runs = 0;
+        const service = new HarnessInteractiveChatService({
+          createPromptLoop: () => ({
+            runTranscript: async (options) => {
+              const run = runs++;
+              entered[run].resolve();
+              await answers[run].promise;
+              return makeResult(options, `Answer ${run + 1}.`);
+            },
+          }),
+          now: nextIsoNow(),
+          sessionStore: emptyStore({
+            listSessions: () => [{
+              session: createHarnessChatSessionStatus({
+                sessionId: "session-1",
+                createdAt: "2026-05-22T00:00:00.000Z",
+                workspace: { hostPath: "/workspace" },
+              }),
+              transcript: [],
+            }],
+          }),
+        });
+        await service.startSession("req-session", {
+          sessionId: "session-1",
+          workspace: { hostPath: "/workspace" },
+        });
+        await service.startTurn("req-first", {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Go" },
+        });
+        await entered[0].promise;
+        const firstSettled = service.waitForTurn("session-1", "turn-1");
+        await service.cancelTurn("req-cancel", "session-1", "turn-1");
+        expect(service.status("session-1").sessions[0].status).toBe(
+          "canceling",
+        );
+
+        // The reload replaces the session with the idle one the store holds.
+        await service.initializeFromStore();
+        expect(service.status("session-1").sessions[0].status).toBe("idle");
+        return { service, entered, answers, firstSettled };
+      };
+
+      it("still waits for a reloaded session's turn after a turn from before the reload settles", async () => {
+        const { service, entered, answers, firstSettled } =
+          await reloadedWhileCanceling();
+        expect(
+          errorCodeOf(
+            await service.startTurn("req-second", {
+              sessionId: "session-1",
+              turnId: "turn-2",
+              input: { text: "Again" },
+            }),
+          ),
+        ).toBeUndefined();
+        await entered[1].promise;
+
+        answers[0].resolve();
+        await firstSettled;
+        const [session] = service.status("session-1").sessions;
+        expect([session.status, session.activeTurnId]).toEqual([
+          "turn_running",
+          "turn-2",
+        ]);
+
+        const waited = service.waitForTurn("session-1", "turn-2").then(() =>
+          service.listTurns({ sessionId: "session-1" }).turns.map((entry) => [
+            entry.turn.turnId,
+            entry.turn.status,
+          ])
+        );
+        answers[1].resolve();
+        expect(await waited).toEqual([["turn-2", "completed"]]);
+        expect(
+          service.listEvents({ sessionId: "session-1" }).events.map((
+            envelope,
+          ) => [envelope.event.kind, envelope.turnId]),
+        ).toEqual([
+          ["turn_started", "turn-2"],
+          ["turn_completed", "turn-2"],
+        ]);
+      });
+
+      it("leaves a reloaded session's canceled turn of the same id canceling until its own task settles", async () => {
+        // The store holds no turn-1, so the reloaded session can start a turn
+        // of that id. Settling the turn-1 from before the reload records
+        // nothing for it.
+
+        const { service, entered, answers, firstSettled } =
+          await reloadedWhileCanceling();
+        await service.startTurn("req-again", {
+          sessionId: "session-1",
+          turnId: "turn-1",
+          input: { text: "Again" },
+        });
+        await entered[1].promise;
+        await service.cancelTurn("req-cancel-again", "session-1", "turn-1");
+
+        answers[0].resolve();
+        await firstSettled;
+        const [canceling] = service.status("session-1").sessions;
+        expect([canceling.status, canceling.activeTurnId]).toEqual([
+          "canceling",
+          "turn-1",
+        ]);
+
+        const settled = service.waitForTurn("session-1", "turn-1");
+        answers[1].resolve();
+        await settled;
+        const [idle] = service.status("session-1").sessions;
+        expect([idle.status, idle.activeTurnId]).toEqual(["idle", undefined]);
+        expect(
+          service.listTurns({ sessionId: "session-1" }).turns.map((entry) => [
+            entry.turn.turnId,
+            entry.turn.status,
+          ]),
+        ).toEqual([["turn-1", "canceled"]]);
+      });
     });
 
     describe("closeSession()", () => {

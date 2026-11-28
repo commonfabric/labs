@@ -81,8 +81,8 @@ debt"); this pattern is its implementation.
   released rules, so the view reads nothing else.
 
 The policy, its released function, and its one writer are in `pool-policy.tsx`;
-the pattern and its view are in `inductor-pool.tsx`, which the policy module
-does not import. The pure logic is in `consensus.ts`, and the rule grammar in
+the pattern and its view are in `main.tsx`, which the policy module does not
+import. The pure logic is in `consensus.ts`, and the rule grammar in
 `../shared/rule-grammar.ts`. The policy module's identity covers both, because a
 module's identity covers the modules it imports, and it does not cover the view,
 so a view edit leaves stored contributions releasable. Both live in the inductor

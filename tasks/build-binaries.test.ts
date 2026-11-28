@@ -52,6 +52,8 @@ import {
   VERSION_NAMESPACE,
 } from "../runtime/runner/src/compilation-cache/compiler-fingerprint.deno.ts";
 import { SOURCE_COMPILE_CACHE_RUNTIME_VERSION } from "../runtime/runner/src/compilation-cache/compile-cache-version.ts";
+import { CORPUS_DIR } from "../runtime/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
+import { computeCompilerOutputVersion } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
 import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { shellGrammar } from "../runtime/cli/lib/view/languages/shell/shell.ts";
 
@@ -605,7 +607,7 @@ test("each binary's modules and assets stay within BINARY_SOURCES", async () => 
   assertEquals([...outside].sort(), []);
   assert(
     roots.includes(
-      join(config.patternPaths()[0], "examples", "counter", "counter.tsx"),
+      join(config.patternPaths()[0], "examples", "counter", "main.tsx"),
     ),
   );
 });
@@ -1172,11 +1174,18 @@ test("main build path reverts workspace when command spawn fails", async () => {
         "--cli-only",
       ],
       cwd: root,
+      // The input fingerprint needs no corpus compile, so the build reaches
+      // its first command, which is where `--deny-run` stops it.
+      env: { CF_COMPILE_CACHE_VERSION: "inputs", NO_COLOR: "1" },
       stdout: "piped",
       stderr: "piped",
     }).output();
 
     assertEquals(output.success, false);
+    assertStringIncludes(
+      new TextDecoder().decode(output.stderr),
+      "Requires run access",
+    );
     assertEquals(
       await Deno.readTextFile(config.compileCacheVersionPath()),
       SOURCE_VERSION_MODULE,
@@ -1386,6 +1395,28 @@ test("runBuildBinaries bakes the output-based version unless asked for the input
       Deno.env.set("CF_COMPILE_CACHE_VERSION", original);
     }
     await Deno.remove(root, { recursive: true });
+  }
+});
+
+test("the shipped compile-cache version is the output version of the corpus under the root", async () => {
+  const writeCorpus = async (source: string) => {
+    const root = await Deno.makeTempDir({ prefix: "build-binaries-corpus-" });
+    await writeFile(join(root, CORPUS_DIR, "main.tsx"), source);
+    return root;
+  };
+  const options = { entries: ["main.tsx"] };
+  const one = await writeCorpus("export default 1;\n");
+  const two = await writeCorpus("export default 2;\n");
+  try {
+    const shipped = await computeShippedCompileCacheVersion(one, options);
+    assertEquals(shipped, await computeCompilerOutputVersion(one, options));
+    assertNotEquals(
+      await computeShippedCompileCacheVersion(two, options),
+      shipped,
+    );
+  } finally {
+    await Deno.remove(one, { recursive: true });
+    await Deno.remove(two, { recursive: true });
   }
 });
 

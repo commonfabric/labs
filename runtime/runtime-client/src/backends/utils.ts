@@ -191,26 +191,23 @@ export function cellRefToSigilLink(cell: CellRef): SigilLink {
 }
 
 export function createCellRef(cell: Cell<unknown>, schema?: unknown): CellRef {
+  // The link carries the schema a reference to the cell is sent with. Parsed
+  // against the cell's own link, it is a full link. `getAsLink()` writes no
+  // `overwrite`, so the ref carries none.
   const link = parseLink(
     cell.getAsLink({
       includeSchema: true,
       keepAsCell: KeepAsCell.All,
     }),
+    cell.getAsNormalizedFullLink(),
   );
-  // Check before casting to a NormalizedFullLink
-  if (!link.id || !link.space) {
-    throw new Error("Serialized links must contain id and space.");
-  }
   const cellRef: CellRef = {
     id: link.id,
     space: link.space,
-    scope: link.scope === "inherit" || link.scope === undefined
-      ? "space"
-      : link.scope,
+    scope: link.scope,
     path: link.path,
   };
   if (link.schema != null) cellRef.schema = link.schema;
-  if (link.overwrite != null) cellRef.overwrite = link.overwrite;
   if (schema !== undefined) {
     cellRef.schema = schema as JSONSchema;
   }

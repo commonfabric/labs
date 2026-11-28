@@ -503,6 +503,21 @@ describe("v2-server-currency-across-spaces", () => {
         expect(server.currencyDelivery().pulls).toBe(pulls + 1);
       });
 
+      it("forgets a space it was armed with once that space cannot be asked, refuses the root, and marks its slice `2`", async () => {
+        const owned = [SPACE, SOURCE];
+        server = newServer(owned);
+        await armed();
+        expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+        const { pulls } = server.currencyDelivery();
+        owned.splice(owned.indexOf(SOURCE), 1);
+
+        expect(await servable()).toBe(false);
+
+        expect(await markOf()).toBe(2);
+        expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+        expect(server.currencyDelivery().pulls).toBe(pulls);
+      });
+
       it("returns the slices an advance queued behind a commit marked, at the seq of that commit", async () => {
         server = newServer();
         await write(SOURCE, "of:raw");
@@ -1163,6 +1178,108 @@ describe("v2-server-currency-across-spaces", () => {
             ]);
           });
         });
+      });
+    });
+
+    describe("noteExecutorCommit()", () => {
+      /**
+       * Tells `target` of a client's commit to `id` in `SOURCE` at `seq`.
+       */
+      const note = (seq: number, id = "of:other", target = server): void =>
+        target.noteExecutorCommit({
+          space: SOURCE,
+          seq,
+          class: "authored",
+          sessionId: "session-one",
+          writes: [{ id, scopeKey: "space" }],
+        });
+
+      it("queues one advance for the commits noted before it runs, and another for a commit noted after it ran", async () => {
+        server = newServer();
+        await armed();
+        const { advancesQueued } = server.currencyDelivery();
+        const first = await write(SOURCE, "of:other");
+        const second = await write(SOURCE, "of:other");
+
+        note(first);
+        note(second);
+        await server.idle();
+
+        expect(server.currencyDelivery().advancesQueued).toBe(
+          advancesQueued + 1,
+        );
+        note(await write(SOURCE, "of:other"));
+        await server.idle();
+        expect(server.currencyDelivery().advancesQueued).toBe(
+          advancesQueued + 2,
+        );
+      });
+
+      it("opens no store for an advance queued once the server has closed", async () => {
+        server = newServer();
+        await armed();
+        const closed = server;
+        server = newServer();
+        await closed.close();
+        const { advancesQueued } = closed.currencyDelivery();
+        using warned = stub(console, "warn");
+
+        note(1, "of:other", closed);
+        // A second close waits for the advance the commit queued.
+        await closed.close();
+
+        expect(closed.currencyDelivery().advancesQueued).toBe(
+          advancesQueued + 1,
+        );
+        expect(warned.calls).toEqual([]);
+      });
+
+      it("warns, naming the space, when the advance a commit queued fails, and tells no reader", async () => {
+        server = newServer();
+        await armed();
+        const seq = await write(SOURCE, "of:far");
+        const failure = new Error("the store cannot be opened");
+        const refused: string[] = [];
+        server.accessForTestingOnly.engineOpener = (space) => {
+          server.accessForTestingOnly.engineOpener = undefined;
+          refused.push(space);
+          return Promise.reject(failure);
+        };
+        using warned = stub(console, "warn");
+
+        note(seq, "of:far");
+        await server.idle();
+
+        expect(refused).toEqual([SOURCE]);
+        expect(warned.calls.map(({ args }) => args)).toEqual([[
+          `memory v2: the currency advance queued for ${SOURCE} failed`,
+          failure,
+        ]]);
+        expect(told).toEqual([]);
+        expect(server.currencyReadersArmedOn(SOURCE)).toEqual([SPACE]);
+      });
+    });
+
+    describe("setServerExecutionObserver()", () => {
+      it("warns when the observer throws on `currencyChanged`, and still disarms the reader it tells", async () => {
+        server = newServer();
+        await armed();
+        const failure = new Error("observer failure");
+        server.setServerExecutionObserver({
+          currencyChanged: () => {
+            throw failure;
+          },
+        });
+        using warned = stub(console, "warn");
+
+        await change(SOURCE, "of:far");
+
+        expect(warned.calls.map(({ args }) => args)).toEqual([[
+          "memory v2: server-execution observer threw on currencyChanged",
+          failure,
+        ]]);
+        expect(server.currencyReadersArmedOn(SOURCE)).toEqual([]);
+        expect(server.currencyDelivery().triggers).toBe(1);
       });
     });
   });

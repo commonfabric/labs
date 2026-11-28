@@ -46,6 +46,7 @@ import { test } from "@commonfabric/test-support/test";
 /** A GitHub API that these tests never reach. */
 const noGitHub: GitHubApi = {
   find: () => Promise.reject(new Error("these tests find nothing")),
+  defaultBranch: () => Promise.reject(new Error("these tests ask nothing")),
   mergeMethod: () => Promise.reject(new Error("these tests merge nothing")),
   create: () => Promise.reject(new Error("these tests create nothing")),
   merge: () => Promise.reject(new Error("these tests merge nothing")),

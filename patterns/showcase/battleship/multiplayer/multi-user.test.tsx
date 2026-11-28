@@ -13,7 +13,7 @@
  * kept by the profile migration); the profile-wish UI path needs a browser.
  */
 import { action, assert, multiUserTest, pattern, TESTS } from "commonfabric";
-import BattleshipLobby, { type LobbyOutput } from "./lobby.tsx";
+import BattleshipLobby, { type LobbyOutput } from "./main.tsx";
 
 interface Setup {
   lobby: LobbyOutput;

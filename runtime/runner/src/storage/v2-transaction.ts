@@ -783,11 +783,6 @@ const arraySpliceHunks = (
     return undefined;
   }
 
-  // Where the length holds, a script of substitutions alone replaces the
-  // elements the per-index diff does, and nothing is gained.
-  if (sameLength && runs.every((hunk) => hunk.remove === hunk.add)) {
-    return undefined;
-  }
   // A shortest script can remove an element and add it back where it was,
   // the same value at the same index, which the per-index diff leaves out.
   // An element can be any size, so a count of elements says nothing of what

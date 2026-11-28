@@ -1,6 +1,6 @@
 import { NAME, pattern, UI } from "commonfabric";
 import Demo from "./ui-variants-demo.tsx";
-import Counter from "../counter/counter.tsx";
+import Counter from "../counter/main.tsx";
 
 /**
  * CT-1321 browser verification host. Renders one piece that exports all three

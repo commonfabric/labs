@@ -588,6 +588,32 @@ test("runPackageIntegration reads each test, and how to rerun a failing one, fro
       message: "Error: still 3",
       rerun: "deno task integration runner counter",
     }]);
+    expect(lines.filter((line) => line.startsWith("test records:")))
+      .toEqual([]);
+  } finally {
+    await Deno.remove(rootDir, { recursive: true });
+    await Deno.remove(spool, { recursive: true });
+  }
+});
+
+test("runPackageIntegration warns of the results it could not read and keeps the rest", async () => {
+  const rootDir = await makeRoot(["runner"]);
+  const spool = await Deno.makeTempDir();
+  try {
+    const fake = reportingHost(
+      [...COUNTER_RESULTS, counterResult("counts", { outcome: "fail" })],
+      { CF_TEST_RECORDS_DIR: spool },
+    );
+    const { result: outcome, lines } = await capturing(() =>
+      runPackage("runner", rootDir, fake)
+    );
+    expect(lines.filter((line) => line.startsWith("test records:")))
+      .toEqual([
+        "test records: dropped a second result for counts in results-counter.ndjson",
+      ]);
+    expect(
+      outcome.tests.map(({ record }) => [record.test.n, record.outcome]),
+    ).toEqual([["counts", "pass"], ["resets", "fail"]]);
   } finally {
     await Deno.remove(rootDir, { recursive: true });
     await Deno.remove(spool, { recursive: true });

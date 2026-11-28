@@ -201,12 +201,12 @@
  *      above). The one real CT-1615 cross-consumer hazard (schema generator vs.
  *      schema injection needing different types for a synthetic wrapper node)
  *      was retired in CT-1621: PR #3716 added the `schemaInjectedRegistry`
- *      marker that catches re-entries on nodes whose mark survived. PR #3788
- *      then closed the residual case — synthetic capability-wrapper re-entries
- *      whose mark did not survive — by detecting them structurally
- *      (`argumentType.pos < 0 && isCellLikeTypeNode(argumentType)`) and
- *      short-circuiting the re-shrink, which left the channel without a
- *      consumer and let `narrowedWrapperTypeRegistry` be deleted entirely.
+ *      marker that catches re-entries on nodes whose mark survived. A
+ *      re-entry whose mark did not survive cannot arise: the one schema-first
+ *      lift any stage writes is the call schema injection rebuilds from an
+ *      authored `lift(toSchema<T>(), ..., fn)`, and it marks that call before
+ *      visiting only its children. That left the channel without a consumer,
+ *      and `narrowedWrapperTypeRegistry` was deleted entirely.
  *   3. (done) Lifted schemaHints + capabilitySummary to context record/lookup
  *      methods. typeRegistry stays on direct .set (its split was dropped in
  *      step 2, so there's no per-use method to route through).

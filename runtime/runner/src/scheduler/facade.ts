@@ -1701,6 +1701,24 @@ export class Scheduler {
   }
 
   /**
+   * Whether a node registered here declares a write to some instance of
+   * `address`'s document, at any scope: the piece the node belongs to is
+   * running, and the node derives the instance `(space, id, scope)`. The
+   * lookup spans every scope for the reason `#owingWriters()` gives: the
+   * write index keys a derivation by its declared scope, and a derivation
+   * declared at space scope writes the instance its reads narrow to.
+   */
+  hasWriterOf(
+    address: { space: MemorySpace; id: string; scope: CellScope },
+  ): boolean {
+    return (["space", "user", "session"] as const).some((scope) =>
+      (this.#writeIndex.writersByEntity.get(
+        entityNameKey({ ...address, scope } as never),
+      )?.size ?? 0) > 0
+    );
+  }
+
+  /**
    * Starts recording the pieces whose nodes change, for a serving loop that
    * keeps a currency index (serving-loop.md §3b).
    */
@@ -2414,14 +2432,13 @@ export class Scheduler {
    * node for gets no run of it.
    */
   #willRunForInstance(action: Action, instance: ScopeKey): boolean {
-    const node = this.#nodes.get(action);
-    if (node === undefined) return false;
     const queued = this.#isLiveAction(action) ||
       this.#materializers.isMaterializer(action) ||
       this.#pending.has(action);
     if (!queued) return false;
-    if (node.fanOut === undefined) return this.#isInvalidAction(action);
-    if (!fanOutOwesRun(node.fanOut, instance)) return false;
+    const fanOut = this.#nodes.get(action)?.fanOut;
+    if (fanOut === undefined) return this.#isInvalidAction(action);
+    if (!fanOutOwesRun(fanOut, instance)) return false;
     const observation = (action as Partial<TelemetryAnnotations>)
       .schedulerObservationIdentity;
     const roots = observation?.demandRootIds ??
@@ -2430,7 +2447,7 @@ export class Scheduler {
         : undefined);
     if (roots === undefined) return false;
     const demanders = this.runtime.serverRunDemandersFor(roots) ?? [];
-    return fanOutInstances(node.fanOut, demanders).some((candidate) =>
+    return fanOutInstances(fanOut, demanders).some((candidate) =>
       candidate.key === instance
     );
   }
@@ -2457,8 +2474,7 @@ export class Scheduler {
       return false;
     }
     const node = this.#nodes.get(action);
-    if (node === undefined) return false;
-    if (node.fanOut === undefined) return node.produced === true;
+    if (node?.fanOut === undefined) return node?.produced === true;
     return instance !== undefined &&
       node.fanOut.instances.get(instance)?.produced === true;
   }

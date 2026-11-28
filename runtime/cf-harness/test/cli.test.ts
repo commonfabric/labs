@@ -27,7 +27,7 @@ import {
   cfHarnessCliInformationalControl,
   type CfHarnessCliIO,
   type CfHarnessCliSignalHandler,
-  cfHarnessOpenUrlCommand,
+  type CfHarnessCommand,
   createCfHarnessBatchResult,
   createCfHarnessCliCapabilities,
   formatCfHarnessCliResult,
@@ -36,6 +36,7 @@ import {
   installCfHarnessSignalHandlers,
   registerCfHarnessSignalHandler,
   resolveCfHarnessCliSystemPrompt,
+  runCfHarnessOpenUrlCommand,
   validateCfHarnessStructuredResult,
 } from "../src/cli.ts";
 import {
@@ -57,6 +58,7 @@ import {
   type RunHarnessTranscriptOptions,
 } from "../src/prompt-loop.ts";
 import type { HarnessRunState } from "../src/run-state.ts";
+import type { SandboxPlatform } from "../src/sandbox/types.ts";
 import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
@@ -407,6 +409,52 @@ test("parseCfHarnessCliArgs supports prompt files and mode overrides", async () 
   assertEquals(parsed.gatewayAuthMode, "bearer");
   assertEquals(parsed.cfcEnforcementModeOverride, "observe");
   assertEquals(parsed.maxModelTurns, 5);
+});
+
+test("parseCfHarnessCliArgs reads the reviewed skills a run accepts from a file", async () => {
+  const reviewedSkills = {
+    entries: [{
+      verifier: "github:acme",
+      registryId: "acme/skills/trip",
+      bundleDigest: "sha256:abc",
+    }],
+    acceptedVerifiers: ["github:acme"],
+    revoked: [],
+  };
+  const parsed = await parseCfHarnessCliArgs(
+    ["--prompt", "hi", "--reviewed-skills", "reviewed.json"],
+    {
+      cwd: "/tmp/project",
+      env: {},
+      readTextFile: (path) => {
+        assertEquals(path, "/tmp/project/reviewed.json");
+        return Promise.resolve(JSON.stringify(reviewedSkills));
+      },
+    },
+  );
+
+  if ("help" in parsed) {
+    throw new Error("expected config result");
+  }
+  expect(parsed.reviewedSkills).toEqual(reviewedSkills);
+});
+
+test("parseCfHarnessCliArgs refuses a reviewed-skills file with an unknown key", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--reviewed-skills", "/tmp/reviewed.json"],
+        {
+          env: {},
+          readTextFile: () =>
+            Promise.resolve(
+              JSON.stringify({ entries: [], acceptedVerifiers: [], extra: 1 }),
+            ),
+        },
+      ),
+    Error,
+    'unknown key "extra" in the file',
+  );
 });
 
 test("parseCfHarnessCliArgs accepts CFC mode from environment", async () => {
@@ -1511,6 +1559,35 @@ test({
       await Deno.remove(workspace, { recursive: true });
     }
   },
+});
+
+test("parseCfHarnessCliArgs asks for --skills-root to preload a skill outside a checkout", async () => {
+  await assertRejects(
+    () =>
+      parseCfHarnessCliArgs(
+        ["--prompt", "hi", "--skill", "pattern-dev"],
+        { cwd: "/tmp/project", env: {}, checkoutSkillsRoot: () => undefined },
+      ),
+    Error,
+    "--skill requires --skills-root",
+  );
+  const parsed = await parseCfHarnessCliArgs(
+    ["--prompt", "hi", "--skill", "pattern-dev"],
+    {
+      cwd: "/tmp/project",
+      env: {},
+      checkoutSkillsRoot: () => "/opt/labs/skills",
+    },
+  );
+  if ("help" in parsed) {
+    throw new Error("expected config result");
+  }
+  assertEquals(parsed.skillNames, ["pattern-dev"]);
+  assertEquals(parsed.skillsRootRecord, {
+    type: "cf-harness.skills-root-record",
+    source: "checkout-default",
+    hostPath: "/opt/labs/skills",
+  });
 });
 
 test("parseCfHarnessCliArgs preloads a skill out of the checkout's own skills tree", async () => {
@@ -7056,7 +7133,7 @@ test("structured browser login emits JSON events and a bounded result", async ()
       io,
       env: {},
       credentialStore: store,
-      openUrl: () => {},
+      runOpenUrlCommand: () => {},
       loginOpenAICodex: async (options) => {
         await options.onAuthorizationUrl("https://auth.example/authorize");
         const credential = {
@@ -9255,15 +9332,15 @@ describe("cli", () => {
 
     it("prints the authorization URL, opens it, and reports the connection", async () => {
       const { io, stdout } = createIoBuffers();
-      const opened: string[] = [];
+      const opened: CfHarnessCommand[] = [];
       const exitCode = await runCfHarnessCli(
         ["auth", "login", "openai-codex"],
         {
           io,
           credentialStore: new InMemoryHarnessCredentialStore(),
           controlSignal: new AbortController().signal,
-          openUrl: (url) => {
-            opened.push(url);
+          runOpenUrlCommand: (command) => {
+            opened.push(command);
           },
           loginOpenAICodex: async (options) => {
             await options.onAuthorizationUrl("https://auth.example.test/go");
@@ -9279,11 +9356,53 @@ describe("cli", () => {
         },
       );
       expect(exitCode).toBe(0);
-      expect(opened).toEqual(["https://auth.example.test/go"]);
+      expect(opened).toEqual([
+        { command: "xdg-open", args: ["https://auth.example.test/go"] },
+      ]);
       expect(stdout).toEqual([
         "Open this URL to connect openai-codex:\nhttps://auth.example.test/go\n",
         "openai-codex: connected\n",
       ]);
+    });
+
+    it("opens the authorization URL with the program of the platform it is given", async () => {
+      const url = "https://auth.example.test/go?a=1";
+      const programs: [SandboxPlatform, CfHarnessCommand][] = [
+        ["darwin", { command: "open", args: [url] }],
+        // `start` reads its first quoted argument as a window title.
+        ["windows", { command: "cmd", args: ["/c", "start", "", url] }],
+        ["freebsd", { command: "xdg-open", args: [url] }],
+        ["android", { command: "xdg-open", args: [url] }],
+      ];
+      for (const [platform, program] of programs) {
+        const { io } = createIoBuffers();
+        const opened: CfHarnessCommand[] = [];
+        const exitCode = await runCfHarnessCli(
+          ["auth", "login", "openai-codex"],
+          {
+            io,
+            platform,
+            credentialStore: new InMemoryHarnessCredentialStore(),
+            controlSignal: new AbortController().signal,
+            runOpenUrlCommand: (command) => {
+              opened.push(command);
+            },
+            loginOpenAICodex: async (options) => {
+              await options.onAuthorizationUrl(url);
+              return {
+                type: "oauth",
+                providerId: "openai-codex",
+                accessToken: "access",
+                refreshToken: "refresh",
+                expiresAt: Date.UTC(2099, 0, 1),
+                accountId: "account",
+              };
+            },
+          },
+        );
+        expect(exitCode).toBe(0);
+        expect(opened).toEqual([program]);
+      }
     });
 
     it("exits nonzero with the login's error when not asked for JSON", async () => {
@@ -9711,29 +9830,40 @@ describe("cli", () => {
     });
   });
 
-  describe("cfHarnessOpenUrlCommand()", () => {
-    const url = "https://auth.example.test/go?a=1";
-
-    it("returns open for macOS", () => {
-      expect(cfHarnessOpenUrlCommand("darwin", url)).toEqual({
-        command: "open",
-        args: [url],
-      });
-    });
-
-    it("returns cmd's start, with an empty window title, for Windows", () => {
-      expect(cfHarnessOpenUrlCommand("windows", url)).toEqual({
-        command: "cmd",
-        args: ["/c", "start", "", url],
-      });
-    });
-
-    it("returns xdg-open for every other platform", () => {
-      for (const os of ["linux", "freebsd", "android"] as const) {
-        expect(cfHarnessOpenUrlCommand(os, url)).toEqual({
-          command: "xdg-open",
-          args: [url],
+  describe("runCfHarnessOpenUrlCommand()", () => {
+    it("runs the program and waits for it to end", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        const marker = join(dir, "opened");
+        await runCfHarnessOpenUrlCommand({
+          command: Deno.execPath(),
+          args: [
+            "eval",
+            `Deno.writeTextFileSync(${JSON.stringify(marker)}, "opened")`,
+          ],
         });
+        expect(await Deno.readTextFile(marker)).toBe("opened");
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("ignores a program that exits unsuccessfully", async () => {
+      await expect(runCfHarnessOpenUrlCommand({
+        command: Deno.execPath(),
+        args: ["eval", "Deno.exit(3)"],
+      })).resolves.toBeUndefined();
+    });
+
+    it("ignores a program that cannot be started", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        await expect(runCfHarnessOpenUrlCommand({
+          command: join(dir, "missing-browser-opener"),
+          args: ["https://auth.example.test/go"],
+        })).resolves.toBeUndefined();
+      } finally {
+        await Deno.remove(dir, { recursive: true });
       }
     });
   });

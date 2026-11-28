@@ -417,6 +417,73 @@ describe("selection", () => {
       }
     });
 
+    it("carries the last failure an entry names, and drops one that is not a day", () => {
+      // Nothing selects by it, so a malformed one must not cost every lane
+      // the manifest it obeys.
+      const manifest = sampleManifest();
+      manifest.entries[0]!.lastFailure = "2026-08-19";
+      expect(parseManifest(JSON.stringify(manifest))?.entries[0]?.lastFailure)
+        .toBe("2026-08-19");
+      for (const lastFailure of [7, "", "2026-02-31", "2026-08-19T04:00Z"]) {
+        Object.assign(manifest.entries[0]!, { lastFailure });
+        const parsed = parseManifest(JSON.stringify(manifest));
+        expect(parsed?.entries.length).toBe(manifest.entries.length);
+        expect(parsed?.entries[0]?.lastFailure).toBeUndefined();
+      }
+    });
+
+    it("carries the disagreements an entry names, and drops one that does not read", () => {
+      // Nothing selects by these, so a malformed one must not cost every
+      // lane the manifest it obeys.
+      const kept = {
+        day: "2026-08-19",
+        commit: "c2",
+        seed: 20260819,
+        failed: {
+          place: "pr" as const,
+          ci: { runId: "1001", runAttempt: 1, job: "Test (3/8)" },
+        },
+        passed: { place: "local" as const },
+      };
+      const manifest = sampleManifest();
+      Object.assign(manifest.entries[0]!, {
+        disagreements: [
+          kept,
+          { ...kept, day: "2026-02-31" },
+          { ...kept, commit: "" },
+          { ...kept, seed: 1.5 },
+          { ...kept, failed: { place: "pr", ci: { runId: "1" } } },
+          { ...kept, failed: { place: "pr", ci: "1001" } },
+          { ...kept, passed: { place: "ci" } },
+          {
+            ...kept,
+            passed: {
+              place: "local",
+              ci: { runId: "1", runAttempt: 1, job: "Test" },
+            },
+          },
+          {
+            ...kept,
+            failed: {
+              place: "pr",
+              ci: { runId: "1", runAttempt: 0, job: "Test" },
+            },
+          },
+          "not one",
+        ],
+      });
+      const parsed = parseManifest(JSON.stringify(manifest));
+      expect(parsed?.entries[0]?.disagreements).toEqual([kept]);
+    });
+
+    it("reads an entry whose disagreements all fail to read as holding none", () => {
+      const manifest = sampleManifest();
+      Object.assign(manifest.entries[0]!, { disagreements: ["not one"] });
+      const parsed = parseManifest(JSON.stringify(manifest));
+      expect(parsed?.entries.length).toBe(manifest.entries.length);
+      expect(parsed?.entries[0]?.disagreements).toBeUndefined();
+    });
+
     it("rejects a generation time that is not one", () => {
       // A reader measures a manifest's age from this, and a value that
       // does not parse compares false against every threshold, so a
@@ -580,12 +647,25 @@ describe("selection", () => {
         }, "entry"),
       ],
       [
+        "a last new real test failure that is a time rather than a day",
+        withField("inputs", {
+          catches: 0,
+          sources: 0,
+          churn: 0,
+          lastCatch: "2026-08-20T04:00:00Z",
+        }, "entry"),
+      ],
+      [
         "a last run that is not a day",
         withField("lastRun", 7, "entry"),
       ],
       [
         "a last run that names no day at all",
         withField("lastRun", "", "entry"),
+      ],
+      [
+        "a last run that is a time rather than a day",
+        withField("lastRun", "2026-08-20T04:00:00Z", "entry"),
       ],
 
       // The lists a manifest carries beside its entries. Each has its own
@@ -817,6 +897,7 @@ describe("selection", () => {
         }],
       });
       manifest.entries[0]!.lastRun = "2026-08-20";
+      manifest.entries[0]!.lastFailure = "2026-08-19";
       manifest.entries[0]!.inputs.lastCatch = "2026-08-20";
       expect(parseManifest(serializeManifest(manifest))).toEqual(manifest);
     });

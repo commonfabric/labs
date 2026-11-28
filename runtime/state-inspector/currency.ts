@@ -281,10 +281,9 @@ export function currencyCycles(
     }
     const to = nodeKey({ space, piece });
     for (const writer of writers.get(`${source}\0${id}`) ?? []) {
+      // A piece that reads its own output gets an edge to itself, which no
+      // cycle of several pieces passes along.
       const from = nodeKey({ space: source, piece: writer });
-      // A piece that reads its own output is one piece, and no cycle of
-      // several.
-      if (from === to) continue;
       nodes.add(from);
       nodes.add(to);
       let targets = edges.get(from);
@@ -317,23 +316,22 @@ export function currencyCycles(
   for (const component of found) {
     const members = new Set(component);
     const spaces = new Set(component.map((key) => refOf(key).space));
-    if (members.size < 2 || spaces.size < 2) continue;
+    if (spaces.size < 2) continue;
     // The shortest cycle through an edge that crosses spaces: that edge,
-    // and the shortest way back from its reader to its writer.
-    let shortest: string[] | undefined;
+    // and the shortest way back from its reader to its writer. A component
+    // whose pieces are in more than one space has such an edge.
+    const paths: string[][] = [];
     for (const from of [...members].sort()) {
       for (const to of [...edges.get(from)?.keys() ?? []].sort()) {
         if (!members.has(to) || refOf(from).space === refOf(to).space) {
           continue;
         }
-        const back = new Map<string, string>();
+        const back = new Map([[to, to]]);
         const queue = [to];
         for (let at = 0; at < queue.length && !back.has(from); at++) {
           const node = queue[at];
           for (const target of [...edges.get(node)?.keys() ?? []].sort()) {
-            if (!members.has(target) || back.has(target) || target === to) {
-              continue;
-            }
+            if (!members.has(target) || back.has(target)) continue;
             back.set(target, node);
             queue.push(target);
           }
@@ -345,13 +343,12 @@ export function currencyCycles(
         }
         // `path` runs from the writer back to the reader, against the
         // edges.
-        path.reverse();
-        if (shortest === undefined || path.length < shortest.length) {
-          shortest = path;
-        }
+        paths.push(path.reverse());
       }
     }
-    if (shortest === undefined) continue;
+    const shortest = paths.reduce((best, path) =>
+      path.length < best.length ? path : best
+    );
     // The crossing edge closes the path. The cycle is told from its first
     // piece in sort order, so the same cycle reads the same way each time.
     const first = shortest.indexOf([...shortest].sort()[0]);

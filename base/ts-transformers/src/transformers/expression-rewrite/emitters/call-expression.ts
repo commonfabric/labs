@@ -17,22 +17,9 @@ import {
 } from "../../call-root-support.ts";
 import { rewriteHelperOwnedExpression } from "./helper-owned-expression.ts";
 
-function isZeroArgInlineIifeCall(
-  expression: ts.CallExpression,
-): expression is ts.CallExpression & {
-  expression:
-    | ts.ParenthesizedExpression
-    | ts.ArrowFunction
-    | ts.FunctionExpression;
-} {
-  return getZeroArgInlineIifeCallee(expression) !== undefined;
-}
-
-function getZeroArgInlineIifeCallee(
-  expression: ts.CallExpression,
-): ts.ArrowFunction | ts.FunctionExpression | undefined {
+function isZeroArgInlineIifeCall(expression: ts.CallExpression): boolean {
   if (expression.arguments.length !== 0) {
-    return undefined;
+    return false;
   }
 
   // Parentheses only: a callee under a type assertion is not recognized as an
@@ -40,11 +27,14 @@ function getZeroArgInlineIifeCallee(
   // lowering handles it.
   const callee = unwrapParentheses(expression.expression);
 
-  return ts.isArrowFunction(callee) || ts.isFunctionExpression(callee)
-    ? callee
-    : undefined;
+  return ts.isArrowFunction(callee) || ts.isFunctionExpression(callee);
 }
 
+/**
+ * Whether `expression` names a binding declared inside `container`. Bindings
+ * are declared in the authored tree, so a rewritten `container` is compared
+ * through the authored node it was rebuilt from.
+ */
 function isDeclaredInside(
   expression: ts.Expression,
   container: ts.Node,
@@ -54,12 +44,13 @@ function isDeclaredInside(
     return false;
   }
 
+  const authored = ts.getOriginalNode(container);
   const symbol = context.checker.getSymbolAtLocation(expression);
   const declarations = symbol?.getDeclarations() ?? [];
   return declarations.some((declaration) => {
     let current: ts.Node | undefined = declaration;
     while (current) {
-      if (current === container) {
+      if (current === authored) {
         return true;
       }
       current = current.parent;
@@ -68,29 +59,34 @@ function isDeclaredInside(
   });
 }
 
+/**
+ * Collects the receivers of `.get()` calls an IIFE makes on values declared
+ * outside it. The scan enters the IIFE's own function and synthetic compute
+ * callbacks, and skips every other nested function, whose reads do not run when
+ * the IIFE does. Reads inside a synthetic compute callback already happen under
+ * a reactive cause context and are not collected.
+ */
 function collectUnsafeIifeGetReceivers(
-  expression: ts.CallExpression,
+  iife: ts.Expression,
   context: Parameters<Emitter>[0]["context"],
 ): ts.Expression[] {
-  const iifeCallee = getZeroArgInlineIifeCallee(expression);
-  if (!iifeCallee) {
-    return [];
-  }
-
   const receivers: ts.Expression[] = [];
 
-  const visit = (node: ts.Node, syntheticComputeDepth: number): void => {
+  const visit = (
+    node: ts.Node,
+    syntheticComputeDepth: number,
+    insideIife: boolean,
+  ): void => {
     const isFunctionLike = ts.isArrowFunction(node) ||
       ts.isFunctionExpression(node) ||
       ts.isFunctionDeclaration(node);
     if (isFunctionLike) {
-      const isRootIife = node === iifeCallee;
       const isSyntheticCompute = context.isSyntheticComputeCallback(node);
-      if (!isRootIife && !isSyntheticCompute) {
+      if (insideIife && !isSyntheticCompute) {
         return;
       }
       const nextDepth = syntheticComputeDepth + (isSyntheticCompute ? 1 : 0);
-      ts.forEachChild(node, (child) => visit(child, nextDepth));
+      ts.forEachChild(node, (child) => visit(child, nextDepth, true));
       return;
     }
 
@@ -100,7 +96,7 @@ function collectUnsafeIifeGetReceivers(
       : undefined;
     if (receiver) {
       if (
-        !isDeclaredInside(receiver, iifeCallee, context) &&
+        !isDeclaredInside(receiver, iife, context) &&
         !receivers.includes(receiver)
       ) {
         receivers.push(receiver);
@@ -108,10 +104,13 @@ function collectUnsafeIifeGetReceivers(
       return;
     }
 
-    ts.forEachChild(node, (child) => visit(child, syntheticComputeDepth));
+    ts.forEachChild(
+      node,
+      (child) => visit(child, syntheticComputeDepth, insideIife),
+    );
   };
 
-  visit(iifeCallee.body, 0);
+  visit(iife, 0, false);
   return receivers;
 }
 
@@ -288,7 +287,7 @@ export const emitCallExpression: Emitter = ({
   ) {
     const rewritten = rewriteChildren(expression);
     const unsafeGetReceivers = collectUnsafeIifeGetReceivers(
-      rewritten as ts.CallExpression,
+      rewritten,
       context,
     );
     if (

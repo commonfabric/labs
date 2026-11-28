@@ -10,6 +10,10 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
 
+import {
+  type FabricPlainObject,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { isWellFormedDID } from "@commonfabric/identity/did";
@@ -414,6 +418,37 @@ describe("profile management", () => {
     return documentSpace;
   }
 
+  /** The document the `name` of the profile at `profile` resolves to. */
+  async function nameDocument(
+    profile: { space: string; id: string },
+  ): Promise<NormalizedFullLink> {
+    const cell = runtime.getCellFromEntityId(spaceOf(profile), profile.id);
+    await cell.sync();
+    const name = cell.key("name").resolveAsCell();
+    await name.sync();
+    return { ...name.getAsNormalizedFullLink(), path: [] };
+  }
+
+  /**
+   * Replaces the label envelope stored on `document` with what `change`
+   * makes of it, beneath the runtime's write checks.
+   */
+  async function rewriteEnvelope(
+    document: NormalizedFullLink,
+    change: (cfc: FabricPlainObject) => FabricPlainObject,
+  ): Promise<void> {
+    const tx = runtime.edit();
+    const stored = storedFields(tx, document);
+    const { cfc } = stored;
+    if (!isFabricPlainObject(cfc)) {
+      throw new Error(`${document.id} carries no label.`);
+    }
+    seedStoredEnvelope(tx, document, { ...stored, cfc: change(cfc) });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+  }
+
   describe("listProfiles()", () => {
     it("returns no profiles for a person who has none", async () => {
       expect(await listProfiles(CONFIG, { loadPieces })).toEqual([]);
@@ -674,6 +709,37 @@ describe("profile management", () => {
       expect(await listedNames()).toEqual(["Ada", "Alan"]);
     });
 
+    it("throws, saying Home's list did not change, when Home finds the profile retired already", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+      const alan = await createProfile({ ...CONFIG, name: "Alan" }, {
+        loadPieces,
+      });
+      // The retired list holds a link in the home space that leads to Alan's
+      // profile: Home follows it and finds Alan retired, though the list
+      // holds no link into Alan's space.
+      const tx = runtime.edit();
+      const redirect = runtime.getCell<unknown>(
+        space,
+        "a link to Alan's profile",
+        undefined,
+        tx,
+      );
+      redirect.set(runtime.getCellFromLink(listedLink(alan.space)));
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await listInHome(redirect.getAsNormalizedFullLink(), "retiredProfiles");
+
+      await expect(
+        retireProfile({ ...CONFIG, profileSpace: alan.space }, { loadPieces }),
+      ).rejects.toThrow(
+        `Retiring profile ${alan.space} committed, but Home's list did not ` +
+          "change.",
+      );
+      expect(
+        (host.key("retiredProfiles").asSchema(linkListSchema).get() ?? [])
+          .map((each) => each.getAsNormalizedFullLink().space),
+      ).toEqual([space]);
+    });
+
     it("refuses a listed profile that is another identity's", async () => {
       await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
       await createProfile({ ...CONFIG, name: "Alan" }, { loadPieces });
@@ -784,6 +850,72 @@ describe("profile management", () => {
       await restoreProfile(target, { loadPieces });
 
       expect(await listedNames()).toEqual(["Ada", "Alan"]);
+    });
+
+    it("throws when the applied inspection leaves the name attested to another principal besides the identity", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+      const older = await listProfileWithUnlabeledName("Alan");
+      const target = { ...CONFIG, profileSpace: older.space };
+      const first = await attestProfileName(target, { loadPieces });
+      if (first.status !== "inspected") throw new Error("Not inspected.");
+      await attestProfileName(
+        { ...target, expectedInspection: first.inspection },
+        { loadPieces },
+      );
+      // The name's protection stays in place, so the repair has nothing to
+      // apply, and its label names the stranger as well as the owner.
+      await rewriteEnvelope(await nameDocument(older), (cfc) => {
+        const { labelMap } = cfc;
+        if (!isFabricPlainObject(labelMap)) throw new Error("No label map.");
+        return {
+          ...cfc,
+          labelMap: {
+            ...labelMap,
+            entries: [...storedList(labelMap.entries), {
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: stranger.did(),
+                }],
+              },
+              origin: "derived",
+            }],
+          },
+        };
+      });
+
+      const inspected = await attestProfileName(target, { loadPieces });
+      expect(inspected).toMatchObject({ status: "inspected", name: "Alan" });
+      if (inspected.status !== "inspected") throw new Error("Not inspected.");
+      await expect(
+        attestProfileName(
+          { ...target, expectedInspection: inspected.inspection },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(
+        `Attesting the name of profile ${older.space} committed, but its ` +
+          `name is still not attested to ${space}.`,
+      );
+    });
+
+    it("throws, naming the profile, when the label of its name cannot be read", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      const target = { ...CONFIG, profileSpace: ada.space };
+      expect(await attestProfileName(target, { loadPieces })).toEqual({
+        status: "already",
+        name: "Ada",
+      });
+      await rewriteEnvelope(
+        await nameDocument(ada),
+        (cfc) => ({ ...cfc, version: 3 }),
+      );
+
+      await expect(attestProfileName(target, { loadPieces })).rejects.toThrow(
+        `Could not read the label of ${ada.id}.`,
+      );
     });
 
     it("returns `already`, changing nothing, for a name attested to the identity", async () => {
@@ -903,6 +1035,41 @@ describe("profile management", () => {
       ).rejects.toThrow(/^Renaming profile /);
       profileSigner = signer;
       expect(await listedNames()).toEqual(["Ada"]);
+    });
+
+    it("throws, naming the act, when another name has replaced the new one by the time it is read back", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      // Another writer renames the profile once the rename has reached
+      // storage, before the profile is stopped and its name read back.
+      const racing: typeof loadPiecesOf = async (config) => {
+        const pieces = await loadPieces(config);
+        if (config.space !== ada.space) return pieces;
+        const stop = pieces.stopPiece.bind(pieces);
+        stub(pieces, "stopPiece", async (piece) => {
+          if (typeof piece === "string") throw new Error("A piece's id.");
+          const tx = pieces.runtime.edit();
+          piece.withTx(tx).asSchema(undefined).key("setName").send({
+            name: "Augusta",
+          });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await pieces.runtime.idle();
+          return stop(piece);
+        });
+        return pieces;
+      };
+
+      await expect(
+        renameProfile(
+          { ...CONFIG, profileSpace: ada.space, name: "Countess" },
+          { loadPieces: racing },
+        ),
+      ).rejects.toThrow(
+        `Renaming profile ${ada.space} committed, but the profile did not ` +
+          "change.",
+      );
+      expect(await listedNames()).toEqual(["Augusta"]);
     });
 
     it("refuses a retired profile", async () => {

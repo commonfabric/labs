@@ -13,6 +13,7 @@ import {
   _internal as languageInternals,
   decodeLanguageInput,
   diffSemanticsFor,
+  filenameSettlesLanguage,
   indexLanguagesByName,
   languageForFile,
   languageForName,
@@ -31,6 +32,7 @@ import type { LanguageDecoder } from "../lib/view/languages/decoder.ts";
 import { typeScriptLanguage } from "../lib/view/languages/typescript/language.ts";
 import { markdownLanguage } from "../lib/view/languages/markdown/language.ts";
 import {
+  jsoncLanguage,
   jsonLanguage,
   jsonLinesLanguage,
 } from "../lib/view/languages/json/language.ts";
@@ -104,7 +106,7 @@ test("languageForFile: named files resolve and missing names use plain text", ()
     assertEquals(languageForFile(name).id, "plain-text", name);
   }
   assertEquals(languageForFile("README.md").id, "markdown");
-  assertEquals(languageForFile("deno.jsonc").id, "json");
+  assertEquals(languageForFile("deno.jsonc").id, "jsonc");
   assertEquals(languageForFile("workflow.yml").id, "yaml");
   assertEquals(languageForFile("script.py").id, "python");
   expect(languageForFile("asset.png").id).toBe("binary");
@@ -180,6 +182,21 @@ test("language metadata claims a shared extension only with its evidence", () =>
   assert(!metadataMatchesSharedExtension(metadata, undefined, "demo:"));
 });
 
+test("filenameSettlesLanguage: a name settles only when a language claims it", () => {
+  // LICENSE is plain text by name, so it settles as much as a JSON file does.
+  for (
+    const name of ["a.json", "LICENSE", "containers/Dockerfile.debug"]
+  ) {
+    assert(filenameSettlesLanguage(name), name);
+  }
+  for (const name of ["notes.xyz", "script", undefined]) {
+    assert(!filenameSettlesLanguage(name), String(name));
+  }
+  // A template settles exactly when its host's name does.
+  assert(filenameSettlesLanguage("deploy.sh.j2"));
+  assert(!filenameSettlesLanguage("notes.xyz.j2"));
+});
+
 test("languageForFile: named JavaScript uses the TypeScript-family parser", () => {
   const source = "export const answer = 42;\n";
   const doc = languageForFile("answer.js").parseDocument(source, "answer.js");
@@ -193,7 +210,7 @@ test("languageForName: identifiers and aliases resolve explicit overrides", () =
   assertEquals(languageForName("markdown"), markdownLanguage);
   assertEquals(languageForName("md"), markdownLanguage);
   assertEquals(languageForName("json"), jsonLanguage);
-  assertEquals(languageForName("jsonc"), jsonLanguage);
+  assertEquals(languageForName("jsonc"), jsoncLanguage);
   assertEquals(languageForName("json-lines"), jsonLinesLanguage);
   assertEquals(languageForName("jsonl"), jsonLinesLanguage);
   assertEquals(languageForName("ndjson"), jsonLinesLanguage);
@@ -283,6 +300,7 @@ test("languageForName: identifiers and aliases resolve explicit overrides", () =
   expect(languageIds()).toEqual([
     "typescript",
     "markdown",
+    "jsonc",
     "json",
     "json-lines",
     "yaml",
@@ -341,8 +359,8 @@ test("languageForName: identifiers and aliases resolve explicit overrides", () =
     "js",
     "markdown",
     "md",
-    "json",
     "jsonc",
+    "json",
     "json-lines",
     "jsonl",
     "ndjson",
@@ -835,6 +853,19 @@ describe("languageMatchingSources()", () => {
     expect(languageMatchingSources("tool", ["echo unrecognized\n"]))
       .toBeUndefined();
     expect(languageMatchingSources(undefined, [])).toBeUndefined();
+  });
+});
+
+describe("filenameSettlesLanguage()", () => {
+  it("returns true for a name a language claims, and false for no name or an unclaimed one", () => {
+    expect(filenameSettlesLanguage("deno.jsonc")).toBe(true);
+    expect(filenameSettlesLanguage("notes.xyz")).toBe(false);
+    expect(filenameSettlesLanguage(undefined)).toBe(false);
+  });
+
+  it("returns whether the host's name settles the host under a template suffix", () => {
+    expect(filenameSettlesLanguage("tsconfig.json.j2")).toBe(true);
+    expect(filenameSettlesLanguage("notes.xyz.j2")).toBe(false);
   });
 });
 

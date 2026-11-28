@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
-import { validateSource } from "../utils.ts";
+import { validateSource, withSourceText } from "../utils.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
-import { transformCfDirective } from "../../src/mod.ts";
 import { describe, it } from "@commonfabric/test-support/test";
 
 /**
@@ -32,15 +31,12 @@ async function errorSites(source: string, typePrefix = "") {
   const { diagnostics } = await validateSource(source, {
     types: COMMONFABRIC_TYPES,
   });
-  const compiled = transformCfDirective(source);
-  return diagnostics
-    .filter((diagnostic) =>
+  return withSourceText(
+    source,
+    diagnostics.filter((diagnostic) =>
       diagnostic.severity === "error" && diagnostic.type.startsWith(typePrefix)
-    )
-    .map(({ type, start, length }) => ({
-      type,
-      text: compiled.slice(start, start + length),
-    }));
+    ),
+  ).map(({ type, text }) => ({ type, text }));
 }
 
 describe("pattern-context-validation", () => {

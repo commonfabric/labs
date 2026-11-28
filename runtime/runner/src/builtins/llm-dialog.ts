@@ -127,7 +127,6 @@ import {
 import { Runtime, spaceCellSchema } from "../runtime.ts";
 import { type Action, ignoreReadForScheduling } from "../scheduler.ts";
 import { schemaToTypeString } from "../schema-format.ts";
-import { resolveLinkScope } from "../scope.ts";
 import type { IExtendedStorageTransaction } from "../storage/interface.ts";
 import { internalVerifierRead } from "../storage/reactivity-log.ts";
 import { formatTransactionSummary } from "../storage/transaction-summary.ts";
@@ -647,17 +646,17 @@ function serializeForLLMObservation(
           observedConfidentiality: handleConfidentiality,
         };
       }
-      // Even the pointer's label exceeds the ceiling: the handle would leak
-      // which-document, and falling through would serialize the over-ceiling
-      // CONTENT into consumers with no downstream gate (the post-commit
-      // context/pinned-cell docs send llmParams without a sink-request
-      // gate). Redact entirely — no content, no handle, no observation
-      // (Codex review on #4541).
-      return {
-        value: "[redacted: exceeds observation ceiling]",
-        observedConfidentiality: [],
-      };
     }
+    // No handle can stand in, or even the pointer's label exceeds the
+    // ceiling: the handle would leak which-document, and falling through
+    // would serialize the over-ceiling CONTENT into consumers with no
+    // downstream gate (the post-commit context/pinned-cell docs send
+    // llmParams without a sink-request gate). Redact entirely — no content,
+    // no handle, no observation.
+    return {
+      value: "[redacted: exceeds observation ceiling]",
+      observedConfidentiality: [],
+    };
   }
 
   if (!isObjectOrArray(value)) {
@@ -4358,16 +4357,7 @@ export function llmDialog(
         }
       };
       // A sealed cancellation can still be withdrawn with its wave.
-      requireWaveAcceptance(tx);
-      tx.addCommitCallback((committed, outcome) => {
-        if (outcome.error) return;
-        const settlement = waveSettlementOf(committed) ?? waveSettlementOf(tx);
-        if (settlement) {
-          settlement.then((verdict) => {
-            if (!verdict.error) cancelAcceptedTurn();
-          });
-        } else cancelAcceptedTurn();
-      });
+      onAcceptance(tx, cancelAcceptedTurn);
     }
   };
 
@@ -4469,13 +4459,11 @@ async function startRequest(
     tx: IExtendedStorageTransaction,
     messages: Schema<typeof LLMMessageSchema>[],
   ) => {
-    const startIndex = (messagesCell.withTx(tx).get() as
-      | readonly CfcConfClause[]
-      | undefined)?.length ?? 0;
-    // Each message becomes its own document, which the stamping below reads
-    // back. Pushing plain messages would also produce them, since `Cell.push`
-    // anchors objects in arrays; they are made explicitly to control their
-    // identity -- a deliberate cause rather than a frame-relative counter.
+    // Each message becomes its own document, which the stamping below
+    // addresses. Pushing plain messages would also produce them, since
+    // `Cell.push` anchors objects in arrays; they are made explicitly to
+    // control their identity -- a deliberate cause rather than a
+    // frame-relative counter.
     // TODO(seefeld): Once we have event ids, the cause should be that.
     //
     // Space, scope and schema follow the user-message push: resolved link,
@@ -4495,22 +4483,21 @@ async function startRequest(
         builtinId: "llmDialog",
       });
     }
-    messagesCell.withTx(tx).pushAll(
-      messages.map((message) => {
-        const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
-          base.space,
-          { llmDialog: { message: cause, id: crypto.randomUUID() } },
-          undefined,
-          tx,
-          base.scope,
-        );
-        // Per-message store: named for this transaction, not enrolled. See
-        // the sibling in `addMessage` and `runtime-owned-store.ts`.
-        recordRuntimeOwnedStore(tx, result, messageCell);
-        messageCell.withTx(tx).set(message);
-        return messageCell;
-      }),
-    );
+    const messageCells = messages.map((message) => {
+      const messageCell = runtime.getCell<Schema<typeof LLMMessageSchema>>(
+        base.space,
+        { llmDialog: { message: cause, id: crypto.randomUUID() } },
+        undefined,
+        tx,
+        base.scope,
+      );
+      // Per-message store: named for this transaction, not enrolled. See
+      // the sibling in `addMessage` and `runtime-owned-store.ts`.
+      recordRuntimeOwnedStore(tx, result, messageCell);
+      messageCell.withTx(tx).set(message);
+      return messageCell;
+    });
+    messagesCell.withTx(tx).pushAll(messageCells);
     if (!stamped) {
       return;
     }
@@ -4524,23 +4511,9 @@ async function startRequest(
     // PolicyInput` on the child doc), which also marks the transaction
     // CFC-relevant so `prepareTxForCommit` runs the persist pass that mints
     // the labelMap entry.
-    for (let index = 0; index < messages.length; index++) {
-      const raw = messagesCell.withTx(tx).key(startIndex + index).getRaw();
-      const link = parseLink(raw);
-      const id = link?.id;
-      if (link === undefined || id === undefined) {
-        logger.warn(
-          "llm",
-          "model message did not split into its own doc; LlmDerived stamp skipped",
-        );
-        continue;
-      }
+    for (const messageCell of messageCells) {
       recordRelevantSchemaWritePolicyInput(tx, {
-        ...link,
-        id,
-        space: link.space ?? base.space ?? space,
-        scope: resolveLinkScope(link.scope, base.scope),
-        path: [],
+        ...messageCell.getAsNormalizedFullLink(),
         schema: LLM_DERIVED_MESSAGE_SCHEMA,
       }, LLM_DERIVED_MESSAGE_SCHEMA);
     }

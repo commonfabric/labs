@@ -56,6 +56,7 @@ import {
   computeFabricModuleIdentities,
   dataFileSpecifier,
   FABRIC_MOUNT_ROOT,
+  requiredModuleIdentity,
   type SourcePackageIdentity,
   sourceRootSpecifier,
 } from "../sandbox/module-record-compiler.ts";
@@ -342,15 +343,13 @@ function sourcePackageImports(
   for (const rootPath of owner.rootPaths) {
     imports.push({
       specifier: sourceRootSpecifier(storedNameFor(rootPath)),
-      targetIdentity: requiredIdentity(identityByPath, rootPath),
+      targetIdentity: requiredModuleIdentity(identityByPath, rootPath),
     });
   }
   for (const dataPath of owner.dataPaths ?? []) {
-    // Every data path is in the pristine set the identities were computed
-    // over, the same guarantee the root lookup above relies on.
     imports.push({
       specifier: dataFileSpecifier(storedNameFor(dataPath)),
-      targetIdentity: identityByPath.get(dataPath)!,
+      targetIdentity: requiredModuleIdentity(identityByPath, dataPath),
     });
   }
   return imports;
@@ -2195,12 +2194,9 @@ async function precompiledModulesOf(
     | undefined,
 ): Promise<Map<string, CompiledTypeScriptModule> | undefined> {
   if (precompiledModulesFor === undefined) return undefined;
-  const identities: string[] = [];
-  for (const file of moduleFiles) {
-    const identity = identityByPath.get(file.name);
-    if (identity === undefined) return undefined;
-    identities.push(identity);
-  }
+  // Every module file is in the pristine set the identities were computed
+  // over.
+  const identities = moduleFiles.map((file) => identityByPath.get(file.name)!);
   const held = await precompiledModulesFor({
     entryIdentity,
     identities: [...new Set(identities)],
@@ -2244,7 +2240,7 @@ function cacheableImportsFor(
   const edges = importEdges.get(fileName);
   const internal = (edges?.internalDeps ?? []).map((dep) => ({
     specifier: dep.specifier,
-    targetIdentity: requiredIdentity(identityByPath, dep.target),
+    targetIdentity: requiredModuleIdentity(identityByPath, dep.target),
   }));
   const fabric = (edges?.externalDeps ?? [])
     .filter(isFabricImportSpecifier)
@@ -2252,21 +2248,10 @@ function cacheableImportsFor(
       specifier,
       // Resolution refuses an import it cannot resolve, and
       // `FabricAwareResolver` aliases every fabric specifier it resolves.
-      targetIdentity: requiredIdentity(
+      targetIdentity: requiredModuleIdentity(
         identityByPath,
         specifierAliases.get(specifier)!,
       ),
     }));
   return [...internal, ...fabric];
-}
-
-function requiredIdentity(
-  identityByPath: ReadonlyMap<string, string>,
-  path: string,
-): string {
-  const identity = identityByPath.get(path);
-  if (identity === undefined) {
-    throw new Error(`No module identity computed for '${path}'`);
-  }
-  return identity;
 }

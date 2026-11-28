@@ -51,6 +51,7 @@ import {
 import {
   type CfcConfClause,
   clauseAlternatives,
+  clauseReleasableBy,
   commitmentAwareEquals,
   isOrClause,
 } from "@commonfabric/memory/v2/cfc-release-authority";
@@ -67,7 +68,7 @@ import {
 import { utf8Compare } from "@commonfabric/text/utf8";
 
 import { encodePointer } from "../../../memory/v2/path.ts";
-import type { JSONSchema, JSONSchemaObj } from "../builder/types.ts";
+import type { JSONSchema, JSONSchemaObj, JSONValue } from "../builder/types.ts";
 import { ContextualFlowControl } from "../cfc.ts";
 import { areLinksSame } from "../link-equality.ts";
 import { literalMemberMatches } from "../schema-literal-match.ts";
@@ -101,7 +102,7 @@ import {
   isCurrentPrincipalUserClause,
 } from "./current-principal-confidentiality.ts";
 import { MAX_PATH_RESOLUTION_LENGTH } from "../link-resolution.ts";
-import { metaFieldsWritten } from "../meta-seam.ts";
+import { asPatternIdentityRef, metaFieldsWritten } from "../meta-seam.ts";
 import {
   isPrimitiveCellLink,
   isWriteRedirectLink,
@@ -241,6 +242,7 @@ import { createTxCfcModulePolicyResolver } from "./policy-resolver.ts";
 import {
   type CfcDeclaringSchema,
   cfcSchemaEntries,
+  type CfcSchemaEntry,
 } from "./schema-label-view.ts";
 import { sinkClassOf } from "./sink-inventory.ts";
 import {
@@ -830,8 +832,8 @@ function* resolvedLocations(
   ]);
   if (nonRecursive !== true) {
     for (const entry of entries) {
+      // A consumed entry longer than `path` lies beneath it.
       if (entry.path.length <= path.length) continue;
-      if (!isPrefix(path, entry.path)) continue;
       locations.set(pathKey(entry.path), entry.path);
     }
   }
@@ -892,13 +894,6 @@ const observationInputWitnesses = (
   nonRecursive: boolean | undefined,
   evidence?: readonly LabelMapEntry[],
 ): CfcAtom[] | undefined => {
-  // A location's confidentiality comes only from these entries, so a read
-  // none of them makes confidential has no confidential location.
-  if (
-    !entries.some((entry) => (entry.label.confidentiality?.length ?? 0) > 0)
-  ) {
-    return undefined;
-  }
   let witnesses: CfcAtom[] | undefined;
   for (
     const { integrity } of resolvedLocations(
@@ -2344,52 +2339,36 @@ const updateAddedOwnerCreator = (
 };
 
 /**
- * The recorded creator of the piece the document `target` belongs to: the
- * document's own `creator` meta field for a result document, else the
- * `creator` of the piece's result document, which an argument document and an
- * internal document belong to two ways: the setup naming them for the piece
- * in this transaction (`runtime.piece-setup-store`, `runtime.owned-store`,
- * whose first source is the result document), and the `result` meta link a
- * setup writes on them. A result document without a record names no creator,
- * whatever its own `result` link, which names its parent piece.
+ * The result document of the piece the document `target` belongs to: the
+ * document itself where it records a `creator` or a `patternIdentity`, else
+ * the piece's result document, which an argument document and an internal
+ * document belong to two ways: the setup naming them for the piece in this
+ * transaction (`runtime.piece-setup-store`, `runtime.owned-store`, whose
+ * first source is the result document), and the `result` meta link a setup
+ * writes on them. A document that records a `creator` or a `patternIdentity`
+ * is a result document, whose own `result` link names its parent piece, so
+ * that link is not followed for it.
  */
-const pieceCreatorOfDocument = (
+const pieceResultOfDocument = (
   tx: IExtendedStorageTransaction,
   target: {
     space: MemorySpace;
     id: string;
     scope: ReturnType<typeof normalizeCellScope>;
   },
-): string | undefined => {
-  const readMeta = (
-    document: {
-      space: MemorySpace;
-      id: string;
-      scope: ReturnType<typeof normalizeCellScope>;
-    },
-    field: "creator" | "patternIdentity" | "result",
-  ): unknown =>
-    tx.readOrThrow({
-      space: document.space,
-      id: document.id as URI,
-      scope: document.scope,
-      path: [field],
-    }, { meta: INTERNAL_VERIFIER_META });
-  const creatorOf = (
-    document: {
-      space: MemorySpace;
-      id: string;
-      scope: ReturnType<typeof normalizeCellScope>;
-    },
-  ): string | undefined => {
-    const recorded = readMeta(document, "creator");
-    return typeof recorded === "string" && isWellFormedDID(recorded)
-      ? recorded
-      : undefined;
-  };
-  const own = creatorOf(target);
-  if (own !== undefined) return own;
-  if (readMeta(target, "patternIdentity") !== undefined) return undefined;
+):
+  | {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  }
+  | undefined => {
+  if (
+    pieceCreatorRecordedOn(tx, target) !== undefined ||
+    readPieceMeta(tx, target, "patternIdentity") !== undefined
+  ) {
+    return target;
+  }
   const key = cfcDocumentKey(target);
   const named = writePolicyInputsForDocument(tx, target).find((input) =>
     input.kind === "structural-provenance" &&
@@ -2399,19 +2378,338 @@ const pieceCreatorOfDocument = (
     cfcDocumentKey(input.target) === key && input.sources.length > 0
   );
   if (named !== undefined && named.kind === "structural-provenance") {
-    return creatorOf(linkDocument(named.sources[0]));
+    return linkDocument(named.sources[0]);
   }
-  const result = parseLink(readMeta(target, "result"), {
+  const result = parseLink(readPieceMeta(tx, target, "result"), {
     ...target,
     id: target.id as URI,
     path: [],
   });
   if (result === undefined) return undefined;
-  return creatorOf({
+  return {
     space: result.space,
     id: result.id,
     scope: normalizeCellScope(result.scope),
+  };
+};
+
+/** One meta field of `document`, read as the verifier reads it. */
+const readPieceMeta = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  field: "creator" | "patternIdentity" | "result",
+): unknown =>
+  tx.readOrThrow({
+    space: document.space,
+    id: document.id as URI,
+    scope: document.scope,
+    path: [field],
+  }, { meta: INTERNAL_VERIFIER_META });
+
+/** The well-formed DID `document`'s own `creator` meta field records. */
+const pieceCreatorRecordedOn = (
+  tx: IExtendedStorageTransaction,
+  document: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): string | undefined => {
+  const recorded = readPieceMeta(tx, document, "creator");
+  return typeof recorded === "string" && isWellFormedDID(recorded)
+    ? recorded
+    : undefined;
+};
+
+/**
+ * The recorded creator of the piece the document `target` belongs to
+ * (`pieceResultOfDocument`): the `creator` its result document records. A
+ * result document without a record names no creator.
+ */
+const pieceCreatorOfDocument = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+): string | undefined => {
+  const result = pieceResultOfDocument(tx, target);
+  return result === undefined ? undefined : pieceCreatorRecordedOn(tx, result);
+};
+
+/**
+ * Whether `value` is one compiler-lowered `PolicyOf` marker: a module policy
+ * reference whose subject is the owning-space placeholder, with its module,
+ * symbol and digest named.
+ */
+const isPolicyOfMarker = (value: unknown): boolean =>
+  isObjectOrArray(value) && !Array.isArray(value) &&
+  value.type === CFC_ATOM_TYPE.Policy && value.policyRefKind === "module" &&
+  typeof value.moduleIdentity === "string" &&
+  typeof value.symbol === "string" &&
+  typeof value.policyDigest === "string" &&
+  isObjectOrArray(value.subject) &&
+  (value.subject as Record<string, unknown>)[OWNING_SPACE_PLACEHOLDER] ===
+    true;
+
+/** One `ifc.reclassify` declaration of a schema, at its logical path. */
+type ReclassifyDeclaration = {
+  readonly path: readonly string[];
+  readonly marker: unknown;
+  readonly conditional: boolean;
+};
+
+/**
+ * Every `ifc.reclassify` declaration of `schema` (the lowered form of
+ * `Reclassified`), at its logical value path. A declaration that is not
+ * exactly one well-formed `PolicyOf` marker (`isPolicyOfMarker`) throws, so
+ * a schema carrying one is refused whether or not reclassification is on,
+ * and a merge that unions two policies at one path is refused too.
+ */
+const reclassifyDeclarationsOf = (
+  schema: JSONSchema | undefined,
+): readonly ReclassifyDeclaration[] => {
+  if (schema === undefined) return [];
+  return cfcSchemaEntries(schema).flatMap((entry) => {
+    const declared = (entry.schema.ifc as Record<string, unknown>).reclassify;
+    if (declared === undefined) return [];
+    const path = canonicalizeLogicalPath(entry.path);
+    if (
+      !Array.isArray(declared) || declared.length !== 1 ||
+      !isPolicyOfMarker(declared[0])
+    ) {
+      throw new Error(
+        `reclassify at /${
+          path.join("/")
+        } must name exactly one compiler-lowered PolicyOf`,
+      );
+    }
+    return [{
+      path,
+      marker: declared[0],
+      conditional: entry.conditional === true,
+    }];
   });
+};
+
+/** Whether the declared path `declared` (`*` matching any key) covers `path`. */
+const declaredPathCovers = (
+  declared: readonly string[],
+  path: readonly string[],
+): boolean =>
+  declared.length <= path.length &&
+  declared.every((segment, index) =>
+    segment === "*" || segment === path[index]
+  );
+
+/**
+ * Whether `clause` is the piece creator's alone to release and names them
+ * only as a `User`: `clauseReleasableBy` admits it for `creator`, and every
+ * alternative is a `User` atom, plain or a commitment to the creator. The
+ * creator's `Context`, `Resource`, home `Space` and `PersonalSpace` clauses
+ * are kept as they are.
+ */
+const isCreatorUserClause = (
+  clause: CfcConfClause,
+  creator: string,
+): boolean =>
+  clauseReleasableBy(clause, creator) &&
+  clauseAlternatives(clause).every((alternative) =>
+    isObjectOrArray(alternative) &&
+    (alternative as { type?: unknown }).type === CFC_ATOM_TYPE.User
+  );
+
+/** What `reclassifiedFlowConfidentiality` decides a write's join by. */
+type ReclassificationContext = {
+  /** The schemas the transaction's writers brought to the document. */
+  readonly declaring: JSONSchema | undefined;
+  /** The envelope the document stored before the transaction, if any. */
+  readonly stored: JSONSchema | undefined;
+  /** The envelope this commit persists. */
+  readonly merged: JSONSchema;
+  /** The authoring identities of the writers' schema inputs, by path. */
+  readonly identities:
+    | Map<string, ImplementationIdentity | undefined>
+    | undefined;
+  /** The value paths the transaction wrote on the document. */
+  readonly writtenPaths: readonly (readonly string[])[];
+};
+
+/**
+ * The confidentiality of the flow join `join` as the written document
+ * `target` stores it. A reclassification under a policy `P` that a writer's
+ * own schema declares (`ifc.reclassify`, the lowered form of `Reclassified`)
+ * replaces each clause the piece's recorded creator alone may release as a
+ * `User` (`isCreatorUserClause`) with that clause or `P`, `P`'s subject
+ * resolved to the target's space, whose manifest the resolution installs
+ * there. Every other clause is kept.
+ *
+ * Throws, which refuses the write, where a declaration is malformed
+ * (`reclassifyDeclarationsOf`), or where a write to a document the
+ * transaction did not create brings a declaration covering a value it writes
+ * that the document did not store, at that path and policy: an audience is
+ * the creating program's to choose, not a later writer's. A declaration
+ * covering no value the transaction writes, as when a link to a share's
+ * result is stored beneath it, is persisted without a refusal, since
+ * refusing it would refuse storing such a link in any existing record; a
+ * later write there is honored only under every condition below.
+ * (`PROPOSAL.md`, Risks.)
+ *
+ * Returns the join as it is, with a diagnostic saying why, unless all of
+ * these hold: the transaction's `patternReclassification` dial is on; one
+ * declaration, outside any union branch, covers every path the transaction
+ * wrote on the document, because the join is stamped document-wide; every
+ * writer at those paths (`identitiesForClaimPath`) is a module of the piece's
+ * own pattern, the module its `patternIdentity` names, so a declaration that
+ * any other writer brings, or one the document stores for a writer that
+ * brought none, releases nothing; the piece records a creator; and the join
+ * holds a clause that is theirs to release.
+ *
+ * The creator is the authority because a computation has no acting user:
+ * the creator installed the pattern that computes the value, and releasing a
+ * clause that is theirs alone is choosing the audience of their own content
+ * (§8.12.7's `canReleaseStoredClause`, applied to a new value).
+ */
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/111
+const reclassifiedFlowConfidentiality = (
+  tx: IExtendedStorageTransaction,
+  target: {
+    space: MemorySpace;
+    id: string;
+    scope: ReturnType<typeof normalizeCellScope>;
+  },
+  context: ReclassificationContext,
+  join: readonly CfcConfClause[],
+): readonly CfcConfClause[] => {
+  const declared = reclassifyDeclarationsOf(context.declaring);
+  reclassifyDeclarationsOf(context.merged);
+  const storedDeclarations = reclassifyDeclarationsOf(context.stored);
+  // Only the write that creates the document declares a reclassification. A
+  // document that already exists keeps the one it stored, at the same path
+  // and under the same policy, whether or not it stored an envelope at all.
+  // A declaration covering no value this transaction writes releases nothing
+  // now, as when a link to another piece's result is stored beneath it.
+  if (
+    declared.length > 0 && !createdInTransaction(tx, { ...target, path: [] })
+  ) {
+    for (
+      const declaration of declared.filter((declaration) =>
+        context.writtenPaths.some((path) =>
+          declaredPathCovers(declaration.path, path)
+        )
+      )
+    ) {
+      const storedHere = storedDeclarations.some((stored) =>
+        arraysEqual(stored.path, declaration.path) &&
+        commitmentAwareEquals(
+          stored.marker as FabricValue,
+          declaration.marker as FabricValue,
+        )
+      );
+      if (!storedHere) {
+        throw new Error(
+          `reclassify at /${
+            declaration.path.join("/")
+          } of ${target.id} is not in its stored envelope; only the write that creates the document declares one`,
+        );
+      }
+    }
+  }
+  if (join.length === 0) return join;
+  const unchanged = (why: string): readonly CfcConfClause[] => {
+    tx.noteCfcDiagnostic(
+      `reclassify: ${target.id} keeps its flow join: ${why}`,
+    );
+    return join;
+  };
+  if (declared.length === 0) {
+    return storedDeclarations.length === 0 ? join : unchanged(
+      "its stored reclassification binds no writer that did not declare it",
+    );
+  }
+  if (tx.getCfcState().patternReclassification !== true) {
+    return unchanged("the cfcPatternReclassification dial is off");
+  }
+  const where = (path: readonly string[]) => `/${path.join("/")}`;
+  if (context.writtenPaths.length === 0) {
+    return unchanged("the transaction wrote no value on it");
+  }
+  const covering = declared.filter((declaration) =>
+    context.writtenPaths.every((path) =>
+      declaredPathCovers(declaration.path, path)
+    )
+  );
+  if (covering.length === 0) {
+    return unchanged(
+      `no reclassification covers every written path (declared at ${
+        declared.map((declaration) => where(declaration.path)).join(", ")
+      }; written at ${context.writtenPaths.map(where).join(", ")})`,
+    );
+  }
+  const declaration = covering[covering.length - 1];
+  if (
+    covering.some((other) =>
+      !commitmentAwareEquals(
+        other.marker as FabricValue,
+        declaration.marker as FabricValue,
+      )
+    )
+  ) {
+    return unchanged("its covering reclassifications name different policies");
+  }
+  if (covering.some((other) => other.conditional)) {
+    return unchanged(
+      `the reclassification at ${
+        where(declaration.path)
+      } sits in a union branch`,
+    );
+  }
+  const result = pieceResultOfDocument(tx, target);
+  const pieceModule = result === undefined
+    ? undefined
+    : asPatternIdentityRef(readPieceMeta(tx, result, "patternIdentity"))
+      ?.identity;
+  if (pieceModule === undefined) {
+    return unchanged("it belongs to no piece that names its pattern");
+  }
+  const writers = identitiesForClaimPath(
+    context.identities,
+    declaration.path,
+    context.writtenPaths,
+  );
+  if (
+    !writers.every((identity) =>
+      identity?.kind === "verified" && identity.moduleIdentity === pieceModule
+    )
+  ) {
+    return unchanged(
+      `a writer at ${where(declaration.path)} is not ${pieceModule}`,
+    );
+  }
+  const creator = pieceCreatorRecordedOn(tx, result!);
+  if (creator === undefined) {
+    return unchanged("its piece records no creator");
+  }
+  if (!join.some((clause) => isCreatorUserClause(clause, creator))) {
+    return unchanged(`no clause is ${creator}'s alone to release`);
+  }
+  const policy = resolvePolicyOfValue(
+    tx,
+    declaration.marker,
+    target.space,
+  ) as CfcAtom;
+  return join.map((clause) =>
+    isCreatorUserClause(clause, creator)
+      ? normalizeClause(
+        { anyOf: [...clauseAlternatives(clause), policy] } as CfcConfClause,
+      )
+      : clause
+  );
 };
 
 /**
@@ -5517,25 +5815,25 @@ const deriveFlowJoinImpl = (
    * writer the evidence at the container does not speak for.
    *
    * The clauses come back as read where the policy-evaluation dial is not
-   * `enforce` and where no location carries evidence. A policy that cannot
-   * be resolved fires none of its rules, so the clause naming it stays as
-   * read on the derived value and the gate that later reads it decides on
-   * it again (§5.3.2: "leaves the original label unchanged").
+   * `enforce` and where no location carries evidence.
    *
-   * Where an evaluation runs out of fuel, each clause that location consumed
-   * comes back split into its alternatives, one clause each. Keeping the
-   * clauses as read is not the strict side there, since a `dropClause` rule
-   * on a clause of several alternatives removes one, which tightens it, and
-   * §5.3.2 makes exhaustion "a hard boundary failure (fail closed), not
-   * permission to continue with a partially rewritten label". The split is
-   * never looser than the clauses as read, and is stricter than any outcome
-   * that keeps one of a clause's original alternatives. It is not a bound on
-   * every outcome: a rule that adds an alternative can enable another that
-   * then drops an original one, leaving a clause the split does not imply.
-   * Exhaustion needs more than 64 firings at one location. The flow join
-   * has callers outside prepare (a query builtin's request label, the
-   * serving loop's processed claim), so it refuses through the label it
-   * returns rather than by throwing.
+   * Where an evaluation runs out of fuel, or a module policy it names does not
+   * resolve, each clause that location consumed comes back split into its
+   * alternatives, one clause each. A module policy's value-intrinsic rules can
+   * fire only here, since the join drops the evidence they guard on, and a
+   * manifest consultation adds no precondition that would catch a replica that
+   * has not received it (§4.4.1, commonfabric/specs#109, pending). Keeping the
+   * clauses as read is not the strict side there, since a `dropClause` rule on
+   * a clause of several alternatives removes one, which tightens it, and §5.3.2
+   * makes exhaustion "a hard boundary failure (fail closed), not permission to
+   * continue with a partially rewritten label". The split is never looser than
+   * the clauses as read, and is stricter than any outcome that keeps one of a
+   * clause's original alternatives. It is not a bound on every outcome: a rule
+   * that adds an alternative can enable another that then drops an original
+   * one, leaving a clause the split does not imply. Exhaustion needs more than
+   * 64 firings at one location. The flow join has callers outside prepare (a
+   * query builtin's request label, the serving loop's processed claim), so it
+   * refuses through the label it returns rather than by throwing.
    */
   const exchangedAtObservation = (
     document: string,
@@ -5582,7 +5880,7 @@ const deriveFlowJoinImpl = (
           admitsRulesOfKind("value-intrinsic"),
           manifestFor,
         );
-        return outcome.exhausted
+        return outcome.exhausted || outcome.resolutionFailures.length > 0
           ? consumed.flatMap((clause) => clauseAlternatives(clause))
           : outcome.confidentiality;
       },
@@ -6316,18 +6614,9 @@ const deriveFlowJoinImpl = (
         location.path,
       );
     }
-    const metadataOf = (location: ObservedLocation) => {
-      const key = docKey(location);
-      if (metadataByDoc.has(key)) return metadataByDoc.get(key)!.metadata;
-      noteLabelSource(location, "application/json");
-      return storedMetadataFor(
-        tx,
-        location.space,
-        location.id,
-        location.scope,
-        "application/json",
-      );
-    };
+    // The observation that observed a location registered its document.
+    const metadataOf = (location: ObservedLocation) =>
+      metadataByDoc.get(docKey(location))!.metadata;
     // A slot whose stamp the envelope does not place witnesses nothing,
     // whether its reference is followed or only observed: the stamp does
     // not say which reference it describes.
@@ -8426,13 +8715,12 @@ const UNMARKED_METADATA: NonNullable<IReadActivity["meta"]> = Object.freeze(
 );
 
 /**
- * Whether what `meta` says of its reads can no longer change: it is absent,
- * or frozen with a prototype that is `Object.prototype` or none. What
+ * Whether what `meta` says of its reads can no longer change: it is frozen
+ * with a prototype that is `Object.prototype` or none. What
  * `Object.prototype` says is compared apart
  * (`InputReadSnapshot.inheritedInternal`).
  */
 const classificationIsFixed = (meta: IReadActivity["meta"]): boolean => {
-  if (meta === undefined) return true;
   if (!Object.isFrozen(meta)) return false;
   const prototype = Object.getPrototypeOf(meta);
   return prototype === Object.prototype || prototype === null;
@@ -8933,7 +9221,10 @@ const verifyInputRequirements = (
   // while producing the current view. Refresh after that inspection so every
   // envelope resolution observes those writes.
   metadataResolver.refresh();
-  const schemaEntries = cfcSchemaEntries(schema);
+  const schemaEntries = requirementBoundEntries(
+    schema,
+    inputRequirementBindings(tx, target.space),
+  );
   // The stored envelope of each read's document is resolved here, ahead of
   // the label: `storedMetadataFor` refuses an envelope this build cannot
   // interpret, by version or by shape, and a transaction that consumed such
@@ -8986,6 +9277,13 @@ const verifyInputRequirements = (
     );
     if (disallowedClause !== undefined) {
       return { reason: disallowedClause, verdict: true };
+    }
+    const unboundRequirement = unboundInputRequirementReason(
+      entry.schema,
+      entry.path,
+    );
+    if (unboundRequirement !== undefined) {
+      return { reason: unboundRequirement, verdict: true };
     }
     const currentPrincipalFailure = currentPrincipalIntegrityReason(
       tx,
@@ -9207,13 +9505,23 @@ const verifyInputRequirements = (
           read.locations,
           [],
           mode === "enforce" ? "consuming" : "observing",
-          target.space,
+          // The space the label was read from holds its manifests (atomic
+          // persistence, spec §4.4.1). The target may receive its copy only
+          // from the commit this gate decides, so a lookup there alone
+          // would refuse a cold cross-space copy on every attempt.
+          read.space,
         );
         if (mode === "enforce") {
           // Exhaustion fails closed; otherwise subsumption-fit the REWRITTEN
           // label (spec §8.10.3 clause fit — flat ceilings keep their
-          // conjunctive meaning through atomsOutsideCeiling).
+          // conjunctive meaning through atomsOutsideCeiling). A module manifest
+          // that did not resolve fails the gate even where the unrewritten
+          // label fits (spec §5.3.2): a rule may drop an alternative, so the
+          // manifest's rules could have made the label stricter, and the
+          // consultation adds no precondition that would catch a replica that
+          // has not received it (§4.4.1, commonfabric/specs#109, pending).
           const fits = outcome.exhausted === false &&
+            outcome.resolutionFailures.length === 0 &&
             atomsOutsideCeiling(outcome.confidentiality, maxConfidentiality)
                 .length === 0;
           if (
@@ -9593,6 +9901,22 @@ const resolvePolicyOfConfidentiality = (
     resolvePolicyOfValue(tx, value, owningSpace) as CfcConfClause
   );
 
+/**
+ * Whether `value` is a `PolicyOf` reference as the compiler lowers it: a
+ * module policy whose subject is the space owning the document, written as a
+ * placeholder, with the identity of the policy it names.
+ */
+const isOwningSpacePolicyMarker = (
+  value: Record<string, unknown>,
+): boolean =>
+  value.type === CFC_ATOM_TYPE.Policy &&
+  value.policyRefKind === "module" &&
+  isObjectOrArray(value.subject) &&
+  value.subject[OWNING_SPACE_PLACEHOLDER] === true &&
+  typeof value.moduleIdentity === "string" &&
+  typeof value.symbol === "string" &&
+  typeof value.policyDigest === "string";
+
 const resolvePolicyOfValue = (
   tx: IExtendedStorageTransaction,
   value: unknown,
@@ -9655,6 +9979,174 @@ const resolvePolicyOfValue = (
   );
 };
 
+/**
+ * The schema annotations that state input requirements (spec §8.10.3): what a
+ * value must be screened by, and how confidential it may be, to land where the
+ * schema describes.
+ */
+const INPUT_REQUIREMENT_KEYS = [
+  "requiredIntegrity",
+  "maxConfidentiality",
+] as const;
+
+/**
+ * The trusted bindings an attempt's input requirements are instantiated
+ * against: the principal it acts for, and the space that owns the document
+ * being written.
+ */
+type InputRequirementBindings = {
+  readonly actingPrincipal: string | undefined;
+  readonly owningSpace: MemorySpace;
+};
+
+/**
+ * `value` with each placeholder it holds bound by `bindings`: a
+ * `CurrentPrincipal` to the acting principal, and the subject of a lowered
+ * `PolicyOf` to the owning space. A placeholder `bindings` cannot bind is left
+ * as it is, for `unboundInputRequirementReason()` to refuse.
+ */
+const bindRequirementPlaceholders = (
+  value: JSONValue,
+  bindings: InputRequirementBindings,
+): JSONValue => {
+  if (isCurrentPrincipalPlaceholder(value)) {
+    return bindings.actingPrincipal ?? value;
+  }
+  if (Array.isArray(value)) {
+    let changed = false;
+    const next = value.map((entry) => {
+      const bound = bindRequirementPlaceholders(entry, bindings);
+      changed ||= bound !== entry;
+      return bound;
+    });
+    return changed ? next : value;
+  }
+  if (!isObjectOrArray(value)) return value;
+  if (isOwningSpacePolicyMarker(value)) {
+    return { ...value, subject: bindings.owningSpace };
+  }
+  let changed = false;
+  const next: Record<string, JSONValue> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    const bound = bindRequirementPlaceholders(entry as JSONValue, bindings);
+    changed ||= bound !== entry;
+    next[key] = bound;
+  }
+  return changed ? next : value;
+};
+
+/**
+ * The bindings `tx`'s attempt to write a document in `owningSpace` checks its
+ * input requirements under. A snapshot naming no principal, an empty one
+ * included, binds none, and neither does a run that acts for no one
+ * (`servedRunActsForNoOne()`), whatever its snapshot names. A requirement
+ * naming the current principal then fails closed.
+ */
+const inputRequirementBindings = (
+  tx: IExtendedStorageTransaction,
+  owningSpace: MemorySpace,
+): InputRequirementBindings => {
+  const snapshot = tx.getCfcState().trustSnapshot;
+  return {
+    actingPrincipal: !snapshot?.actingPrincipal ||
+        servedRunActsForNoOne(tx, snapshot)
+      ? undefined
+      : snapshot.actingPrincipal,
+    owningSpace,
+  };
+};
+
+/**
+ * `ceiling`, a `maxConfidentiality` list, bound by `bindings`. A bare
+ * `CurrentPrincipal` where a ceiling names a reader, as a clause or as an
+ * alternative of one, names that principal as a reader, `User(<DID>)`, as a
+ * database ceiling's does (`row-label-read.ts`).
+ */
+const bindCeilingClauses = (
+  ceiling: readonly JSONValue[],
+  bindings: InputRequirementBindings,
+): JSONValue => {
+  const reader = (value: JSONValue): JSONValue =>
+    isCurrentPrincipalPlaceholder(value) &&
+      bindings.actingPrincipal !== undefined
+      ? cfcAtom.user(bindings.actingPrincipal) as JSONValue
+      : bindRequirementPlaceholders(value, bindings);
+  let changed = false;
+  const bound = ceiling.map((clause) => {
+    const next = isOrClause(clause)
+      ? { anyOf: clause.anyOf.map((alternative) => reader(alternative)) }
+      : reader(clause);
+    changed ||= !deepEqual(next, clause);
+    return next;
+  });
+  return changed ? bound : ceiling;
+};
+
+/**
+ * The entries of `schema` (`cfcSchemaEntries()`), each with the placeholders
+ * in the input requirements it declares bound by `bindings`. These are the
+ * entries every check of an input requirement walks, so a requirement is
+ * compared with what an attempt read or wrote only once it names concrete
+ * principals and spaces (spec §8.10.3).
+ *
+ * A requirement is a check on one attempt, so it binds to that attempt's
+ * principal. A declared label is persisted with the value, and binds by the
+ * creator rule `creatorBinding()` applies instead. The schema a document
+ * stores keeps its requirements symbolic, so each later attempt binds them to
+ * itself.
+ */
+const requirementBoundEntries = (
+  schema: JSONSchema,
+  bindings: InputRequirementBindings,
+): readonly CfcSchemaEntry[] =>
+  cfcSchemaEntries(schema).map((entry) => {
+    const declared = entry.schema.ifc as Record<string, JSONValue>;
+    let ifc = declared;
+    for (const key of INPUT_REQUIREMENT_KEYS) {
+      const requirement = declared[key];
+      if (requirement === undefined) continue;
+      const bound = key === "maxConfidentiality" && Array.isArray(requirement)
+        ? bindCeilingClauses(requirement, bindings)
+        : bindRequirementPlaceholders(requirement, bindings);
+      if (bound !== requirement) ifc = { ...ifc, [key]: bound };
+    }
+    return ifc === declared
+      ? entry
+      : { ...entry, schema: { ...entry.schema, ifc } as CfcDeclaringSchema };
+  });
+
+/**
+ * Why the input requirements `schema` declares at `path` cannot be checked, or
+ * `undefined` when they can: a placeholder `requirementBoundEntries()` left
+ * unbound, a `CurrentPrincipal` in an attempt no principal acts for or a
+ * malformed `PolicyOf`. Such a requirement fails closed, whether or not the
+ * attempt read anything it would apply to (spec §8.10.3).
+ */
+const unboundInputRequirementReason = (
+  schema: CfcDeclaringSchema,
+  path: readonly string[],
+): string | undefined => {
+  const ifc = schema.ifc as Record<string, unknown>;
+  for (const key of INPUT_REQUIREMENT_KEYS) {
+    if (holdsRequirementPlaceholder(ifc[key])) {
+      return `unbound placeholder in ${key} at /${path.join("/")}`;
+    }
+  }
+  return undefined;
+};
+
+const holdsRequirementPlaceholder = (value: unknown): boolean => {
+  if (Array.isArray(value)) return value.some(holdsRequirementPlaceholder);
+  if (!isObjectOrArray(value)) return false;
+  if (
+    isCurrentPrincipalPlaceholder(value) ||
+    value[OWNING_SPACE_PLACEHOLDER] === true
+  ) {
+    return true;
+  }
+  return Object.values(value).some(holdsRequirementPlaceholder);
+};
+
 const modulePolicyReferencesIn = (value: unknown): unknown[] => {
   const references: unknown[] = [];
   const visit = (candidate: unknown): void => {
@@ -9705,7 +10197,7 @@ const installCarriedPolicyManifests = (
     // space it just read. Resolve first so the runtime verifies and indexes
     // that exact artifact, then atomically install it beside the destination
     // label in this transaction.
-    tx.resolveCfcPolicyManifest(reference, undefined, false);
+    tx.resolveCfcPolicyManifest(reference);
     if (
       !tx.hasCfcPolicyManifest(destination, reference) &&
       !tx.installCfcPolicyManifest(destination, reference)
@@ -11679,9 +12171,11 @@ export const decomposeEnvelopeRoot = (
   for (const [hash, document] of decomposed.documents) {
     registerSchemaDocument(hash, document);
   }
-  const rootDocument = decomposed.documents.get(parsed.taggedHash);
-  if (rootDocument === undefined) return undefined;
-  return { rootHash: parsed.taggedHash, rootDocument };
+  // The closure holds every document it references, the root's included.
+  return {
+    rootHash: parsed.taggedHash,
+    rootDocument: decomposed.documents.get(parsed.taggedHash)!,
+  };
 };
 
 // Exported for unit testing of the S5 mismatch refusal; the persist loop is
@@ -12262,41 +12756,39 @@ export const describeSinkReleaseRefusal = (
   );
 };
 
-/** Looks up the manifest of a module policy, in `space` where one is named. */
+/** Looks up the manifest of a module policy in `space`. */
 type ManifestLookup = (
   reference: CfcModulePolicyRefAtom,
-  space: MemorySpace | undefined,
+  space: MemorySpace,
 ) => unknown;
 
 /**
  * A manifest lookup for one pass of exchange evaluations, which resolves each
  * module policy once per space rather than once per evaluation. A resolution
- * reads the manifest document, adds its reads to the journal and binds it into
- * the commit, so a pass that evaluates at every location of a long list
+ * reads the manifest document and adds its reads to the journal, so a pass
+ * that evaluates at every location of a long list
  * otherwise pays that per location. Absences are kept too. Sound only while the
  * pass installs no manifest: a pass that does must take a new lookup after it.
- * A lookup with no space named resolves over the spaces the journal has
- * touched so far, which the pass can widen, so it is not kept.
  */
 const passManifestLookup = (
   tx: IExtendedStorageTransaction,
 ): ManifestLookup => {
   const resolved = new Map<string, unknown>();
-  // A lookup is not an observation of the manifest: the commit is bound to
-  // the manifest it found by a precondition, and like every other policy
-  // lookup it reads under `internalVerifierRead`. Read plainly, a flow join
-  // that made it would walk the manifest document as an unlabeled input,
-  // whose empty integrity ends the hereditary meet.
+  // A lookup is not an observation of the manifest: the manifest is bound by
+  // its digest rather than by the commit (§4.4.1, commonfabric/specs#109,
+  // pending), and like every other policy lookup it reads under
+  // `internalVerifierRead`. Read plainly, a flow join that made it would walk
+  // the manifest document as an unlabeled input, whose empty integrity ends the
+  // hereditary meet.
   const resolve = (
     reference: CfcModulePolicyRefAtom,
-    space: MemorySpace | undefined,
+    space: MemorySpace,
   ): unknown =>
     tx.runWithAmbientReadMeta(
       internalVerifierRead,
       () => tx.resolveCfcPolicyManifest(reference, space),
     );
   return (reference, space) => {
-    if (space === undefined) return resolve(reference, undefined);
     const key = stringTupleKey([
       space,
       reference.policyDigest,
@@ -12341,7 +12833,7 @@ const evaluateGatedConfidentiality = (
   integrity: readonly CfcAtom[],
   boundary: readonly CfcAtom[],
   consumption: CfcGrantConsumptionContext,
-  destinationSpace?:
+  destinationSpace:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
   admitsRule?: (rule: ExchangeRule) => boolean,
@@ -12385,10 +12877,9 @@ const evaluateGatedConfidentiality = (
           const space = typeof destinationSpace === "function"
             ? destinationSpace(reference)
             : destinationSpace;
-          if (typeof destinationSpace === "function" && space === undefined) {
-            return undefined;
-          }
-          return manifestFor(reference, space);
+          return space === undefined
+            ? undefined
+            : manifestFor(reference, space);
         },
       ),
     },
@@ -12425,7 +12916,7 @@ const evaluateAccessExchange = (
   locations: () => readonly ConsumedLocation[],
   boundary: readonly CfcAtom[],
   consumption: CfcGrantConsumptionContext,
-  destinationSpace?:
+  destinationSpace:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
 ): ReturnType<typeof evaluateGatedConfidentiality> => {
@@ -12569,12 +13060,11 @@ const verifySinkRequestCeilings = (
         const spaces = [...(consumed.modulePolicySpaces.get(key) ?? [])]
           .sort();
         if (spaces.length === 0) return undefined;
-        // Every consumed label origin must carry its own exact local copy.
-        // Bind every origin into the commit, so a concurrent change in any
-        // one of them rejects the release before its post-commit effect can
-        // flush. Precondition-only origin commits are harmless to split; the
-        // effect runs only after the complete transaction succeeds.
-        tx.enableMultiSpaceWrites?.(spaces);
+        // SPEC-PENDING https://github.com/commonfabric/specs/pull/109
+        // Every consumed label origin must carry its own exact local copy. A
+        // copy is bound by its digest, and a missing one fails the release
+        // below, so no origin takes a precondition (§4.4.1,
+        // commonfabric/specs#109, pending).
         for (const space of spaces) {
           if (tx.resolveCfcPolicyManifest(reference, space) === undefined) {
             return undefined;
@@ -12601,9 +13091,24 @@ const verifySinkRequestCeilings = (
           );
           continue;
         }
+        if (outcome.resolutionFailures.length > 0) {
+          // A manifest that did not resolve fails the release even where the
+          // unrewritten label fits (spec §5.3.2; §4.4.1,
+          // commonfabric/specs#109, pending), as the write gate does.
+          // Retryable: the manifest may arrive.
+          noteModulePolicyResolutionFailures(
+            tx,
+            `sink-request ${sink}`,
+            outcome.resolutionFailures,
+          );
+          reasons.push(
+            `cfcPolicyManifest: module policy did not resolve for ` +
+              `sink-request ${sink}`,
+          );
+          continue;
+        }
         effective = outcome.confidentiality;
-        verdict = outcome.resolutionFailures.length === 0 &&
-          !outcome.grantResolutionUnavailable;
+        verdict = !outcome.grantResolutionUnavailable;
       } else {
         // observe: decide exactly as `off` would; diagnose what enforce
         // would have done differently.
@@ -12768,7 +13273,10 @@ const verifyWriteFloor = function* (
   // principal are tx-wide. Concept floors on the written value resolve through
   // it; plain floors ignore it (Epic D5).
   const trust = cfcFloorTrustContext(tx);
-  const entries = cfcSchemaEntries(schema);
+  const entries = requirementBoundEntries(
+    schema,
+    inputRequirementBindings(tx, target.space),
+  );
   const entryLabels = new Map<string, IFCLabel>(
     entries.map((entry) => [pathKey(entry.path), entry.label]),
   );
@@ -13181,7 +13689,7 @@ export function* prepareBoundaryCommitSteps(
       // atoms.
       collectSources: writerFitRejects,
     });
-  const flowConfidentiality = flowJoin.confidentiality;
+  const joinConfidentiality = flowJoin.confidentiality;
   // The join's own sources, and not the egress collector's: that one counts
   // every entry a read overlaps, whatever its observation class, so it can
   // name a read whose entries the join left out. The join is the same for
@@ -13196,7 +13704,7 @@ export function* prepareBoundaryCommitSteps(
   // function that computed what it labels.
   const flowTransformedBy = flowIntegrity.filter(isTransformedByAtom);
   const flowLabeledSpaces = flowJoin.labeledSpaces;
-  const flowHasJoin = flowConfidentiality.length > 0 ||
+  const flowHasJoin = joinConfidentiality.length > 0 ||
     flowIntegrity.length > 0;
   // What the reads declared onward consumed counts as taint to land: the
   // persist loop runs and lands it on the target even when the join itself
@@ -13226,7 +13734,7 @@ export function* prepareBoundaryCommitSteps(
     flowHasLabels
   ) {
     tx.noteCfcDiagnostic(
-      `flow-labels(observe): would derive ${flowConfidentiality.length} ` +
+      `flow-labels(observe): would derive ${joinConfidentiality.length} ` +
         `confidentiality / ${flowIntegrity.length} integrity atom(s) onto ` +
         `${flowTargets.size} written doc(s)`,
     );
@@ -13547,6 +14055,26 @@ export function* prepareBoundaryCommitSteps(
         reasons.push(verdictReason(dropped));
         continue;
       }
+    }
+    // The join as this document stores it, which a reclassification its
+    // schema declares changes; everything below measures and stamps this.
+    let flowConfidentiality: readonly CfcConfClause[];
+    try {
+      flowConfidentiality = reclassifiedFlowConfidentiality(
+        tx,
+        target,
+        {
+          declaring: stampingSchemas.get(key),
+          stored: storedSchema,
+          merged: mergedSchema,
+          identities: writeAuthorIdentities.get(key),
+          writtenPaths: valueWritePathsOf(tx, { space, id, scope }),
+        },
+        joinConfidentiality,
+      );
+    } catch (error) {
+      reasons.push(describeFailure(error));
+      continue;
     }
 
     const linkWriteInputs = linkWrites.get(key) ?? [];

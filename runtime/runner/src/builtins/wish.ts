@@ -80,6 +80,7 @@ import {
 } from "../document-readiness.ts";
 import { wishStateSchemaForResult } from "./wish-schema.ts";
 import { setResultCell } from "../result-utils.ts";
+import { getResultCellWithSourceSchema } from "../piece-helpers.ts";
 import { profileSuggestionCell } from "../profile-suggestion.ts";
 
 const wishFlowLogger = getLogger("runner.wish-flow", {
@@ -873,26 +874,20 @@ function searchMentionablesForHashtag(
         );
         if (nameMatches) return true;
 
-        // Compute schema tag lazily from the cell
-        let tag: string | undefined;
-        try {
-          const schema = measureWishPhase(
-            "mentionable-schema",
+        // The piece's result schema, recorded on its document, holds its tags
+        const schema = measureWishPhase(
+          "mentionable-schema",
+          queryKey,
+          () =>
+            getResultCellWithSourceSchema(resolved.asSchema(undefined)).schema,
+        );
+        const tag = typeof schema === "object"
+          ? measureWishPhase(
+            "mentionable-schema-stringify",
             queryKey,
-            () =>
-              pieceCell.resolveAsCell()?.asSchema(undefined)
-                .asSchemaFromLinks?.()?.schema,
-          );
-          if (typeof schema === "object") {
-            tag = measureWishPhase(
-              "mentionable-schema-stringify",
-              queryKey,
-              () => JSON.stringify(schema),
-            );
-          }
-        } catch {
-          // Schema not available yet
-        }
+            () => JSON.stringify(schema),
+          )
+          : undefined;
 
         return measureWishPhase(
           "mentionable-tag-match",

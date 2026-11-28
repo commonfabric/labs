@@ -1,25 +1,36 @@
 import type { ConsoleHandler } from "@commonfabric/runner";
 import { NodeConsole, Writable } from "./deps.ts";
 
-const textEncoder = new TextEncoder();
-const stderrStream = new Writable({
-  write(chunk, _encoding, callback) {
-    try {
-      const bytes = typeof chunk === "string"
-        ? textEncoder.encode(chunk)
-        : chunk;
-      Deno.stderr.writeSync(bytes);
+/**
+ * A console that writes all of its output through `write`.
+ *
+ * Output is best-effort: a chunk that `write` throws on is dropped, and the
+ * next chunk is still offered to `write`.
+ */
+export function createWriterConsole(
+  write: (bytes: Uint8Array) => void,
+): Console {
+  const stream = new Writable({
+    write(chunk, _encoding, callback) {
+      try {
+        write(chunk);
+      } catch {
+        // The failed chunk is dropped; there is nowhere left to report it.
+      }
       callback();
-    } catch (error) {
-      callback(error instanceof Error ? error : new Error(String(error)));
-    }
-  },
+    },
+  });
+  const writerConsole = new NodeConsole({
+    stdout: stream,
+    stderr: stream,
+  }) as unknown as Console;
+  writerConsole.timeStamp = () => {};
+  return writerConsole;
+}
+
+const stderrConsole = createWriterConsole((bytes) => {
+  Deno.stderr.writeSync(bytes);
 });
-const stderrConsole = new NodeConsole({
-  stdout: stderrStream,
-  stderr: stderrStream,
-}) as unknown as Console;
-stderrConsole.timeStamp = () => {};
 
 export function hasJsonArgument(args: readonly string[]): boolean {
   return args.some((arg) =>

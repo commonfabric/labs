@@ -678,6 +678,24 @@ export async function validateSource(
 }
 
 /**
+ * Each of `diagnostics` with the text of `source` it points at. A diagnostic's
+ * positions are in the text the compiler reads, which `transformCfDirective()`
+ * derives from `source`, so that is the text they are read from.
+ */
+export function withSourceText<
+  T extends Pick<TransformationDiagnostic, "start" | "length">,
+>(source: string, diagnostics: readonly T[]): (T & { text: string })[] {
+  const compiled = transformCfDirective(source);
+  return diagnostics.map((diagnostic) => ({
+    ...diagnostic,
+    text: compiled.slice(
+      diagnostic.start,
+      diagnostic.start + diagnostic.length,
+    ),
+  }));
+}
+
+/**
  * Validates multiple files and returns diagnostics from the transformer pipeline.
  */
 export async function validateFiles(

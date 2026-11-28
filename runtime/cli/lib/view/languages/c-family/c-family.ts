@@ -218,7 +218,7 @@ interface Declared {
 function declared(declarator: SyntaxNode): Declared | undefined {
   let isFunction = false;
   let node: SyntaxNode | null = declarator;
-  while (node !== null) {
+  while (node !== null && !NAMELESS.has(node.type)) {
     if (node.type === "function_declarator") {
       node = node.childForFieldName("declarator");
       isFunction = node?.type !== "parenthesized_declarator" ||
@@ -233,8 +233,6 @@ function declared(declarator: SyntaxNode): Declared | undefined {
           !child.isExtra && !child.type.startsWith("ms_") &&
           child.type !== "attribute_declaration"
         ) ?? null;
-    } else if (NAMELESS.has(node.type)) {
-      return undefined;
     } else {
       const conversion = ownName(node).type === "operator_cast";
       return { name: node, isFunction: isFunction || conversion };

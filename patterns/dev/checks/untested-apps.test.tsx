@@ -14,12 +14,12 @@
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import ActivityLog from "../../apps/activity-log/main.tsx";
 import Agent from "../../apps/agent/main.tsx";
-import CfcPromptInjectionDemo from "../../examples/cfc-agent-prompt-injection-demo/main.tsx";
-import CfcRowLabelRecords from "../../examples/cfc-row-label-records/main.tsx";
+import CfcPromptInjectionDemo from "../../examples/cfc-agent-prompt-injection-demo/cfc-agent-prompt-injection-demo.tsx";
+import CfcRowLabelRecords from "../../examples/cfc-row-label-records/cfc-row-label-records.tsx";
 import VoiceNote from "../../system/notes/voice-note.tsx";
 import ProfileGroupChat from "../../examples/profile-group-chat/main.tsx";
 import Router from "../../examples/router/main.tsx";
-import ScopedGroupChatPlainInputs from "../../examples/scoped-group-chat/main-plain-inputs.tsx";
+import ScopedGroupChatPlainInputs from "../../examples/scoped-group-chat/plain-inputs/main.tsx";
 import SharedProfileRoster from "../../examples/shared-profile-roster/main.tsx";
 import { textContent } from "../../tools/test-support/vnode-helpers.ts";
 

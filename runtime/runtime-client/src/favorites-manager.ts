@@ -155,11 +155,11 @@ export class FavoritesManager {
     let isDisposed = false;
 
     const setupSubscription = async () => {
-      if (isDisposed) return;
-
       // Subscribe to the favorites property
       const favoritesCell = (await this.#getHomePattern()).key("favorites")
         .asSchema(favoriteListSchema) as CellHandle<readonly FavoriteEntry[]>;
+      // The caller may have unsubscribed while the home pattern loaded.
+      if (isDisposed) return;
       unsubscribeFavorites = favoritesCell.subscribe(
         (favoritesValue) => {
           if (isDisposed) return;

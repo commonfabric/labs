@@ -1499,6 +1499,13 @@ describe("cf-iframe cell bridge", () => {
             message: "The host lost the presence room.",
           },
         ],
+        [
+          { name: "PresenceError", message: "did:key:secret refused" },
+          {
+            code: "presence-disconnected",
+            message: "The host lost the presence room.",
+          },
+        ],
       ] as const;
 
       for (const [cause, told] of failures) {

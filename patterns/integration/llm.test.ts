@@ -48,7 +48,7 @@ describe("LLM pattern test", () => {
             "..",
             "examples",
             "llm",
-            "llm.tsx",
+            "main.tsx",
           ),
         ),
         { start: false },

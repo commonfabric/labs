@@ -1218,6 +1218,37 @@ test("main lists the files that owe lines, largest first", async () => {
   });
 });
 
+test("the script prints what main returns, and fails on a usage error", async () => {
+  await withScoredTree(async (rootDir, lcov) => {
+    const lcovPath = path.join(rootDir, "combined.lcov");
+    await Deno.writeTextFile(lcovPath, lcov);
+    const run = (...args: string[]) =>
+      new Deno.Command(Deno.execPath(), {
+        args: [
+          "run",
+          "--frozen",
+          "--allow-read",
+          "--allow-run",
+          "--allow-env",
+          "tasks/coverage-metrics.ts",
+          ...args,
+        ],
+        cwd: new URL("../", import.meta.url),
+      }).output();
+    const args = [`--root=${rootDir}`, `--lcov=${lcovPath}`, "--by-file"];
+    const listed = await run(...args);
+    expect(listed.code).toBe(0);
+    expect(new TextDecoder().decode(listed.stdout))
+      .toBe(`${await main(args)}\n`);
+
+    const refused = await run(...args, "--by-files");
+    expect(refused.code).toBe(1);
+    expect(new TextDecoder().decode(refused.stdout)).toBe("");
+    expect(new TextDecoder().decode(refused.stderr))
+      .toContain("unknown argument --by-files");
+  });
+});
+
 test("main refuses arguments it cannot act on", async () => {
   const refusals: [string[], string][] = [
     [["--by-file"], "give one of --profile-dir and --lcov"],

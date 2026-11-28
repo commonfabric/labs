@@ -11,6 +11,7 @@ import {
 import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
 import type { TreeSitterGrammar } from "../runtime/cli/lib/view/languages/treesitter/adapter.ts";
+import type { CompilerOutputVersionOptions } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
 import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 import { PACKAGE_ROOTS } from "./package-layout.ts";
@@ -93,16 +94,17 @@ export const BUILD_HOST_VARIABLES = [
  * Loaded when a build asks for it: the corpus compile brings the whole
  * runtime with it, and this module is imported by the test topology and by a
  * build that takes the compiler-input fingerprint, neither of which loads a
- * runtime.
+ * runtime. `options` are handed to the corpus compile; a build gives none.
  */
 export async function computeShippedCompileCacheVersion(
   root: string,
+  options?: CompilerOutputVersionOptions,
 ): Promise<string> {
   // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which the test topology and an inputs-only build never load
   const { computeCompilerOutputVersion } = await import(
     "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts"
   );
-  return await computeCompilerOutputVersion(root);
+  return await computeCompilerOutputVersion(root, options);
 }
 
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
@@ -849,6 +851,4 @@ export async function runBuildBinaries(
 // Only run the build when invoked directly (`deno task build-binaries`), not
 // when imported by tests, which exercise BuildConfig / prepareWorkspace /
 // revertWorkspace against a temporary tree.
-if (import.meta.main) {
-  await runBuildBinaries(Deno.args);
-}
+if (import.meta.main) await runBuildBinaries(Deno.args);

@@ -71,6 +71,29 @@ const PROGRAM: RuntimeProgram = {
   ],
 };
 
+// A host whose create stream appends to a list of its own rather than to the
+// `profiles` list it exposes, which a create through it leaves as it was.
+const MISWIRED_PROGRAM: RuntimeProgram = {
+  ...PROGRAM,
+  files: [
+    {
+      name: "/main.tsx",
+      contents: WRAPPER_SRC.replace(
+        "  const created = ProfileCreate({ profiles });",
+        [
+          "  const elsewhere = new Writable<ProfileHomeOutput[]>([])",
+          "    .for('elsewhere');",
+          "  const created = ProfileCreate({ profiles: elsewhere });",
+        ].join("\n"),
+      ).replace(
+        "return { profiles, createProfile",
+        "return { profiles, elsewhere, createProfile",
+      ),
+    },
+    ...PROGRAM.files.slice(1),
+  ],
+};
+
 const signer = await Identity.fromPassphrase("cf-profile-create");
 const space = signer.did();
 
@@ -92,6 +115,28 @@ describe("createProfile()", () => {
   // deno-lint-ignore no-explicit-any
   let loadPieces: any;
 
+  /** Runs `program` as the home root, under `cause`, and returns it. */
+  async function runHost(program: RuntimeProgram, cause: string) {
+    const tx = runtime.edit();
+    const parent = await runtime.patternManager.compilePattern(program, {
+      space,
+      tx,
+    });
+    const resultCell = runtime.getCell<Record<string, unknown>>(
+      space,
+      cause,
+      undefined,
+      tx,
+    );
+    // deno-lint-ignore no-explicit-any
+    const result = runtime.run(tx, parent as any, {}, resultCell);
+    runtime.prepareTxForCommit(tx);
+    const setup = await tx.commit().settled;
+    expect(setup.error).toBeUndefined();
+    await result.pull();
+    return result;
+  }
+
   beforeEach(async () => {
     server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
     manager = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -99,23 +144,7 @@ describe("createProfile()", () => {
       apiUrl: new URL(import.meta.url),
       storageManager: manager,
     });
-    const tx = runtime.edit();
-    const parent = await runtime.patternManager.compilePattern(PROGRAM, {
-      space,
-      tx,
-    });
-    const resultCell = runtime.getCell<Record<string, unknown>>(
-      space,
-      "cf profile create host",
-      undefined,
-      tx,
-    );
-    // deno-lint-ignore no-explicit-any
-    host = runtime.run(tx, parent as any, {}, resultCell);
-    runtime.prepareTxForCommit(tx);
-    const setup = await tx.commit().settled;
-    expect(setup.error).toBeUndefined();
-    await host.pull();
+    host = await runHost(PROGRAM, "cf profile create host");
     // The connections the command would open: to the home space, answering
     // with this host as the home root; and to the created profile's space,
     // a runtime of its own over the same server, as a second connection
@@ -286,6 +315,21 @@ describe("createProfile()", () => {
 
     expect(picked?.[0]).toBe(alan.space);
     expect(picked?.[1].getAsNormalizedFullLink().id).toBe(alan.id);
+  });
+
+  it("throws when the create commits and the home's `profiles` list carries no new profile", async () => {
+    host = await runHost(MISWIRED_PROGRAM, "cf profile create miswired host");
+
+    await expect(createProfile(CONFIG, { loadPieces })).rejects.toThrow(
+      'Creating profile "Ada Lovelace" committed, but the home root\'s ' +
+        "`profiles` list carries no new profile.",
+    );
+    const links = {
+      type: "array",
+      items: { type: "unknown", asCell: ["cell"] },
+    };
+    expect(host.key("profiles").asSchema(links).get()).toEqual([]);
+    expect(host.key("elsewhere").asSchema(links).get()).toHaveLength(1);
   });
 
   it("trims the name and refuses a blank one before connecting", async () => {

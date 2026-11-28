@@ -13,6 +13,7 @@ import type { FabricValue } from "@commonfabric/data-model";
 import { type DID, Identity } from "@commonfabric/identity";
 import { toValuePath } from "@commonfabric/memory/v2";
 import { getLogger } from "@commonfabric/logger";
+import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 import { describe, it } from "@commonfabric/test-support/test";
 
 import { AUTHOR_CLAIM_SCHEMA, observeAuthorship } from "@/authorship.ts";
@@ -304,6 +305,44 @@ describe("connection", () => {
     transport.emit("message", notification);
 
     expect(messages).toEqual([notification]);
+    await connection.dispose();
+  });
+
+  it("logs the worker's build as the initialize reply reports it, and not on later replies", async () => {
+    using logs = captureLogsForTestingOnly("runtime-client");
+    const transport = new FakeTransport();
+    transport.runtimeBuild = "b".repeat(40);
+    const connection = await initializedConnection(transport);
+    try {
+      expect(logs.messagesOf("peer-build")).toEqual([
+        [connection.buildDiagnostics],
+      ]);
+      expect(connection.buildDiagnostics.peer).toBe("b".repeat(40));
+
+      await connection.request({ type: RequestType.Idle });
+      expect(logs.messagesOf("peer-build")).toHaveLength(1);
+    } finally {
+      await connection.dispose();
+    }
+  });
+
+  it("routes presence updates", async () => {
+    const transport = new FakeTransport();
+    const connection = await initializedConnection(transport);
+    const presence: unknown[] = [];
+    const operations: unknown[] = [];
+    connection.on("presenceupdate", (message) => presence.push(message));
+    connection.on("operationupdate", (message) => operations.push(message));
+    const notification = {
+      type: NotificationType.PresenceUpdate,
+      subscriptionId: "presence:1",
+      event: { kind: "remove", participantId: "participant-1" },
+    } as const;
+
+    transport.emit("message", notification);
+
+    expect(presence).toEqual([notification]);
+    expect(operations).toEqual([]);
     await connection.dispose();
   });
 
@@ -1730,6 +1769,65 @@ describe("connection", () => {
       client.getCellFromRef(ref).subscribe(() => {}, { onRefused: () => {} });
       client.getCellFromRef(ref).subscribe(() => {}, { onRefused: () => {} });
       expect(subscribeRequests(transport)).toHaveLength(1);
+    });
+
+    const unsubscribeRequests = (transport: FakeTransport) =>
+      transport.sent.filter((message) =>
+        "msgId" in message && message.data.type === RequestType.CellUnsubscribe
+      );
+
+    it("unsubscribes once from a cell whose only subscriber cancels twice", async () => {
+      const transport = new FakeTransport();
+      await using client = await clientOver(transport);
+      const cancel = client.getCellFromRef(ref).subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      cancel();
+      cancel();
+      expect(unsubscribeRequests(transport)).toHaveLength(1);
+      expect(client[$conn]().getSubscriptionDiagnostics().totals)
+        .toMatchObject({ localUnsubscribes: 1, backendUnsubscribes: 1 });
+    });
+
+    it("keeps the worker's subscription for the other handle when one cancels twice", async () => {
+      const transport = new FakeTransport();
+      await using client = await clientOver(transport);
+      const cancelFirst = client.getCellFromRef(ref).subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      const cancelSecond = client.getCellFromRef(ref).subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      cancelFirst();
+      cancelFirst();
+      expect(unsubscribeRequests(transport)).toHaveLength(0);
+      expect(client[$conn]().getSubscriptionDiagnostics().totals)
+        .toMatchObject({ localUnsubscribes: 1, activeInstances: 1 });
+
+      cancelSecond();
+      expect(unsubscribeRequests(transport)).toHaveLength(1);
+      expect(client[$conn]().getSubscriptionDiagnostics().totals)
+        .toMatchObject({ localUnsubscribes: 2, activeInstances: 0 });
+    });
+
+    it("asks the worker for no unsubscription when the last subscriber cancels after disposal", async () => {
+      const transport = new FakeTransport();
+      const client = await clientOver(transport);
+      const cancel = client.getCellFromRef(ref).subscribe(() => {}, {
+        onRefused: () => {},
+      });
+      // The worker answers requests in order, so once it answers this one it
+      // has answered the subscription, which then outlasts the disposal.
+      await client.idle();
+      await client.dispose();
+      cancel();
+      expect(unsubscribeRequests(transport)).toHaveLength(0);
+      expect(client[$conn]().getSubscriptionDiagnostics().totals)
+        .toMatchObject({
+          localUnsubscribes: 1,
+          backendUnsubscribes: 0,
+          activeInstances: 0,
+        });
     });
 
     it("logs an unsubscription the worker fails", async () => {

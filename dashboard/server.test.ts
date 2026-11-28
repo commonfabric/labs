@@ -15,6 +15,7 @@ import {
 } from "@std/assert";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
+import { fromFileUrl, join } from "@std/path";
 import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import {
   broadcast,
@@ -2337,6 +2338,50 @@ boardTest("start: binds the runners page's feed to the relay it is given", async
   const after = await key();
   assert(after !== before, "a feed of its own serves a key of its own");
   assertEquals(await key(), after);
+});
+
+// Runs `deno run` in this package as the Dockerfile does, but with no network
+// access, so serving fails where it would bind the port. The child reads a
+// copy of the checked-in lock it may not change, and skips V8's code cache,
+// which would report a module's top-level branches as run whether they ran or
+// not. `program` is the module `-` reads from standard input.
+async function runWithoutNetwork(
+  module: string,
+  program = "",
+): Promise<{ success: boolean; stderr: string }> {
+  const directory = await Deno.makeTempDir({ prefix: "dashboard-server-run-" });
+  try {
+    const lock = join(directory, "deno.lock");
+    await Deno.copyFile(fromFileUrl(new URL("../deno.lock", import.meta.url)), lock);
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", `--lock=${lock}`, "--frozen", "--no-code-cache", "--allow-env", module],
+      cwd: fromFileUrl(new URL(".", import.meta.url)),
+      env: { DASHBOARD_PORT: "18731", NO_COLOR: "1" },
+      stdin: "piped",
+      stdout: "null",
+      stderr: "piped",
+    }).spawn();
+    const stdin = child.stdin.getWriter();
+    await stdin.write(new TextEncoder().encode(program));
+    await stdin.close();
+    const { success, stderr } = await child.output();
+    return { success, stderr: new TextDecoder().decode(stderr) };
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+}
+
+test("running the file serves on DASHBOARD_PORT before it reaches any source", async () => {
+  const { success, stderr } = await runWithoutNetwork("server.ts");
+  assert(!success, stderr);
+  assertStringIncludes(stderr, 'Requires net access to "0.0.0.0:18731"');
+  assertEquals(stderr.split("Requires net access").length, 2, stderr);
+});
+
+test("importing the file serves nothing", async () => {
+  const { success, stderr } = await runWithoutNetwork("-", 'await import("./server.ts");');
+  assert(success, stderr);
+  assert(!stderr.includes("Requires net access"), stderr);
 });
 
 describe("workflow activity", () => {

@@ -5,8 +5,8 @@ import {
   followSaved,
   Keeper,
   loadSaved,
+  programHost,
   runQuietly,
-  systemPrograms,
 } from "./browse.ts";
 import type { Saved } from "./browser.ts";
 import {
@@ -309,17 +309,28 @@ describe("browse", () => {
     });
   });
 
-  describe("systemPrograms()", () => {
-    it("returns the programs that open a web browser and fill the clipboard on each system", () => {
-      expect(systemPrograms("darwin")).toEqual({
-        open: ["open"],
-        copy: ["pbcopy"],
-      });
-      expect(systemPrograms("linux")).toEqual({
-        open: ["xdg-open"],
-        copy: ["xclip", "-selection", "clipboard"],
-      });
-      expect(systemPrograms("windows").copy).toEqual(["clip"]);
+  describe("programHost()", () => {
+    it("opens an address by naming it to the open program, and copies text by handing it to the copy program", async () => {
+      const out = join(dir, "out.txt");
+      // Records the arguments it is given and the input it is handed.
+      const recorder = [
+        "sh",
+        "-c",
+        'printf "args=%s input=" "$*" > "$0"; cat >> "$0"',
+        out,
+      ];
+      const failing = ["sh", "-c", "exit 4"];
+
+      await programHost({ open: recorder, copy: failing })
+        .open("https://example.test/top/1");
+      expect(await Deno.readTextFile(out))
+        .toBe("args=https://example.test/top/1 input=");
+
+      await programHost({ open: failing, copy: recorder }).copy("top/1");
+      expect(await Deno.readTextFile(out)).toBe("args= input=top/1");
+
+      await expect(programHost({ open: failing, copy: recorder }).open("x"))
+        .rejects.toThrow("exited with status 4");
     });
   });
 

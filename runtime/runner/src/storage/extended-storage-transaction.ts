@@ -80,6 +80,7 @@ import {
   type CfcLabelMetadataObservation,
   type CfcLabelMetadataProtectionMode,
   type CfcMetadata,
+  type CfcPatternReclassification,
   type CfcPolicyEvaluationMode,
   type CfcPrefixProvenanceSummary,
   type CfcRecordAddress,
@@ -98,6 +99,7 @@ import {
   DEFAULT_CFC_ENFORCEMENT_MODE,
   DEFAULT_CFC_FLOW_LABELS_MODE,
   DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
+  DEFAULT_CFC_PATTERN_RECLASSIFICATION,
   DEFAULT_CFC_POLICY_EVALUATION_MODE,
   DEFAULT_CFC_TRIGGER_READ_GATING,
   DEFAULT_CFC_WRITE_FLOOR_MODE,
@@ -359,7 +361,6 @@ export type CfcInstrumentationHooks = {
     reference: unknown,
     tx: IExtendedStorageTransaction,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown;
   hasPolicyManifest?(
     space: MemorySpace,
@@ -774,6 +775,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     policyEvaluationMode: DEFAULT_CFC_POLICY_EVALUATION_MODE,
     labelMetadataProtectionMode: DEFAULT_CFC_LABEL_METADATA_PROTECTION_MODE,
     declaredMonotonicityMode: DEFAULT_CFC_DECLARED_MONOTONICITY_MODE,
+    patternReclassification: DEFAULT_CFC_PATTERN_RECLASSIFICATION,
     prepare: { status: "unprepared" },
     dereferenceTraces: [],
     structureContainers: [],
@@ -825,6 +827,7 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   #cfcWriteFloorPinned = false;
   #cfcTriggerReadGatingPinned = false;
   #cfcPolicyEvaluationPinned = false;
+  #cfcPatternReclassificationPinned = false;
   #cfcLabelMetadataProtectionPinned = false;
   #cfcDeclaredMonotonicityPinned = false;
 
@@ -1232,13 +1235,11 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown {
     return this.#cfcInstrumentation.resolvePolicyManifest?.(
       reference,
       this,
       destinationSpace,
-      bindCommit,
     );
   }
 
@@ -1376,6 +1377,31 @@ export class ExtendedStorageTransaction implements IExtendedStorageTransaction {
     // read when the transaction prepares; a change after that reaches the
     // next transaction, not the envelope this one already staged.
     this.#cfcState.contentAddressedLabels = enabled;
+  }
+
+  setCfcPatternReclassification(enabled: CfcPatternReclassification): void {
+    // The dial decides the label a reclassified value is stored with, and is
+    // not part of PreparedDigestInput, so a change after prepare invalidates
+    // the prepared decision. The Runtime's set at creation comes before
+    // prepare. That first set pins it: code reaching the transaction can turn
+    // a release off but never on, so the Runtime's experimental flag decides.
+    if (
+      this.#cfcPatternReclassificationPinned && enabled &&
+      this.#cfcState.patternReclassification !== true
+    ) {
+      throw new Error(
+        "CFC pattern reclassification cannot be enabled: transaction is " +
+          "pinned at disabled",
+      );
+    }
+    this.#cfcPatternReclassificationPinned = true;
+    if (
+      this.#cfcState.patternReclassification !== enabled &&
+      this.#cfcState.prepare.status === "prepared"
+    ) {
+      this.invalidateCfc("pattern-reclassification-changed");
+    }
+    this.#cfcState.patternReclassification = enabled;
   }
 
   setCfcPolicyEvaluationMode(mode: CfcPolicyEvaluationMode): void {
@@ -5309,6 +5335,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
     this.#wrapped.setCfcContentAddressedLabels(enabled);
   }
 
+  setCfcPatternReclassification(enabled: CfcPatternReclassification): void {
+    this.#wrapped.setCfcPatternReclassification(enabled);
+  }
+
   stageSchemaDocClosure(space: MemorySpace, rootHash: string): void {
     this.#wrapped.stageSchemaDocClosure(space, rootHash);
   }
@@ -5556,12 +5586,10 @@ export class TransactionWrapper implements IExtendedStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown {
     return this.#wrapped.resolveCfcPolicyManifest(
       reference,
       destinationSpace,
-      bindCommit,
     );
   }
 
