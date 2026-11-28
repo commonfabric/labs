@@ -255,6 +255,10 @@ export type ServingLoopStats = {
    * has learned the scope, so the retry emits correctly attributed.
    * Never silently sessionless. Counted per refusal. */
   earlyEmitRefusals: number;
+  /** Contributions the session-ceiling guard refused: a shared instance
+   * read without its session's read ceiling and then discovered session
+   * scope (wave.ts `sealedOutsideSessionCeiling`). */
+  sessionCeilingRefusals: number;
 
   /** Fan-out stage B's ARRIVAL RE-ARMS (design §A): demand-registry
    * passes that found a new (principal, session) demander for a root
@@ -1023,6 +1027,7 @@ export const emptyServingLoopStats = (): ServingLoopStats => ({
   warmRequests: 0,
   undemandedNarrowingRuns: 0,
   earlyEmitRefusals: 0,
+  sessionCeilingRefusals: 0,
   demandArrivals: 0,
   watermarkLag: 0,
   demand: {

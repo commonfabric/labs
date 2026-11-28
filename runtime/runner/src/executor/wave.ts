@@ -208,15 +208,22 @@ export interface WaveRunContext {
    * resolve no scoped addresses at all). */
   scopeKeyIdentity?: ScopeKeyIdentity;
 
-  /** The read ceiling this run's cell and `db.query` reads are bounded by: the
-   * ceiling of the session the run acts as (`scopeKeyIdentity.sessionId`),
-   * read from the memory server's session record at the stamp
-   * (`Server.sessionReadCeiling`) — declared by the client in its signed
-   * `session.open` descriptor, or assigned by the server. The sqlite
-   * builtin meets it with the serving runtime's own option, exactly as it
-   * meets a query's declared ceiling with a runtime's (06-cfc.md, "Runtime
-   * read ceiling"). Absent on a run acting as no session, or as one that
-   * declared none: such a run reads under the runtime's option alone. */
+  /** The read ceiling of the session this run's scoped addresses resolve
+   * to (`scopeKeyIdentity.sessionId`), read from the memory server's session
+   * record at the stamp (`Server.sessionReadCeiling`): declared by the client
+   * in its signed `session.open` descriptor, or assigned by the server. A
+   * query whose result is materialized for that session alone reads under
+   * it whatever the run (06-cfc.md, "Runtime read ceiling"). Absent when
+   * that session declared none. */
+  sessionReadCeiling?: SessionReadCeiling;
+
+  /** The read ceiling this run's cell reads are bounded by: the
+   * `sessionReadCeiling` when the run acts as that session
+   * ({@link actsAsSession}), or when this runtime's derived writes would not
+   * carry their inputs' labels. Absent on a shared instance resolved
+   * against one of its demanders: that session does not act through it,
+   * and each reader's own read of its labelled result meets that reader's
+   * ceiling. */
   readCeiling?: SessionReadCeiling;
 
   /** The capability grant a provisioning run's FOREIGN writes are
@@ -276,6 +283,48 @@ const actingAtScope = (
   }
   return { user: identity.principal, session: String(identity.sessionId) };
 };
+
+/**
+ * Whether a served run acts as the session its scoped addresses resolve to,
+ * so that session's read ceiling bounds its reads (serving-loop.md §3c). A
+ * handler does when it carries a session actor. A derivation does when its
+ * stamped instance is that session's: a space or user instance is shared,
+ * and the session it resolves against only stands in for its demanders.
+ * Decided from the stamp, never from the order of the run's reads; a
+ * shared instance that turns out to be the session's is refused at the seal
+ * ({@link sealedOutsideSessionCeiling}).
+ */
+export function actsAsSession(run: {
+  kind: WaveRunKind;
+  acting?: { session?: string };
+  actionScopeKey?: ScopeKey;
+}): boolean {
+  switch (run.kind) {
+    case "event-handler":
+      return run.acting?.session !== undefined;
+    case "derivation":
+      return scopeOfInstanceKey(run.actionScopeKey) === "session";
+    case "bookkeeping":
+      return false;
+  }
+}
+
+/**
+ * Whether a derivation read without its session's ceiling and then
+ * discovered that it is that session's instance after all. Its contribution
+ * is refused fail-closed: the scheduler has learned the narrower scope by
+ * the seal, so the rerun is stamped as the session's instance and reads
+ * under the ceiling.
+ */
+export function sealedOutsideSessionCeiling(
+  context: WaveRunContext,
+  discovered: CellScope,
+): boolean {
+  return context.kind === "derivation" &&
+    context.sessionReadCeiling !== undefined &&
+    context.readCeiling === undefined &&
+    discovered === "session";
+}
 
 /**
  * Settle a scope-attributed derivation run's `acting` and `capabilityRef`
@@ -1343,6 +1392,7 @@ export class WaveAccumulator
   readonly #sealedTxs = new WeakSet<object>();
   readonly #onUnstampedSeal: (() => void) | undefined;
   readonly #onEarlyEmitRefusal: (() => void) | undefined;
+  readonly #onSessionCeilingRefusal: (() => void) | undefined;
   readonly #onUndemandedNarrowing: (() => void) | undefined;
 
   constructor(options: {
@@ -1376,6 +1426,12 @@ export class WaveAccumulator
      * serving loop feeds its §7 `earlyEmitRefusals` counter): called
      * once per contribution refused for an under-attributed emission. */
     onEarlyEmitRefusal?: () => void;
+
+    /** Counted observation of the session-ceiling guard (the serving loop
+     * feeds its `sessionCeilingRefusals` counter): called once per
+     * contribution refused for reading as a shared instance before it
+     * discovered session scope. */
+    onSessionCeilingRefusal?: () => void;
 
     /** Counted observation of design §B5's accept-and-count residual
      * (the serving loop feeds `undemandedNarrowingRuns`): a derivation
@@ -1444,6 +1500,7 @@ export class WaveAccumulator
     this.#sealedTenure = options.lease?.tenure ?? 0;
     this.#onUnstampedSeal = options.onUnstampedSeal;
     this.#onEarlyEmitRefusal = options.onEarlyEmitRefusal;
+    this.#onSessionCeilingRefusal = options.onSessionCeilingRefusal;
     this.#onUndemandedNarrowing = options.onUndemandedNarrowing;
     this.#foreignWrites = options.foreignWrites ?? "refuse";
     this.#foreignWriteGrant = options.foreignWriteGrant;
@@ -1683,6 +1740,28 @@ export class WaveAccumulator
               `discovering ${discoveredScope} (fan-out stage B's early-emit ` +
               "guard; the retry attributes it at the learned scope)",
             reason: new Error("early-emit-under-attributed"),
+          },
+        };
+      }
+      // The session-ceiling guard (fail-closed, the early-emit guard's
+      // shape): a shared instance read without its session's ceiling and
+      // then discovered it acts as that session. The retry runs as the
+      // session's instance, under its ceiling.
+      if (sealedOutsideSessionCeiling(context, discoveredScope)) {
+        this.#onSessionCeilingRefusal?.();
+        logger.warn("session-ceiling-refused", () => [
+          `run ${context.actionId} ran as a shared instance and then ` +
+          "discovered session scope; the contribution is refused " +
+          "fail-closed (serving-loop.md §3c; the retry reads under the " +
+          "session's ceiling)",
+        ]);
+        return {
+          error: {
+            name: "StorageTransactionAborted",
+            message: "session read ceiling not applied: the run read as a " +
+              "shared instance before discovering session scope (the " +
+              "retry reads under the session's ceiling)",
+            reason: new Error("session-ceiling-unapplied"),
           },
         };
       }
