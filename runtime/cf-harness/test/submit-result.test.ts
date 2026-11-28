@@ -641,6 +641,21 @@ describe("submit_result", () => {
     expect(result.finalAssistantText).toBe("Hyperion.");
   });
 
+  it("sends no result notice to a run whose result file is already there, as a resumed run's may be", async () => {
+    await Deno.mkdir(join(dir, "workspace"));
+    await Deno.writeTextFile(
+      resultPath,
+      JSON.stringify({ answer: "Hyperion" }),
+    );
+    const { result, requests } = await run("run-prose-result-held", [
+      finalTurn("Hyperion."),
+    ]);
+
+    expect(requests).toHaveLength(1);
+    expect(resultNotices(requests)).toBe(0);
+    expect(result.finalAssistantText).toBe("Hyperion.");
+  });
+
   it("sends no result notice to a run whose result is the file, not submit_result", async () => {
     const { result, requests } = await run("run-prose-file-result", [
       finalTurn("Hyperion."),
