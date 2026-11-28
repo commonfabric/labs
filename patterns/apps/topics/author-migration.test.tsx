@@ -70,8 +70,14 @@ export default pattern(() => {
   });
   const unusableMigrated = new Writable(0);
   const unusable = Topic({
-    createdByName: 42,
-    comments: [{ authorName: false, body: "No usable name", sentAt: 1 }],
+    // Stored values of another type than the key declares: each reads as
+    // absent.
+    createdByName: 42 as never,
+    comments: [{
+      authorName: false as never,
+      body: "No usable name",
+      sentAt: 1,
+    }],
     topicStateVersion: unusableMigrated,
   });
   const completed = Topic({

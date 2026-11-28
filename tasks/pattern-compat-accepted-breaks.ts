@@ -746,6 +746,42 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     record: "docs/history/topics-mentionable-readonly-break.md",
   },
   {
+    // A THIRD entry for this pattern, with baselines disjoint from the two
+    // above. The legacy author-name keys narrow from `unknown` to `string`:
+    // the compiled pattern subset refuses the `typeof` read the upgrade made
+    // of an `unknown` key, and a stored value of another type now reads as
+    // absent, which the upgrade already took for "no name".
+    pattern: "apps/topics/topic.tsx",
+    baselines: [
+      "20260911T185348Z-TLZ8gBXbqm4PebTM",
+      "20260911T230650Z-jpIt_H74ytb3FdPd",
+      "20260917T201944Z-87tRLj7PxsLvmpke",
+      "20260920T034305Z-8DokVB7TDYHLFGaw",
+      "20260928T194610Z-7uJDiZmryLb8mCJB",
+      "20260928T232954Z-euYdF9fy9vGst_XK",
+      "20261016T163241Z-_PqZU4hKe2Qs43R9",
+      "20261025T215338Z-BAWOQj5zJ1eupTk_",
+      "20261026T170612Z-vYiZ0AG23HXq-8HF",
+      "20261026T191653Z-r5gOPL0sIP-vg3Tw",
+      "20261028T062707Z-hm6k1qqIvc3sxVTF",
+      "20261116T101720Z-I9BlP7RO117PBqvJ",
+      "20261119T222839Z-Qu-HuRv_MxP-XL9Z",
+      "20261120T005219Z-PNWAKUv3lmH9Xhrl",
+      "20261121T012444Z-OkC9Kx-S3QtZp9Qs",
+      "20261124T022719Z-cg22DBWo12zs2ZvG",
+      "20261124T221007Z-69p6VS7_JPJTgrZg",
+      "20261127T211045Z-bY22_7B0dqerK1Os",
+    ],
+    paths: ["argument.createdByName", "argument.comments[].authorName"],
+    reason: "The legacy author-name keys are declared `string` rather than " +
+      "`unknown`, the form the compiled pattern subset gives a key of older " +
+      "data that code reads as a string. A stored value of another type reads " +
+      "as absent, and the upgrade completes such a topic with no name from " +
+      "that key, as it did before. A deployed topic takes this one update " +
+      "forced and is proven again on every update after it.",
+    record: "docs/history/topics-legacy-author-names-string-break.md",
+  },
+  {
     // A SECOND entry for this pattern, and no baseline here appears above:
     // the pairs stay disjoint so that the older ones, which predate
     // `shortName` entirely, keep the tight bound the entry above gave them.

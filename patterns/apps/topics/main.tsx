@@ -28,11 +28,11 @@ import {
   type MentionableRow,
 } from "../../product/collection-naming/mentionable.ts";
 import {
-  createNamed,
   type NamesMap,
   namesTable,
   type NamesTableRow,
   type NamingDeclaration,
+  nextNameAmong,
   recordNames,
   SEQUENCE_NAMING,
 } from "../../product/collection-naming/naming.ts";
@@ -279,22 +279,24 @@ export interface TopicIndexRow {
  * stays green over a board that silently accepts no new topic. Only a read
  * against a board with an in-flight append tells the two apart.
  *
- * Declaring the source structurally is what changes that. The parameter type
- * says `get(): { mentions: M } | undefined`, so omitting the second `?.` HERE
- * is a compile error: `deno task cfcheck` fails with "Object is possibly
- * 'undefined'". `deno task check` passes either way — it walks the
- * hand-maintained path list in `tasks/typecheck.ts`, which this package is not
- * on, and patterns are checked by `cfcheck`. So the structural declaration buys
- * two things rather than one: the read becomes testable, and the optionality
- * moves somewhere the pattern typechecker can see it.
+ * Declaring the cell of a source as `ReadonlyCell<TopicMentionSource |
+ * undefined>` is what changes that: its `get()` returns the value or
+ * `undefined`, so omitting the second `?.` HERE is a compile error: `deno
+ * task cfcheck` fails with "Object is possibly 'undefined'". `deno task check`
+ * passes either way — it walks the hand-maintained path list in
+ * `tasks/typecheck.ts`, which this package is not on, and patterns are checked
+ * by `cfcheck`. A structural type such as `{ get(): T | undefined }` says the
+ * same and is no handle in the compiled pattern language
+ * (`language-subset.md` §7.5.1), so the declaration names the cell.
  *
  * Whether a cell's `get()` may return undefined against its declared type is a
  * question about the cell contract rather than about this pattern, and it is
  * not answered here.
  */
-export function mentionListsOf<M>(
-  sources: readonly ({ get(): { mentions: M } | undefined } | undefined)[],
-): (M | undefined)[] {
+export function mentionListsOf(
+  sources:
+    readonly (ReadonlyCell<TopicMentionSource | undefined> | undefined)[],
+): (TopicMentionSource["mentions"] | undefined)[] {
   return Array.from(sources, (source) => source?.get()?.mentions);
 }
 
@@ -622,10 +624,7 @@ export function byActivity<T extends { value: CardSource }>(
  * and writes nothing.
  */
 export function cardRowsOf(
-  topics: readonly (
-    | { get(): CardSource | undefined }
-    | undefined
-  )[],
+  topics: readonly (ReadonlyCell<CardSource | undefined> | undefined)[],
 ): CardRow[] {
   const read: { topic: unknown; value: CardSource }[] = [];
   for (const topic of topics) {
@@ -848,27 +847,31 @@ export const submitProfileTopic = handler<void, {
   // concurrent create serializes on the map's keys rather than taking the
   // same one.
   const filedAt = Date.now();
-  const { member: piece } = createNamed(names, (allocated) =>
-    Topic({
-      topicStateVersion: TOPIC_STATE_VERSION,
-      title: trimmed,
-      createdAt: filedAt,
-      // Kept by the topic's verbs from here on; a new topic has no comment and
-      // no activity but its creation.
-      commentCount: 0,
-      lastActivityAt: filedAt,
-      createdBy: author,
-      // The number this create allocated, stored with the topic, which is
-      // what lets the topic report it without reading the board.
-      shortName: allocated,
-      // Same wiring `addTopic` gives its children: the board's mention index
-      // is the universe the new topic's editor autocompletes over, and the
-      // board's pivot, through its index by number, is where it reads its
-      // inbound references.
-      mentionable,
-      boardCrossrefs,
-      boardCrossrefIndex,
-    }));
+  // The allocation and the write of the namespace are this handler's own, as
+  // `createNamed()` makes them: it takes the namespace through a structural
+  // type, which is no handle in the compiled pattern language.
+  const allocated = nextNameAmong(Object.keys(names.get() ?? {}));
+  const piece = Topic({
+    topicStateVersion: TOPIC_STATE_VERSION,
+    title: trimmed,
+    createdAt: filedAt,
+    // Kept by the topic's verbs from here on; a new topic has no comment and
+    // no activity but its creation.
+    commentCount: 0,
+    lastActivityAt: filedAt,
+    createdBy: author,
+    // The number this create allocated, stored with the topic, which is
+    // what lets the topic report it without reading the board.
+    shortName: allocated,
+    // Same wiring `addTopic` gives its children: the board's mention index
+    // is the universe the new topic's editor autocompletes over, and the
+    // board's pivot, through its index by number, is where it reads its
+    // inbound references.
+    mentionable,
+    boardCrossrefs,
+    boardCrossrefIndex,
+  });
+  names.key(allocated).set(piece);
   topics.push(piece);
   newTitle.set("");
 });
@@ -956,34 +959,38 @@ export default pattern<TopicsInput, TopicsOutput>(({ topics, names }) => {
     // map's keys, re-running with the next number rather than taking the same
     // one.
     const filedAt = Date.now();
-    const { name, member: piece } = createNamed(names, (allocated) =>
-      Topic({
-        topicStateVersion: TOPIC_STATE_VERSION,
-        title: trimmed,
-        // Body at create is part of the create's atomic unit; created-with is
-        // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
-        // Preserved verbatim, matching setBody and the UI save path — trimming
-        // would corrupt whitespace-sensitive Markdown (indented code blocks).
-        body: body ?? "",
-        createdAt: filedAt,
-        // Kept by the topic's verbs from here on; a new topic has no comment
-        // and no activity but its creation.
-        commentCount: 0,
-        lastActivityAt: filedAt,
-        createdBy: author,
-        // The number this create allocated, stored with the topic, which is
-        // what lets the topic report it without reading the board.
-        shortName: allocated,
-        // The board's mention index, so the editor has a mention universe. A
-        // piece from before the index is rewired to it as a one-time
-        // link-bind, the backfill the input declares for itself.
-        mentionable,
-        // The board's mention pivot. A topic reads its inbound references out
-        // of the row the board already built for it rather than rebuilding the
-        // join, and finds that row through the pivot's index by number.
-        boardCrossrefs: pivot,
-        boardCrossrefIndex: crossrefIndex,
-      }));
+    // The allocation and the write of the namespace, as `createNamed()` makes
+    // them, are written here: it takes the namespace through a structural
+    // type, which is no handle in the compiled pattern language.
+    const name = nextNameAmong(Object.keys(names.get() ?? {}));
+    const piece = Topic({
+      topicStateVersion: TOPIC_STATE_VERSION,
+      title: trimmed,
+      // Body at create is part of the create's atomic unit; created-with is
+      // not an update, so bodyUpdatedBy/At stay unset (createdBy covers it).
+      // Preserved verbatim, matching setBody and the UI save path — trimming
+      // would corrupt whitespace-sensitive Markdown (indented code blocks).
+      body: body ?? "",
+      createdAt: filedAt,
+      // Kept by the topic's verbs from here on; a new topic has no comment
+      // and no activity but its creation.
+      commentCount: 0,
+      lastActivityAt: filedAt,
+      createdBy: author,
+      // The number this create allocated, stored with the topic, which is
+      // what lets the topic report it without reading the board.
+      shortName: name,
+      // The board's mention index, so the editor has a mention universe. A
+      // piece from before the index is rewired to it as a one-time
+      // link-bind, the backfill the input declares for itself.
+      mentionable,
+      // The board's mention pivot. A topic reads its inbound references out
+      // of the row the board already built for it rather than rebuilding the
+      // join, and finds that row through the pivot's index by number.
+      boardCrossrefs: pivot,
+      boardCrossrefIndex: crossrefIndex,
+    });
+    names.key(name).set(piece);
     // Mergeable append: concurrent creates from different users all land.
     // The session composer draft is `submitTopic`'s to clear; a headless
     // create has no draft.

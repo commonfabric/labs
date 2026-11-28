@@ -11,9 +11,9 @@
  */
 
 import {
-  type Cell,
   type FabricBytes,
   profileOwnerOf,
+  type ReadonlyCell,
   writtenPrincipalOf,
 } from "commonfabric";
 
@@ -76,7 +76,7 @@ export type ProfileFace =
  * computation, not in a pattern body.
  */
 export const profileFace = (
-  profile: Cell<ProfileFaceFields> | undefined,
+  profile: ReadonlyCell<ProfileFaceFields> | undefined,
 ): ProfileFace => {
   const owner = profile === undefined ? undefined : profileOwnerOf(profile);
   if (profile === undefined || owner === undefined) return {};

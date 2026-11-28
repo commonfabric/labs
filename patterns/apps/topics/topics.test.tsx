@@ -296,11 +296,14 @@ export default pattern(() => {
     kept: { destination: undefined, modifiedTitle: false },
     minted: { destination: undefined, modifiedTitle: true },
   });
+  const profileCreatedBy = new Writable<TopicAuthor | undefined>();
   const profileUpgrade = {
     topicStateVersion: new Writable(TOPIC_STATE_VERSION),
-    createdByName: new Writable<unknown>(),
-    createdBy: new Writable<TopicAuthor | undefined>(),
+    createdByName: new Writable<string | undefined>(),
+    createdBy: profileCreatedBy,
+    creatorRead: profileCreatedBy,
     comments: profileComments,
+    commentsRead: profileComments,
     commentCount: new Writable(0),
     lastActivityAt: new Writable(0),
     links: profileLinks,
@@ -345,6 +348,7 @@ export default pattern(() => {
     upgrade: {
       ...profileUpgrade,
       comments: textComments,
+      commentsRead: textComments,
       commentCount: new Writable(0),
       lastActivityAt: new Writable(0),
     },
@@ -858,8 +862,11 @@ export default pattern(() => {
   // like; the third is the one that used to throw. Reading its list as
   // undefined is exactly what `mentionedBy` above declares and guards.
   const assert_mention_lists_tolerate_a_mid_sync_source = assert(() => {
-    const settled = (m: unknown[]) => ({ get: () => ({ mentions: m }) });
-    const midSync = { get: () => undefined };
+    // Stand-ins for the cells of three sources, which the helper reads
+    // through `get()` alone.
+    const settled = (m: unknown[]) =>
+      ({ get: () => ({ mentions: m }) }) as never;
+    const midSync = { get: () => undefined } as never;
     const lists = mentionListsOf([settled([twinA]), settled([]), midSync]);
     return lists.length === 3 &&
       (lists[0] as unknown[]).length === 1 &&
@@ -1014,8 +1021,10 @@ export default pattern(() => {
     };
     const blankName = { get: () => ({ [NAME]: "", title: "Blank name" }) };
     const midSync = { get: () => undefined };
+    // Stand-ins for the cells of the members, which the helper reads
+    // through `get()` alone.
     const rows = mentionableRowsOf(
-      [named, cold, midSync, blankName, undefined],
+      [named, cold, midSync, blankName, undefined] as never,
     );
     return rows.length === 3 &&
       rows[0]?.[NAME] === "Named" &&

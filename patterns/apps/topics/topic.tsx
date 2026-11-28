@@ -26,7 +26,6 @@ import {
   profileFace,
   type ProfileFaceFields,
 } from "../../system/profile-face/profile-face.ts";
-import type {} from "commonfabric/schema";
 
 import { isMemberName } from "../../product/collection-naming/allocator.ts";
 
@@ -320,8 +319,9 @@ export interface TopicComment {
 
 /** Stored comment fields available to the author migration. */
 interface StoredTopicComment extends TopicComment {
-  /** Unrestricted legacy storage; only nonblank strings supply a name. */
-  authorName?: unknown;
+  /** Legacy storage; only nonblank strings supply a name, and a stored value
+   * of another type reads as absent. */
+  authorName?: string;
 }
 
 export interface TopicLink {
@@ -356,10 +356,7 @@ export interface TopicLink {
  * report success, and move a count on a topic nobody was looking at.
  */
 const isElementOf = (
-  array: {
-    get(): readonly unknown[];
-    key(index: number): { equals(other: object): boolean };
-  },
+  array: ReadonlyCell<readonly unknown[]>,
   candidate: object,
 ): boolean => {
   const stored = array.get();
@@ -393,8 +390,9 @@ export interface TopicInput {
   createdAt?: number | Default<0>;
   createdBy?: TopicAuthor;
 
-  /** Creator display name recorded without an author kind. */
-  createdByName?: unknown;
+  /** Creator display name recorded without an author kind. A stored value
+   * that is not a string reads as absent. */
+  createdByName?: string;
 
   /** Number of ordered state upgrades completed by this topic. */
   topicStateVersion?: Writable<number | Default<0>>;
@@ -1168,7 +1166,7 @@ interface TopicUpgradeComment {
   author?: Partial<TopicAuthor>;
 
   /** Legacy storage key retained for version-zero inputs. */
-  authorName?: unknown;
+  authorName?: string;
 
   /** The stamps the activity step reads. */
   sentAt?: number;
@@ -1188,13 +1186,23 @@ interface TopicUpgradeState {
   topicStateVersion: Writable<number>;
 
   /** Legacy storage key; its spelling remains fixed for version-zero inputs. */
-  createdByName: ReadonlyCell<unknown>;
+  createdByName: ReadonlyCell<string | undefined>;
 
-  /** Structured creator destination, including partially populated stored data. */
-  createdBy: Writable<Partial<TopicAuthor> | undefined>;
+  /** Structured creator destination, written through a handle of the type of
+   * its place. */
+  createdBy: Writable<TopicAuthor | undefined>;
 
-  /** Original comment identities, including the fixed legacy `authorName` key. */
-  comments: Writable<TopicUpgradeComment[]>;
+  /** The same creator read as partially populated stored data, which the
+   * type of its place does not admit. */
+  creatorRead: ReadonlyCell<Partial<TopicAuthor> | undefined>;
+
+  /** Original comment identities, written through a handle of the type of
+   * their place. */
+  comments: Writable<StoredTopicComment[]>;
+
+  /** The same comments read with partially populated authors and the fixed
+   * legacy `authorName` key. */
+  commentsRead: ReadonlyCell<TopicUpgradeComment[]>;
 
   /** The kept count and activity time, which the activity step fills and every
    * verb that adds, edits or retracts a record keeps. */
@@ -1211,83 +1219,12 @@ interface TopicUpgradeState {
 /** Object schemas whose properties extend generated mutation contracts. */
 type TopicObjectSchema = Exclude<JSONSchema, boolean>;
 
-/** Generated reader contract for partially populated structured creators. */
-const TOPIC_CREATOR_SCHEMA = toSchema<
-  Writable<Partial<TopicAuthor> | undefined>
->();
-
-/** Generated reader contract for partially populated comment authors. */
-const TOPIC_COMMENT_AUTHOR_SCHEMA = toSchema<
-  Partial<TopicAuthor>
->();
-
-/**
- * Reader contract that materializes strings while retaining opaque legacy data.
- * Both structured-author projections must stay inline: this contract is also
- * embedded inside handler schemas, whose roots resolve local references.
- */
-const TOPIC_UPGRADE_SCHEMA = {
-  type: "object",
-  properties: {
-    topicStateVersion: toSchema<Writable<number>>(),
-    createdBy: TOPIC_CREATOR_SCHEMA,
-    // Concrete strings are read; every other legacy value stays opaque.
-    // A TypeScript `string | unknown` collapses to opaque-only `unknown`.
-    createdByName: {
-      type: ["string", "unknown"],
-      asCell: ["readonly"],
-    },
-    comments: {
-      type: "array",
-      asCell: ["cell"],
-      items: {
-        type: "object",
-        properties: {
-          author: TOPIC_COMMENT_AUTHOR_SCHEMA,
-          authorName: { type: ["string", "unknown"] },
-          sentAt: { type: "number" },
-          editedAt: { type: "number" },
-          removedAt: { type: "number" },
-        },
-      },
-    },
-    commentCount: toSchema<Writable<number>>(),
-    lastActivityAt: toSchema<Writable<number>>(),
-    links: {
-      type: "array",
-      asCell: ["readonly"],
-      items: {
-        type: "object",
-        properties: {
-          addedAt: { type: "number" },
-          removedAt: { type: "number" },
-        },
-      },
-    },
-    createdAt: { type: "number", asCell: ["readonly"] },
-    bodyUpdatedAt: { type: "number", asCell: ["readonly"] },
-    titleUpdatedAt: { type: "number", asCell: ["readonly"] },
-  },
-  required: [
-    "topicStateVersion",
-    "createdByName",
-    "createdBy",
-    "comments",
-    "commentCount",
-    "lastActivityAt",
-    "links",
-    "createdAt",
-    "bodyUpdatedAt",
-    "titleUpdatedAt",
-  ],
-} as const;
-
 /** Durable fields and upgrade handles bound to a Topic mutation. */
 type TopicWriteState<K extends keyof TopicInput = never> =
   & Required<Pick<TopicInput, K>>
   & {
     /** Shared state checked before the mutation's first durable write. */
-    upgrade: Writable<TopicUpgradeState>;
+    upgrade: TopicUpgradeState;
   };
 
 /**
@@ -1301,12 +1238,13 @@ const upgradeLegacyAuthors = (
   input: TopicUpgradeState,
   fromHandler: boolean,
 ): boolean => {
-  const { createdByName, createdBy, comments } = input;
+  const { createdByName, createdBy, creatorRead, comments, commentsRead } =
+    input;
 
   const legacyCreatorName = createdByName.get();
-  const creator = createdBy.get();
-  const storedCreatorName = createdBy.key("name").get();
-  const creatorKind = createdBy.key("kind").get();
+  const creator = creatorRead.get();
+  const storedCreatorName = creatorRead.key("name").get();
+  const creatorKind = creatorRead.key("kind").get();
   const creatorName = !storedCreatorName?.trim() &&
       typeof legacyCreatorName === "string" && legacyCreatorName.trim() &&
       legacyCreatorName.trim() !== "someone"
@@ -1314,7 +1252,7 @@ const upgradeLegacyAuthors = (
     : undefined;
   // Handles keep unresolved reads pending in the lift. Eager handler reads
   // can return undefined for both absent fields and unresolved links.
-  const storedComments = comments.get();
+  const storedComments = commentsRead.get();
   if (storedComments === undefined) return false;
   // An empty array may be the input's default standing in for an array behind
   // an unresolved link, which a handler's eager read cannot tell from an empty
@@ -1322,7 +1260,7 @@ const upgradeLegacyAuthors = (
   // leaves an empty thread's step to it.
   if (fromHandler && storedComments.length === 0) return false;
   const commentAuthors = storedComments.map((_, index) => {
-    const comment = comments.key(index);
+    const comment = commentsRead.key(index);
     const author = comment.key("author").get();
     const storedName = comment.key("author").key("name").get();
     const kind = comment.key("author").key("kind").get();
@@ -1380,7 +1318,7 @@ const upgradeLegacyAuthors = (
  * activity, so its own stamp moves the clock forward.
  */
 /** The stamps of one record as its keys read, `undefined` where one is absent. */
-type StampsRead<K extends string> = { readonly [P in K]: number | undefined };
+type StampsRead<K extends string> = Readonly<Record<K, number | undefined>>;
 
 const activityOf = (
   comments: readonly StampsRead<"sentAt" | "editedAt" | "removedAt">[],
@@ -1423,8 +1361,8 @@ const upgradeActivityScalars = (
   fromHandler: boolean,
 ): boolean => {
   if (fromHandler) return false;
-  const comments = (input.comments.get() ?? []).map((_, index) => {
-    const comment = input.comments.key(index);
+  const comments = (input.commentsRead.get() ?? []).map((_, index) => {
+    const comment = input.commentsRead.key(index);
     return {
       sentAt: comment.key("sentAt").get(),
       editedAt: comment.key("editedAt").get(),
@@ -1513,7 +1451,7 @@ const upgradeTopicState = (state: TopicUpgradeState, verb?: string): void => {
     // through an element's key reaches into the document behind the link and
     // suspends the lift until it resolves; on an array that is empty it reads
     // `undefined` and costs nothing more.
-    state.comments.key(0).get();
+    state.commentsRead.key(0).get();
     state.links.key(0).get();
   }
   for (let index = version; index < TOPIC_STATE_VERSION; index++) {
@@ -1528,8 +1466,6 @@ const upgradeTopicState = (state: TopicUpgradeState, verb?: string): void => {
 /** Runs pending state upgrades whenever the Topic runs, without a result read. */
 const migrateTopicState = lift(
   (state: TopicUpgradeState): void => upgradeTopicState(state),
-  TOPIC_UPGRADE_SCHEMA,
-  toSchema<void>(),
 );
 
 /** Generated object contract extended with the concrete legacy reader. */
@@ -1600,7 +1536,7 @@ const RECORD_NAME_STATE_SCHEMA = toSchema<
 /** Bound state for `submitProfileComment`. */
 type SubmitProfileCommentState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored thread containing the mutation target. */
   comments: Writable<TopicComment[] | Default<[]>>;
@@ -1620,13 +1556,7 @@ type SubmitProfileCommentState = {
  * Profile snapshots while production still sources them only from wishes. */
 export const submitProfileComment = handler<void, SubmitProfileCommentState>(
   toSchema<void>(),
-  {
-    ...SUBMIT_PROFILE_COMMENT_STATE_SCHEMA,
-    properties: {
-      ...SUBMIT_PROFILE_COMMENT_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  SUBMIT_PROFILE_COMMENT_STATE_SCHEMA,
   (
     _,
     {
@@ -1640,9 +1570,9 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
     const text = commentDraft.get();
     const author = topicAuthorFromPerson(profileName, face);
     if (!text.trim() || !author) return;
-    upgradeTopicState(upgrade.get(), "submitProfileComment");
+    upgradeTopicState(upgrade, "submitProfileComment");
     const comment = appendComment(comments, text, author);
-    noteActivity(upgrade.get(), comment.sentAt, 1);
+    noteActivity(upgrade, comment.sentAt, 1);
     commentDraft.set("");
   },
 );
@@ -1650,7 +1580,7 @@ export const submitProfileComment = handler<void, SubmitProfileCommentState>(
 /** Bound state for `retractProfileComment`. */
 type RetractProfileCommentState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored thread containing the mutation target. */
   comments: Writable<TopicComment[] | Default<[]>>;
@@ -1681,23 +1611,17 @@ type RetractProfileCommentState = {
  * reader would be shown a thread the topic does not hold. */
 export const retractProfileComment = handler<void, RetractProfileCommentState>(
   toSchema<void>(),
-  {
-    ...RETRACT_PROFILE_COMMENT_STATE_SCHEMA,
-    properties: {
-      ...RETRACT_PROFILE_COMMENT_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  RETRACT_PROFILE_COMMENT_STATE_SCHEMA,
   (_, { upgrade, comments, comment, profileName }) => {
     const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     if (!comment || comment.get() === undefined) return;
     if (!isElementOf(comments, comment)) return;
     if (comment.get()?.removedAt !== undefined) return;
-    upgradeTopicState(upgrade.get(), "retractProfileComment");
+    upgradeTopicState(upgrade, "retractProfileComment");
     const removedAt = Date.now();
     comment.key("removedAt").set(removedAt);
-    noteActivity(upgrade.get(), removedAt, -1);
+    noteActivity(upgrade, removedAt, -1);
     comment.key("removedBy").set(author);
   },
 );
@@ -1728,7 +1652,7 @@ export const persistTitle = (
 /** Bound state for `saveProfileTitle`. */
 type SaveProfileTitleState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Durable title saved with its attribution stamps. */
   title: Writable<string | Default<"">>;
@@ -1758,13 +1682,7 @@ type SaveProfileTitleState = {
  * rename. */
 export const saveProfileTitle = handler<void, SaveProfileTitleState>(
   toSchema<void>(),
-  {
-    ...SAVE_PROFILE_TITLE_STATE_SCHEMA,
-    properties: {
-      ...SAVE_PROFILE_TITLE_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  SAVE_PROFILE_TITLE_STATE_SCHEMA,
   (
     _,
     {
@@ -1780,7 +1698,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
     const text = titleDraft.get();
     const author = topicAuthorFromPerson(profileName);
     if (!text.trim() || !author) return;
-    upgradeTopicState(upgrade.get(), "saveProfileTitle");
+    upgradeTopicState(upgrade, "saveProfileTitle");
     const saved = persistTitle(
       title,
       titleUpdatedBy,
@@ -1788,7 +1706,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
       text,
       author,
     );
-    noteActivity(upgrade.get(), saved.titleUpdatedAt);
+    noteActivity(upgrade, saved.titleUpdatedAt);
     editingTitle.set(false);
   },
 );
@@ -1796,7 +1714,7 @@ export const saveProfileTitle = handler<void, SaveProfileTitleState>(
 /** Bound state for `saveProfileBody`. */
 type SaveProfileBodyState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Durable prose saved with its references and attribution. */
   body: Writable<string | Default<"">>;
@@ -1831,13 +1749,7 @@ type SaveProfileBodyState = {
 /** Browser body save under the current Profile snapshot. */
 export const saveProfileBody = handler<void, SaveProfileBodyState>(
   toSchema<void>(),
-  {
-    ...SAVE_PROFILE_BODY_STATE_SCHEMA,
-    properties: {
-      ...SAVE_PROFILE_BODY_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  SAVE_PROFILE_BODY_STATE_SCHEMA,
   (
     _,
     {
@@ -1854,7 +1766,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
   ) => {
     const author = topicAuthorFromPerson(profileName);
     if (!author) return;
-    upgradeTopicState(upgrade.get(), "saveProfileBody");
+    upgradeTopicState(upgrade, "saveProfileBody");
     // One whole-value set per explicit save keeps the conflict window small; a
     // live-bound textarea on a shared string would conflict per keystroke.
     body.set(bodyDraft.get());
@@ -1869,7 +1781,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
     bodyUpdatedBy.set(author);
     const savedAt = Date.now();
     bodyUpdatedAt.set(savedAt);
-    noteActivity(upgrade.get(), savedAt);
+    noteActivity(upgrade, savedAt);
     editingBody.set(false);
   },
 );
@@ -1877,7 +1789,7 @@ export const saveProfileBody = handler<void, SaveProfileBodyState>(
 /** Bound state for `dropMention`. */
 type DropMentionState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Durable set of verb-made piece references. */
   mentioned: Writable<unknown[] | Default<[]>>;
@@ -1898,16 +1810,10 @@ type DropMentionState = {
  */
 export const dropMention = handler<void, DropMentionState>(
   toSchema<void>(),
-  {
-    ...DROP_MENTION_STATE_SCHEMA,
-    properties: {
-      ...DROP_MENTION_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  DROP_MENTION_STATE_SCHEMA,
   (_, { upgrade, mentioned, topic }) => {
     if (!topic) return;
-    upgradeTopicState(upgrade.get(), "dropMention");
+    upgradeTopicState(upgrade, "dropMention");
     mentioned.removeByValue(topic);
   },
 );
@@ -1915,7 +1821,7 @@ export const dropMention = handler<void, DropMentionState>(
 /** Bound state for `retractProfileLink`. */
 type RetractProfileLinkState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored links containing the mutation target. */
   links: Writable<TopicLink[] | Default<[]>>;
@@ -1935,23 +1841,17 @@ type RetractProfileLinkState = {
  * a reference as well as a row. */
 export const retractProfileLink = handler<void, RetractProfileLinkState>(
   toSchema<void>(),
-  {
-    ...RETRACT_PROFILE_LINK_STATE_SCHEMA,
-    properties: {
-      ...RETRACT_PROFILE_LINK_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  RETRACT_PROFILE_LINK_STATE_SCHEMA,
   (_, { upgrade, links, link, profileName }) => {
     const author = topicAuthorFromPerson(profileName);
     if (!author) return;
     if (!link || link.get() === undefined) return;
     if (!isElementOf(links, link)) return;
     if (link.get()?.removedAt !== undefined) return;
-    upgradeTopicState(upgrade.get(), "retractProfileLink");
+    upgradeTopicState(upgrade, "retractProfileLink");
     const removedAt = Date.now();
     link.key("removedAt").set(removedAt);
-    noteActivity(upgrade.get(), removedAt);
+    noteActivity(upgrade, removedAt);
     link.key("removedBy").set(author);
   },
 );
@@ -1959,7 +1859,7 @@ export const retractProfileLink = handler<void, RetractProfileLinkState>(
 /** Bound state for `submitProfileLink`. */
 type SubmitProfileLinkState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** Stored links containing the mutation target. */
   links: Writable<TopicLink[] | Default<[]>>;
@@ -1980,13 +1880,7 @@ type SubmitProfileLinkState = {
 /** Browser link submit under the current Profile snapshot. */
 export const submitProfileLink = handler<void, SubmitProfileLinkState>(
   toSchema<void>(),
-  {
-    ...SUBMIT_PROFILE_LINK_STATE_SCHEMA,
-    properties: {
-      ...SUBMIT_PROFILE_LINK_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  SUBMIT_PROFILE_LINK_STATE_SCHEMA,
   (
     _,
     {
@@ -2001,7 +1895,7 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
     const url = linkUrlDraft.get();
     const author = topicAuthorFromPerson(profileName);
     if (!url.trim() || !isSafeLinkUrl(url) || !author) return;
-    upgradeTopicState(upgrade.get(), "submitProfileLink");
+    upgradeTopicState(upgrade, "submitProfileLink");
     const link = appendLink(
       links,
       url,
@@ -2009,7 +1903,7 @@ export const submitProfileLink = handler<void, SubmitProfileLinkState>(
       linkLabelDraft.get(),
       author,
     );
-    noteActivity(upgrade.get(), link.addedAt ?? 0);
+    noteActivity(upgrade, link.addedAt ?? 0);
     linkUrlDraft.set("");
     linkLabelDraft.set("");
     linkKindDraft.set("web");
@@ -2163,21 +2057,15 @@ const addCommentHandler = handler<
   AddCommentResult
 >(
   toSchema<AddCommentEvent>(),
-  {
-    ...COMMENTS_WRITE_SCHEMA,
-    properties: {
-      ...COMMENTS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  COMMENTS_WRITE_SCHEMA,
   ({ body: text, agentName }, { upgrade, comments }) => {
     const trimmed = (text ?? "").trim();
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("addComment", "agentName must be non-blank");
     if (!trimmed) rejectMutation("addComment", "body must be non-empty");
-    upgradeTopicState(upgrade.get(), "addComment");
+    upgradeTopicState(upgrade, "addComment");
     const comment = appendComment(comments, trimmed, author);
-    noteActivity(upgrade.get(), comment.sentAt, 1);
+    noteActivity(upgrade, comment.sentAt, 1);
     return { comment };
   },
 );
@@ -2189,13 +2077,7 @@ const addLinkHandler = handler<
   AddLinkResult
 >(
   toSchema<AddLinkEvent>(),
-  {
-    ...LINKS_WRITE_SCHEMA,
-    properties: {
-      ...LINKS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  LINKS_WRITE_SCHEMA,
   ({ kind, url, label, agentName }, { upgrade, links }) => {
     const trimmedUrl = (url ?? "").trim();
     const author = topicAuthorFromAgent(agentName) ??
@@ -2204,9 +2086,9 @@ const addLinkHandler = handler<
     if (!isSafeLinkUrl(trimmedUrl)) {
       rejectMutation("addLink", "url must be http(s)");
     }
-    upgradeTopicState(upgrade.get(), "addLink");
+    upgradeTopicState(upgrade, "addLink");
     const link = appendLink(links, trimmedUrl, kind, label, author);
-    noteActivity(upgrade.get(), link.addedAt ?? 0);
+    noteActivity(upgrade, link.addedAt ?? 0);
     return { link };
   },
 );
@@ -2218,13 +2100,7 @@ const removeCommentHandler = handler<
   RemoveCommentResult
 >(
   toSchema<RemoveCommentEvent>(),
-  {
-    ...COMMENTS_WRITE_SCHEMA,
-    properties: {
-      ...COMMENTS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  COMMENTS_WRITE_SCHEMA,
   ({ comment, agentName }, { upgrade, comments }) => {
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("removeComment", "agentName must be non-blank");
@@ -2241,14 +2117,14 @@ const removeCommentHandler = handler<
     if (comment.get()?.removedAt !== undefined) {
       rejectMutation("removeComment", "comment is already retracted");
     }
-    upgradeTopicState(upgrade.get(), "removeComment");
+    upgradeTopicState(upgrade, "removeComment");
     const removedAt = Date.now();
     // Two field writes into the element the caller named, not a rewrite of
     // the array. Concurrent retractions of distinct comments merge, and
     // every surviving reference stays a reference.
     comment.key("removedAt").set(removedAt);
     comment.key("removedBy").set(author);
-    noteActivity(upgrade.get(), removedAt, -1);
+    noteActivity(upgrade, removedAt, -1);
     return { removedAt, removedBy: author };
   },
 );
@@ -2260,13 +2136,7 @@ const editCommentHandler = handler<
   EditCommentResult
 >(
   toSchema<EditCommentEvent>(),
-  {
-    ...COMMENTS_WRITE_SCHEMA,
-    properties: {
-      ...COMMENTS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  COMMENTS_WRITE_SCHEMA,
   ({ comment, body: text, agentName }, { upgrade, comments }) => {
     // Checked, not bound: `editComment` requires a signature like every
     // other mutation here, and then stores nothing from it. `author` and
@@ -2287,11 +2157,11 @@ const editCommentHandler = handler<
     }
     const trimmed = (text ?? "").trim();
     if (!trimmed) rejectMutation("editComment", "body must be non-empty");
-    upgradeTopicState(upgrade.get(), "editComment");
+    upgradeTopicState(upgrade, "editComment");
     const editedAt = Date.now();
     comment.key("body").set(trimmed);
     comment.key("editedAt").set(editedAt);
-    noteActivity(upgrade.get(), editedAt);
+    noteActivity(upgrade, editedAt);
     return { body: trimmed, editedAt };
   },
 );
@@ -2303,13 +2173,7 @@ const removeLinkHandler = handler<
   RemoveLinkResult
 >(
   toSchema<RemoveLinkEvent>(),
-  {
-    ...LINKS_WRITE_SCHEMA,
-    properties: {
-      ...LINKS_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  LINKS_WRITE_SCHEMA,
   ({ link, url, agentName }, { upgrade, links }) => {
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("removeLink", "agentName must be non-blank");
@@ -2344,10 +2208,10 @@ const removeLinkHandler = handler<
     } else if (target.get()?.removedAt !== undefined) {
       rejectMutation("removeLink", "link is already retracted");
     }
-    upgradeTopicState(upgrade.get(), "removeLink");
+    upgradeTopicState(upgrade, "removeLink");
     const removedAt = Date.now();
     target!.key("removedAt").set(removedAt);
-    noteActivity(upgrade.get(), removedAt);
+    noteActivity(upgrade, removedAt);
     target!.key("removedBy").set(author);
     return {
       url: target!.get()?.url ?? named,
@@ -2364,13 +2228,7 @@ const setBodyHandler = handler<
   SetBodyResult
 >(
   toSchema<SetBodyEvent>(),
-  {
-    ...BODY_WRITE_SCHEMA,
-    properties: {
-      ...BODY_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  BODY_WRITE_SCHEMA,
   (
     { body: text, agentName },
     { upgrade, body, bodyUpdatedBy, bodyUpdatedAt },
@@ -2378,12 +2236,12 @@ const setBodyHandler = handler<
     const author = topicAuthorFromAgent(agentName) ??
       rejectMutation("setBody", "agentName must be non-blank");
     const persisted = text ?? "";
-    upgradeTopicState(upgrade.get(), "setBody");
+    upgradeTopicState(upgrade, "setBody");
     body.set(persisted);
     const bodyUpdatedAtValue = Date.now();
     bodyUpdatedBy.set(author);
     bodyUpdatedAt.set(bodyUpdatedAtValue);
-    noteActivity(upgrade.get(), bodyUpdatedAtValue);
+    noteActivity(upgrade, bodyUpdatedAtValue);
     return {
       body: persisted,
       bodyUpdatedBy: author,
@@ -2399,13 +2257,7 @@ const setTitleHandler = handler<
   SetTitleResult
 >(
   toSchema<SetTitleEvent>(),
-  {
-    ...TITLE_WRITE_SCHEMA,
-    properties: {
-      ...TITLE_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  TITLE_WRITE_SCHEMA,
   (
     { title: text, agentName },
     { upgrade, title, titleUpdatedBy, titleUpdatedAt },
@@ -2414,7 +2266,7 @@ const setTitleHandler = handler<
     const author = topicAuthorFromAgent(agentName ?? "") ??
       rejectMutation("setTitle", "agentName must be non-blank");
     if (!trimmed) rejectMutation("setTitle", "title must be non-empty");
-    upgradeTopicState(upgrade.get(), "setTitle");
+    upgradeTopicState(upgrade, "setTitle");
     const saved = persistTitle(
       title,
       titleUpdatedBy,
@@ -2422,7 +2274,7 @@ const setTitleHandler = handler<
       trimmed,
       author,
     );
-    noteActivity(upgrade.get(), saved.titleUpdatedAt);
+    noteActivity(upgrade, saved.titleUpdatedAt);
     return saved;
   },
 );
@@ -2430,13 +2282,7 @@ const setTitleHandler = handler<
 /** Handles `mention` after bringing durable Topic state up to date. */
 const mentionHandler = handler<MentionEvent, TopicWriteState<"mentioned">>(
   toSchema<MentionEvent>(),
-  {
-    ...MENTIONED_WRITE_SCHEMA,
-    properties: {
-      ...MENTIONED_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  MENTIONED_WRITE_SCHEMA,
   ({ topic }, { upgrade, mentioned }) => {
     // A reference, or a rejection. The schema wraps whatever it is handed as
     // a cell without looking behind it, so this is the boundary — and the
@@ -2449,7 +2295,7 @@ const mentionHandler = handler<MentionEvent, TopicWriteState<"mentioned">>(
     // A set-add, not an append: referencing the same piece twice is one
     // reference. Mergeable, so concurrent mentions of distinct pieces all
     // land and a repeated one is a no-op against durable state.
-    upgradeTopicState(upgrade.get(), "mention");
+    upgradeTopicState(upgrade, "mention");
     mentioned.addUnique(topic);
   },
 );
@@ -2457,13 +2303,7 @@ const mentionHandler = handler<MentionEvent, TopicWriteState<"mentioned">>(
 /** Handles `unmention` after bringing durable Topic state up to date. */
 const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
   toSchema<UnmentionEvent>(),
-  {
-    ...MENTIONED_WRITE_SCHEMA,
-    properties: {
-      ...MENTIONED_WRITE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  MENTIONED_WRITE_SCHEMA,
   ({ topic }, { upgrade, mentioned }) => {
     // Same check as `mention`, and it earns its place here too: a payload
     // that is not a reference matches no stored entry, so the removal below
@@ -2475,7 +2315,7 @@ const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
     // array and set it back, which is both a clobbering write and the shape
     // that flattens surviving references. This one resolves against durable
     // state, so concurrent removals of distinct entries merge.
-    upgradeTopicState(upgrade.get(), "unmention");
+    upgradeTopicState(upgrade, "unmention");
     mentioned.removeByValue(topic);
   },
 );
@@ -2483,7 +2323,7 @@ const unmentionHandler = handler<UnmentionEvent, TopicWriteState<"mentioned">>(
 /** Bound state for `recordName`. */
 type RecordNameState = {
   /** Shared upgrade handles for this Topic. */
-  upgrade: Writable<TopicUpgradeState>;
+  upgrade: TopicUpgradeState;
 
   /** The topic's own stored number, absent until a call records one. The
    * writable handle the write needs, over an input every other reader takes
@@ -2498,13 +2338,7 @@ const recordNameHandler = handler<
   RecordNameResult
 >(
   toSchema<RecordNameEvent>(),
-  {
-    ...RECORD_NAME_STATE_SCHEMA,
-    properties: {
-      ...RECORD_NAME_STATE_SCHEMA.properties,
-      upgrade: { ...TOPIC_UPGRADE_SCHEMA, asCell: ["cell"] },
-    },
-  },
+  RECORD_NAME_STATE_SCHEMA,
   ({ name }, { upgrade, shortName }) => {
     const given = (name ?? "").trim();
     // The grammar is the whole of what a topic can check: it holds no
@@ -2522,7 +2356,7 @@ const recordNameHandler = handler<
     if (stored !== undefined && stored !== "") {
       rejectMutation("recordName", `topic already stores \`${stored}\``);
     }
-    upgradeTopicState(upgrade.get(), "recordName");
+    upgradeTopicState(upgrade, "recordName");
     shortName.set(given);
     return { name: given, wrote: true };
   },
@@ -2560,7 +2394,9 @@ export default pattern<TopicInput, TopicOutput>(
       topicStateVersion,
       createdByName,
       createdBy,
+      creatorRead: createdBy,
       comments,
+      commentsRead: comments,
       commentCount,
       lastActivityAt,
       links,
