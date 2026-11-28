@@ -110,6 +110,40 @@ export function isAbsentPathError(error: unknown): boolean {
     );
 }
 
+/** Whether `value` is a stored link, as a whole-document read prints one. */
+export function isStoredLink(value: unknown): boolean {
+  return isObjectNotArray(value) && isObjectNotArray(value["/"]) &&
+    Object.keys(value["/"]).some((key) => key.startsWith("link@"));
+}
+
+/**
+ * The top-level fields of a piece's input document that hold a link, read
+ * with `cf cell get --input` and the address arguments `addr`
+ * (`--piece`, `--space`, `--api-url`).
+ *
+ * The document is read whole because that is the read that shows a link as
+ * stored. A read of the field itself follows the link, and `--select
+ * <field>@` answers with the field's own address whether it holds a link or
+ * nothing at all, so neither can tell a bound field from an absent one.
+ */
+export async function linkedInputFields(
+  addr: readonly string[],
+): Promise<Set<string>> {
+  const doc = await cfJson<unknown>([
+    "cell",
+    "get",
+    "-q",
+    ...addr,
+    "--input",
+  ]);
+  const linked = new Set<string>();
+  if (!isObjectNotArray(doc)) return linked;
+  for (const [field, value] of Object.entries(doc)) {
+    if (isStoredLink(value)) linked.add(field);
+  }
+  return linked;
+}
+
 /**
  * The path {@link retiredKeys} reports when the live read does not surface the
  * compared value AT ALL, rather than a key inside it — the root node, spelled
@@ -234,6 +268,11 @@ export interface TopicExportRow {
   /** The argument document exactly as stored, links unresolved — the
    * forensic copy. Restore consumes `content`, never this. */
   rawArgument: unknown;
+
+  /** The fields inside `content`'s records that held a link to another
+   * record's value and are recorded as that value, such as
+   * `comments[1].author`. Absent when there were none. */
+  aliased?: string[];
 }
 
 export interface TopicsExport {
@@ -249,6 +288,13 @@ export interface TopicsExport {
     /** Stored membership links of the board's `topics` array, in order —
      * evidence of membership and order, never a restore payload. */
     topicsLinks: unknown[];
+
+    /**
+     * The board's namespace, each number to the topic it names. A board that
+     * holds its topics in a collection appends nothing to its list, so this
+     * is where such a board's export records which topics it holds.
+     */
+    names: Record<string, unknown>;
   } | null;
   topics: TopicExportRow[];
 
@@ -270,11 +316,18 @@ export interface TopicsExport {
  * a retirable one is left out and reported, and any other is refused.
  * `buildRestoreDocument` makes each of these decisions.
  *
- * Four today: `mentionable` (the board's derived mention index),
- * `boardCrossrefs` (its reference pivot), `boardCrossrefIndex` (that pivot's
- * positions grouped by topic number), and `boardNames` (its names table). The
- * mention index publishes display rows with stable strings and unread member
- * references, matching the wiring the board supplies when it creates a topic.
+ * Each field and the board path it links to:
+ *
+ * - `mentionable` to `mentionable`, the board's mention universe: display
+ *   rows with stable strings and unread member references, matching the
+ *   wiring the board supplies when it creates a topic.
+ * - `board` to `board`, the board's collection of topics, which a topic asks
+ *   for the topics that mention it.
+ * - `boardCrossrefs` to `crossrefs`, the reference graph a topic read its
+ *   backlinks from before the board held a collection.
+ * - `boardCrossrefIndex` to `crossrefIndex`, that graph's rows grouped by
+ *   topic number.
+ * - `boardNames` to `namesTable`, the board's names table.
  *
  * Adding a wiring input to the topic pattern means adding it here. Leaving it
  * out is not silent: `buildRestoreDocument` throws on any link-valued field it
@@ -289,6 +342,7 @@ export interface TopicsExport {
  */
 export const STRUCTURAL_LINK_SOURCES: Record<string, string> = {
   mentionable: "mentionable",
+  board: "board",
   boardCrossrefs: "crossrefs",
   boardCrossrefIndex: "crossrefIndex",
   boardNames: "namesTable",
@@ -313,13 +367,19 @@ export const STRUCTURAL_LINK_FIELDS = Object.keys(STRUCTURAL_LINK_SOURCES);
  *
  * `myName` predates the agentName attribution and no pattern declares it.
  * `boardNames` named the board's table a topic read its number from, before a
- * topic stored its own. `boardCrossrefIndex` is declared by the generations
- * that look their backlinks up by number, and not by the ones that scan.
+ * topic stored its own. `boardCrossrefs` is declared by the generations that
+ * read their backlinks out of the board's reference graph, and
+ * `boardCrossrefIndex` by those among them that look their row up by number;
+ * a topic that asks the board's collection declares neither. `board` is
+ * declared by the generations that ask the board's collection, and by none
+ * before them.
  */
 export const RETIRABLE_LINK_FIELDS = [
   "myName",
   "boardNames",
+  "boardCrossrefs",
   "boardCrossrefIndex",
+  "board",
 ] as const;
 
 /**
@@ -584,6 +644,267 @@ export function buildRestoreDocument(
     }
   }
   return { doc, structural, legacy, unpublished, carried };
+}
+
+/** A link as `annotate` renders it in an export's `rawArgument`. */
+interface AnnotatedLink {
+  id: string;
+  path?: string[];
+  space?: string;
+}
+
+/** A link in the form the store writes, which a cell write takes as a link. */
+export function storedLink(
+  id: string,
+  path: readonly string[] = [],
+  linkSpace?: string,
+): Record<string, unknown> {
+  return {
+    "/": {
+      "link@1": {
+        id,
+        path: [...path],
+        ...(linkSpace ? { space: linkSpace } : {}),
+      },
+    },
+  };
+}
+
+/**
+ * `entry`, a link as an export renders it, as a stored link: to the topic
+ * recreated from the topic it names, or as it was when it names anything
+ * else. `what` names the entry in the error thrown for a value that is not a
+ * link.
+ */
+function recreatedLink(
+  entry: unknown,
+  recreated: ReadonlyMap<string, string>,
+  what: string,
+): Record<string, unknown> {
+  const link = isObjectNotArray(entry) ? entry.$link : undefined;
+  if (!isObjectNotArray(link) || typeof link.id !== "string") {
+    throw new Error(`${what} is not a link`);
+  }
+  const { id, path, space } = link as unknown as AnnotatedLink;
+  const to = recreated.get(id);
+  return to !== undefined
+    ? storedLink(to, path ?? [])
+    : storedLink(id, path ?? [], space);
+}
+
+/** Fields {@link recreatedDocument} writes itself rather than copying from
+ * the raw argument. */
+const RECREATED_FIELDS = new Set<string>([
+  ...SCALAR_CONTENT_FIELDS,
+  ...LINKED_ARRAY_FIELDS,
+  ...STRUCTURAL_LINK_FIELDS,
+  ...RETIRABLE_LINK_FIELDS,
+  "mentioned",
+  "references",
+  "shortName",
+  "topicStateVersion",
+]);
+
+/**
+ * The input fields `topics-recreate.ts` writes into the topic recreated from
+ * `topic`, numbered `name`. `recreated` maps each topic of the exported board
+ * to the topic recreated from it, and every link to one of them is pointed at
+ * that topic: in `mentioned`, and in the destination of each `references`
+ * entry, the `[Label][key]` mentions in the body. A link to anything else is
+ * kept as it was. The structural links and the inputs only an earlier topic
+ * pattern declared are left out; a plain field no list names is copied, and
+ * one that holds a link throws.
+ *
+ * `createdBy` is always written. The create stored the run's agent as the
+ * topic's author, so a topic exported with no author of its own gets
+ * `undefined` there, which a reader takes for no author, as it did on the
+ * exported board.
+ *
+ * `topicStateVersion` is always written too, as the version the topic was
+ * exported at, and zero for a topic exported before it had one. The create
+ * stamped the current version, which would mark the topic's state upgrades
+ * done: those rebuild a topic's authors and its activity scalars from its
+ * comments and links, so they run when the recreated topic first runs.
+ */
+export function recreatedDocument(
+  topic: TopicExportRow,
+  name: string,
+  recreated: ReadonlyMap<string, string>,
+): Record<string, unknown> {
+  const raw = topic.rawArgument as Record<string, unknown>;
+  const doc: Record<string, unknown> = {};
+  for (const [field, value] of Object.entries(raw)) {
+    if (RECREATED_FIELDS.has(field) || value === undefined) continue;
+    const at = findLink(value);
+    if (at) {
+      throw new Error(`${topic.fid} ${field} holds a link at ${at}`);
+    }
+    doc[field] = value;
+  }
+  for (const field of SCALAR_CONTENT_FIELDS) {
+    if (topic.content[field] !== undefined) doc[field] = topic.content[field];
+  }
+  doc.createdBy = topic.content.createdBy;
+  doc.comments = topic.content.comments;
+  doc.links = topic.content.links;
+  doc.shortName = name;
+  doc.topicStateVersion = typeof raw.topicStateVersion === "number"
+    ? raw.topicStateVersion
+    : 0;
+  const references = isObjectNotArray(raw.references) ? raw.references : {};
+  if (Object.hasOwn(references, "$link")) {
+    throw new Error(`${topic.fid} references holds a link at $`);
+  }
+  doc.references = Object.fromEntries(
+    Object.entries(references).map(([key, ref]) => {
+      const what = `${topic.fid} references.${key}`;
+      if (!isObjectNotArray(ref)) throw new Error(`${what} is not a reference`);
+      const { destination, ...rest } = ref;
+      const at = findLink(rest);
+      if (at) throw new Error(`${what} holds a link at ${at}`);
+      return [key, {
+        ...rest,
+        destination: recreatedLink(destination, recreated, what),
+      }];
+    }),
+  );
+  doc.mentioned = (Array.isArray(raw.mentioned) ? raw.mentioned : []).map(
+    (entry, at) =>
+      recreatedLink(entry, recreated, `${topic.fid} mentioned[${at}]`),
+  );
+  return doc;
+}
+
+/** One line of a `topics-recreate.ts` progress file. */
+export interface ProgressLine {
+  /** The exported topic's number, which the recreated topic has as well. */
+  name: string;
+
+  /** The exported topic. */
+  from: string;
+
+  /** The topic recreated from it, as the address `addTopic` returns. */
+  to: string;
+}
+
+/** What {@link recreateTopics} does to the board and the progress file. */
+export interface RecreateSteps {
+  /**
+   * Files `topic` through the board's `addTopic`, which numbers it `name`,
+   * and returns the address of the topic it created.
+   */
+  create(name: string, topic: TopicExportRow): Promise<string>;
+
+  /** Appends `line` to the progress file. */
+  record(line: ProgressLine): Promise<void>;
+
+  /** Writes `fields` into the input document of the topic `id`. */
+  write(id: string, fields: Record<string, unknown>): Promise<void>;
+}
+
+/** What one {@link recreateTopics} run did. */
+export interface RecreateCounts {
+  /** Topics the board held that the progress file did not record. */
+  reconciled: number;
+
+  /** Topics created through the board's `addTopic`. */
+  created: number;
+
+  /** Topics whose input document was written. */
+  written: number;
+}
+
+/**
+ * The progress lines a recreate run is missing: one for each topic the board
+ * holds that `recorded` does not, which is a topic a run created and stopped
+ * before recording. `topics` is the export's topics as number and row, in
+ * number order; `recorded` maps each exported topic to the topic recreated
+ * from it; `held` maps each number the board's namespace holds to the topic
+ * it names.
+ *
+ * The board numbers the topics it creates densely from 1, and a run creates
+ * them in number order, so the topic the board holds under a number is the
+ * one created from the exported topic with that number. Throws where the
+ * board and the progress file cannot both describe this run: a number the
+ * export does not have, or a recorded topic the board holds under no number
+ * or under another topic's.
+ */
+export function unrecordedCreates(
+  topics: readonly (readonly [string, TopicExportRow])[],
+  recorded: ReadonlyMap<string, string>,
+  held: ReadonlyMap<string, string>,
+): ProgressLine[] {
+  const exported = new Map(topics);
+  for (const name of held.keys()) {
+    if (!exported.has(name)) {
+      throw new Error(
+        `the board holds a topic numbered ${name}, which the export does not ` +
+          "have; the board is not the fresh board this run was started on",
+      );
+    }
+  }
+  const missing: ProgressLine[] = [];
+  for (const [name, topic] of topics) {
+    const to = recorded.get(topic.fid);
+    const holds = held.get(name);
+    if (to !== undefined && to !== holds) {
+      throw new Error(
+        `the progress file records ${topic.fid} as ${to}, and the board ` +
+          `holds ${holds ?? "no topic"} under its number ${name}; the ` +
+          "progress file is not this board's",
+      );
+    }
+    if (to === undefined && holds !== undefined) {
+      missing.push({ name, from: topic.fid, to: holds });
+    }
+  }
+  return missing;
+}
+
+/**
+ * Recreates `topics`, the export's topics as number and row in number order,
+ * on a fresh board through `steps`, in the two passes `topics-recreate.ts`
+ * describes. `recorded` is the progress file, each exported topic to the
+ * topic recreated from it, and `held` is the board's namespace, each number to
+ * the topic it names; a topic the board holds and the progress file does not
+ * is recorded first, as {@link unrecordedCreates} finds it, rather than
+ * created again.
+ *
+ * Both passes cover the topics numbered 1 to `limit`, so a run stopped at any
+ * point is finished by running it again with the same limit, and a run with a
+ * larger one goes on from there. Pass 2 writes each of those documents again
+ * on every run, which also points their mentions at topics created since.
+ */
+export async function recreateTopics(
+  topics: readonly (readonly [string, TopicExportRow])[],
+  recorded: ReadonlyMap<string, string>,
+  held: ReadonlyMap<string, string>,
+  limit: number,
+  steps: RecreateSteps,
+): Promise<RecreateCounts> {
+  const created = new Map(recorded);
+  const counts: RecreateCounts = { reconciled: 0, created: 0, written: 0 };
+  for (const line of unrecordedCreates(topics, recorded, held)) {
+    await steps.record(line);
+    created.set(line.from, line.to);
+    counts.reconciled++;
+  }
+  const selected = topics.slice(0, limit);
+  for (const [name, topic] of selected) {
+    if (created.has(topic.fid)) continue;
+    const to = await steps.create(name, topic);
+    await steps.record({ name, from: topic.fid, to });
+    created.set(topic.fid, to);
+    counts.created++;
+  }
+  for (const [name, topic] of selected) {
+    await steps.write(
+      created.get(topic.fid)!,
+      recreatedDocument(topic, name, created),
+    );
+    counts.written++;
+  }
+  return counts;
 }
 
 /** The path below any node where a `$link` marker appears, or null. Used to

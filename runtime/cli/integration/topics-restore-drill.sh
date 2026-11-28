@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # The Topics content-safety drill: deploy a board, seed it, snapshot the
 # store, export, clobber a topic the worst way a bad migration would, restore
-# it, and prove the restore byte-exact — the loop
+# it, prove the restore byte-exact, and recreate the export on a fresh board
+# the way a board migrates to a new board pattern — the loop
 # docs/history/plans/topics-migration-rehearsal.md's "restore drill" section makes
 # part of every clean rehearsal pass, runnable as one command.
 #
@@ -132,11 +133,14 @@ BODY='# Drill\n\n    indented code block\n    second line\n\ntrailing prose'
 TOPIC_ALIAS="$(jq -r '.result.topic["$link"] // empty' "$WORK/create.json")"
 # The create may or may not render an address depending on selection; the
 # canonical fid comes from the export below either way. Seed through the
-# board-published topic address when present, else re-read it.
+# address the create returned when present, else through the one the board
+# publishes: its `topics` output, which is where the board lists its topics.
+# `topics` is computed, so the read steps the board first rather than taking
+# whatever output was last stored, which can predate the create.
 if [ -z "$TOPIC_ALIAS" ]; then
   TOPIC_ALIAS="$(
     "${CF[@]}" cell get -q --piece "$BOARD" --space "$SPACE" --api-url "$API_URL" \
-      topics --input --select '@' 2> /dev/null | jq -r '.[0]["$link"]'
+      topics --step --select '@' 2> /dev/null | jq -r '.[0]["$link"] // empty'
   )"
 fi
 [ -n "$TOPIC_ALIAS" ] && ok "topic address in hand" || {
@@ -236,7 +240,7 @@ step "verify: byte-exact content, live board link, idempotent rerun"
 # relinks only those. This board is of the same generation as its topic, so
 # every wiring link the topic declares must have been relinked and read back,
 # and none left out for want of a board path.
-for FIELD in mentionable boardCrossrefs boardCrossrefIndex; do
+for FIELD in mentionable board; do
   grep -qx "$FIELD: board link present" "$WORK/restore.log" &&
     ok "restore relinked $FIELD and read it back" ||
     bad "restore log has no '$FIELD: board link present' line"
@@ -281,6 +285,74 @@ deno run --allow-run --allow-read --allow-env \
   grep -q "nothing to restore" &&
   ok "second restore is a no-op" || bad "second restore was not a no-op"
 
+step "recreate the export on a fresh board"
+# A board is migrated by recreating its topics on a board deployed fresh:
+# `topics-recreate.ts` files each exported topic through the new board's
+# `addTopic`, in number order, and then writes the export's content into it.
+# The recreated topic is a new piece, so it is found through the progress
+# file the run writes, which pairs each exported topic with its new one.
+"${CF[@]}" piece new -q "$REPO_ROOT/patterns/apps/topics/main.tsx" \
+  --root "$REPO_ROOT" --space "$SPACE" --api-url "$API_URL" \
+  > "$WORK/deploy2.out" 2> "$WORK/deploy2.err"
+FRESH="$(grep -xE 'fid1:[A-Za-z0-9_-]+' "$WORK/deploy2.out" | head -1)"
+[ -n "$FRESH" ] && ok "fresh board deployed: $FRESH" || {
+  bad "fresh board deploy produced no bare fid line on stdout"
+  cat "$WORK/deploy2.err" >&2
+  exit 1
+}
+deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
+  --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
+  --agent-name drill --progress "$WORK/recreate.jsonl" \
+  > "$WORK/recreate.log" 2>&1 &&
+  ok "recreate exited zero" || {
+  bad "recreate failed"
+  cat "$WORK/recreate.log" >&2
+}
+RECREATED="$(jq -r 'select(.name == "1") | .to' "$WORK/recreate.jsonl" 2> /dev/null)"
+[ -n "$RECREATED" ] && ok "the topic was recreated as number 1: $RECREATED" ||
+  bad "the progress file names no recreated topic 1"
+"${CF[@]}" cell get -q --piece "$RECREATED" --space "$SPACE" \
+  --api-url "$API_URL" body --input > "$WORK/recreated-body.json" 2> /dev/null
+jq -e --slurpfile live "$WORK/recreated-body.json" \
+  '.topics[0].content.body == $live[0]' "$WORK/export.json" > /dev/null &&
+  ok "recreated body byte-exact" || bad "recreated body differs from export"
+RECREATED_COMMENTS="$(
+  "${CF[@]}" cell get -q --piece "$RECREATED" --space "$SPACE" \
+    --api-url "$API_URL" comments --input 2> /dev/null | jq 'length'
+)"
+[ "$RECREATED_COMMENTS" = "2" ] && ok "both comments recreated" ||
+  bad "recreated comments: $RECREATED_COMMENTS"
+"${CF[@]}" cell get -q --piece "$RECREATED" --space "$SPACE" \
+  --api-url "$API_URL" createdBy --input > "$WORK/recreated-author.json" \
+  2> /dev/null
+jq -e --slurpfile live "$WORK/recreated-author.json" \
+  '.topics[0].content.createdBy == $live[0]' "$WORK/export.json" > /dev/null &&
+  ok "recreated topic keeps its author, not the run's" ||
+  bad "recreated author differs from export: $(cat "$WORK/recreated-author.json")"
+deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
+  --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
+  --agent-name drill --progress "$WORK/recreate.jsonl" 2> /dev/null |
+  grep -q "pass 1: created 0" &&
+  ok "a second recreate creates nothing" ||
+  bad "a second recreate created topics again"
+# A run stopped after a create and before its progress line was written
+# leaves a topic the progress file does not record, which is what an empty
+# file stands for here. The rerun reads the fresh board's namespace and
+# records the topic it holds rather than creating it again.
+: > "$WORK/recreate.jsonl"
+deno run -A "$REPO_ROOT/scripts/topics-recreate.ts" "$WORK/export.json" \
+  --board "$FRESH" --space "$SPACE" --api-url "$API_URL" \
+  --agent-name drill --progress "$WORK/recreate.jsonl" \
+  > "$WORK/recreate-resume.log" 2>&1
+RESUMED="$(jq -r 'select(.name == "1") | .to' "$WORK/recreate.jsonl" 2> /dev/null)"
+if grep -q "pass 1: created 0" "$WORK/recreate-resume.log" &&
+  [ -n "$RESUMED" ] && [ "$RESUMED" = "$RECREATED" ]; then
+  ok "a recreate missing its progress line records the topic the board holds"
+else
+  bad "a recreate missing its progress line recorded '$RESUMED', expected '$RECREATED'"
+  cat "$WORK/recreate-resume.log" >&2
+fi
+
 step "the namespace verbs' own results"
 # `backfillNames` returns the names it wrote. Asserted here rather than in a
 # pattern test for the reason the create's `name` is: a verb's result reaches
@@ -290,10 +362,10 @@ step "the namespace verbs' own results"
 # The board's one topic was named by its create, so a backfill over it as it
 # stands writes nothing — and an implementation that never wrote anything would
 # pass that just as well. So the namespace is emptied first, which is the state
-# a board filed before it numbered anything is actually in: members in the
-# list, no names for them. Now the run has something to write, and `assigned`
-# has to carry it. Last step in the drill, since it leaves the namespace
-# rebuilt rather than as the restore left it.
+# the step repairs: members in the board's collection, no names for them. Now
+# the run has something to write, and `assigned` has to carry it. Last step in
+# the drill, since it leaves the namespace rebuilt rather than as the restore
+# left it.
 printf '{}' | "${CF[@]}" cell set -q --piece "$BOARD" --space "$SPACE" \
   --api-url "$API_URL" names > /dev/null 2>&1
 CLEARED="$(
