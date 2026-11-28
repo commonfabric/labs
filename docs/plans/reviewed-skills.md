@@ -354,11 +354,14 @@ about injection.
   class and needs none. The class is computed from the resolved sandbox profile,
   `read` when sealed and `side-effect` otherwise, and never declared. Scripts
   the operator runs on the host stay `side-effect`.
-- **What runs sealed today.** A call is sealed when the run's engine built its
-  own runsc runtime, the target is the sandbox, and the call names no working
-  directory. It runs on a runtime built for that call from the run's
+- **What runs sealed today.** Only a call the run would not admit as a side
+  effect is sealed; one it admits, under a direct command or in a run that does
+  not enforce, runs as before. Such a call is sealed when the run's engine built
+  its own runsc runtime, the target is the sandbox, and the call names no
+  working directory. It runs on a runtime built for that call from the run's
   configuration, with network mode `none`, no fabric mount, the workspace and
-  every host bind read-only, and a scratch directory of its own; the tool checks
+  every host bind read-only, the artifact root hidden, and a scratch directory
+  of its own; the tool checks
   the runtime describes itself that way before it runs anything. Its working
   directory is the read-only workspace, because runsc keeps a call's working
   directory inside its mounts; what it writes lands in its container's fresh
@@ -371,10 +374,11 @@ about injection.
   the host. And the record names the root filesystem path, not a measured image
   digest: nothing measures the image yet.
 - **The `"side-effect"` literal stays.** The policy gate in `prompt-loop.ts`
-  already passes the call's computed class. The second call, which passes
-  `"side-effect"`, answers a different question: whether a side effect would be
-  admitted on this call, which `read_value` asks before starting a piece. Asked
-  as of `read`, it would always say yes.
+  passes the call's computed class. The literal asks a different question:
+  whether a side effect would be admitted on this call. `read_value` asks it
+  before starting a piece, and `run_skill_script` asks it to decide whether to
+  seal; asked as of `read`, it would always say yes. The loop now asks it once,
+  before computing the class, and hands the answer to both.
 - **A reviewed script descriptor comes later.** Each reviewed script becomes a
   §18.3.2 `ToolDescriptor` whose `contractPredicateDigest` names a §18.2.4.1
   measured contract over the script bytes, the interpreter and the sandbox

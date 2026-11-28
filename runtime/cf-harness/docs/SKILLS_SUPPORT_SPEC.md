@@ -334,13 +334,20 @@ mediated before model exposure, sealed or not.
 
 ### Sealed runs
 
-A call runs sealed when the run's engine built its own runsc runtime, the
+Sealing is for a call the run's authority would not admit as a side effect: a
+`quote`-bound call under an enforce mode. A call the run does admit, under a
+direct command or in a run that does not enforce, runs as it always has, on the
+run's network with a writable workspace.
+
+Such a call runs sealed when the run's engine built its own runsc runtime, the
 skill-script execution target is the sandbox, and the call names no `cwd`. It
 then runs on a runtime built for that one call from the run's runsc
 configuration and closed after it:
 
 - network mode `none`: a loopback and no other interface, and no pasta;
 - no fabric mount, and the workspace and every host bind read-only;
+- the run's artifact root, where it lies inside the workspace, covered by an
+  empty read-only tmpfs, since no model-facing tool may read it;
 - a scratch directory of its own beside the run's, and a fresh container, so a
   fresh `/tmp` and an in-memory overlay over the root filesystem, the only
   places the script can write, both gone when the call ends;
@@ -349,17 +356,19 @@ configuration and closed after it:
 
 Its environment is the explicit `CF_HARNESS_*` and `SKILL_*` set, and argv,
 args, env and stdin are labeled as its inputs. Before running, the tool checks
-that the runtime describes itself that way and returns `permission_denied`
-otherwise. The output and the execution record carry
-`sealed: { networkMode: "none", image }`, where `image` is the configured root
-filesystem path; no measured digest of the image is recorded.
+that the runtime is runsc and describes itself that way, and returns
+`permission_denied` otherwise. The output carries
+`sealed: { networkMode: "none" }`; the execution record adds `image`, the
+configured root filesystem path, which the model does not see. No measured
+digest of the image is recorded.
 
 A sealed call can write nothing that outlives it and reach nothing outside the
 call, so it is an untrusted transition and needs no authority: its class is
 `read`. Under `enforce-explicit` a `quote`-bound run, such as a child lowered
 for its skill, runs it; under `enforce-strict` even a `read` needs
 `direct-command`. A host-target call, a call that names a `cwd`, and any call in
-a run handed its sandbox runtime rather than building one stay side effects.
+a run handed its sandbox runtime rather than building one stay side effects, and
+such a run refuses them.
 
 ## CLI and Config Surface
 
