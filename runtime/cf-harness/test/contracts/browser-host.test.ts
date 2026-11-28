@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 
 import { describe, it } from "@commonfabric/test-support/test";
 import {
+  BROWSER_HOST_SITE_OF_MAX_HOSTS,
   type BrowserHostPage,
   browserHostPageFitsSession,
   type BrowserHostRequest,
@@ -136,10 +137,33 @@ describe("browser-host", () => {
           operation: { action: "session-open", kind: "read-only", url: SITE },
         },
         { operation: { action: "session-list" } },
+        {
+          operation: {
+            action: "site-of",
+            hosts: Array(BROWSER_HOST_SITE_OF_MAX_HOSTS).fill("shop.example"),
+          },
+        },
       ];
       for (const request of requests) {
         expect(browserHostRequestProblem(request)).toBeUndefined();
       }
+    });
+
+    it("returns the problem with a site-of that names a session or asks about too many hosts", () => {
+      expect(
+        browserHostRequestProblem({
+          session: "s1",
+          operation: { action: "site-of", hosts: ["shop.example"] },
+        }),
+      ).toBe("`site-of` is sent with no session");
+      expect(
+        browserHostRequestProblem({
+          operation: {
+            action: "site-of",
+            hosts: Array(BROWSER_HOST_SITE_OF_MAX_HOSTS + 1).fill("a.example"),
+          },
+        }),
+      ).toBe("`site-of` asks about at most 1000 hosts");
     });
 
     it("returns the problem with a malformed name, a session-open or session-close naming no session, and a session-list naming one", () => {
@@ -583,6 +607,42 @@ describe("browser-host", () => {
       it("returns false for an ok carrying a page that is not one", () => {
         expect(isBrowserHostResult({ status: "ok", page: { url: 7 } }, close))
           .toBe(false);
+      });
+    });
+
+    describe("site-of", () => {
+      const siteOf: BrowserHostRequest = {
+        operation: {
+          action: "site-of",
+          hosts: ["www.shop.example", "bücher.example", "localhost"],
+        },
+      };
+
+      it("returns true for an https site or null for each host, in the same number", () => {
+        const sites = [SITE, "https://xn--bcher-kva.example", null];
+
+        expect(isBrowserHostResult({ status: "ok", sites }, siteOf)).toBe(true);
+        expect(
+          isBrowserHostResult(
+            { status: "ok", sites: [] },
+            { operation: { action: "site-of", hosts: [] } },
+          ),
+        ).toBe(true);
+      });
+
+      it("returns false without the list, for one of another length, or for an entry that is not an https site or null", () => {
+        const lists = [
+          undefined,
+          [SITE, null],
+          [SITE, null, null, null],
+          [SITE, "http://xn--bcher-kva.example", null],
+          [SITE, "https://xn--bcher-kva.example/", null],
+          [SITE, "https://xn--bcher-kva.example", "null"],
+        ];
+        for (const sites of lists) {
+          expect(isBrowserHostResult({ status: "ok", sites }, siteOf))
+            .toBe(false);
+        }
       });
     });
 

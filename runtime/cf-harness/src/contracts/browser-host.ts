@@ -249,6 +249,17 @@ export type BrowserHostOperation =
   }
   | {
     /**
+     * Reports the `https` site of each of `hosts`, written in Unicode or
+     * ASCII, in the same order: the harness's only way to compute a site,
+     * so that the host's copy of the Public Suffix List is the only one.
+     * Sent with no session, and waits on no session's operations. At most
+     * {@link BROWSER_HOST_SITE_OF_MAX_HOSTS} hosts.
+     */
+    action: "site-of";
+    hosts: string[];
+  }
+  | {
+    /**
      * Copies the owner's cookies and local storage for the bound site of a
      * locked-down session into it.
      */
@@ -272,8 +283,11 @@ export type BrowserHostOperation =
 /** The operations whose answer carries no page. */
 export type BrowserHostPagelessOperation = Extract<
   BrowserHostOperation,
-  { action: "session-close" | "session-list" }
+  { action: "session-close" | "session-list" | "site-of" }
 >;
+
+/** The most hosts one `site-of` may ask about. */
+export const BROWSER_HOST_SITE_OF_MAX_HOSTS = 1000;
 
 /** The operations whose answer carries the page the session is on. */
 export type BrowserHostPageOperation = Exclude<
@@ -473,11 +487,23 @@ export interface BrowserHostSessionCloseResult {
   status: "ok";
 }
 
+/** What a host returns for a `site-of` it performed. */
+export interface BrowserHostSiteOfResult {
+  status: "ok";
+
+  /**
+   * The `https` site of each host asked about, in the same order, or `null`
+   * for a host that has none.
+   */
+  sites: (string | null)[];
+}
+
 /** What a host returns for an operation of type `O` that it performed. */
 export type BrowserHostOkResult<
   O extends BrowserHostOperation = BrowserHostOperation,
 > = O extends { action: "session-list" } ? BrowserHostSessionListResult
   : O extends { action: "session-close" } ? BrowserHostSessionCloseResult
+  : O extends { action: "site-of" } ? BrowserHostSiteOfResult
   : O extends { action: "session-open" } ? BrowserHostSessionOpenResult
   : O extends { action: "sign-in" } ? BrowserHostSignInResult
   : O extends { action: "evaluate" } ? BrowserHostEvaluateResult
@@ -554,7 +580,9 @@ export const isBrowserHostSite = (value: unknown): value is string =>
 /**
  * What is wrong with `request` as the harness would send it, or `undefined`
  * when nothing is: a malformed session name, a `session-open` or
- * `session-close` that names no session, or a `session-list` that names one.
+ * `session-close` that names no session, a `session-list` or `site-of` that
+ * names one, or a `site-of` asking about more than
+ * {@link BROWSER_HOST_SITE_OF_MAX_HOSTS} hosts.
  */
 export const browserHostRequestProblem = (
   request: BrowserHostRequest,
@@ -570,8 +598,15 @@ export const browserHostRequestProblem = (
   ) {
     return `\`${operation.action}\` names a session`;
   }
-  if (operation.action === "session-list" && session !== undefined) {
-    return "`session-list` is sent with no session";
+  if (SCOPE_ACTIONS.has(operation.action) && session !== undefined) {
+    return `\`${operation.action}\` is sent with no session`;
+  }
+  if (
+    operation.action === "site-of" &&
+    operation.hosts.length > BROWSER_HOST_SITE_OF_MAX_HOSTS
+  ) {
+    return "`site-of` asks about at most " +
+      `${BROWSER_HOST_SITE_OF_MAX_HOSTS} hosts`;
   }
   return undefined;
 };
@@ -579,13 +614,14 @@ export const browserHostRequestProblem = (
 /**
  * The queue a channel orders `request` in, where a withdrawal the host has
  * not acknowledged holds back the requests after it: the session's name, `""`
- * for the unnamed session, or `undefined` for a `session-list`, which
- * concerns the browsing scope rather than a session and so waits in none.
+ * for the unnamed session, or `undefined` for a `session-list` or `site-of`,
+ * which concerns the browsing scope rather than a session and so waits in
+ * none.
  */
 export const browserHostQueueOf = (
   request: BrowserHostRequest,
 ): string | undefined =>
-  request.operation.action === "session-list"
+  SCOPE_ACTIONS.has(request.operation.action)
     ? undefined
     : request.session ?? "";
 
@@ -637,6 +673,13 @@ export const isBrowserHostResult = <O extends BrowserHostOperation>(
   if (operation.action === "session-close") {
     return true;
   }
+  if (operation.action === "site-of") {
+    const { sites } = value;
+    return Array.isArray(sites) && sites.length === operation.hosts.length &&
+      sites.every((site) =>
+        site === null || (isBrowserHostSite(site) && site.startsWith("https:"))
+      );
+  }
   if (page === undefined) {
     return false;
   }
@@ -667,6 +710,9 @@ export const isBrowserHostResult = <O extends BrowserHostOperation>(
 };
 
 const SESSION_NAME = /^[A-Za-z0-9_-]{1,64}$/;
+
+/** The operations about the browsing scope rather than one session. */
+const SCOPE_ACTIONS: ReadonlySet<string> = new Set(["session-list", "site-of"]);
 
 /** One label of a domain, which starts and ends with a letter or digit. */
 const LABEL = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";

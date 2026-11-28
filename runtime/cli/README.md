@@ -2973,14 +2973,14 @@ session), `withdraw {id}` and `close` events, and answers each operation with
 cf-harness's `contracts/browser-host.ts`). The semantics are the console host's:
 every operation is answered, one withdrawn while the host holds it is
 acknowledged by its answer before the next operation for the same session is
-sent, other sessions and every `session-list` carry on, and the job's end says
-`close` and settles anything outstanding as `session-ended`. Unlike the
-console's, the stream is resumable, since the caller is usually a relay: a
-dropped stream leaves the host open, a new attach replaces the old and is sent
-every operation still unanswered and every withdrawal still unacknowledged
-first, and a repeated answer reads as a duplicate. A host that ends the job's
-browser on its own says so with `POST /jobs/<id>/browser/detach`, after which
-every outstanding and later operation, in every session, settles as
+sent, other sessions and every `session-list` and `site-of` carry on, and the
+job's end says `close` and settles anything outstanding as `session-ended`.
+Unlike the console's, the stream is resumable, since the caller is usually a
+relay: a dropped stream leaves the host open, a new attach replaces the old and
+is sent every operation still unanswered and every withdrawal still
+unacknowledged first, and a repeated answer reads as a duplicate. A host that
+ends the job's browser on its own says so with `POST /jobs/<id>/browser/detach`,
+after which every outstanding and later operation, in every session, settles as
 `session-ended`; a detach for a job with no browser host, or one already
 detached, succeeds and changes nothing. `GET /jobs/<id>` shows the host as
 `browser {state, attached, outstanding, withdrawn}`.

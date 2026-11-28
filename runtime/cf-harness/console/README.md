@@ -776,13 +776,14 @@ whose data is `{"id"}`, and the host stops it if it can and answers it as it
 ended. That answer is the acknowledgment: no later operation for the same
 session reaches the host until it arrives, so nothing the host does for a
 withdrawn call overlaps the next one in its session, while other sessions carry
-on. A `session-list` concerns no one session, and waits on none. A request with
-a malformed session name, a `session-open` or `session-close` that names no
-session, and a `session-list` that names one are answered `invalid` without
-reaching the host. A result that is not one for its operation settles the
-operation as failed rather than leaving it waiting. When the host's stream ends,
-every outstanding and later operation settles as `session-ended`, and so does
-every operation when the turn ends. The operation and result shapes are
+on. A `session-list` or `site-of` concerns no one session, and waits on none. A
+request with a malformed session name, a `session-open` or `session-close` that
+names no session, a `session-list` or `site-of` that names one, and a `site-of`
+asking about more than 1000 hosts are answered `invalid` without reaching the
+host. A result that is not one for its operation settles the operation as failed
+rather than leaving it waiting. When the host's stream ends, every outstanding
+and later operation settles as `session-ended`, and so does every operation when
+the turn ends. The operation and result shapes are
 `src/contracts/browser-host.ts`.
 
 The `/api/` routes answer only the console's own page and clients that are not

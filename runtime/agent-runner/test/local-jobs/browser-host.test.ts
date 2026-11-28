@@ -631,6 +631,44 @@ describe("LocalJobBrowserHost", () => {
       host.close();
     });
 
+    it("sends a site-of while the unnamed session owes an acknowledgment, and settles it with the sites", async () => {
+      const host = new LocalJobBrowserHost();
+      const stream = reader(host.attach());
+      const abort = new AbortController();
+      const withdrawn = host.perform(
+        { operation: { action: "reload" } },
+        abort.signal,
+      );
+      await stream.next();
+      abort.abort(new Error("moved on"));
+      await expect(withdrawn).rejects.toThrow("moved on");
+      await stream.next();
+
+      const next = host.perform({ operation: { action: "back" } });
+      const sites = host.perform({
+        operation: { action: "site-of", hosts: ["www.shop.example"] },
+      });
+      expect(await stream.next()).toEqual({
+        event: "request",
+        data: {
+          id: "3",
+          operation: { action: "site-of", hosts: ["www.shop.example"] },
+        },
+      });
+      expect(
+        host.acceptResult("3", {
+          status: "ok",
+          sites: ["https://shop.example"],
+        }),
+      ).toBe("accepted");
+      expect(await sites).toEqual({
+        status: "ok",
+        sites: ["https://shop.example"],
+      });
+      expect(await settled(next)).toBe(false);
+      host.close();
+    });
+
     it("sends, and checks the answer against, the request as it was made", async () => {
       const host = new LocalJobBrowserHost();
       const request: BrowserHostRequest = {
