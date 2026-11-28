@@ -5777,7 +5777,11 @@ export class Runner {
     // creators records the one its owner-protected fields give evidence of,
     // so the field the transition installs can bind them. A piece that
     // records a creator keeps it, a pointer installed again over the record
-    // included.
+    // included. A client records only its own identity: the store admits a
+    // session's record only when it names the principal the session
+    // authenticated (`cfc-creator-record.ts` in the memory package), so a
+    // child of another principal's piece, or a legacy piece whose evidence
+    // names another principal, records none there.
     if (
       !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
       this.#runtime.experimental.pieceCreatorRecord === true &&
@@ -5789,7 +5793,11 @@ export class Runner {
       const creator = previousIdentityRef === undefined
         ? this.#pieceCreatorFor(tx, resultCell, validationOptions)
         : this.#legacyPieceCreator(tx, resultCell);
-      if (creator !== undefined) {
+      const clientIdentity = tx.getCfcState().clientIdentity;
+      if (
+        creator !== undefined &&
+        (clientIdentity === undefined || creator === clientIdentity)
+      ) {
         resultCell.withTx(tx).setMetaRaw(
           "creator",
           creator,

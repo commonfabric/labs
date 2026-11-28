@@ -153,7 +153,10 @@ describe("cfc-piece-creator", () => {
   };
 
   beforeEach(() => {
-    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    server = newLoopbackServer({
+      subscriptionRefreshDelayMs: 0,
+      delegatingDids: [service.did()],
+    });
     managers = [];
     runtimes = [];
     openTxs = [];
@@ -222,6 +225,30 @@ describe("cfc-piece-creator", () => {
       run: { parentPieceRootId: parent.getAsNormalizedFullLink().id },
     });
     expect((await tx.commit().settled).error).toBeUndefined();
+
+    expect(await storedCreator(child)).toBe(alice.did());
+  });
+
+  it("records no creator on a child another principal's client instantiates of a piece it did not create", async () => {
+    // The store admits a session's record only when it names the session's
+    // own principal, so bob's client leaves the child of alice's piece
+    // without one rather than have its commit refused.
+
+    const parent = await createPiece(client, alice.did());
+    const member = connect(bob);
+    await member.getCellFromLink(parent.getAsNormalizedFullLink()).sync();
+    const child = await createPiece(member, alice.did(), {
+      run: { parentPieceRootId: parent.getAsNormalizedFullLink().id },
+    });
+
+    expect(await storedCreator(child)).toBeUndefined();
+  });
+
+  it("records the parent's creator on a child its creator's own client instantiates", async () => {
+    const parent = await createPiece(client, alice.did());
+    const child = await createPiece(client, alice.did(), {
+      run: { parentPieceRootId: parent.getAsNormalizedFullLink().id },
+    });
 
     expect(await storedCreator(child)).toBe(alice.did());
   });

@@ -8622,6 +8622,14 @@ export class Server {
                       // admission path — never read from the client payload
                       // (protocol.md §1).
                       commitClass: "authored",
+                      // A session of the deployment's own serving identity
+                      // commits the creator records its commit preparation
+                      // admitted; the engine judges every other session's.
+                      ...(session.principal !== undefined &&
+                          (this.#isServicePrincipal(session.principal) ||
+                            this.#isDelegatingPrincipal(session.principal))
+                        ? { creatorRecordsVouched: true }
+                        : {}),
                     });
                     // No commit other than an admitted deletion leaves a
                     // deletion tombstone, a patch in `off` mode included.

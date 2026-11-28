@@ -349,7 +349,10 @@ describe("cfc-reclassify", () => {
   };
 
   beforeEach(() => {
-    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    server = newLoopbackServer({
+      subscriptionRefreshDelayMs: 0,
+      delegatingDids: [service.did()],
+    });
     managers = [];
     runtimes = [];
   });

@@ -284,7 +284,10 @@ describe("cfc-creator-owner-binding", () => {
   };
 
   beforeEach(() => {
-    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
+    server = newLoopbackServer({
+      subscriptionRefreshDelayMs: 0,
+      delegatingDids: [service.did()],
+    });
     managers = [];
     runtimes = [];
     cancels = [];
@@ -347,7 +350,8 @@ describe("cfc-creator-owner-binding", () => {
   });
 
   it("records the space's owner on a space root with no record at its next source transition, and binds the field to them", async () => {
-    // A space alice owns, whose root bob's runtime moves to the next release.
+    // A space alice owns, whose root a serving runtime moves to the next
+    // release.
     const owned = await managers[0].createSpace({ [alice.did()]: "OWNER" });
     const legacy = connect(alice, { pieceCreatorRecord: false });
     const compiled = await compile(legacy, FIRST_RELEASE, owned);
@@ -363,8 +367,8 @@ describe("cfc-creator-owner-binding", () => {
     const link = result.getAsNormalizedFullLink();
     expect(await creatorOf(link)).toBeUndefined();
 
+    expect((await update(serving, link)).refusal).toBeUndefined();
     const theirs = await update(member, link);
-    expect(theirs.refusal).toBeUndefined();
 
     expect(await creatorOf(link)).toBe(alice.did());
     expect(await ownersOfItems(link)).toEqual([alice.did()]);
@@ -377,12 +381,37 @@ describe("cfc-creator-owner-binding", () => {
     const link = await createPiece(legacy, LEGACY_RELEASE);
     expect(await creatorOf(link)).toBeUndefined();
 
+    expect((await update(serving, link, LEGACY_SECOND_RELEASE)).refusal)
+      .toBeUndefined();
     const theirs = await update(member, link, LEGACY_SECOND_RELEASE);
-    expect(theirs.refusal).toBeUndefined();
 
     expect(await creatorOf(link)).toBe(alice.did());
     expect(await ownersOfItems(link)).toEqual([alice.did()]);
     await add(member, theirs.result, "forged");
     expect(await itemsOf(link)).toEqual([]);
+  });
+
+  it("records no creator at a source transition another member's client makes, where the evidence names someone else", async () => {
+    // The store admits a session's record only when it names the session's
+    // own principal, so bob's client leaves alice's piece without one.
+
+    const legacy = connect(alice, { pieceCreatorRecord: false });
+    const link = await createPiece(legacy, LEGACY_RELEASE);
+
+    const theirs = await update(member, link, LEGACY_SECOND_RELEASE);
+    expect(theirs.refusal).toBeUndefined();
+
+    expect(await creatorOf(link)).toBeUndefined();
+  });
+
+  it("records the creator at a source transition the evidence's own principal's client makes", async () => {
+    const legacy = connect(alice, { pieceCreatorRecord: false });
+    const link = await createPiece(legacy, LEGACY_RELEASE);
+
+    const mine = await update(client, link, LEGACY_SECOND_RELEASE);
+    expect(mine.refusal).toBeUndefined();
+
+    expect(await creatorOf(link)).toBe(alice.did());
+    expect(await ownersOfItems(link)).toEqual([alice.did()]);
   });
 });

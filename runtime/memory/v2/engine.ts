@@ -35,6 +35,10 @@ import {
   parseOwnerReleaseByIntentRecord,
   type VerifiedOwnerReleaseByIntent,
 } from "./cfc-owner-release-by-intent.ts";
+import {
+  CREATOR_RECORD_MEMBER,
+  creatorRecordRefusal,
+} from "./cfc-creator-record.ts";
 import { broaderCellScopes } from "./cfc-scoped-instance-labels.ts";
 import { isCfcLabelDocumentContent } from "./cfc-stored-envelope.ts";
 import {
@@ -1793,6 +1797,16 @@ export type ApplyCommitOptions = {
      *  refused too — the declaration names a chain with NO actor. */
     sessionlessSpaceScope?: boolean;
   };
+
+  /**
+   * Whether the server vouches for the creator records this `authored`
+   * commit carries, which it does for a session of the deployment's own
+   * serving identity (a service or delegating principal): that runtime ran
+   * the code, and its commit preparation admitted each record. Otherwise a
+   * session's commit records only its own principal as a piece's creator
+   * (`cfc-creator-record.ts`).
+   */
+  creatorRecordsVouched?: boolean;
 
   /** Server-owned OW54 Retry admission. The commit retains a distinct
    *  server transaction identity while the new event is attributed to the
@@ -7385,6 +7399,7 @@ const applyCommitTransaction = (
     consequenceOf,
     derivedThrough,
     delegated,
+    creatorRecordsVouched = false,
     systemEventActor,
     scopeKeys,
     releasesOperationFields = false,
@@ -8030,6 +8045,17 @@ const applyCommitTransaction = (
       metadataPointer(patch.path) ||
       metadataPointer("from" in patch ? patch.from : undefined)
     );
+  // A patch can land a piece's creator record the same ways, and the record
+  // is judged on the document the patch leaves (`creatorRecordRefusal()`).
+  const creatorPointer = (pointer: string | undefined): boolean =>
+    pointer !== undefined &&
+    (pointer === `/${CREATOR_RECORD_MEMBER}` ||
+      pointer.startsWith(`/${CREATOR_RECORD_MEMBER}/`));
+  const patchTouchesCreator = (patches: PatchOp[] | undefined): boolean =>
+    (patches ?? []).some((patch) =>
+      creatorPointer(patch.path) ||
+      creatorPointer("from" in patch ? patch.from : undefined)
+    );
   // Scoped rows key exactly as the write loop below keys them: a
   // delegated commit's scoped writes carry the validated acting identity,
   // and a derived commit's annotation supplies the row key outright.
@@ -8052,7 +8078,10 @@ const applyCommitTransaction = (
   const metadataPatchDocKeys = new Set<string>();
   for (const [opIndex, operation] of commit.operations.entries()) {
     if (operation.op !== "patch" || operation.id.startsWith("cid:")) continue;
-    if (patchTouchesMetadata(operation.patches)) {
+    if (
+      patchTouchesMetadata(operation.patches) ||
+      patchTouchesCreator(operation.patches)
+    ) {
       metadataPatchDocKeys.add(opDocKey(opIndex, operation));
     }
   }
@@ -8088,6 +8117,7 @@ const applyCommitTransaction = (
       readonly operation: { id: string; scope?: unknown };
       lastOpIndex: number;
       cfc: unknown;
+      creator: unknown;
       deleted: boolean;
     }
   >();
@@ -8099,6 +8129,8 @@ const applyCommitTransaction = (
   ): void => {
     const docKey = opDocKey(opIndex, operation);
     const cfc = (document as { cfc?: unknown } | null | undefined)?.cfc;
+    const creator = (document as Record<string, unknown> | null | undefined)
+      ?.[CREATOR_RECORD_MEMBER];
     const known = envelopeWrites.get(docKey);
     if (known === undefined) {
       envelopeWrites.set(docKey, {
@@ -8106,11 +8138,13 @@ const applyCommitTransaction = (
         operation,
         lastOpIndex: opIndex,
         cfc,
+        creator,
         deleted,
       });
     } else {
       known.lastOpIndex = opIndex;
       known.cfc = cfc;
+      known.creator = creator;
       known.deleted = deleted;
     }
   };
@@ -8147,8 +8181,9 @@ const applyCommitTransaction = (
       }
     }
     if (!operation.id.startsWith("cid:")) {
-      // A patch that touches no metadata leaves the `cfc` member as it
-      // found it, which after a delete in this commit is no member at all.
+      // A patch that touches no metadata leaves the `cfc` and `creator`
+      // members as it found them, which after a delete in this commit is no
+      // member at all.
       if (operation.op === "patch") {
         const known = envelopeWrites.get(opDocKey(opIndex, operation));
         if (
@@ -8157,6 +8192,7 @@ const applyCommitTransaction = (
         ) {
           known.lastOpIndex = opIndex;
           known.cfc = undefined;
+          known.creator = undefined;
           known.deleted = false;
         }
       }
@@ -8722,6 +8758,57 @@ const applyCommitTransaction = (
           dropped.map((drop) => JSON.stringify(drop.path)).join(", ")
         }, where it stores one; only the space's owner, releasing clauses that are theirs alone, may drop a declared label`,
       );
+    }
+  }
+
+  // A session's commit may record a piece's creator only as the principal
+  // the session authenticated, and may not change or remove a stored record
+  // (`cfc-creator-record.ts`). A commit the server produces, or one it
+  // vouches for, carries the record its serving runtime's commit preparation
+  // admitted, and is not judged. A content-addressed document is never a
+  // piece, and holds a record only as a session that may record one wrote it.
+  if (
+    commitClass === "authored" && delegated === undefined &&
+    !creatorRecordsVouched
+  ) {
+    for (const write of envelopeWrites.values()) {
+      if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
+      const stored = (readState(engine, {
+        id: write.operation.id,
+        branch,
+        scope: write.operation.scope as Parameters<
+          typeof readState
+        >[1]["scope"],
+        principal: scanPrincipal,
+        sessionId: scanSession,
+        scopeKey: scopeKeyByOpIndex.get(write.opIndex),
+      })?.document as Record<string, unknown> | null | undefined)?.[
+        CREATOR_RECORD_MEMBER
+      ];
+      const refusal = creatorRecordRefusal(stored, write.creator, principal);
+      if (refusal !== undefined) {
+        throw new ProtocolError(
+          `memory v2 commit writes the creator record of document ${write.operation.id}: ${refusal}`,
+        );
+      }
+    }
+    for (const [opIndex, operation] of commit.operations.entries()) {
+      if (
+        operation.op !== "set" || !operation.id.startsWith("cid:") ||
+        elidedOpIndexes.has(opIndex)
+      ) continue;
+      const refusal = creatorRecordRefusal(
+        undefined,
+        (operation.value as Record<string, unknown> | null | undefined)?.[
+          CREATOR_RECORD_MEMBER
+        ],
+        principal,
+      );
+      if (refusal !== undefined) {
+        throw new ProtocolError(
+          `memory v2 commit writes the creator record of document ${operation.id}: ${refusal}`,
+        );
+      }
     }
   }
 
