@@ -3088,10 +3088,7 @@ test("runCfHarnessCli hands an embedder's browser host to the run's engine", asy
   const { io } = createIoBuffers();
   const browserHost: HarnessBrowserHost = {
     perform: () =>
-      Promise.resolve({
-        status: "ok",
-        page: { url: "about:blank", title: "" },
-      }),
+      Promise.resolve({ status: "session-ended", message: "never used" }),
   };
   let createdOptions: Record<string, unknown> | undefined;
   const exitCode = await runCfHarnessCli(

@@ -1,10 +1,12 @@
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 
-import type {
-  BrowserHostOperation,
-  BrowserHostResult,
-  HarnessBrowserHost,
+import {
+  type BrowserHostOperation,
+  type BrowserHostRequest,
+  type BrowserHostResult,
+  type HarnessBrowserHost,
+  isBrowserHostResult,
 } from "../src/contracts/browser-host.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import { createHarnessRunState } from "../src/run-state.ts";
@@ -59,16 +61,22 @@ const PNG_BASE64 = "iVBORw0KGgoA";
 class RecordingBrowserHost implements HarnessBrowserHost {
   readonly operations: BrowserHostOperation[] = [];
 
-  perform(operation: BrowserHostOperation): Promise<BrowserHostResult> {
+  perform<O extends BrowserHostOperation>(
+    request: BrowserHostRequest<O>,
+  ): Promise<BrowserHostResult<O>> {
+    const { operation } = request;
     this.operations.push(operation);
-    return Promise.resolve({
+    const result = {
       status: "ok",
       page: { url: "https://shop.example/", title: "Shop" },
       ...(operation.action === "screenshot"
-        ? { image: { mediaType: "image/png" as const, base64: PNG_BASE64 } }
+        ? { image: { mediaType: "image/png", base64: PNG_BASE64 } }
         : {}),
-      ...(operation.action === "handoff" ? { handoff: "done" as const } : {}),
-    });
+      ...(operation.action === "handoff" ? { handoff: "done" } : {}),
+    };
+    return isBrowserHostResult(result, request)
+      ? Promise.resolve(result)
+      : Promise.reject(new Error(`no answer for ${operation.action}`));
   }
 }
 

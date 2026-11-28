@@ -5741,8 +5741,10 @@ describe("console/server", () => {
               return {
                 runTranscript: async (run) => {
                   const result = await options.browserHost?.perform({
-                    action: "snapshot",
-                    interactive: true,
+                    operation: {
+                      action: "snapshot",
+                      interactive: true,
+                    },
                   });
                   results.push(result);
                   const answer = {
@@ -6254,10 +6256,11 @@ describe("console/server", () => {
       expect(refused.response.ok).toBe(false);
       expect(attached).toHaveLength(3);
       for (const host of attached) {
-        expect(await host?.perform({ action: "reload" })).toEqual({
-          status: "session-ended",
-          message: "the turn has ended",
-        });
+        expect(await host?.perform({ operation: { action: "reload" } }))
+          .toEqual({
+            status: "session-ended",
+            message: "the turn has ended",
+          });
       }
     });
 

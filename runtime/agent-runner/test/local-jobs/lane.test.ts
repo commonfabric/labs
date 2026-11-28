@@ -1577,7 +1577,9 @@ describe("local-jobs/lane", () => {
           tools: [...ASK.tools, "delegate_task"],
           subagentProfiles: ["browser"],
         });
-        const open = host.perform({ action: "open", url: "https://a.test" });
+        const open = host.perform({
+          operation: { action: "open", url: "https://a.test" },
+        });
         run.settle({ outcome: "cancelled" });
         await reached(store, id, "cancelled");
         expect(await open).toEqual({
