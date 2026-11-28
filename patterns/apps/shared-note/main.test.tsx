@@ -365,7 +365,7 @@ export default pattern(() => {
   const assert_editor_marks_the_comment = assert(() => {
     const highlights = highlightsOf(note[UI]);
     return highlights?.length === 1 &&
-      highlights[0].id === listed(comments.get())[0].id &&
+      highlights[0].id === listed(comments.get())[0]?.id &&
       highlights[0].kind === "active" &&
       highlightsOf(guest[UI])?.[0]?.kind === undefined &&
       !hasText(rowOf(note[UI], "Needs a date"), QUOTE);
@@ -472,7 +472,7 @@ export default pattern(() => {
   );
   const assert_highlight_selects_its_comment = assert(() =>
     highlightsOf(note[UI])?.find((h) => h.kind === "active")?.id ===
-      listed(comments.get())[0].id &&
+      listed(comments.get())[0]?.id &&
     actionsFollow(note[UI], "Needs a date")
   );
   const action_type_reply = action(() =>

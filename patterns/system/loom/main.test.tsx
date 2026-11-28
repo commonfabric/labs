@@ -181,10 +181,14 @@ export default pattern(() => {
       { assertion: assert(() => loom.pieceRegistry.length === 2) },
       {
         assertion: assert(() =>
-          loom.pieceRegistry[0].equals(loom.pieceRegistry[1])
+          loom.pieceRegistry[0]?.equals(loom.pieceRegistry[1]) === true
         ),
       },
-      { assertion: assert(() => !loom.panels[0].equals(loom.panels[2])) },
+      {
+        assertion: assert(() =>
+          loom.panels[0]?.equals(loom.panels[2]) === false
+        ),
+      },
       { action: stage },
       { assertion: assert(() => loom.presentation.stagedPanels.length === 2) },
       {
@@ -204,35 +208,47 @@ export default pattern(() => {
       { assertion: assert(() => loom.presentation.stagedPanels.length === 0) },
       { action: addDocument },
       { assertion: assert(() => loom.panels.length === 3) },
-      { assertion: assert(() => loom.panels[0].equals(documentPanel)) },
+      {
+        assertion: assert(() => loom.panels[0]?.equals(documentPanel) === true),
+      },
       { assertion: assert(() => loom.pieceRegistry.length === 1) },
       { action: move },
-      { assertion: assert(() => loom.panels[0].equals(url)) },
+      { assertion: assert(() => loom.panels[0]?.equals(url) === true) },
       { action: changeUrl },
-      { assertion: assert(() => loom.panels[0].equals(url)) },
+      { assertion: assert(() => loom.panels[0]?.equals(url) === true) },
       { action: updateSource },
-      { assertion: assert(() => loom.panels[1].equals(documentPanel)) },
+      {
+        assertion: assert(() => loom.panels[1]?.equals(documentPanel) === true),
+      },
       { assertion: assert(() => content.get().notes === "Guest notes") },
       { action: removeUrl },
       { assertion: assert(() => loom.panels.length === 2) },
       { assertion: assert(() => content.get().source.kind === "page-excerpt") },
       { action: duplicateDocument },
       { assertion: assert(() => loom.panels.length === 3) },
-      { assertion: assert(() => !loom.panels[0].equals(loom.panels[2])) },
+      {
+        assertion: assert(() =>
+          loom.panels[0]?.equals(loom.panels[2]) === false
+        ),
+      },
       {
         assertion: assert(() => {
-          const copy = loom.panels[2].get();
-          return copy.kind === "document" && copy.content.equals(content);
+          const copy = loom.panels[2]?.get();
+          return copy?.kind === "document" && copy.content.equals(content);
         }),
       },
       { action: addUrl },
       { action: duplicateUrl },
       { assertion: assert(() => loom.panels.length === 5) },
-      { assertion: assert(() => !loom.panels[3].equals(loom.panels[4])) },
+      {
+        assertion: assert(() =>
+          loom.panels[3]?.equals(loom.panels[4]) === false
+        ),
+      },
       {
         assertion: assert(() => {
-          const copy = loom.panels[4].get();
-          return copy.kind === "url" &&
+          const copy = loom.panels[4]?.get();
+          return copy?.kind === "url" &&
             copy.url === "https://example.org/updated" &&
             copy.titleOverride === "Updated site";
         }),
@@ -247,8 +263,8 @@ export default pattern(() => {
       },
       {
         assertion: assert(() =>
-          loom.presentation.stagedPanels[0].equals(loom.panels[0]) &&
-          loom.presentation.stagedPanels[4].equals(loom.panels[4])
+          loom.presentation.stagedPanels[0]?.equals(loom.panels[0]) === true &&
+          loom.presentation.stagedPanels[4]?.equals(loom.panels[4]) === true
         ),
       },
       {
@@ -265,7 +281,7 @@ export default pattern(() => {
       {
         assertion: assert(() =>
           loom.panels.length === 5 && loom.pieceRegistry.length === 1 &&
-          loom.pieceRegistry[0].equals(otherPiece)
+          loom.pieceRegistry[0]?.equals(otherPiece) === true
         ),
       },
       {
@@ -309,9 +325,15 @@ export default pattern(() => {
       { action: duplicateFromUI },
       { assertion: assert(() => loom.panels.length === 5) },
       { action: moveLastFromUI },
-      { assertion: assert(() => loom.panels[4].equals(documentPanel)) },
+      {
+        assertion: assert(() => loom.panels[4]?.equals(documentPanel) === true),
+      },
       { action: moveFirstFromUI },
-      { assertion: assert(() => !loom.panels[0].equals(documentPanel)) },
+      {
+        assertion: assert(() =>
+          loom.panels[0]?.equals(documentPanel) === false
+        ),
+      },
       { action: removeFromUI },
       { assertion: assert(() => loom.panels.length === 4) },
       // Hiding a panel from the UI takes it out of this viewer's cards and

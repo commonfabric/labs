@@ -82,21 +82,25 @@ export default pattern(() => {
       // being absent: the rows run from 1599 down.
       { assertion: assert(() => mailbox.errorMessage === "") },
       { assertion: assert(() => mailbox.headerCount === 500) },
-      { assertion: assert(() => mailbox.headers[0].subject === "Bulk 1599") },
-      { assertion: assert(() => mailbox.headers[499].subject === "Bulk 1100") },
+      { assertion: assert(() => mailbox.headers[0]?.subject === "Bulk 1599") },
+      {
+        assertion: assert(() => mailbox.headers[499]?.subject === "Bulk 1100"),
+      },
 
       // The ceiling named exactly reads the same 500, so the clamp neither
       // narrows a limit that already sits on it nor lets one past.
       { action: action(() => limit.set(500)) },
       { assertion: assert(() => mailbox.headerCount === 500) },
-      { assertion: assert(() => mailbox.headers[0].subject === "Bulk 1599") },
-      { assertion: assert(() => mailbox.headers[499].subject === "Bulk 1100") },
+      { assertion: assert(() => mailbox.headers[0]?.subject === "Bulk 1599") },
+      {
+        assertion: assert(() => mailbox.headers[499]?.subject === "Bulk 1100"),
+      },
 
       // A limit below the ceiling is the caller's, still newest first.
       { action: action(() => limit.set(3)) },
       { assertion: assert(() => mailbox.headerCount === 3) },
-      { assertion: assert(() => mailbox.headers[0].subject === "Bulk 1599") },
-      { assertion: assert(() => mailbox.headers[2].subject === "Bulk 1597") },
+      { assertion: assert(() => mailbox.headers[0]?.subject === "Bulk 1599") },
+      { assertion: assert(() => mailbox.headers[2]?.subject === "Bulk 1597") },
 
       // Ends on a month holding nothing, so the last read this run issues is
       // one that settles empty rather than a large one still in flight when

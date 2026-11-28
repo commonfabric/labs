@@ -236,7 +236,11 @@ export default pattern(() => {
   const assert_empty_message = assert(() =>
     countText(cal[UI], "No events yet. Add one below!") === 1
   );
+  // `todayDate` is "" until the clock arrives, and `shiftDate` throws on "",
+  // so the shifted dates are compared only once the seeding action has stored
+  // a date.
   const assert_seeded = assert(() =>
+    seeded.get().today !== "" &&
     seeded.get().today === cal.todayDate &&
     seeded.get().past === shiftDate(cal.todayDate, -8) &&
     seeded.get().future === shiftDate(cal.todayDate, 8)

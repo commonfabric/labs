@@ -60,8 +60,8 @@ export default pattern(() => {
       { assertion: assert(() => list.remainingCount === 2) },
       { assertion: assert(() => list.completedCount === 0) },
       // A quantity the caller gave, and the default for one it did not.
-      { assertion: assert(() => list.items[0].quantity === 1) },
-      { assertion: assert(() => list.items[1].quantity === 6) },
+      { assertion: assert(() => list.items[0]?.quantity === 1) },
+      { assertion: assert(() => list.items[1]?.quantity === 6) },
 
       // An item with no title is not something anyone can tick off.
       { action: addBlank },
@@ -69,7 +69,7 @@ export default pattern(() => {
 
       { action: stashFirst },
       { action: toggleHeld },
-      { assertion: assert(() => list.items[0].done === true) },
+      { assertion: assert(() => list.items[0]?.done === true) },
       { assertion: assert(() => list.remainingCount === 1) },
       { assertion: assert(() => list.completedCount === 1) },
       {
@@ -79,13 +79,13 @@ export default pattern(() => {
       // Toggling writes through the element's cell rather than replacing the
       // slot, so the reference stashed before the edit still matches.
       { action: toggleHeld },
-      { assertion: assert(() => list.items[0].done === false) },
+      { assertion: assert(() => list.items[0]?.done === false) },
       { action: toggleHeld },
       { assertion: assert(() => list.completedCount === 1) },
 
       { action: clearCompleted },
       { assertion: assert(() => list.items.length === 1) },
-      { assertion: assert(() => list.items[0].title === "Socks") },
+      { assertion: assert(() => list.items[0]?.title === "Socks") },
 
       { action: stashFirst },
       { action: removeHeld },
@@ -112,7 +112,7 @@ export default pattern(() => {
       { assertion: assert(() => parentItems.get().length === 2) },
       { action: action(() => clickButton(seeded[UI], "Remove")) },
       { assertion: assert(() => parentItems.get().length === 1) },
-      { assertion: assert(() => parentItems.get()[0].title === "Buy bread") },
+      { assertion: assert(() => parentItems.get()[0]?.title === "Buy bread") },
       { assertion: assert(() => seeded.remainingCount === 1) },
       {
         action: action(() =>
@@ -120,7 +120,7 @@ export default pattern(() => {
         ),
       },
       { assertion: assert(() => external.items.length === 1) },
-      { assertion: assert(() => external.items[0].title === "Tickets") },
+      { assertion: assert(() => external.items[0]?.title === "Tickets") },
     ],
   };
 });

@@ -32,6 +32,12 @@ import {
 } from "./view-walk.ts";
 import WeeklyCalendar, { addDays, formatDateHeader } from "./main.tsx";
 
+// The header of the day `days` after `monday`, or undefined until the Monday
+// is noted, since an assertion also runs before its step and `addDays` throws
+// on "".
+const headerAfter = (monday: string, days: number): string | undefined =>
+  monday === "" ? undefined : formatDateHeader(addDays(monday, days));
+
 export default pattern(() => {
   const cal = WeeklyCalendar({ events: [] });
 
@@ -60,22 +66,22 @@ export default pattern(() => {
   const assert_monday_noted = assert(() =>
     headers(cal[UI]) ===
       [0, 1, 2, 3, 4, 5, 6]
-        .map((i) => formatDateHeader(addDays(thisMonday.get(), i)))
+        .map((i) => headerAfter(thisMonday.get(), i))
         .join(" / ")
   );
   const assert_next_week = assert(() =>
-    headerOf(cal[UI], 0) === formatDateHeader(addDays(thisMonday.get(), 7)) &&
+    headerOf(cal[UI], 0) === headerAfter(thisMonday.get(), 7) &&
     todayBadges(cal[UI]) === "0000000"
   );
   const assert_back_on_this_week = assert(() =>
     shownColumns(cal[UI]) === "1111111" &&
-    headerOf(cal[UI], 0) === formatDateHeader(thisMonday.get()) &&
+    headerOf(cal[UI], 0) === headerAfter(thisMonday.get(), 0) &&
     todayBadges(cal[UI]).replace(/0/g, "") === "1"
   );
   // A week the user moved to stays put across the view toggle.
   const assert_next_monday_alone = assert(() =>
     shownColumns(cal[UI]) === "1000000" &&
-    headerOf(cal[UI], 0) === formatDateHeader(addDays(thisMonday.get(), 7)) &&
+    headerOf(cal[UI], 0) === headerAfter(thisMonday.get(), 7) &&
     styleOf(headerButton(cal[UI], "Day"), "backgroundColor") === "#3b82f6" &&
     styleOf(headerButton(cal[UI], "Week"), "backgroundColor") === "#fff"
   );
