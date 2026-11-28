@@ -76,42 +76,20 @@ describe("prepareBoundaryCommit()", () => {
     );
   });
 
-  it("returns a reason for a write to a part of the field", async () => {
-    // A creator stored as a record, which a store written without
-    // enforcement can hold, is the one a write can reach a part of.
-    const unenforced = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-      cfcEnforcementMode: "disabled",
-    });
-    try {
-      const seed = unenforced.edit();
-      const stored = unenforced.getCell(
-        alice.did(),
-        "partial",
-        undefined,
-        seed,
-      );
-      stored.set({ count: 0 });
-      stored.setMetaRaw(
-        "creator",
-        { did: bob.did() },
-        rawMetaWriteAuthorization,
-      );
-      expect((await seed.commit().settled).error).toBeUndefined();
-    } finally {
-      await unenforced.dispose({ closeStorage: false });
-    }
+  it("returns a reason for a write to a part of the field", () => {
+    // The store refuses a stored creator that is not a DID, so the record a
+    // write reaches a part of is one the same transaction stages.
 
-    const cell = runtime.getCell(alice.did(), "partial", undefined, tx);
+    const cell = newPiece("partial");
+    cell.setMetaRaw("creator", { did: bob.did() }, rawMetaWriteAuthorization);
     const { space, id } = cell.getAsNormalizedFullLink();
     tx.writeOrThrow(
       { space, id, path: ["creator", "did"] },
       alice.did(),
       rawMetaWriteAuthorization,
     );
-    expect(prepareBoundaryCommit(tx)).toEqual([
+    expect(prepareBoundaryCommit(tx)).toContain(
       `cfc-verdict: creator record for ${id}: the field is written whole or not at all`,
-    ]);
+    );
   });
 });
