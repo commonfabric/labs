@@ -37,6 +37,13 @@ export interface HarnessCfcModelContextRead {
    */
   coverage: { kind: string } & JSONObject;
   ifc: IFCLabel;
+
+  /**
+   * The stores whose provisional default label `ifc` is, where it is one: a
+   * label the host assigned a store that has no verified contract yet.
+   * Absent for a verified or a public label.
+   */
+  provisional?: readonly string[];
   author?: JSONObject;
   title?: string;
   at?: string;
@@ -50,11 +57,22 @@ export interface HarnessCfcModelContextRead {
 export const HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT = 512;
 
 /**
- * Most UTF-8 bytes of JSON one read may hold. A host's read of a source is a
- * reference, a revision, a coverage, a label and a few details, well inside
- * this; an output declaring a larger one is not shown to the model.
+ * Most UTF-8 bytes of JSON one read may hold; an output declaring a larger one
+ * is not shown to the model. Loom bounds a read's text at 1,000 characters of
+ * reference, 200 of revision, 3,000 of title and 100 of date, and its
+ * coverage at 1,000 page numbers (`source_reads.py`). Serialized, a character
+ * takes at most 6 bytes (a control character escaped as `\u00XX`) and a page
+ * number at most 17 (a safe integer and its comma), so those fields take at
+ * most 42,800 bytes, and this leaves about 22,700 for the label, the author,
+ * the provisional stores and the keys.
  */
-export const HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES = 16_384;
+export const HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES = 65_536;
+
+/**
+ * Most reads one run's report carries. The run state keeps every one; a
+ * report that would carry more says how many it left out (`readsOmitted`).
+ */
+export const HARNESS_CFC_MODEL_CONTEXT_REPORT_READS_LIMIT = 1_024;
 
 export interface HarnessCfcModelContextObservation {
   type: "cf-harness.cfc-model-context-observation";
@@ -210,23 +228,55 @@ export interface HarnessCfcModelContextReadsEntry {
   reads: readonly HarnessCfcModelContextRead[];
 }
 
+/** The reads one run's report carries, and how many it left out. */
+export interface HarnessCfcModelContextReportReads {
+  reads: HarnessCfcModelContextReadsEntry[];
+
+  /** Reads this run declared past the report's bound; absent when none. */
+  readsOmitted?: number;
+}
+
 /**
- * The observations of `context` that declare reads, in sequence order, each
- * with its sequence, tool call, output, label, and reads: what a host builds
- * its receipts of the run's reads from. Empty for a run that declared none.
+ * The reads a run made, as its report carries them: each observation of
+ * `context` that declares at least one read and records an output among
+ * `outputs`, the run's own, in sequence order, with its sequence, tool call,
+ * output, label, and reads. A continued run's context holds its
+ * predecessors' observations too, and their outputs are not this run's, so
+ * the report is the run's own. Observations are taken whole while their
+ * reads fit {@link HARNESS_CFC_MODEL_CONTEXT_REPORT_READS_LIMIT}; the reads
+ * of the first one that does not, and of every one after it, are counted in
+ * `readsOmitted`, so the list is always a prefix of the run's reads. Empty
+ * for a run that declared none.
  */
 export const harnessCfcModelContextReads = (
   context: HarnessCfcModelContext | undefined,
-): HarnessCfcModelContextReadsEntry[] =>
-  (context?.observations ?? []).flatMap((observation) =>
-    observation.reads === undefined ? [] : [{
+  outputs: readonly { outputId: string }[],
+): HarnessCfcModelContextReportReads => {
+  const own = new Set(outputs.map((output) => output.outputId));
+  const reads: HarnessCfcModelContextReadsEntry[] = [];
+  let carried = 0;
+  let omitted = 0;
+  for (const observation of context?.observations ?? []) {
+    const declared = observation.reads ?? [];
+    if (declared.length === 0 || !own.has(observation.outputId)) continue;
+    if (
+      omitted > 0 ||
+      carried + declared.length > HARNESS_CFC_MODEL_CONTEXT_REPORT_READS_LIMIT
+    ) {
+      omitted += declared.length;
+      continue;
+    }
+    carried += declared.length;
+    reads.push({
       sequence: observation.sequence,
       toolCallId: observation.toolCallId,
       outputId: observation.outputId,
       label: cloneJsonValue(observation.label),
-      reads: cloneJsonValue(observation.reads),
-    }]
-  );
+      reads: cloneJsonValue(declared),
+    });
+  }
+  return omitted > 0 ? { reads, readsOmitted: omitted } : { reads };
+};
 
 export const appendHarnessCfcModelContextObservations = (
   context: HarnessCfcModelContext | undefined,

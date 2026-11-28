@@ -54,7 +54,17 @@ const conversation = async () => {
         runId: request.headers.get("X-Loom-Agent-Run-Id"),
         id: body.id,
       });
-      return Response.json({ ok: true });
+      // Each command declares one read of a source named for it.
+      return Response.json({
+        ok: true,
+        reads: [{
+          ref: `source:${body.id}`,
+          revision: "r1",
+          coverage: { kind: "body" },
+          ifc: { confidentiality: ["https://cfc.test/atom/owner"] },
+          provisional: ["source"],
+        }],
+      });
     },
   );
   const script = scriptedJob((_request, index) => {
@@ -182,6 +192,30 @@ describe("local-jobs/lane continuation", () => {
       "command.prior",
       "command.current",
     ]);
+  });
+
+  it("reports only each job's own reads, though a follow-up carries its predecessor's model context", async () => {
+    const { first, next } = await conversation();
+    const refs = (job: LocalJob) =>
+      ((job.report?.reads ?? []) as { reads: { ref: string }[] }[]).flatMap((
+        entry,
+      ) => entry.reads.map((read) => read.ref));
+    expect(refs(first)).toEqual(["source:command.prior"]);
+    expect(refs(next)).toEqual(["source:command.current"]);
+    expect(next.report?.reads).toEqual([{
+      sequence: 2,
+      toolCallId: expect.any(String),
+      outputId: expect.any(String),
+      label: { confidentiality: ["https://cfc.test/atom/owner"] },
+      reads: [{
+        ref: "source:command.current",
+        revision: "r1",
+        coverage: { kind: "body" },
+        ifc: { confidentiality: ["https://cfc.test/atom/owner"] },
+        provisional: ["source"],
+      }],
+    }]);
+    expect(next.report).not.toHaveProperty("readsOmitted");
   });
 
   it("runs each job's commands over the host endpoint with that job's id, starting no host process", async () => {

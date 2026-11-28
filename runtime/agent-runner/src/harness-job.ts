@@ -367,7 +367,10 @@ const runStateReport = (
   runState: HarnessPromptLoopResult["runState"],
 ): AgentRunReport => ({
   toolCalls: runState.toolOutputs.length,
-  reads: harnessCfcModelContextReads(runState.cfcModelContext),
+  ...harnessCfcModelContextReads(
+    runState.cfcModelContext,
+    runState.toolOutputs,
+  ),
   ...(runState.artifactRoot !== undefined
     ? { runRef: runState.artifactRoot }
     : {}),

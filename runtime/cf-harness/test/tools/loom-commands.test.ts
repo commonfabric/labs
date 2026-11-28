@@ -1783,6 +1783,7 @@ describe("loom-commands tools", () => {
 
     it("labels an answer by the join of its reads' labels, recording the reads beside it and showing them nowhere", async () => {
       const mail = readOf("gmail:thread-a", "rev-a", [OWNER], {
+        provisional: ["gmail"],
         title: "Lunch",
         at: "2026-11-20T12:00:00Z",
         author: { email: "a@example.com" },
@@ -1925,9 +1926,9 @@ describe("loom-commands tools", () => {
           [{ ...readOf("gmail:thread-a", "r", [OWNER]), revision: 3 }],
           [{ ...readOf("gmail:thread-a", "r", [OWNER]), coverage: {} }],
           [{ ...readOf("", "r", [OWNER]) }],
-          [readOf("gmail:thread-a", "r", [OWNER], {
-            title: "x".repeat(HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES),
-          })],
+          [readOf("gmail:thread-a", "r", [OWNER], { provisional: [] })],
+          [readOf("gmail:thread-a", "r", [OWNER], { provisional: [3] })],
+          [readOf("gmail:thread-a", "r", [OWNER], { provisional: "gmail" })],
         ]
       ) {
         const output = executed(await run({ ok: true, reads }).output);
@@ -1961,12 +1962,52 @@ describe("loom-commands tools", () => {
       );
       expect(past.entry).toBeUndefined();
       expect(past.truncated).toBe(true);
-      expect(past.hint).toContain("omitted to fit the tool output limit");
+      expect(past.hint).toContain("at most 512 reads");
+      expect(past.hint).not.toContain("tool output limit");
       expect(past.cfc).toEqual({ version: 1 });
 
       const at = executed(await run({ ok: true, reads: reads(512) }).output);
       expect(at.entry?.status).toBe("admitted");
       expect(at.cfc.reads).toHaveLength(512);
+    });
+
+    it("admits a read at every limit Loom states, and leaves out an answer whose read is larger than one observation records", async () => {
+      // Loom bounds a read's reference at 1,000 characters, its title at
+      // 3,000 and its pages at 1,000; multibyte text and long page numbers
+      // take the serialized read past 16 KiB.
+      const atLimits = {
+        ...readOf("gmail:" + "é".repeat(994), "r".repeat(200), [OWNER], {
+          title: "\u{1F600}".repeat(1500),
+          at: "2".repeat(100),
+          provisional: ["gmail"],
+        }),
+        coverage: {
+          kind: "body",
+          pages: Array.from({ length: 1000 }, (_, n) => 1_000_000_000 + n),
+        },
+      };
+      expect(new TextEncoder().encode(JSON.stringify(atLimits)).length)
+        .toBeGreaterThan(16_384);
+      const admitted = executed(
+        await run({ ok: true, reads: [atLimits] }).output,
+      );
+      expect(admitted.entry?.status).toBe("admitted");
+      expect(admitted.cfc.reads).toEqual([atLimits]);
+
+      const oversized = executed(
+        await run({
+          ok: true,
+          reads: [readOf("gmail:thread-a", "r", [OWNER], {
+            title: "x".repeat(HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES),
+          })],
+        }).output,
+      );
+      expect(oversized.entry).toBeUndefined();
+      expect(oversized.truncated).toBe(true);
+      expect(oversized.hint).toContain(
+        `each at most ${HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES} bytes`,
+      );
+      expect(oversized.cfc).toEqual({ version: 1 });
     });
 
     it("bounds a batch's reads together, leaving out the answer that would pass the bound", async () => {

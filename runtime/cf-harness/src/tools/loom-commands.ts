@@ -741,36 +741,42 @@ interface AnsweredCall {
   body: JSONObject;
   provenance: HarnessCommandResultProvenance;
 
-  /**
-   * The reads the answer declared; `"unreadable"` when its `reads` is not a
-   * list of reads, and absent when the answer has no `reads` key.
-   */
-  reads?: HarnessCfcModelContextRead[] | "unreadable";
+  /** The reads the answer declared, absent when it has no `reads` key. */
+  reads?: DeclaredReads;
 }
+
+/**
+ * An answer's `reads` as read: each read in the host's order; `"unreadable"`
+ * when it is not a list of reads; `"oversized"` when a read is larger than
+ * one observation records.
+ */
+type DeclaredReads =
+  | HarnessCfcModelContextRead[]
+  | "unreadable"
+  | "oversized";
 
 /**
  * Helper for {@link declaredReads}: `value` as one read, or `undefined` when
  * it lacks a reference, a revision or `null`, a coverage naming its kind, or
- * a readable label of its own, or when it is larger than
- * {@link HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES} of JSON, which keeps what
- * one observation retains bounded.
+ * a readable label of its own, or names provisional stores other than as a
+ * nonempty list of store names.
  */
 const declaredRead = (
   value: JSONValue,
 ): HarnessCfcModelContextRead | undefined => {
-  if (
-    !isObjectNotArray(value) ||
-    harnessCommandJsonBytes(value) > HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES
-  ) {
-    return undefined;
-  }
-  const { ref, revision, coverage, author, title, at } = value;
+  if (!isObjectNotArray(value)) return undefined;
+  const { ref, revision, coverage, provisional, author, title, at } = value;
   const label = readLoomRowLabel(value);
   if (
     typeof ref !== "string" || ref.length === 0 ||
     (revision !== null && typeof revision !== "string") ||
     !isObjectNotArray(coverage) || typeof coverage.kind !== "string" ||
     label === undefined || label === "absent" ||
+    (provisional !== undefined &&
+      !(Array.isArray(provisional) && provisional.length > 0 &&
+        provisional.every((store) =>
+          typeof store === "string" && store.length > 0
+        ))) ||
     (author !== undefined && !isObjectNotArray(author)) ||
     (title !== undefined && typeof title !== "string") ||
     (at !== undefined && typeof at !== "string")
@@ -785,6 +791,13 @@ const declaredRead = (
       confidentiality: label.confidentiality,
       ...(label.integrity.length > 0 ? { integrity: label.integrity } : {}),
     }),
+    ...(provisional !== undefined
+      ? {
+        provisional: provisional.flatMap((store) =>
+          typeof store === "string" ? [store] : []
+        ),
+      }
+      : {}),
     ...(author !== undefined ? { author: structuredClone(author) } : {}),
     ...(title !== undefined ? { title } : {}),
     ...(at !== undefined ? { at } : {}),
@@ -792,15 +805,24 @@ const declaredRead = (
 };
 
 /**
- * Helper for command tools, which reads an answer's `reads`: each read in
- * the host's order, or `"unreadable"` when it is not a list or any member is
- * not a read, since a read the harness cannot record must not reach the
- * model unrecorded.
+ * Helper for command tools, which reads a `reads` value: each read in the
+ * host's order; `"oversized"` when a read is larger than
+ * {@link HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES} of JSON, which keeps what
+ * one observation retains bounded; `"unreadable"` when it is not a list or
+ * any member is not a read. Either refusal keeps the answer from the model,
+ * since a read the harness cannot record must not reach it unrecorded.
  */
-const declaredReads = (
-  value: JSONValue | undefined,
-): HarnessCfcModelContextRead[] | "unreadable" => {
-  if (!Array.isArray(value)) return "unreadable";
+const declaredReads = (value: unknown): DeclaredReads => {
+  if (!isHarnessCommandJsonValue(value) || !Array.isArray(value)) {
+    return "unreadable";
+  }
+  if (
+    value.some((item) =>
+      harnessCommandJsonBytes(item) > HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES
+    )
+  ) {
+    return "oversized";
+  }
   const reads: HarnessCfcModelContextRead[] = [];
   for (const item of value) {
     const read = declaredRead(item);
@@ -954,9 +976,15 @@ const sendCall = async (
 const OMITTED_BODY_HINT =
   "The result body was omitted to fit the tool output limit. No requested values are shown. Read a smaller date range, fewer results, or a smaller batch.";
 
+/** Guidance when an answer declares more reads than its result may record. */
+const READS_BOUND_HINT =
+  `The result body was omitted because the command declared more of what it read than one result records: at most ${HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT} reads, each at most ${HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES} bytes. No requested values are shown. Read fewer results or a smaller batch.`;
+
 /** Space reserved for an omitted body's guidance, including JSON wrapping. */
-const OMITTED_BODY_HINT_SIZE =
-  JSON.stringify({ hint: OMITTED_BODY_HINT }).length;
+const OMITTED_BODY_HINT_SIZE = Math.max(
+  JSON.stringify({ hint: OMITTED_BODY_HINT }).length,
+  JSON.stringify({ hint: READS_BOUND_HINT }).length,
+);
 
 /**
  * Helper for command tools, which measures an answer against the run's
@@ -974,10 +1002,12 @@ const measureAnswer = async (
   readsLeft: number,
 ): Promise<ExecutedCallOutput> => {
   const { reads } = answered;
-  if (Array.isArray(reads) && reads.length > readsLeft) {
+  if (
+    reads === "oversized" || (Array.isArray(reads) && reads.length > readsLeft)
+  ) {
     return {
       ...answered.skeleton,
-      hint: answered.skeleton.hint ?? OMITTED_BODY_HINT,
+      hint: answered.skeleton.hint ?? READS_BOUND_HINT,
       truncated: true,
       cfc: { version: 1 },
     };
@@ -1344,7 +1374,15 @@ export const loomCommandModelContextObservation = (
   ) {
     return undefined;
   }
-  const { observedLabel, reads } = output.cfc;
+  const { observedLabel } = output.cfc;
+  const reads = output.cfc.reads === undefined
+    ? undefined
+    : declaredReads(output.cfc.reads);
+  if (reads === "unreadable" || reads === "oversized") {
+    throw new TypeError(
+      "A command result's recorded reads are not the reads it declared.",
+    );
+  }
   return {
     toolCallId,
     toolId: resultRef.toolId,
@@ -1352,9 +1390,7 @@ export const loomCommandModelContextObservation = (
     channels: ["output"],
     label: (observedLabel ?? { confidentiality: [] }) as IFCLabel,
     ...(output.truncated === true ? { truncated: true } : {}),
-    ...(reads !== undefined
-      ? { reads: reads as HarnessCfcModelContextRead[] }
-      : {}),
+    ...(reads !== undefined ? { reads } : {}),
   };
 };
 

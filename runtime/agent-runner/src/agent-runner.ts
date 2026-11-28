@@ -58,14 +58,22 @@ export interface AgentRunReport {
   runRef?: string;
 
   /**
-   * What the model was shown of the person's data, as the host declared it:
-   * each model-context observation that declares reads, in sequence order,
-   * with its tool call, output, label, and reads. Empty for a run whose
-   * outputs declared none; absent from a report of a harness that does not
-   * record reads. A local job keeps the report whole; a Fabric run's record
+   * What this run's model was shown of the person's data, as the host
+   * declared it: each of the run's own model-context observations that
+   * declares a read, in sequence order, with its tool call, output, label,
+   * and reads, at most `HARNESS_CFC_MODEL_CONTEXT_REPORT_READS_LIMIT` reads
+   * in all. Empty for a run whose outputs declared none; absent from a report
+   * of a harness that does not record reads. A continued run reports only
+   * its own. A local job keeps the report whole; a Fabric run's record
    * copies the fields its schema names, and `reads` is not one of them.
    */
   reads?: HarnessCfcModelContextReadsEntry[];
+
+  /**
+   * Reads the run declared past the report's bound, which the run's own
+   * state keeps; absent when `reads` holds them all.
+   */
+  readsOmitted?: number;
 }
 
 /** How one run ended, as its executor reports it. */

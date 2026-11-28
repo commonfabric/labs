@@ -650,6 +650,7 @@ describe("runHarnessJob()", () => {
           ...done,
           runState: {
             ...done.runState,
+            toolOutputs: [1, 2, 3, 4].map((n) => ({ outputId: outputId(n) })),
             cfcModelContext: {
               type: "cf-harness.cfc-model-context",
               version: 1,
@@ -659,6 +660,7 @@ describe("runHarnessJob()", () => {
                 observation(1, [read("a"), read("b")]),
                 observation(2),
                 observation(3, [read("c")]),
+                observation(4, []),
               ],
             },
           } as unknown as HarnessPromptLoopResult["runState"],

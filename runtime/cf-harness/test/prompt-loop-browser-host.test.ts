@@ -19,6 +19,7 @@ import type {
   SandboxRuntimeDescription,
   SandboxShellRequest,
 } from "../src/sandbox/types.ts";
+import { startCommandHost } from "./support/command-host.ts";
 import {
   chatViewOfRequest,
   responsesBodyFromChatFixture,
@@ -487,6 +488,91 @@ describe("prompt-loop with a browser host", () => {
       "@link": "opaque:run-browser-host-unread.subagent.1#/url",
     });
     expect(result.runState.handleTable?.referents ?? []).toEqual([]);
+  });
+
+  it("keeps a browser child's string sealed when all the parent observed was a public declared read", async () => {
+    await using host = startCommandHost({
+      list: () =>
+        Response.json({
+          commands: [{
+            id: "web.page",
+            scope: "global",
+            effect: "read",
+            inputs: { type: "object" },
+          }],
+        }),
+      run: () =>
+        Response.json({
+          ok: true,
+          title: "Shop",
+          reads: [{
+            ref: "web:https://shop.example/",
+            revision: null,
+            coverage: { kind: "body", revisionScope: "none" },
+            ifc: { confidentiality: [] },
+          }],
+        }),
+    });
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine: new CfHarnessEngine({
+        sandboxRuntime: new FakeSandboxRuntime(),
+        runId: "run-browser-host-public-read",
+        model: "gpt-5.4",
+        cfcEnforcementMode: "disabled",
+        browserHost: new RecordingBrowserHost(),
+        loomCommands: {
+          url: host.url,
+          actor: "agent:agent-runner",
+          runId: "job-1",
+        },
+      }),
+      allowedToolIds: ["run_command", "delegate_task"],
+      allowedSubagentProfiles: ["browser"],
+      fetchFn: scriptedFetch([
+        toolCallTurn("call-read", "run_command", {
+          command: "web.page",
+          args: {},
+        }),
+        toolCallTurn("call-find", "delegate_task", {
+          profile: "browser",
+          goal: "Find the item's page.",
+          returnSchema: {
+            type: "object",
+            properties: { url: { type: "string" } },
+            required: ["url"],
+            additionalProperties: false,
+          },
+        }),
+        finalTurn(JSON.stringify({ url: "https://shop.example/item/7" })),
+        finalTurn("Found it."),
+      ], []),
+    });
+
+    const result = await loop.runPrompt({ prompt: "Find the item's page." });
+
+    // The parent's public read is on record, so the child inherits a model
+    // context whose label holds no confidentiality.
+    expect(
+      result.runState.cfcModelContext?.observations.map((observation) => ({
+        toolId: observation.toolId,
+        label: observation.label,
+      })),
+    ).toEqual([{ toolId: "run_command", label: { confidentiality: [] } }]);
+    const delegated = JSON.parse(
+      result.transcript.findLast((message) =>
+        message.role === "tool" && message.toolName === "delegate_task"
+      )?.content ?? "{}",
+    );
+    expect(delegated.subagent.structuredReturn.value.url).toEqual({
+      "@link": "opaque:run-browser-host-public-read.subagent.1#/url",
+    });
+    // The command's own answer is held as a document; no return referent is.
+    expect(
+      (result.runState.handleTable?.referents ?? []).map((referent) =>
+        referent.kind
+      ),
+    ).toEqual(["document"]);
   });
 
   it("seals a browser child's reply in words once a hand-off was sent", async () => {

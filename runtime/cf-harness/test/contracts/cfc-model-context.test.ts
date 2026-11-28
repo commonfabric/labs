@@ -8,6 +8,7 @@ import {
   cloneIfcLabel,
   createHarnessCfcModelContextInputLabels,
   HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT,
+  HARNESS_CFC_MODEL_CONTEXT_REPORT_READS_LIMIT,
   type HarnessCfcModelContext,
   type HarnessCfcModelContextObservationInput,
   type HarnessCfcModelContextRead,
@@ -375,7 +376,13 @@ describe("cfc-model-context", () => {
   });
 
   describe("harnessCfcModelContextReads()", () => {
-    it("returns the observations that declare reads, in sequence order, with their label and reads", () => {
+    /** The outputs `commandOutput` made, numbered as given. */
+    const outputsOf = (...numbers: number[]) =>
+      numbers.map((n) => ({
+        outputId: createToolOutputId("run", "run_command", n),
+      }));
+
+    it("returns the run's own observations that declare a read, in sequence order, with their label and reads", () => {
       const a = readOf("gmail:thread-a", "rev-a", [observedSecret]);
       const b = readOf("gmail:thread-b", "rev-b", [otherReader]);
       const c = readOf("web:https://example.com/", null);
@@ -386,29 +393,81 @@ describe("cfc-model-context", () => {
       );
       const context = appendHarnessCfcModelContextObservations(
         saved,
-        [commandOutput(2, [observedSecret]), commandOutput(3, [], [c])],
+        [
+          commandOutput(2, [observedSecret]),
+          commandOutput(3, [], [c]),
+          commandOutput(4, [observedSecret], []),
+        ],
         "2026-09-22T10:00:00.000Z",
       );
 
-      expect(harnessCfcModelContextReads(context)).toEqual([{
-        sequence: 1,
-        toolCallId: "call-1",
-        outputId: createToolOutputId("run", "run_command", 1),
-        label: { confidentiality: [observedSecret, otherReader] },
-        reads: [a, b],
-      }, {
-        sequence: 3,
-        toolCallId: "call-3",
-        outputId: createToolOutputId("run", "run_command", 3),
-        label: { confidentiality: [] },
-        reads: [c],
-      }]);
+      expect(harnessCfcModelContextReads(context, outputsOf(1, 2, 3, 4)))
+        .toEqual({
+          reads: [{
+            sequence: 1,
+            toolCallId: "call-1",
+            outputId: createToolOutputId("run", "run_command", 1),
+            label: { confidentiality: [observedSecret, otherReader] },
+            reads: [a, b],
+          }, {
+            sequence: 3,
+            toolCallId: "call-3",
+            outputId: createToolOutputId("run", "run_command", 3),
+            label: { confidentiality: [] },
+            reads: [c],
+          }],
+        });
+    });
+
+    it("leaves out observations of outputs that are not the run's own, as a continued run's inherited ones are", () => {
+      const context = appendHarnessCfcModelContextObservations(
+        undefined,
+        [
+          commandOutput(1, [observedSecret], [readOf("prior", "r")]),
+          commandOutput(2, [observedSecret], [readOf("current", "r")]),
+        ],
+        "2026-09-21T10:00:00.000Z",
+      );
+
+      expect(
+        harnessCfcModelContextReads(context, outputsOf(2)).reads.map((entry) =>
+          entry.reads.map((read) => read.ref)
+        ),
+      ).toEqual([["current"]]);
+      expect(harnessCfcModelContextReads(context, [])).toEqual({ reads: [] });
+    });
+
+    it("carries whole observations up to the report's bound and counts the reads past it", () => {
+      const many = (prefix: string, count: number) =>
+        Array.from({ length: count }, (_, n) => readOf(`${prefix}-${n}`, "r"));
+      const half = HARNESS_CFC_MODEL_CONTEXT_REPORT_READS_LIMIT / 2;
+      const context = appendHarnessCfcModelContextObservations(
+        undefined,
+        [
+          commandOutput(1, [observedSecret], many("a", half)),
+          commandOutput(2, [observedSecret], many("b", half)),
+          commandOutput(3, [observedSecret], many("c", 1)),
+          commandOutput(4, [observedSecret], many("d", 2)),
+        ],
+        "2026-09-21T10:00:00.000Z",
+      );
+
+      const report = harnessCfcModelContextReads(
+        context,
+        outputsOf(1, 2, 3, 4),
+      );
+      expect(report.reads.map((entry) => entry.sequence)).toEqual([1, 2]);
+      expect(report.readsOmitted).toBe(3);
+      expect(
+        harnessCfcModelContextReads(context, outputsOf(1, 3)),
+      ).not.toHaveProperty("readsOmitted");
     });
 
     it("returns no entries for a run without a model context or whose outputs declared none", () => {
-      expect(harnessCfcModelContextReads(undefined)).toEqual([]);
-      expect(harnessCfcModelContextReads(savedContext([observedSecret])))
-        .toEqual([]);
+      expect(harnessCfcModelContextReads(undefined, [])).toEqual({ reads: [] });
+      expect(
+        harnessCfcModelContextReads(savedContext([observedSecret]), []),
+      ).toEqual({ reads: [] });
     });
   });
 });
