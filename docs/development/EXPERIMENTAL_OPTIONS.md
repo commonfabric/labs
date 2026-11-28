@@ -1077,7 +1077,8 @@ holds the measurements and the conditions for revisiting.
   mark vouching for the value either way, and refuses every other write to
   it, whatever grant the writer holds. The memory store judges the record
   too, whatever the flag: a session's commit may write one only where none is
-  stored and only naming the principal the session authenticated, and may not
+  stored and only naming a principal the session authenticated as (its key,
+  or the root issuer of the proof chain it presented), and may not
   change or remove a stored one except by deleting the document
   ([`runtime/memory/v2/cfc-creator-record.ts`](../../runtime/memory/v2/cfc-creator-record.ts)).
   A commit the server produces, or one a session of its own serving or
@@ -1206,7 +1207,9 @@ holds the measurements and the conditions for revisiting.
   ([specs pull request 87](https://github.com/commonfabric/specs/pull/87))
   lands, and documents created before the flag can be rebuilt, since their
   stored shape stays the creator's alone. The fixture's `PROPOSAL.md`, Risks,
-  lists these and the rest.
+  lists these and the rest, among them a `result` link that commit
+  preparation follows as written and a served child whose pattern another
+  member's data chose.
 - **Status on 2026-11-27.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
   `runtime/runner/test/experimental-options.test.ts`. With this flag and

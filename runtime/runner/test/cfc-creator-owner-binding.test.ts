@@ -391,9 +391,11 @@ describe("cfc-creator-owner-binding", () => {
     expect(await itemsOf(link)).toEqual([]);
   });
 
-  it("records no creator at a source transition another member's client makes, where the evidence names someone else", async () => {
+  it("records no creator at a source transition another member's client makes, where the evidence names someone else, and binds the field to its first writer", async () => {
     // The store admits a session's record only when it names the session's
-    // own principal, so bob's client leaves alice's piece without one.
+    // own principal, so bob's client leaves alice's piece without one, and
+    // the added field binds whoever writes it first, as on any piece that
+    // records no creator.
 
     const legacy = connect(alice, { pieceCreatorRecord: false });
     const link = await createPiece(legacy, LEGACY_RELEASE);
@@ -402,6 +404,9 @@ describe("cfc-creator-owner-binding", () => {
     expect(theirs.refusal).toBeUndefined();
 
     expect(await creatorOf(link)).toBeUndefined();
+    await add(member, theirs.result, "theirs");
+    expect(await itemsOf(link)).toEqual(["theirs"]);
+    expect(await ownersOfItems(link)).toEqual([bob.did()]);
   });
 
   it("records the creator at a source transition the evidence's own principal's client makes", async () => {

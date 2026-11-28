@@ -307,9 +307,11 @@ one records nothing. A piece created before the runtime recorded creators gains
 one at its next source transition: a space root takes the owner its space's
 access list names, and any other piece the one principal the stored labels of
 its owner-protected fields represent, none where those fields name two
-principals or none. The memory store admits a record a session writes only
-when it names the principal the session authenticated, and refuses a change or
-removal of a stored one; a commit the serving host makes is not judged. So a
+principals or none. Ahead of a ruling stacked on
+[specs#87](https://github.com/commonfabric/specs/pull/87), the memory store
+admits a record a session writes only when it names a principal the session
+authenticated as, and refuses a change or removal of a stored one; a commit
+the serving host makes is not judged. So a
 runtime on a client records only its own identity, and a child or a legacy
 piece whose record would name another principal records none there. The
 record is written only while the `pieceCreatorRecord` experimental option is on

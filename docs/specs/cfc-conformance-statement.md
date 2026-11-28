@@ -463,14 +463,16 @@ dials.
   removal of a stored one (`creatorRecordRefusal` in
   `runtime/memory/v2/cfc-creator-record.ts`); a commit the serving host makes
   is not judged. It runs at every posture and refuses more than
-  [specs#87](https://github.com/commonfabric/specs/pull/87) does, so it is
-  fail-closed. With the default-off `pieceCreatorRecord` on, a runtime on a
-  client records only its own identity, so a child it instantiates under
-  another principal's piece and a legacy piece whose evidence names another
-  principal record none, where #87 records the parent's creator or the
-  evidence's principal. Such a piece's update-added owner fields then bind
-  their first writer, as a piece recording none does under #87. This is a
-  semantic gap whose ruling is drafted to stack on #87.
+  [specs#87](https://github.com/commonfabric/specs/pull/87) does, so the store
+  side is fail-closed.
+- With the default-off `pieceCreatorRecord` on, a runtime on a client records
+  only its own identity, so a child it instantiates under another principal's
+  piece and a legacy piece whose evidence names another principal record
+  none, where #87 records the parent's creator or the evidence's principal.
+  This client side under-protects #87's owner binding: such a piece's
+  update-added owner fields bind their first writer, as a piece recording none
+  does under #87. For reclassification it is fail-closed. Both are a semantic
+  gap whose ruling is drafted to stack on #87.
 - Under strict, an authorized runtime-owned store with a live enrollment or
   an authenticated piece-setup claim admits eligible writer-fit misfits and
   records them only in the derived component.

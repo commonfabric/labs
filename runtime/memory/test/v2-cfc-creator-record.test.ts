@@ -19,7 +19,17 @@ import {
   open,
   read,
 } from "../v2/engine.ts";
-import { ProtocolError } from "../v2.ts";
+import { Server } from "../v2/server.ts";
+import {
+  encodeMemoryBoundary,
+  getMemoryProtocolFlags,
+  type HelloOkMessage,
+  MEMORY_PROTOCOL,
+  ProtocolError,
+  type ResponseMessage,
+  type ServerMessage,
+  type SessionOpenAuthMetadata,
+} from "../v2.ts";
 
 const ALICE = "did:key:z6MkaliceAliceAliceAliceAliceAliceAliceAlice";
 const BOB = "did:key:z6MkbobBobBobBobBobBobBobBobBobBobBobBobBobBo";
@@ -27,30 +37,35 @@ const SERVICE = "did:key:z6MkserviceServiceServiceServiceServiceSe";
 
 describe("cfc-creator-record", () => {
   describe("creatorRecordRefusal()", () => {
-    it("returns `undefined` for a record the session's principal is named in, where none is stored", () => {
-      expect(creatorRecordRefusal(undefined, ALICE, ALICE)).toBeUndefined();
+    it("returns `undefined` for a new record naming the session's principal", () => {
+      expect(creatorRecordRefusal(undefined, ALICE, [ALICE])).toBeUndefined();
+    });
+
+    it("returns `undefined` for a new record naming the root issuer the session acts under", () => {
+      expect(creatorRecordRefusal(undefined, ALICE, [BOB, ALICE]))
+        .toBeUndefined();
     });
 
     it("returns `undefined` where nothing is stored or proposed, or the stored record is kept", () => {
-      expect(creatorRecordRefusal(undefined, undefined, BOB)).toBeUndefined();
-      expect(creatorRecordRefusal(ALICE, ALICE, BOB)).toBeUndefined();
+      expect(creatorRecordRefusal(undefined, undefined, [BOB])).toBeUndefined();
+      expect(creatorRecordRefusal(ALICE, ALICE, [BOB])).toBeUndefined();
     });
 
     it("returns a reason for a new record naming anyone but the session's principal", () => {
-      expect(creatorRecordRefusal(undefined, ALICE, BOB)).toMatch(
+      expect(creatorRecordRefusal(undefined, ALICE, [BOB])).toMatch(
         /only its own principal/,
       );
-      expect(creatorRecordRefusal(undefined, ALICE, undefined)).toMatch(
+      expect(creatorRecordRefusal(undefined, ALICE, [])).toMatch(
         /only its own principal/,
       );
-      expect(creatorRecordRefusal(undefined, { did: BOB }, BOB)).toMatch(
+      expect(creatorRecordRefusal(undefined, { did: BOB }, [BOB])).toMatch(
         /only its own principal/,
       );
     });
 
     it("returns a reason for a stored record changed or removed, even by the principal it names", () => {
-      expect(creatorRecordRefusal(ALICE, BOB, BOB)).toMatch(/once/);
-      expect(creatorRecordRefusal(ALICE, undefined, ALICE)).toMatch(/once/);
+      expect(creatorRecordRefusal(ALICE, BOB, [BOB])).toMatch(/once/);
+      expect(creatorRecordRefusal(ALICE, undefined, [ALICE])).toMatch(/once/);
     });
   });
 
@@ -169,7 +184,12 @@ describe("cfc-creator-record", () => {
           id: `cid:${taggedHashStringOf(content)}`,
           value: { value: content, creator: ALICE },
         }])
-      ).toThrow(/only its own principal/);
+      ).toThrow(/never a piece/);
+    });
+
+    it("commits a record naming the root issuer of the session's proof chain", () => {
+      commitAs(BOB, [create(piece, ALICE)], { capabilityPrincipal: ALICE });
+      expect(storedCreator(piece)).toBe(ALICE);
     });
 
     it("throws on a change or a removal of a stored record, by a set or a patch", () => {
@@ -192,6 +212,13 @@ describe("cfc-creator-record", () => {
       expect(() =>
         commitAs(BOB, [{ op: "delete", id: piece }, create(piece, BOB)])
       ).toThrow(ProtocolError);
+      expect(() =>
+        commitAs(BOB, [{
+          op: "patch",
+          id: piece,
+          patches: [{ op: "move", from: "/creator", path: "/value/was" }],
+        }])
+      ).toThrow(/once/);
       expect(storedCreator(piece)).toBe(ALICE);
     });
 
@@ -212,14 +239,119 @@ describe("cfc-creator-record", () => {
       expect(read(engine, { id: piece })).toBeNull();
     });
 
-    it("commits a served create the server makes for an acting user, and a child it places with its producer's creator", () => {
-      const served = {
-        delegated: { actingPrincipal: BOB, capabilityRef: "grant:test" },
-      };
-      commitAs(SERVICE, [create(piece, BOB)], served);
-      commitAs(SERVICE, [create(child, ALICE)], served);
+    it("commits a record the server vouches for: a create for an acting user, and a child with its producer's creator", () => {
+      const vouched = { creatorRecordsVouched: true };
+      commitAs(SERVICE, [create(piece, BOB)], vouched);
+      commitAs(SERVICE, [create(child, ALICE)], vouched);
       expect(storedCreator(piece)).toBe(BOB);
       expect(storedCreator(child)).toBe(ALICE);
+    });
+
+    it("commits a record a delegated commit carries", () => {
+      commitAs(SERVICE, [create(piece, BOB)], {
+        delegated: { actingPrincipal: ALICE, capabilityRef: "grant:test" },
+      });
+      expect(storedCreator(piece)).toBe(BOB);
+    });
+  });
+
+  describe("a session's transact the server admits", () => {
+    // The server vouches for the records of a session whose principal it
+    // lists as a delegating identity, as a toolshed running server execution
+    // lists its own, and judges every other session's.
+
+    const SPACE = "did:key:z6Mk-creator-record-space";
+    const AUDIENCE = "did:key:z6Mk-creator-record-audience";
+    let requests = 0;
+
+    const newServer = (): Server =>
+      new Server({
+        store: new URL(`memory://creator-record-${++requests}`),
+        subscriptionRefreshDelayMs: 0,
+        authorizeSessionOpen: (message) => {
+          const iss = message.invocation?.iss;
+          return typeof iss === "string" ? iss : undefined;
+        },
+        sessionOpenAuth: { audience: AUDIENCE },
+        acl: { mode: "off", delegatingDids: [SERVICE] },
+      });
+
+    /** Opens a session of `principal` on a new connection to `server`. */
+    const openSession = async (
+      server: Server,
+      principal: string,
+    ): Promise<string> => {
+      const messages: ServerMessage[] = [];
+      const connection = server.connect((message) => messages.push(message));
+      await connection.receive(encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: getMemoryProtocolFlags(),
+      }));
+      const hello = messages.shift() as HelloOkMessage;
+      const sessionOpen = hello.sessionOpen as SessionOpenAuthMetadata;
+      await connection.receive(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: `open-${++requests}`,
+        space: SPACE,
+        session: {},
+        invocation: {
+          iss: principal,
+          aud: sessionOpen.audience,
+          challenge: sessionOpen.challenge.value,
+        },
+      }));
+      const opened = messages.shift() as ResponseMessage<{ sessionId: string }>;
+      expect(opened.error).toBeUndefined();
+      return opened.ok!.sessionId;
+    };
+
+    const transact = (
+      server: Server,
+      sessionId: string,
+      id: string,
+      creator: string,
+    ) =>
+      server.transact({
+        type: "transact",
+        requestId: `write-${++requests}`,
+        space: SPACE,
+        sessionId,
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id,
+            value: {
+              value: {},
+              patternIdentity: { identity: "pattern-a", symbol: "default" },
+              creator,
+            },
+          }],
+        },
+      });
+
+    it("returns an error for a client session's record naming another principal", async () => {
+      const server = newServer();
+      try {
+        const bob = await openSession(server, BOB);
+        const result = await transact(server, bob, "of:forged", ALICE);
+        expect(result.error?.message).toMatch(/only its own principal/);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("commits a delegating session's record naming the principal its runtime acted for", async () => {
+      const server = newServer();
+      try {
+        const service = await openSession(server, SERVICE);
+        const result = await transact(server, service, "of:served", ALICE);
+        expect(result.error).toBeUndefined();
+      } finally {
+        await server.close();
+      }
     });
   });
 });

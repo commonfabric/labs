@@ -5781,7 +5781,11 @@ export class Runner {
     // session's record only when it names the principal the session
     // authenticated (`cfc-creator-record.ts` in the memory package), so a
     // child of another principal's piece, or a legacy piece whose evidence
-    // names another principal, records none there.
+    // names another principal, records none there. That also leaves without
+    // one a piece that a client the store would vouch for, such as a
+    // toolshed's own non-serving runtime, creates for a user, and one a key
+    // acting under another principal's proof chain creates for that
+    // principal; both fail closed.
     if (
       !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
       this.#runtime.experimental.pieceCreatorRecord === true &&

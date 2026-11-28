@@ -1800,13 +1800,20 @@ export type ApplyCommitOptions = {
 
   /**
    * Whether the server vouches for the creator records this `authored`
-   * commit carries, which it does for a session of the deployment's own
-   * serving identity (a service or delegating principal): that runtime ran
-   * the code, and its commit preparation admitted each record. Otherwise a
-   * session's commit records only its own principal as a piece's creator
-   * (`cfc-creator-record.ts`).
+   * commit carries, which it does for a session whose principal it lists as
+   * a service or delegating identity: an operator principal, or a toolshed
+   * of the deployment, whose runtime ran the code and whose commit
+   * preparation admitted each record. Otherwise a session's commit records
+   * only its own principal as a piece's creator (`cfc-creator-record.ts`).
    */
   creatorRecordsVouched?: boolean;
+
+  /**
+   * The root issuer of the proof chain the committing session presented,
+   * whose capability the session acts under: a creator record may name it as
+   * well as the session's own principal.
+   */
+  capabilityPrincipal?: string;
 
   /** Server-owned OW54 Retry admission. The commit retains a distinct
    *  server transaction identity while the new event is attributed to the
@@ -7400,6 +7407,7 @@ const applyCommitTransaction = (
     derivedThrough,
     delegated,
     creatorRecordsVouched = false,
+    capabilityPrincipal,
     systemEventActor,
     scopeKeys,
     releasesOperationFields = false,
@@ -8701,20 +8709,28 @@ const applyCommitTransaction = (
       ? undefined
       : document.value;
   };
-  const storedCfcOf = (
+  // The document a write's address holds before the commit, at the scope
+  // instance the write lands in.
+  const storedDocumentOf = (
     write: {
       readonly opIndex: number;
       readonly operation: { id: string; scope?: unknown };
     },
-  ): unknown =>
-    (readState(engine, {
+  ): Record<string, unknown> | null | undefined =>
+    readState(engine, {
       id: write.operation.id,
       branch,
       scope: write.operation.scope as Parameters<typeof readState>[1]["scope"],
       principal: scanPrincipal,
       sessionId: scanSession,
       scopeKey: scopeKeyByOpIndex.get(write.opIndex),
-    })?.document as { cfc?: unknown } | null | undefined)?.cfc;
+    })?.document as Record<string, unknown> | null | undefined;
+  const storedCfcOf = (
+    write: {
+      readonly opIndex: number;
+      readonly operation: { id: string; scope?: unknown };
+    },
+  ): unknown => storedDocumentOf(write)?.cfc;
   const releasesByIntent = verifyOwnerReleasesByIntent({
     engine,
     branch,
@@ -8763,29 +8779,26 @@ const applyCommitTransaction = (
 
   // A session's commit may record a piece's creator only as the principal
   // the session authenticated, and may not change or remove a stored record
-  // (`cfc-creator-record.ts`). A commit the server produces, or one it
-  // vouches for, carries the record its serving runtime's commit preparation
-  // admitted, and is not judged. A content-addressed document is never a
-  // piece, and holds a record only as a session that may record one wrote it.
+  // (`cfc-creator-record.ts`). A `derived` or `system` commit, a delegated
+  // one, and one the server vouches for are not judged: the server makes the
+  // first three itself, and the last comes from a principal it lists as a
+  // service or delegating identity. A content-addressed document is never a
+  // piece, so a session's commit writes no record on one.
   if (
     commitClass === "authored" && delegated === undefined &&
     !creatorRecordsVouched
   ) {
+    const recorders = [principal, capabilityPrincipal].filter(
+      (each): each is string => each !== undefined,
+    );
+    // A session's stale whole-document `set` that omits a record stored
+    // since it read the document is refused with the rest, as a forged
+    // removal would be; only a legacy record a serving runtime writes lands
+    // on a document that already exists, so the race is narrow.
     for (const write of envelopeWrites.values()) {
       if (write.deleted || elidedOpIndexes.has(write.lastOpIndex)) continue;
-      const stored = (readState(engine, {
-        id: write.operation.id,
-        branch,
-        scope: write.operation.scope as Parameters<
-          typeof readState
-        >[1]["scope"],
-        principal: scanPrincipal,
-        sessionId: scanSession,
-        scopeKey: scopeKeyByOpIndex.get(write.opIndex),
-      })?.document as Record<string, unknown> | null | undefined)?.[
-        CREATOR_RECORD_MEMBER
-      ];
-      const refusal = creatorRecordRefusal(stored, write.creator, principal);
+      const stored = storedDocumentOf(write)?.[CREATOR_RECORD_MEMBER];
+      const refusal = creatorRecordRefusal(stored, write.creator, recorders);
       if (refusal !== undefined) {
         throw new ProtocolError(
           `memory v2 commit writes the creator record of document ${write.operation.id}: ${refusal}`,
@@ -8797,16 +8810,13 @@ const applyCommitTransaction = (
         operation.op !== "set" || !operation.id.startsWith("cid:") ||
         elidedOpIndexes.has(opIndex)
       ) continue;
-      const refusal = creatorRecordRefusal(
-        undefined,
+      if (
         (operation.value as Record<string, unknown> | null | undefined)?.[
           CREATOR_RECORD_MEMBER
-        ],
-        principal,
-      );
-      if (refusal !== undefined) {
+        ] !== undefined
+      ) {
         throw new ProtocolError(
-          `memory v2 commit writes the creator record of document ${operation.id}: ${refusal}`,
+          `memory v2 commit writes a creator record on content-addressed document ${operation.id}, which is never a piece`,
         );
       }
     }
