@@ -23,7 +23,6 @@ import {
   isElement,
   sendMessage,
   setBound,
-  viewCell,
   viewShows,
 } from "./vnode-helpers.ts";
 
@@ -46,7 +45,7 @@ const checkThrough = handler<
 >((_, { ui, prop, failures }) => {
   try {
     boundViewCell(
-      viewCell(ui),
+      ui,
       (node) => isElement(node, "cf-checkbox"),
       prop,
       "the checkbox",
