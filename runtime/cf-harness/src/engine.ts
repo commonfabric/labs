@@ -509,6 +509,7 @@ export interface CreateHarnessEngineOptions
    * script sealed.
    */
   sealedSandboxRuntime?: () => SandboxRuntime;
+
   artifactStore?: HarnessArtifactStore;
   processRunner?: ProcessRunner;
 
@@ -766,6 +767,7 @@ export class CfHarnessEngine {
   readonly #hostMounts: readonly HostSandboxMount[];
   /** The runsc configuration this engine built, when it built one. */
   readonly #ownedNativeConfig?: RunscSandboxConfig;
+  /** Builds a sealed skill-script call's runtime, where this run can. */
   readonly #sealedSandboxRuntime?: () => SandboxRuntime;
   readonly #sandboxRuntimeChoice?: SandboxRuntimeChoice;
   #sandboxClosed = false;

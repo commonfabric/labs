@@ -347,6 +347,7 @@ export interface RunscSandboxConfig {
 
   /** Whether the workspace is bound read-only; writable unless set. */
   workspaceReadOnly?: boolean;
+
   shellPath: string;
   networkMode: RunscNetworkMode;
   additionalMounts: readonly SandboxAdditionalMount[];
