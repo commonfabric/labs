@@ -1195,7 +1195,7 @@ const sealedRunOf = (
  * it holds and `side-effect` otherwise. A host script, a run that cannot build
  * a sealed runtime, and a call that names its own `cwd` all stay side effects,
  * the last because a directory named in the call is one the script expects
- * to work in, and a sealed run can write nowhere but its own `/tmp`.
+ * to work in, and a sealed run can write nothing that outlives its container.
  */
 export const runsSealedSkillScript = (
   context: Pick<

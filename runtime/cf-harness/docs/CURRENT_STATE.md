@@ -824,6 +824,12 @@ The current package provides:
   registry digest fields, and the invocation is labeled with confidentiality
   alone, because a non-empty `integrity` array in `cfcInputLabels` makes the
   sandbox fail to start (CT-2302);
+- sealed skill-script runs: in a run whose engine built its own runsc runtime, a
+  sandbox-target call that names no `cwd` runs on a runtime built for the one
+  call with network mode `none`, no fabric mount and every mount read-only, and
+  is classed `read`, so a `quote`-bound child runs it under `enforce-explicit`;
+  every other call stays a side effect. The record says `sealed` and names the
+  root filesystem path, not a measured image digest;
 - recoverable rejection of a malformed tool call: a name no tool answers to,
   arguments that are not a JSON object, or a `delegate_task` argument of the
   wrong shape comes back as a `cf-harness.invalid-tool-call` tool result naming

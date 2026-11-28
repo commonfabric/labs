@@ -25,10 +25,11 @@ import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
  *   the run's runtime verifies is private, so the runtime built from it, and
  *   closed after the one call, shares no state with the run's.
  *
- * Each call outside a session already gets a fresh container with a fresh
- * `/tmp`, so a sealed call names no session. It runs in the workspace, which
- * it can read and not write, and `/tmp` is its scratch: runsc keeps a call's
- * working directory inside the mounts, and the tmpfs is not one of them.
+ * Each call outside a session already gets a fresh container, so a sealed
+ * call names no session. Its working directory is the workspace, which it can
+ * read and not write, because runsc keeps a call's working directory inside
+ * the mounts. What it writes lands in the container's `/tmp` or in the
+ * in-memory overlay over its root filesystem, and both go with the container.
  */
 export const sealedSkillScriptRunscConfig = (
   config: RunscSandboxConfig,
