@@ -1105,8 +1105,8 @@ holds the measurements and the conditions for revisiting.
   `runtime/memory/v2/cfc-creator-record.ts` naming the ruling,
   [specs pull request 87](https://github.com/commonfabric/specs/pull/87). The
   store's admission refuses more than that ruling does and stores nothing new,
-  so it runs unconditionally; the ruling that states it is drafted to stack on
-  pull request 87. Once those rulings merge, the record becomes unconditional
+  so it runs unconditionally; the ruling that states it is
+  [specs pull request 112](https://github.com/commonfabric/specs/pull/112), stacked on pull request 87. Once those rulings merge, the record becomes unconditional
   and the flag is deleted.
 - **Status on 2026-11-01.** Implemented and off. The record and the writes
   refused are covered by `runtime/runner/test/cfc-piece-creator.test.ts`, the

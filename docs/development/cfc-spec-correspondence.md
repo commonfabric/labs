@@ -378,7 +378,7 @@ site in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker
 naming #111.
 
 The store's admission of the creator record is a semantic gap pending a
-ruling drafted to stack on
+ruling, [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on
 [specs#87](https://github.com/commonfabric/specs/pull/87). The memory store
 admits a session's `creator` record only when it names a principal the session
 authenticated as, and refuses a session's change or removal of a stored one;

@@ -472,7 +472,7 @@ dials.
   This client side under-protects #87's owner binding: such a piece's
   update-added owner fields bind their first writer, as a piece recording none
   does under #87. For reclassification it is fail-closed. Both are a semantic
-  gap whose ruling is drafted to stack on #87.
+  gap whose ruling is [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on #87.
 - Under strict, an authorized runtime-owned store with a live enrollment or
   an authenticated piece-setup claim admits eligible writer-fit misfits and
   records them only in the derived component.

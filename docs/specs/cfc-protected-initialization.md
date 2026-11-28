@@ -307,7 +307,7 @@ one records nothing. A piece created before the runtime recorded creators gains
 one at its next source transition: a space root takes the owner its space's
 access list names, and any other piece the one principal the stored labels of
 its owner-protected fields represent, none where those fields name two
-principals or none. Ahead of a ruling stacked on
+principals or none. Ahead of a ruling, [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on
 [specs#87](https://github.com/commonfabric/specs/pull/87), the memory store
 admits a record a session writes only when it names a principal the session
 authenticated as, and refuses a change or removal of a stored one. Every

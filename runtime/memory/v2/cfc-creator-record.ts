@@ -34,8 +34,8 @@
 // record naming anyone but its principal. It refuses more than the ruling does
 // and stores nothing new. A runtime on a client, behind the default-off
 // `pieceCreatorRecord`, then records none where the ruling records another
-// principal (`#setupInternal` in the runner). The ruling that states both is
-// drafted to stack on that pull request.
+// principal (`#setupInternal` in the runner). The ruling that states both,
+// stacked on that pull request: https://github.com/commonfabric/specs/pull/112
 
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 
