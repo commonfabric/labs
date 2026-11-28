@@ -1188,8 +1188,13 @@ holds the measurements and the conditions for revisiting.
   integrity are kept. A declaration is honored only from a schema a writer
   brought, where one declaration covers every path the transaction wrote on
   the document and every writer there is the module the piece's
-  `patternIdentity` names. Otherwise, with the flag off, with no recorded
-  creator, or with no such clause, the join is stored as derived, and a
+  `patternIdentity` names. It is honored only where the access list of the
+  piece's space, and of the written document's space, lets the creator and no
+  one else write (readers may hold READ; a missing list fails closed), and
+  only in a run acting for no one or for the creator. Otherwise, with the flag
+  off, with no recorded creator, with no such clause, in a space another
+  principal may write, or in another principal's run, the join is stored as
+  derived, and a
   diagnostic says why. Whatever the flag, a malformed declaration refuses
   the write, and so does one that covers a value written on a document the
   transaction did not create, unless that document stored the same
@@ -1203,17 +1208,22 @@ holds the measurements and the conditions for revisiting.
   (SC-58). The store admits a session's `creator` record only when it names
   the principal the session authenticated (`pieceCreatorRecord` above), so a
   modified client can no longer write a piece naming another principal as its
-  creator. The flag must stay off in every deployment until only the creator
-  may change the source of a piece that records one (otherwise a member with
-  WRITE can repoint the piece and release the creator's data), a legacy
-  piece's record needs an act of the principal it names rather than following
-  from evidence a member can arrange, the creator-record ruling
+  creator. A member with WRITE on the piece's space, or on the written
+  document's space, who could repoint the piece, rewire its argument or write
+  a document there that it reads releases nothing, because a release is
+  honored only where the creator alone may write those two spaces; a
+  multi-writer share space is not supported. A space a release reads from
+  beyond those two is not checked, so a member who may write one of those can
+  still change what it holds. The deployment's service principals, which hold
+  an implicit OWNER on every space, are trusted runtimes and are not counted
+  as other writers. The flag must stay off in every deployment until the
+  store enforces space access lists, which that condition rests on, the
+  creator-record ruling
   ([specs pull request 87](https://github.com/commonfabric/specs/pull/87))
   lands, and documents created before the flag can be rebuilt, since their
   stored shape stays the creator's alone. The fixture's `PROPOSAL.md`, Risks,
-  lists these and the rest, among them a `result` link that commit
-  preparation follows as written and a served child whose pattern another
-  member's data chose.
+  lists these and the rest, and its "CFC debt" section states the policy the sole-writer condition
+  stands in for.
 - **Status on 2026-11-27.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
   `runtime/runner/test/experimental-options.test.ts`. With this flag and
@@ -1222,9 +1232,8 @@ holds the measurements and the conditions for revisiting.
   space sees it (README, finding 7, and
   `patterns/integration/share-space-reclassify-two-browsers.test.ts`). The
   conditions for turning it on are in that fixture's `PROPOSAL.md`, Risks.
-- **Path to removal.** Once both rulings merge, only the creator may change a
-  piece's source, a legacy piece's record needs its principal's act, and
-  documents created before
+- **Path to removal.** Once both rulings merge, access lists are enforced
+  wherever the flag is on, and documents created before
   the flag can be rebuilt, remove the env mapping, the runtime option and its authority and
   shell-source entries, the default, and the transaction dial; the
   substitution in `prepare.ts` stays.

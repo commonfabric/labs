@@ -375,7 +375,11 @@ the document and every writer there is the module the piece's
 `cfcPatternReclassification` dial, which defaults to off and has effect only
 with `pieceCreatorRecord`, so the strict default is unchanged. Its deciding
 site in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker
-naming #111.
+naming #111. The same site honors a reclassification only where the creator
+alone may write the piece's space and the written document's space, as
+their access lists say, and only in a run
+acting for no one or for the creator, conditions #111 does not state. They
+refuse more than #111 and persist nothing, so they sit under the same marker.
 
 The store's admission of the creator record is a semantic gap pending a
 ruling, [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on

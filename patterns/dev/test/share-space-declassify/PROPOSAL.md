@@ -212,6 +212,52 @@ leave room:
    (repair 5b) admits a session's record only when it names the principal the
    session authenticated, and refuses a change or removal of a stored one
    (`runtime/memory/v2/cfc-creator-record.ts`).
+5. **A release is honored only where its creator alone may write, in a run
+   acting for no one or for the creator.** Whoever can write a piece's space can
+   change its pattern, its argument and anything it reads, and so choose what is
+   released in the creator's name. Until the store can attest that the creator
+   chose a release's inputs, a reclassification is honored only where the access
+   list of the piece's space, and of the written document's space, lets the
+   creator and no one else write (`writableOnlyBy` in
+   `runtime/runner/src/cfc/space-membership.ts`): readers may hold READ, as the
+   share in this fixture grants. A missing or malformed list fails closed, since
+   the transport treats a populated space without one as public. A run acting
+   for anyone but the creator releases nothing, so a handler a reader fires does
+   not choose what is released. A space that gains a second writer stops
+   releasing from then on; values already released stay, as they do on
+   unsharing. A multi-writer share space, where a member may write and the
+   creator's release must still resist them, is not supported: an earlier
+   prototype that pinned a piece's pattern and inputs against such a member
+   (labs branch `claude/reclassify-hardening-9fc6a8`, tag
+   `prototype/reclassify-creator-pin`) needed more machinery than the case
+   justifies before the store can attest who chose an input, and is kept as a
+   catalogue of the attacks a principled answer must refuse.
+
+## CFC debt
+
+This is a prototype: the condition under which a reclassification is honored is
+ordinary runtime logic, not a label the store checks.
+
+**The intended policy.** Alice's data, labeled `User(alice)`, stays hers. A
+piece Alice creates in a share space may release to that space's readers what
+its pattern computes from inputs Alice chose, and only those. No one else can
+change what is released in her name: not the pattern, the argument, anything the
+release reads, or the event that runs it.
+
+**The cut corner.** "Inputs Alice chose" is approximated by "no one but Alice
+can write where the release happens", read from the space's access list on the
+runtime that releases, together with the run's acting principal. Principled CFC
+would carry the creator's integrity on whatever selects a release (§3.8.4,
+robust declassification), or a store-checked endorsement that the creator chose
+each input link (§3.7.2's `LinkedBy`), so that a release could be honored in a
+space others also write.
+
+**The semantics CFC appears to lack.** §3.8.4 requires that low-integrity values
+not choose which data is released, but no integrity the store holds can tell a
+co-writer's write from the creator's: the store admits integrity as the writing
+client states it, and `TransformedBy` names code, not the piece or principal
+that ran it. A store-attested "chosen by" or "last written by" fact is what a
+multi-writer release needs.
 
 ## Risks
 
@@ -239,21 +285,43 @@ leave room:
   opens it and A's runtime reconciles its source, A's runtime records A, and the
   store admits it, since A's session wrote it. The legacy record wants an
   explicit act of the principal it names, or evidence the store can check.
+  Closed for a reclassification by decision 5, since no one but the creator
+  writes where one is honored.
 - **A `result` link is followed as written.** Commit preparation finds a
   document's piece through the document's `result` meta link
   (`pieceResultOfDocument` in `runtime/runner/src/cfc/prepare.ts`), which a
   writer can point at A's real piece. A field such a document adds then binds A
   as its owner. Following the link only where the piece names the document back
-  would close it.
+  would close it. Closed for a reclassification by decision 5, since no one but
+  the creator writes where one is honored.
 - **A piece deleted and made again keeps its documents.** A member can delete
   A's piece result and recreate it under the same id recording themselves, since
   a delete is not judged and the new record names its session's principal. That
   releases only the member's own data, but A's argument and internal documents
-  still link the result, so fields they add bind the member.
+  still link the result, so fields they add bind the member. Closed for a
+  reclassification by decision 5, since no one but the creator writes where one
+  is honored.
 - **A served child takes its parent's creator, whatever chose its pattern.** A
   handler's result pattern is instantiated with its producing piece's creator,
   and the pattern can come from data another member wrote. The serving host's
-  commit is not judged by the store.
+  commit is not judged by the store. For a reclassification, decision 5 narrows
+  this to data the creator alone writes, and a handler a reader fires releases
+  nothing.
+- **Only two spaces' access lists are checked.** The guard checks the piece's
+  space and the written document's space. A release that reads a document in any
+  other space, such as the creator's data space, trusts that space's writers: a
+  member who may write there can change what the release reads. Checking every
+  space the transaction read, or the creator's integrity on those reads, would
+  close it.
+- **Service principals are not counted as other writers.** The deployment's
+  service DIDs hold an implicit OWNER on every space and are absent from its
+  access list. They are the deployment's own runtimes, which the store already
+  trusts, so `writableOnlyBy` does not count them; a deployment that grants a
+  service identity to anything less trusted would need them counted.
+- **The access list is read where the release happens.** The releasing runtime
+  decides from the access list it holds, so a grant it has not yet synced does
+  not stop a release, and the store does not check the condition. It rests on
+  the store enforcing access lists, which a deployment must turn on.
 - **No per-value review.** Whatever `fn` returns is released, live. The trust is
   in the installed pattern.
 - **Unsharing does not reach values already derived** from the window. Access to
@@ -281,7 +349,8 @@ leave room:
   piece at a pattern whose lift reclassifies A's data under any policy, and its
   new outputs are new documents, which the stored-envelope refusal does not
   reach. Requiring the creator's act for a source change of a piece that records
-  one would close this.
+  one would close this. Closed for a reclassification by decision 5, since no
+  one but the creator writes where one is honored.
 - **A document created before the dial keeps its existence A's.** SC-4 freezes a
   path's existence (shape) entry at creation. A value first written with the
   dial off, or before its piece recorded a creator, keeps `User(A)` on that
@@ -299,13 +368,15 @@ leave room:
   it, a serving runtime reading as A, and releases it to `P`. A handler's event
   payload naming a document does the same. The inputs of a reclassified
   derivation need to be fixed by the creator, or carry integrity from the
-  creator's act, before the dial is on.
+  creator's act, before the dial is on. Closed for a reclassification by
+  decision 5, since no one but the creator writes where one is honored.
 - **Authority names a module, not a piece.** The writer check admits any writer
   whose module is the piece's pattern, and the piece is found from the written
   document's `result` link. A piece of the same pattern created by someone else,
   writing a document that links to A's piece, would be counted as A's. Whether
   pattern code can set that link is unverified; the check should name the piece
-  itself.
+  itself. Closed for a reclassification by decision 5, since no one but the
+  creator writes where one is honored.
 - **One writer's schema can be attributed to another in one transaction.**
   Authoring identities are recorded per path from the first schema input, so in
   a transaction with two writers a schemaless write beneath a declaration takes
