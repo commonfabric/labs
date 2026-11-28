@@ -113,6 +113,28 @@ export { ANY_INSTANCE };
  */
 export type CurrencyMark = 0 | 1 | 2;
 
+/**
+ * The paths of one document instance that a slice's computations read, as
+ * the scheduler's read log names them: each path starts at the document's
+ * root, so the first component of a read of the document's content is
+ * `value`.
+ */
+export type CurrencyReadPaths = {
+  /**
+   * The paths read with everything beneath them. A write at such a path,
+   * above it or beneath it changes what the read saw.
+   */
+  deep: readonly (readonly string[])[];
+
+  /**
+   * The paths read for their own value and their keys alone. A write at
+   * such a path or above it, or one that adds or removes one of its keys,
+   * changes what the read saw, and a write to the value of a key it
+   * already holds does not.
+   */
+  shallow: readonly (readonly string[])[];
+};
+
 /** One document instance a slice read. */
 export type CurrencyRead = {
   /** The space the document is in. */
@@ -126,6 +148,13 @@ export type CurrencyRead = {
 
   /** Whether some computation writes the document. */
   derived: boolean;
+
+  /**
+   * The paths of the instance that were read. Absent for a read of the
+   * whole document. The index marks a slice on any revision of an instance
+   * it read, whichever paths the read names.
+   */
+  paths?: CurrencyReadPaths;
 
   /**
    * For a read in another space, the seq of that space the run read the

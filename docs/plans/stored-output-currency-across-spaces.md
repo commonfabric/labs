@@ -1,7 +1,8 @@
 # Serving a stored output that depends on another space or on a wish
 
 Status: In progress. Steps 1 to 4, 7 and 8 are done and step 5 is partly
-built; the rest is a design, with the steps to build it. It
+built; the rest is a design, with the steps to build it. Step 9, a read
+registered with its paths, is not started. It
 continues [`stored-output-currency.md`](stored-output-currency.md), whose
 stages 1 to 4 are built, and its steps 1 to 3 come before that plan's
 stage 5.
@@ -179,6 +180,100 @@ replica cannot name.
 
 A reading space that no longer holds a row for an instance names it in its
 next request, and the source drops the registration.
+
+### A read registered with its paths
+
+Not started. This is the half across spaces of "Marking by path" in the
+first plan, which says what paths a read row holds, what a revision
+touched, and when a revision is ahead of a row. Step 9 and acceptance
+tests 24 to 28 are how it is built.
+
+A source reports one head for an instance, to every space that registered
+it, and moves it at every revision. A reader marks `2` each slice whose
+read row is below that head. So a revision that wrote no path any reader
+read marks every slice in every reading space that read the instance, and
+tells each of those spaces to pull.
+
+**The source decides, from the paths each reader registered.** A
+registration names, for each instance, the paths the reading space's
+slices read in it and the lowest sequence number any of them read it at:
+
+```ts
+// Shown at module scope.
+
+/** The paths of one document instance that were read. */
+type CurrencyReadPaths = {
+  deep: readonly (readonly string[])[];
+  shallow: readonly (readonly string[])[];
+};
+
+/** One instance a reading space registers with its source. */
+type CurrencyRegisteredRead = {
+  /** The document's id. */
+  id: string;
+
+  /** The instance's scope key. */
+  scopeKey: string;
+
+  /**
+   * The paths the reading space's slices read in the instance, taken
+   * together. Absent where one of them read the whole document.
+   */
+  paths?: CurrencyReadPaths;
+
+  /**
+   * The lowest seq of the source that a slice of the reading space read
+   * the instance at. Absent with `paths`.
+   */
+  seq?: number;
+};
+```
+
+The source keeps the paths in the row that says who reads what, and beside
+them the sequence number of the newest revision that is ahead of that
+reader, by the first plan's rule, and the position at which that last
+moved. What a reader is told as the instance's head is that sequence
+number. An advance in the source that finds a registered instance changed
+asks, for each reader of it, whether a revision above the cursor touched a
+path the reader registered. Where none did, nothing the reader is told
+moves: no position, no trigger and no pull. Whether an instance is stale
+upstream stays one value for every reader, with a position of its own, so
+a reader is told when its instance's producer is marked whatever paths it
+registered.
+
+At registration the source decides over the revisions between the
+sequence number the registration names and its head. Those can lie below
+its cursor, so it reads them then. Where they pass the first plan's bound
+on revisions, it reports the head.
+
+The reading space's rule does not change: a slice whose read row is below
+what the source reported is marked `2`. The paths are taken together for
+all of a reading space's slices, so a revision that touched a path one
+slice read marks every slice of that space that read the instance below
+it. Telling them apart needs what was touched carried in a pull, and is
+left out.
+
+**A source or a reader of an earlier build.** Nothing is negotiated. A
+source that does not know the registration's paths stores a registration
+of the whole document and reports its head at every revision, and the
+reader marks as it does today. A reader that names no paths is registered
+for the whole document. A row of the source's that an earlier build stored
+holds no paths and no sequence number of its own, and is told the head of
+its instance at the position that head last moved, which is what that row
+means today.
+
+Two builds can serve one source's store, as during a deployment. A build
+from before this advances the cursor without bringing the readers' own
+sequence numbers up to date. So the source keeps a second cursor, the
+sequence number those rows are complete through, and an advance that finds
+it below the first decides the readers' rows from there.
+
+Rejected: **a pull that returns the paths each instance changed at.** The
+source would have to keep what changed for each reader's position, or work
+it out again from the sequence number each reader read at, on every pull.
+A source of an earlier build would return none, so a reader would need a
+rule for their absence. And a source would still tell every reader of
+every revision, since it could not know which of them it concerns.
 
 ### How a change reaches a reader
 
@@ -672,7 +767,8 @@ What to weigh, once there are numbers:
   can load nothing.
 - `protocol.md` §2 and §2b: a registration is admitted with the read it is
   for, and a pull returns sequence numbers and states of registered
-  instances only.
+  instances only. A registration that names paths names paths of the read
+  it is admitted with, and a pull returns nothing more for it.
 - `verification-coverage.md` OW35 (b): the demand rule, ruled, and (a): a
   registration under a grant that was revoked is reported as refused, which
   marks the reader's slice.
@@ -809,6 +905,15 @@ A third is ruled:
    on each change of demand, and one watching viewer's change starts each
    piece they watch for every viewer; both are costs still to take out.
 
+9. **A read registered with its paths.** Not started. It is part 9b of
+   the first plan's stage 9 and is built after 9a, with paths of one
+   component: the registration's paths and sequence number, the reader
+   rows' own sequence number and position, the position of an instance's
+   staleness, the second cursor, and what a registration is told. Together
+   with 9a in the source this is what leaves a piece unstarted when a
+   deploy moves the release time recorded on a result document it reads in
+   another space.
+
 ## Acceptance tests
 
 For the index, in `runtime/memory/test/`, with two stores. Tests 1 to 4
@@ -933,6 +1038,35 @@ change to a shared input of the other space, which reaches both viewers:
     value. Under `skip` the loop carries nothing into the other space,
     which computes no instance for a viewer with no session there
     (`space-server-carried-demand.test.ts`).
+
+For a read registered with its paths, none of which exist. Tests 24 to 27
+are for `v2-currency-index.test.ts` and
+`v2-server-currency-across-spaces.test.ts`, and test 28 for
+`space-server-currency-wish.test.ts`:
+
+24. A revision of a registered instance that touches no path its reader
+    registered moves no position of the source, sends no trigger, and
+    leaves the reader's slices as they are after a pull. A revision that
+    touches one reports its sequence number as the head, and the reader's
+    slice is marked `2`. A reader that registered no paths is told of
+    both.
+25. A write to the reconciliation record of a piece's result document in
+    the source leaves a reading slice that registered a path under `value`
+    of that document, and a reading slice that registered an instance the
+    piece writes, clean: neither `2` nor `1`.
+26. A registration that names a sequence number below the source's cursor
+    is told the sequence number of the newest revision since that touched
+    a registered path, the sequence number it named where none did, and
+    the head where the revisions between pass the bound.
+27. A reader row stored with no paths is told of every revision. After an
+    advance that moved the cursor and not the readers' second cursor, the
+    next advance reports a revision in between that touched a registered
+    path.
+28. A piece whose wish reads the viewer's profile in their home space,
+    recorded for that viewer: under `skip` it is left unstarted when the
+    home space's serving loop follows the Home piece's origin and records
+    a later release time for the same source, and is started when the
+    profile's name changes.
 
 ## Related
 
