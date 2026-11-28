@@ -382,11 +382,12 @@ ruling, [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on
 [specs#87](https://github.com/commonfabric/specs/pull/87). The memory store
 admits a session's `creator` record only when it names a principal the session
 authenticated as, and refuses a session's change or removal of a stored one;
-every session is judged alike, and only the server's own commits, which carry
-a serving runtime's writes, are not. That refuses more than #87
+every session is judged alike, and only the commits the server makes itself
+are not: `derived` ones, which carry a serving runtime's writes, `system`
+ones, and delegated ones. That refuses more than #87
 and stores nothing new, so it runs at the strict default, and its site in
 `runtime/memory/v2/cfc-creator-record.ts` carries a `SPEC-PENDING` marker
-naming #87. Behind the default-off `pieceCreatorRecord` dial, a runtime on a
+naming #112, with #87 as the ruling it stacks on. Behind the default-off `pieceCreatorRecord` dial, a runtime on a
 client then records no creator where #87 records another principal, which
 leaves that piece's update-added owner fields to their first writer.
 

@@ -189,10 +189,11 @@ decided by how the piece came to be:
   parent's record. The actor whose run happened to instantiate it is not the
   creator of what the parent's code made. `parentPieceRootId` and the
   instantiating piece's result cell are already in hand at that site. The
-  store admits a session's record only when it names the session's own
-  principal (`runtime/memory/v2/cfc-creator-record.ts`), so a runtime on a
-  client records the parent's creator only when that is its own identity, and
-  none otherwise. A serving runtime's record is not judged there, since its
+  store admits a session's record only when it names a principal the session
+  authenticated as, its key or the root issuer of the proof chain it presented
+  (`runtime/memory/v2/cfc-creator-record.ts`), so a runtime on a client records
+  the parent's creator only when that is its own identity, and none
+  otherwise. A serving runtime's record is not judged there, since its
   writes reach the store as the server's own `derived` commit.
 - A piece a builtin instantiates from a continuation of its action
   (`attributeInitialization: false`) names the instantiating piece's creator
@@ -208,9 +209,16 @@ A write to `creator` is admitted only when the transaction creates the result
 document, meaning the document holds no stored value and no stored envelope,
 and the write carries the runtime's write-policy authorization. The value
 must be a well-formed DID and must not be the serving runtime's identity.
-Every other write to the field is refused. This is what makes the record
-worth more than a space grant: a client that can write the space can still
-not rename a creator. The gate for runtime-minted integrity atoms
+Every other write to the field is refused. That binds only a writer going
+through the runtime: a modified client with a space grant can skip commit
+preparation and hand the store any record. What keeps such a client from
+naming or renaming a creator is the store's own admission
+(`runtime/memory/v2/cfc-creator-record.ts`): a session's commit may write a
+record only where none is stored and only naming a principal the session
+authenticated as, and may not change or remove a stored one except by
+deleting the document. Commit preparation decides which principal an honest
+runtime records; the store decides which records any session may store. The
+gate for runtime-minted integrity atoms
 (`gateRuntimeMintedIntegrity`, the `cf-compiled-by` attestation) is the
 precedent for a fact only the runtime asserts.
 

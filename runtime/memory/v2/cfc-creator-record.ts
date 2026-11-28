@@ -28,14 +28,15 @@
  * a record bound into the piece's identity would close them as a class.
  */
 
-// SPEC-PENDING https://github.com/commonfabric/specs/pull/87 The ruling has
-// the runtime refuse a record its own setup did not make, and names the
-// parent's creator for a child; the store rule here also refuses a session's
-// record naming anyone but its principal. It refuses more than the ruling does
-// and stores nothing new. A runtime on a client, behind the default-off
-// `pieceCreatorRecord`, then records none where the ruling records another
-// principal (`#setupInternal` in the runner). The ruling that states both,
-// stacked on that pull request: https://github.com/commonfabric/specs/pull/112
+// SPEC-PENDING https://github.com/commonfabric/specs/pull/112 The store's
+// ruling, stacked on https://github.com/commonfabric/specs/pull/87. That
+// pull request has the runtime refuse a record its own setup did not make,
+// and names the parent's creator for a child; the store rule here also
+// refuses a session's record naming anyone but its principal. It refuses
+// more than #87 does and stores nothing new. A runtime on a client, behind
+// the default-off `pieceCreatorRecord`, then records none where #87 records
+// another principal (`#setupInternal` in the runner). The store's ruling
+// states both.
 
 import { type FabricValue, valueEqual } from "@commonfabric/data-model";
 

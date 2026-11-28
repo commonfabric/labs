@@ -1101,9 +1101,10 @@ holds the measurements and the conditions for revisiting.
   The record and its admission rule are spec text under the CFC
   correspondence procedure, so they land behind `SPEC-PENDING` markers in
   `runtime/runner/src/cfc/prepare.ts`,
-  `runtime/runner/src/cfc/piece-creator-evidence.ts` and
-  `runtime/memory/v2/cfc-creator-record.ts` naming the ruling,
-  [specs pull request 87](https://github.com/commonfabric/specs/pull/87). The
+  `runtime/runner/src/cfc/piece-creator-evidence.ts` naming the ruling,
+  [specs pull request 87](https://github.com/commonfabric/specs/pull/87), and
+  in `runtime/memory/v2/cfc-creator-record.ts` naming the store's ruling
+  stacked on it. The
   store's admission refuses more than that ruling does and stores nothing new,
   so it runs unconditionally; the ruling that states it is
   [specs pull request 112](https://github.com/commonfabric/specs/pull/112), stacked on pull request 87. Once those rulings merge, the record becomes unconditional
@@ -1221,8 +1222,9 @@ holds the measurements and the conditions for revisiting.
   space sees it (README, finding 7, and
   `patterns/integration/share-space-reclassify-two-browsers.test.ts`). The
   conditions for turning it on are in that fixture's `PROPOSAL.md`, Risks.
-- **Path to removal.** Once both rulings merge, the store admits the record,
-  only the creator may change a piece's source, and documents created before
+- **Path to removal.** Once both rulings merge, only the creator may change a
+  piece's source, a legacy piece's record needs its principal's act, and
+  documents created before
   the flag can be rebuilt, remove the env mapping, the runtime option and its authority and
   shell-source entries, the default, and the transaction dial; the
   substitution in `prepare.ts` stays.
