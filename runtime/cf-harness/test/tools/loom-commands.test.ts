@@ -1926,6 +1926,7 @@ describe("loom-commands tools", () => {
           [{ ...readOf("gmail:thread-a", "r", [OWNER]), revision: 3 }],
           [{ ...readOf("gmail:thread-a", "r", [OWNER]), coverage: {} }],
           [{ ...readOf("", "r", [OWNER]) }],
+          ["gmail:thread-a"],
           [readOf("gmail:thread-a", "r", [OWNER], { provisional: [] })],
           [readOf("gmail:thread-a", "r", [OWNER], { provisional: [3] })],
           [readOf("gmail:thread-a", "r", [OWNER], { provisional: "gmail" })],
@@ -2214,6 +2215,35 @@ describe("loom-commands tools", () => {
           "call-1",
         ),
       ).not.toHaveProperty("truncated");
+    });
+
+    it("carries the reads an answer recorded, and refuses a result whose recorded reads are not reads", () => {
+      const read = readOf("gmail:thread-a", "rev-a", [OWNER]);
+      expect(
+        loomCommandModelContextObservation(
+          {
+            status: "executed",
+            truncated: false,
+            cfc: { version: 1, reads: [read] },
+          },
+          resultRef,
+          "call-1",
+        ),
+      ).toEqual({
+        toolCallId: "call-1",
+        toolId: "run_command",
+        outputId: resultRef.outputId,
+        channels: ["output"],
+        label: { confidentiality: [] },
+        reads: [read],
+      });
+      expect(() =>
+        loomCommandModelContextObservation(
+          { status: "executed", cfc: { version: 1, reads: [{ ref: "x" }] } },
+          resultRef,
+          "call-1",
+        )
+      ).toThrow(TypeError);
     });
 
     it("returns `undefined` for a withheld answer, an undelivered command, or a non-object", () => {
