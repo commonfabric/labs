@@ -2967,18 +2967,23 @@ profile that admits one, and the job browses through it: the lane adds
 `delegate_task` and the `browser` subagent profile to that job alone, as the
 console's `--allow-browser-host` does for a turn. The caller holds
 `GET /jobs/<id>/browser/stream` open, a stream of server-sent
-`request {id,
-operation}`, `withdraw {id}` and `close` events, and answers each
-operation with `POST /jobs/<id>/browser/result {id, result}` (the operations and
-results are cf-harness's `contracts/browser-host.ts`). The semantics are the
-console host's: every operation is answered, one withdrawn while the host holds
-it is acknowledged by its answer before the next is sent, and the job's end says
-`close` and settles anything outstanding as `session-ended`. Unlike the
-console's, the stream is resumable, since the caller is usually a relay: a
-dropped stream leaves the host open, a new attach replaces the old and is sent
-every operation still unanswered and every withdrawal still unacknowledged
-first, and a repeated answer reads as a duplicate. `GET /jobs/<id>` shows the
-host as `browser {state, attached, outstanding, withdrawn}`.
+`request {id, session, operation}` (with `session` absent for the job's unnamed
+session), `withdraw {id}` and `close` events, and answers each operation with
+`POST /jobs/<id>/browser/result {id, result}` (the operations and results are
+cf-harness's `contracts/browser-host.ts`). The semantics are the console host's:
+every operation is answered, one withdrawn while the host holds it is
+acknowledged by its answer before the next operation for the same session is
+sent, other sessions and every `session-list` and `site-of` carry on, and the
+job's end says `close` and settles anything outstanding as `session-ended`.
+Unlike the console's, the stream is resumable, since the caller is usually a
+relay: a dropped stream leaves the host open, a new attach replaces the old and
+is sent every operation still unanswered and every withdrawal still
+unacknowledged first, and a repeated answer reads as a duplicate. A host that
+ends the job's browser on its own says so with `POST /jobs/<id>/browser/detach`,
+after which every outstanding and later operation, in every session, settles as
+`session-ended`; a detach for a job with no browser host, or one already
+detached, succeeds and changes nothing. `GET /jobs/<id>` shows the host as
+`browser {state, attached, outstanding, withdrawn}`.
 
 `resultSchema` is optional. With a schema, a job ends `completed` with its
 validated JSON result once the harness accepts the model's `submit_result` and

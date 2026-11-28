@@ -3292,13 +3292,15 @@ deno task run -- \
 ### A browser host
 
 A run may instead have a browser host attached: a trusted component, such as the
-Weaver, that owns a web engine, shows its page to the owner, and executes the
-`browser` tool's operations in the one session it holds for the run. The
-protocol is `src/contracts/browser-host.ts` (`HarnessBrowserHost`), and the
-tool's host backend is `src/tools/browser-host-backend.ts`. The interactive chat
-service takes a host per turn (`startTurn`'s `attached.browserHost`), which is
-how the console's [browser host routes](console/README.md#browser-hosts) reach
-it.
+Weaver, that owns a web engine, shows its pages to the owner, and executes the
+`browser` tool's operations in the run's unnamed session. The protocol also lets
+a run open further sessions, each either read-only or locked to one site.
+Operations on different sessions run concurrently, and operations on one session
+run in order. The protocol is `src/contracts/browser-host.ts`
+(`HarnessBrowserHost`), and the tool's host backend is
+`src/tools/browser-host-backend.ts`. The interactive chat service takes a host
+per turn (`startTurn`'s `attached.browserHost`), which is how the console's
+[browser host routes](console/README.md#browser-hosts) reach it.
 
 With a host, the tool offers more than a lease does, and the model is offered
 the host's descriptor rather than the lease's: `back`, `forward`, `reload`,

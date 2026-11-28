@@ -546,6 +546,27 @@ describe("local-jobs/api", () => {
       message: "Use April.",
     };
 
+    it("refuses a message whose attachments are malformed, recording nothing under its key", async () => {
+      const { post, store } = apiWith();
+      try {
+        const { job } = await (await post("/jobs", BODY)).json();
+        store.claimNext();
+        const refused = await post(`/jobs/${job.id}/messages`, {
+          ...MESSAGE,
+          inputs: { notes: 7 },
+        });
+        const accepted = await post(`/jobs/${job.id}/messages`, MESSAGE);
+
+        expect(refused.status).toBe(400);
+        expect((await refused.json()).error).toBe(
+          "`inputs` must map names to piece addresses.",
+        );
+        expect(accepted.status).toBe(201);
+      } finally {
+        store.close();
+      }
+    });
+
     it("returns a pending record and streams delivery at the run's turn", async () => {
       const { post, store, call } = apiWith();
       try {
@@ -1394,10 +1415,47 @@ describe("local-jobs/api", () => {
       }
     });
 
+    it("takes a detach, ending every operation as session-ended, and takes it again", async () => {
+      const { call, post, declare } = browsing();
+      const { id, host } = await declare();
+      const opened = host.perform({
+        session: "a",
+        operation: { action: "open", url: "https://a.test" },
+      });
+      await frames(await call(`/jobs/${id}/browser/stream`), 1);
+
+      const detached = await post(`/jobs/${id}/browser/detach`, {});
+      const again = await post(`/jobs/${id}/browser/detach`, {});
+
+      expect(detached.status).toBe(200);
+      expect(await detached.json()).toEqual({ ok: true });
+      expect(again.status).toBe(200);
+      expect(await opened).toEqual({
+        status: "session-ended",
+        message: "the browser host detached",
+      });
+      expect((await (await call(`/jobs/${id}`)).json()).job.browser)
+        .toMatchObject({ state: "closed", outstanding: 0 });
+    });
+
+    it("takes a detach for a job that declared no host, and changes nothing", async () => {
+      const { post, call } = browsing();
+      const { job } = await (await post("/jobs", BODY)).json();
+
+      const detached = await post(`/jobs/${job.id}/browser/detach`, {});
+
+      expect(detached.status).toBe(200);
+      expect(await detached.json()).toEqual({ ok: true });
+      expect((await (await call(`/jobs/${job.id}`)).json()).job.browser)
+        .toBeUndefined();
+    });
+
     it("streams operations, takes their answers, and shows the host on the job", async () => {
       const { call, post, declare } = browsing();
       const { id, host } = await declare();
-      const opened = host.perform({ action: "open", url: "https://a.test" });
+      const opened = host.perform({
+        operation: { action: "open", url: "https://a.test" },
+      });
       const read = frames(await call(`/jobs/${id}/browser/stream`), 1);
       expect(await read).toEqual([
         'event: request\ndata: {"id":"1","operation":{"action":"open","url":"https://a.test"}}',
@@ -1430,7 +1488,9 @@ describe("local-jobs/api", () => {
     it("refuses an unknown operation, a non-result, a body that is not an object, and an oversized result", async () => {
       const { call, post, declare } = browsing();
       const { id, host } = await declare();
-      const snapshot = host.perform({ action: "snapshot", interactive: true });
+      const snapshot = host.perform({
+        operation: { action: "snapshot", interactive: true },
+      });
       await frames(await call(`/jobs/${id}/browser/stream`), 1);
 
       const unknown = await post(`/jobs/${id}/browser/result`, {

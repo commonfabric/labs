@@ -9,10 +9,12 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 
-import type {
-  BrowserHostOperation,
-  BrowserHostResult,
-  HarnessBrowserHost,
+import {
+  type BrowserHostOperation,
+  type BrowserHostRequest,
+  type BrowserHostResult,
+  type HarnessBrowserHost,
+  isBrowserHostResult,
 } from "../src/contracts/browser-host.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
@@ -87,12 +89,15 @@ class FakeSandboxRuntime implements SandboxRuntime {
 }
 
 /**
- * A host that records each operation it is sent and answers from a script,
- * `ok` on the page above once the script runs out. An `Error` in the script
- * stands for a host that could not be reached.
+ * A host that records each operation it is sent, and the session it
+ * addressed, and answers from a script, `ok` on the page above once the
+ * script runs out. An `Error` in the script stands for a host that could not
+ * be reached. A scripted answer that is not a result for the operation
+ * rejects, naming the operation, so a mistaken script fails the test.
  */
 class FakeBrowserHost implements HarnessBrowserHost {
   readonly operations: BrowserHostOperation[] = [];
+  readonly sessions: (string | undefined)[] = [];
 
   readonly #answers: (BrowserHostResult | Error)[];
 
@@ -100,10 +105,22 @@ class FakeBrowserHost implements HarnessBrowserHost {
     this.#answers = answers;
   }
 
-  perform(operation: BrowserHostOperation): Promise<BrowserHostResult> {
-    this.operations.push(operation);
+  perform<O extends BrowserHostOperation>(
+    request: BrowserHostRequest<O>,
+  ): Promise<BrowserHostResult<O>> {
+    this.operations.push(request.operation);
+    this.sessions.push(request.session);
     const next = this.#answers.shift() ?? { status: "ok", page: PAGE };
-    return next instanceof Error ? Promise.reject(next) : Promise.resolve(next);
+    if (next instanceof Error) {
+      return Promise.reject(next);
+    }
+    return isBrowserHostResult(next, request)
+      ? Promise.resolve(next)
+      : Promise.reject(
+        new Error(
+          `the script's answer is no ${request.operation.action} result`,
+        ),
+      );
   }
 }
 
@@ -165,6 +182,8 @@ describe("browser-host-backend", () => {
           value: { kind: "text", text: "blue" },
         },
       ]);
+      // The tool drives the run's unnamed session.
+      expect(host.sessions).toEqual(host.operations.map(() => undefined));
     });
 
     it("sends a wait for a pattern that names a host on the open web", async () => {
@@ -795,7 +814,7 @@ describe("browser-host-backend", () => {
       const unreachableEngine = createEngine(unreachable);
       const aborting = new AbortController();
       const withdrawn: HarnessBrowserHost = {
-        perform: (_operation, signal) => {
+        perform: (_request, signal) => {
           aborting.abort(new Error("the run was canceled"));
           return Promise.reject(signal?.reason);
         },
@@ -1052,12 +1071,14 @@ describe("browser-host-backend", () => {
         { status: "stale-ref", message: "the page changed" },
         { status: "owner-only-field", message: "a password field" },
         { status: "session-ended", message: "the owner closed it" },
+        { status: "off-site", message: "not on the bound site" },
+        { status: "wrong-kind", message: "not in this kind of session" },
         { status: "failed", message: "navigation failed" },
       ]);
       const engine = createEngine(host);
 
       const codes = [];
-      for (let index = 0; index < 4; index++) {
+      for (let index = 0; index < 6; index++) {
         const output = await invoke(engine, { action: "click", ref: "@e1" });
         codes.push(output.status === "error" ? output.code : output.status);
       }
@@ -1066,6 +1087,8 @@ describe("browser-host-backend", () => {
         "stale_ref",
         "owner_only_field",
         "session_ended",
+        "destination_not_allowed",
+        "invalid_input",
         "command_failed",
       ]);
     });
