@@ -11,6 +11,9 @@ not measured at all. Stages 6 to 8 are not started.
 [`stored-output-currency-across-spaces.md`](stored-output-currency-across-spaces.md)
 continues this plan for a piece that reads another space or a wish, and its
 steps 1 to 3 come before stage 5.
+[The handover record of 2026-11-23](../history/plans/2026-11-23-stored-output-currency-handover.md)
+lists the open work in the order it was understood then, with what the
+Topics and FabriChat benchmarks showed.
 
 A serving loop starts a piece whenever a session's demand reaches one of its
 documents, and a fresh serving runtime runs every demanded computation of the
@@ -761,6 +764,10 @@ Under `skip`, `currency.refused["stale-upstream"]` counts the roots
   no session demands since, still has its reads in its slice: a change to
   one of them marks the slice, whose viewers start the piece once on their
   next cold demand, and the record that start leaves no longer holds them.
+- **A computation that runs for each session runs for every new one.** A
+  session that has just opened holds no instance of what such a computation
+  writes, so each piece with one starts for it whatever its record says. A
+  viewer who returns in a new session pays a start for every such piece.
 - **A slice outlives its session.** Nothing removes the slices of a session
   that ended. No judgment reads them, since no demand row is resolved under
   them, and an advance that finds a shared document changed reads the rows
