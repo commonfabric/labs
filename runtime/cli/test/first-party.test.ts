@@ -105,6 +105,55 @@ describe("first-party requests", () => {
         }),
       ).rejects.toThrow(/https/);
     });
+
+    it("sends a signed request to an https: address off this machine", async () => {
+      const key = await keyfile("me.key");
+      let seen: { url: string; did: string } | undefined;
+      const fetcher: typeof globalThis.fetch = async (input, init) => {
+        const request = new Request(input, init);
+        const { userDid } = await verifyFirstPartyHttpRequest({ request });
+        seen = { url: request.url, did: userDid };
+        return new Response("remote");
+      };
+
+      const text = await signedFetch({
+        url: "https://cfs.example.ts.net/config",
+        method: "GET",
+        identity: key.path,
+        fetch: fetcher,
+      });
+
+      expect(text).toBe("remote");
+      expect(seen).toEqual({
+        url: "https://cfs.example.ts.net/config",
+        did: key.did,
+      });
+    });
+
+    it("refuses text that is not a URL, sending nothing", async () => {
+      const key = await keyfile("me.key");
+      await expect(
+        signedFetch({ url: "cfs config", method: "GET", identity: key.path }),
+      ).rejects.toThrow("cfs config is not a URL.");
+      expect(hits).toEqual([]);
+    });
+
+    it("refuses a body on a bodyless method, sending nothing", async () => {
+      const key = await keyfile("me.key");
+      for (const method of ["get", "HEAD"]) {
+        await expect(
+          signedFetch({
+            url: `${base}/config`,
+            method,
+            body: "{}",
+            identity: key.path,
+          }),
+        ).rejects.toThrow(
+          `A ${method.toUpperCase()} request carries no body.`,
+        );
+      }
+      expect(hits).toEqual([]);
+    });
   });
 
   describe("pairWithService", () => {

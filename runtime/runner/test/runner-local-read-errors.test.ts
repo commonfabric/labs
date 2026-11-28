@@ -2,6 +2,7 @@ import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   afterEach,
   beforeEach,
@@ -18,7 +19,10 @@ import {
   localReadFailure,
   restrictToLocalReads,
 } from "../src/storage/local-read-policy.ts";
-import { trustExecutable } from "./support/trusted-builder.ts";
+import {
+  createTrustedBuilder,
+  trustExecutable,
+} from "./support/trusted-builder.ts";
 
 const signer = await Identity.fromPassphrase("runner local read errors");
 const space = signer.did();
@@ -38,6 +42,62 @@ describe("runner-local-read-errors", () => {
   afterEach(async () => {
     await runtime.dispose();
     await storage.close();
+  });
+
+  it("refuses, on its local basis, to start the piece a JavaScript action's result names", async () => {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const inner = pattern<{ v: number }>(({ v }) => ({
+      tripled: lift((input: number) => input * 3)(v),
+    }));
+    const startInner = (v: number) => inner({ v });
+    const double = (v: number) => v * 2;
+    const program = pattern<{ value: number }>(({ value }) => ({
+      inner: lift(startInner)(value),
+      doubled: lift(double)(value),
+    }));
+    using registrations = spy(runtime.scheduler, "subscribe");
+    const result = runtime.run(
+      undefined,
+      program,
+      { value: 2 },
+      runtime.getCell(space, "pattern-valued result"),
+    );
+    await result.pull();
+    await runtime.idle();
+    expect(result.get()).toMatchObject({ inner: { tripled: 6 }, doubled: 4 });
+    const actionRunning = (implementation: unknown) => {
+      const action = registrations.calls.map((call) => call.args[0]).find(
+        (action) =>
+          "module" in action && isObjectOrArray(action.module) &&
+          action.module.implementation === implementation,
+      );
+      expect(action).toBeDefined();
+      return action!;
+    };
+
+    const runLocally = async (action: Action) => {
+      const tx = runtime.edit();
+      restrictToLocalReads(tx.tx);
+      try {
+        const thrown = await Promise.resolve().then(() => action(tx)).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        return { thrown, failure: localReadFailure(tx) };
+      } finally {
+        tx.abort();
+      }
+    };
+
+    const refused = await runLocally(actionRunning(startInner));
+    expect(refused.failure?.address.id).toBe(
+      result.getAsNormalizedFullLink().id,
+    );
+    expect(refused.thrown).toBe(refused.failure);
+    expect(await runLocally(actionRunning(double))).toEqual({
+      thrown: undefined,
+      failure: undefined,
+    });
   });
 
   for (const asyncBody of [false, true]) {

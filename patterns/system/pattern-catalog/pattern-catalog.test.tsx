@@ -21,6 +21,7 @@ import {
   assert,
   currentPrincipal,
   handler,
+  NAME,
   pattern,
   principalOf,
   TESTS,
@@ -304,6 +305,10 @@ export default pattern(() => {
   const assert_untapped_shows_nothing = assert(() =>
     split.answer === null && !hasText(split[UI], "Getting it")
   );
+  // The button is named for its action, the same whichever pattern it gets.
+  const assert_button_named_for_its_action = assert(() =>
+    split[NAME] === "Get it" && missing[NAME] === "Get it"
+  );
 
   const assert_tap_appends_one_request = assert(() =>
     catalog.getItRequests.length === 2 &&
@@ -430,6 +435,7 @@ export default pattern(() => {
       { action: action_forge },
       { assertion: assert_forged_and_untrusted_writes_refused },
       { assertion: assert_untapped_shows_nothing },
+      { assertion: assert_button_named_for_its_action },
       { action: split.getIt, trustedUi: TRUSTED_TAP },
       { action: missing.getIt, trustedUi: TRUSTED_TAP },
       { assertion: assert_tap_appends_one_request },

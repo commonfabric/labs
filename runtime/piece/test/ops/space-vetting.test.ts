@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
+import type { JSONSchema } from "@commonfabric/api";
 import { createSession, Identity } from "@commonfabric/identity";
 import type { ACL } from "@commonfabric/memory/acl";
 import {
@@ -21,7 +22,7 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
-import { vetSpace } from "../../src/ops/space-vetting.ts";
+import { loomSchemaRefusal, vetSpace } from "../../src/ops/space-vetting.ts";
 import { installCustomRoot } from "../install-custom-root.ts";
 
 const identity = await Identity.fromPassphrase("space vetting owner");
@@ -330,5 +331,40 @@ describe("vetSpace()", () => {
 
     await expect(vetSpace(runtime, space, identity.did(), "photo-album"))
       .rejects.toThrow("photo-album");
+  });
+});
+
+describe("loomSchemaRefusal()", () => {
+  /** A Loom's public composition, as its setup stores it. */
+  const composition: JSONSchema = {
+    type: "object",
+    properties: {
+      panels: { type: "array", items: { type: "object" } },
+      addPanel: { asCell: ["stream"] },
+      removePanel: { asCell: ["stream"] },
+    },
+  };
+
+  it("passes a root that stores a Loom's composition", () => {
+    expect(loomSchemaRefusal(composition)).toBeUndefined();
+  });
+
+  it("returns `space-root-mismatch` for a root that stores no schema or another composition", () => {
+    expect(loomSchemaRefusal(undefined)).toBe("space-root-mismatch");
+    expect(loomSchemaRefusal({
+      type: "object",
+      properties: {
+        panels: { type: "array" },
+        addPanel: { asCell: ["stream"] },
+        removePanel: { type: "object" },
+      },
+    })).toBe("space-root-mismatch");
+  });
+
+  it("throws, rather than refusing, while the schema is a reference whose documents have not arrived", () => {
+    expect(() => loomSchemaRefusal({ $ref: "cid:fid1:not-yet-arrived" }))
+      .toThrow(
+        "The root's result schema refers to documents that have not arrived",
+      );
   });
 });

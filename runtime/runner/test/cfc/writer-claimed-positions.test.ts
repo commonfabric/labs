@@ -94,4 +94,15 @@ describe("prepareBoundaryCommit()", () => {
     expect(reasons).toEqual([]);
     expect(entries).toEqual([adminEntry]);
   });
+
+  it("persists no declared entry at a union a branch of which refers to the unconstrained schema", async () => {
+    // That branch admits any value without a claim, as `true` does.
+
+    const { reasons, entries } = await persist(
+      { $ref: "#/$defs/Anything" } as JSONSchema,
+      5,
+    );
+    expect(reasons).toEqual([]);
+    expect(entries).toEqual([]);
+  });
 });

@@ -1,8 +1,9 @@
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 import {
   inspectLinkedValueCommand,
   inspectMaterializedValueCommand,
   inspectValueCommand,
+  readableCellLink,
 } from "./provenance.ts";
 import { test } from "@commonfabric/test-support/test";
 
@@ -74,4 +75,46 @@ test("recursive retrieval distinguishes declared and raw scopes", () => {
   assert(command.includes("latest"));
   assert(command.includes("--scope 'LINK_SCOPE_KEY'"));
   assert(!command.includes("--scope '<resolved $link.scope>'"));
+});
+
+test("a cell's link keeps its scope and gets a path of its own", () => {
+  const path = ["value", 0];
+  const scoped = readableCellLink({
+    getAsNormalizedFullLink: () => ({ ...baseLink, path, scope: "user" }),
+  });
+  assertEquals(scoped, { ...baseLink, path: ["value", 0], scope: "user" });
+  scoped.path.push("appended");
+  assertEquals(path, ["value", 0]);
+
+  const unscoped = readableCellLink({
+    getAsNormalizedFullLink: () => baseLink,
+  });
+  assertEquals(unscoped, baseLink);
+  assert(!("scope" in unscoped));
+});
+
+test("a value that is not a cell has no link", () => {
+  for (const value of [undefined, null, "of:session", baseLink]) {
+    assertThrows(
+      () => readableCellLink(value),
+      Error,
+      "Raw data source does not expose a Fabric cell",
+    );
+  }
+});
+
+test("a cell whose link lacks an id, a space, or a path has no link", () => {
+  const incomplete = [
+    undefined,
+    { ...baseLink, id: undefined },
+    { ...baseLink, space: 7 },
+    { ...baseLink, path: "value/details" },
+  ];
+  for (const link of incomplete) {
+    assertThrows(
+      () => readableCellLink({ getAsNormalizedFullLink: () => link }),
+      Error,
+      "Raw data source has an incomplete Fabric cell link",
+    );
+  }
 });

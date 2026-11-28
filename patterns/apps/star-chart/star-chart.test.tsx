@@ -6,10 +6,25 @@
  *
  * Run: deno task cf test patterns/apps/star-chart/star-chart.test.tsx --verbose
  */
-import { action, assert, FS, pattern, TESTS, UI, Writable } from "commonfabric";
+import {
+  action,
+  assert,
+  FS,
+  NAME,
+  pattern,
+  TESTS,
+  UI,
+  Writable,
+} from "commonfabric";
 import {
   clickButton,
+  findNode,
+  findNodeByProp,
+  fireClick,
+  hasExactText,
   hasText,
+  isElement,
+  typeInto,
 } from "../../tools/test-support/vnode-helpers.ts";
 import StarChart, {
   type DayRecord,
@@ -36,6 +51,14 @@ const march = (...dates: number[]): DayRecord[] =>
 const listedDays = (content: string): number =>
   content.split("\n").filter((line) => /^- \d{4}-\d{2}-\d{2}:/.test(line))
     .length;
+
+/** The corrections view's toggle for the day labelled `label`. */
+const toggleFor = (view: unknown, label: string): unknown =>
+  findNodeByProp(view, "aria-label", `Toggle star for ${label}`);
+
+/** Whether that toggle shows `mark`. */
+const toggleShows = (view: unknown, label: string, mark: string): boolean =>
+  hasExactText(toggleFor(view, label), mark);
 
 export default pattern(() => {
   const today = new Writable("2026-03-10");
@@ -161,6 +184,51 @@ export default pattern(() => {
     listedDays(chart[FS].content) === 5
   );
 
+  // The corrections view lists recent days, newest first, each with a toggle:
+  // earned days show a star, the forgiven 13th a dim star, missed days a ring.
+  const action_open_corrections = action(() =>
+    clickButton(chart[UI], "Edit past days...")
+  );
+  const assert_corrections_shown = assert(() =>
+    hasText(chart[UI], "Edit Past Days") &&
+    !hasText(chart[UI], "Recent Days") &&
+    toggleShows(chart[UI], "Sat, Mar 14", "⭐") &&
+    toggleShows(chart[UI], "Fri, Mar 13", "⭐") &&
+    toggleShows(chart[UI], "Mon, Mar 9", "○") &&
+    // Thirty days back from the 14th, and no further.
+    toggleShows(chart[UI], "Fri, Feb 13", "○") &&
+    toggleFor(chart[UI], "Thu, Feb 12") === undefined
+  );
+
+  // Adding a star on the 9th extends the streak back to it.
+  const action_star_ninth = action(() =>
+    fireClick(toggleFor(chart[UI], "Mon, Mar 9"), "the toggle for Mar 9")
+  );
+  const assert_ninth_starred = assert(() =>
+    chart.days.some((d) => d.date === "2026-03-09" && d.earned) &&
+    chart.currentStreak === 6 && chart.bestStreak === 6 &&
+    toggleShows(chart[UI], "Mon, Mar 9", "⭐") &&
+    toggleShows(chart[UI], "Tue, Mar 10", "⭐")
+  );
+
+  // Removing it again restores the five-day streak.
+  const action_unstar_ninth = action(() =>
+    fireClick(toggleFor(chart[UI], "Mon, Mar 9"), "the toggle for Mar 9")
+  );
+  const assert_ninth_cleared = assert(() =>
+    !chart.days.some((d) => d.date === "2026-03-09") &&
+    chart.currentStreak === 5 && chart.bestStreak === 5 &&
+    toggleShows(chart[UI], "Mon, Mar 9", "○")
+  );
+
+  const action_close_corrections = action(() =>
+    clickButton(chart[UI], "← Back")
+  );
+  const assert_main_view_back = assert(() =>
+    hasText(chart[UI], "Recent Days") &&
+    !hasText(chart[UI], "Edit Past Days")
+  );
+
   // Months later the timeline and the [FS] list reach back 30 days, not to
   // the first star.
   const action_months_later = action(() => today.set("2026-06-01"));
@@ -169,6 +237,35 @@ export default pattern(() => {
     chart[FS].content.includes("2026-05-03: missed") &&
     !chart[FS].content.includes("2026-05-02") &&
     chart.currentStreak === 0 && chart.bestStreak === 5
+  );
+
+  // The chart is named for its goal, and renaming the goal in the settings
+  // view renames the chart.
+  const assert_named_for_goal = assert(() =>
+    chart[NAME] === "⭐ Gold Star Goal"
+  );
+  const action_open_settings = action(() =>
+    fireClick(
+      findNode(
+        chart[UI],
+        (node) => isElement(node, "button") && hasText(node, "Star Chart"),
+      ),
+      "the goal header",
+    )
+  );
+  const assert_settings_shown = assert(() =>
+    hasText(chart[UI], "Edit Goal") && !hasText(chart[UI], "Recent Days")
+  );
+  const action_rename_goal = action(() =>
+    typeInto(chart[UI], "e.g., Dry Night, Big Kid Day", "Dry Night")
+  );
+  const assert_goal_renamed = assert(() =>
+    chart.goalName === "Dry Night" && chart[NAME] === "⭐ Dry Night" &&
+    chart[FS].content.startsWith("# Dry Night\n")
+  );
+  const action_settings_done = action(() => clickButton(chart[UI], "Done"));
+  const assert_main_view_after_settings = assert(() =>
+    hasText(chart[UI], "Recent Days") && !hasText(chart[UI], "Edit Goal")
   );
 
   return {
@@ -197,8 +294,23 @@ export default pattern(() => {
       { action: action_restore_twelfth },
       { assertion: assert_streak_restored },
       { assertion: assert_fs_projection },
+      { action: action_open_corrections },
+      { assertion: assert_corrections_shown },
+      { action: action_star_ninth },
+      { assertion: assert_ninth_starred },
+      { action: action_unstar_ninth },
+      { assertion: assert_ninth_cleared },
+      { action: action_close_corrections },
+      { assertion: assert_main_view_back },
       { action: action_months_later },
       { assertion: assert_recent_days_capped },
+      { assertion: assert_named_for_goal },
+      { action: action_open_settings },
+      { assertion: assert_settings_shown },
+      { action: action_rename_goal },
+      { assertion: assert_goal_renamed },
+      { action: action_settings_done },
+      { assertion: assert_main_view_after_settings },
     ],
     chart,
   };

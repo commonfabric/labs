@@ -85,8 +85,8 @@ class MathWidget extends WidgetType {
   }
 
   /**
-   * Draws the formula, or, when KaTeX cannot parse it, its TeX as written
-   * with KaTeX's message as the tooltip.
+   * Draws the formula, or, when it cannot be set, its TeX as written with the
+   * reason it cannot as the tooltip.
    */
   override toDOM(): HTMLElement {
     const element = document.createElement(this.#block ? "div" : "span");

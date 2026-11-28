@@ -604,6 +604,7 @@ const IFC_KEY_ROLES: { readonly [K in IfcKey]: IfcKeyRole } = {
   exactCopyOf: "declared",
   projection: "declared",
   collection: "declared",
+  reclassify: "declared",
   flowPrecisionClaim: "declared",
   uiContract: "declared",
   writeAuthorizedBy: "declared",

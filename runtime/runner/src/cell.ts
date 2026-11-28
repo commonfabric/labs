@@ -2452,14 +2452,14 @@ export class CellImpl<T extends FabricValue>
    * collection's own space.
    */
   add(kind: string, member: unknown): void {
-    const collection = this.#indexedCollectionDescriptor();
+    const collection = this.#indexedCollection();
     if (collection === undefined || !this.#tx) {
       throw new TypeError(
         "`.add()` is only available on an indexed collection, within a " +
           "transaction (e.g. inside a handler)",
       );
     }
-    const { descriptor } = indexedKindOf(collection, String(kind));
+    const { descriptor } = indexedKindOf(collection.descriptor, String(kind));
     const cell = asBoundCell(member);
     if (cell === undefined) {
       throw new TypeError("an indexed collection holds cells only");
@@ -2476,15 +2476,12 @@ export class CellImpl<T extends FabricValue>
     // A runtime that maintains the collections of spaces whose declaring
     // piece it never loaded finds this one in the registry, so the commit
     // that gives the collection a member lists it.
-    const value: unknown = this.getRaw({ lastNode: "value" });
-    if (isSqliteDbRef(value)) {
-      listIndexedCollection(
-        this.#runtime,
-        this.#tx,
-        this.withTx(this.#tx).resolveAsCell(),
-        value.id,
-      );
-    }
+    listIndexedCollection(
+      this.#runtime,
+      this.#tx,
+      this.withTx(this.#tx).resolveAsCell(),
+      collection.id,
+    );
     // A piece the calling handler has just made is set up only if something
     // the handler writes refers to it, and a row is not such a write. The
     // handle is written by every `exec()` already, so it carries the
@@ -2493,7 +2490,7 @@ export class CellImpl<T extends FabricValue>
       "latest",
     ).set(cell);
     const bound = cell.withTx(this.#tx);
-    this.#registerIndexedCollection([
+    this.#registerIndexedCollection(collection.id, [
       bound.getAsNormalizedFullLink().id,
       bound.resolveAsCell().getAsNormalizedFullLink().id,
     ], rows);
@@ -2501,29 +2498,35 @@ export class CellImpl<T extends FabricValue>
 
   /**
    * Helper for the indexed-collection methods, which returns this cell's
-   * collection descriptor, or `undefined` when its value is not the handle
-   * of one.
+   * collection descriptor and the id of the database that holds its rows, or
+   * `undefined` when its value is not the handle of a database that declares
+   * one.
    */
-  #indexedCollectionDescriptor(): IndexedCollectionDescriptor | undefined {
-    return indexedCollectionDescriptorOf(this.getRaw({ lastNode: "value" }));
+  #indexedCollection():
+    | { descriptor: IndexedCollectionDescriptor; id: string }
+    | undefined {
+    const value: unknown = this.getRaw({ lastNode: "value" });
+    const descriptor = indexedCollectionDescriptorOf(value);
+    return descriptor !== undefined && isSqliteDbRef(value)
+      ? { descriptor, id: value.id }
+      : undefined;
   }
 
   /**
    * Helper for the indexed-collection methods, which makes the collection
    * known to the runtime's maintainer once this transaction's writes are
    * durable, and has it re-read the members whose own documents are
-   * `members`. A member added in the transaction that creates it can hold
-   * fields this transaction has not written yet, and the commit carrying them
-   * can reach the maintainer before the member's rows exist to be found.
+   * `members`. `id` is the id of the collection's database. A member added
+   * in the transaction that creates it can hold fields this transaction has
+   * not written yet, and the commit carrying them can reach the maintainer
+   * before the member's rows exist to be found.
    */
   #registerIndexedCollection(
+    id: string,
     members: readonly string[] = [],
     added?: MemberRows,
   ): void {
     const handle = this.resolveAsCell().getAsNormalizedFullLink();
-    const value: unknown = this.getRaw({ lastNode: "value" });
-    if (!isSqliteDbRef(value)) return;
-    const id = value.id;
     const maintainer = this.#runtime.indexedCollections;
     const durable = () => {
       maintainer.register(handle, id);
@@ -3975,21 +3978,33 @@ export class CellImpl<T extends FabricValue>
     type ElemT = T extends (infer U)[] ? U : never;
     const got = this.get();
     if (!Array.isArray(got)) {
+      if (memberOfKind === undefined) {
+        throw new Error("Can't remove from non-array value");
+      }
       // On an indexed collection, `remove()` takes a member out of it, named
       // as `add()` names one: `ref` is the kind, and `memberOfKind` the
       // member. The signature a pattern compiles against, which requires
       // both, is `IndexedCollections.remove()`.
-      const collection = this.#indexedCollectionDescriptor();
-      const member = asBoundCell(memberOfKind);
-      if (collection !== undefined && member !== undefined && this.#tx) {
-        const { kind, descriptor } = indexedKindOf(collection, String(ref));
-        for (const key of memberKeysOf(member.withTx(this.#tx))) {
-          deleteMemberRows(this, kind, descriptor, key);
-        }
-        this.#registerIndexedCollection();
-        return;
+      const collection = this.#indexedCollection();
+      if (collection === undefined || !this.#tx) {
+        throw new TypeError(
+          "`.remove()` of a member is only available on an indexed " +
+            "collection, within a transaction (e.g. inside a handler)",
+        );
       }
-      throw new Error("Can't remove from non-array value");
+      const { kind, descriptor } = indexedKindOf(
+        collection.descriptor,
+        String(ref),
+      );
+      const member = asBoundCell(memberOfKind);
+      if (member === undefined) {
+        throw new TypeError("an indexed collection holds cells only");
+      }
+      for (const key of memberKeysOf(member.withTx(this.#tx))) {
+        deleteMemberRows(this, kind, descriptor, key);
+      }
+      this.#registerIndexedCollection(collection.id);
+      return;
     }
     const array = got as ElemT[];
     const index = typeof ref === "object"

@@ -12,6 +12,10 @@
  * property assignment, so a redundant write is a visible cost rather than a
  * wasted one.
  *
+ * `setPropDefault` writes a `style` string on an element as the `style`
+ * attribute, and only when the attribute differs. A style that is not a
+ * string, or a target that is not an element, takes a property assignment.
+ *
  * `styleObjectToCssString` is pinned across the cases where a plausible
  * implementation quietly does the wrong thing: a unitless property, a zero, a
  * vendor prefix, a custom property (which keeps its case and takes no unit),
@@ -64,6 +68,66 @@ describe("render-utils", () => {
       const target = { value: 0 };
       setPropDefault(target, "value", -0);
       expect(Object.is(target.value, -0)).toBe(true);
+    });
+
+    /**
+     * An element stand-in that records each attribute write and each
+     * assignment to its `style` property.
+     */
+    function element() {
+      const attributes = new Map<string, string>();
+      const attributeWrites: string[] = [];
+      const styleAssignments: unknown[] = [];
+      return {
+        attributeWrites,
+        styleAssignments,
+        nodeType: 1,
+        getAttribute: (name: string) => attributes.get(name) ?? null,
+        hasAttribute: (name: string) => attributes.has(name),
+        setAttribute(name: string, value: string) {
+          attributeWrites.push(`${name}=${value}`);
+          attributes.set(name, value);
+        },
+        removeAttribute: (name: string) => attributes.delete(name),
+        get style(): unknown {
+          return undefined;
+        },
+        set style(value: unknown) {
+          styleAssignments.push(value);
+        },
+      };
+    }
+
+    it("writes a style string on an element as the `style` attribute", () => {
+      const target = element();
+      setPropDefault(target, "style", "color: red");
+      expect(target.getAttribute("style")).toBe("color: red");
+      expect(target.styleAssignments).toEqual([]);
+    });
+
+    it("does not rewrite an unchanged `style` attribute", () => {
+      const target = element();
+      setPropDefault(target, "style", "color: red");
+      setPropDefault(target, "style", "color: red");
+      setPropDefault(target, "style", "color: blue");
+      expect(target.attributeWrites).toEqual([
+        "style=color: red",
+        "style=color: blue",
+      ]);
+    });
+
+    it("assigns a style that is not a string as a property", () => {
+      const target = element();
+      const style = { color: "red" };
+      setPropDefault(target, "style", style);
+      expect(target.styleAssignments).toEqual([style]);
+      expect(target.hasAttribute("style")).toBe(false);
+    });
+
+    it("assigns a style string as a property on a target that is not an element", () => {
+      const target: { style?: string } = {};
+      setPropDefault(target, "style", "color: red");
+      expect(target.style).toBe("color: red");
     });
   });
 

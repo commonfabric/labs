@@ -23,7 +23,7 @@ type Input = {
 };
 
 // Takes the trimmed message as the topic, ignoring a blank one.
-export const handleSend = handler<
+const handleSend = handler<
   { detail: { message: string } },
   { topic: Writable<string> }
 >((event, { topic }) => {

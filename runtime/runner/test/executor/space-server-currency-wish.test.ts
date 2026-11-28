@@ -12,6 +12,7 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 import { clock } from "@commonfabric/test-support/fake-clock";
+import { stub } from "@std/testing/mock";
 
 import { ExecutorHost } from "../../src/executor/host.ts";
 import type { CurrencyIndexMode } from "../../src/executor/store-currency.ts";
@@ -704,6 +705,46 @@ describe("SpaceServer", () => {
         expect(host.stats().currency.carriedRefused).toBe(0);
       });
 
+      it("carries the viewer's demand alone where a session that names no viewer demands a document of the space too", async () => {
+        await seedHome();
+        await ownHome();
+        const demandFor = server.demandForSpace.bind(server);
+        using _demand = stub(
+          server,
+          "demandForSpace",
+          (...args: Parameters<typeof server.demandForSpace>) => {
+            const shares = demandFor(...args);
+            return args[0] !== space ? shares : [
+              ...shares,
+              ...sessionDemandOf([{
+                id: "of:currency-wish-anonymous",
+                scope: "space",
+                scopeKey: "space",
+                root: false,
+              }]),
+            ];
+          },
+        );
+        const carry = server.setCarriedDemand.bind(server);
+        const origins = new Set<string | undefined>();
+        using _carry = stub(
+          server,
+          "setCarriedDemand",
+          (...args: Parameters<typeof server.setCarriedDemand>) => {
+            for (const row of args[2]) origins.add(row.origin.sessionId);
+            return carry(...args);
+          },
+        );
+        host = newHost("record");
+        await watch(wishProgram("{ query: '#favorites' }"));
+        await awaitEach(cycles, () => host!.stats().currency.carried > 0);
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.carriedRefused).toBe(0);
+        expect(origins.size).toBe(1);
+        expect(origins.has("")).toBe(false);
+      });
+
       it("counts nothing as carried once the loop has parked", async () => {
         await seedHome();
         await ownHome();
@@ -910,6 +951,38 @@ describe("SpaceServer", () => {
         await awaitEach(cycles, () => serves(root));
         await readerReached(passed);
         expect(host.stats().currency.expiryWakes).toBeGreaterThan(0);
+      });
+
+      it("wakes nothing when the interval passes after the viewer stopped demanding the root it left unstarted, under `skip`", async () => {
+        const piece: {
+          current?: { root: NormalizedFullLink; reader: NormalizedFullLink };
+        } = {};
+        demandFromAViewerWhoRunsNothing(piece);
+        host = newHost("skip");
+        const { root, reader } = await setUpClock();
+        await awaitEach(cycles, () => host?.spaceServer(space) !== undefined);
+        piece.current = { root, reader };
+        host.spaceServer(space)!.noteDemandChanged();
+        await awaitEach(cycles, () => serves(root));
+        await host.whenQuiescent();
+        await host.spaceServer(space)!.park("test-park");
+        await touchSpace();
+        await awaitEach(
+          cycles,
+          () => host!.stats().currency.servedFromStore > 0,
+        );
+        await host.whenQuiescent();
+        piece.current = undefined;
+        host.spaceServer(space)!.noteDemandChanged();
+        await host.whenQuiescent();
+        const cyclesBefore = cycles.entries.length;
+
+        await clock.tick(INTERVAL_SECONDS * 1000);
+        await host.whenQuiescent();
+
+        expect(host.stats().currency.expiryWakes).toBe(0);
+        expect(cycles.entries.length).toBe(cyclesBefore);
+        expect(serves(root)).toBe(false);
       });
 
       it("starts the piece for a session that runs nothing, when the interval passed while no loop served the space, under `skip`", async () => {

@@ -374,6 +374,9 @@ describe("document-release", () => {
     expect(loaded(id)).toBe(true);
     expect(confirmed(id)).toBe(false);
     expect(seen.at(-1)).toEqual({ n: 1 });
+    // The next pass owes the document its watch, so a read that reaches it
+    // through a link is told to start no load of its own.
+    expect(readerStorage.shouldPullDoc(space, id)).toBe(false);
 
     await releaseTwice();
     await readerStorage.synced();
@@ -525,6 +528,9 @@ describe("document-release", () => {
     await retracting.promise;
     expect(held(child)).toEqual({ value: { n: 1 } });
     expect(readerReplica().getSizes?.().watchedDocuments).toBe(1);
+    // Nothing asks the server for the child again, a read that reaches it
+    // through a link included.
+    expect(readerStorage.shouldPullDoc(space, child)).toBe(false);
     await write("child", 2);
     expect(held(child)).toEqual({ value: { n: 1 } });
 

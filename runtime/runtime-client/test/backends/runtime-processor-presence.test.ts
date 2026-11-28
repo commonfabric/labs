@@ -41,16 +41,31 @@ const presenceRuntime = (
   releaseUnreadDocuments: () => Promise.resolve(),
 });
 
+/**
+ * A client recording what is posted to it. `posts(count)` resolves once
+ * `count` messages have been posted in all.
+ */
 const postingClient = (id: number) => {
   const posted: unknown[] = [];
+  let waiting: { count: number; resolve: () => void } | undefined;
   const client: WorkerClient = {
     id,
     post: (message) => {
       posted.push(message);
+      if (waiting !== undefined && posted.length >= waiting.count) {
+        waiting.resolve();
+        waiting = undefined;
+      }
       return true;
     },
   };
-  return { client, posted };
+  const posts = (count: number) => {
+    const { promise, resolve } = defer<void>();
+    if (posted.length >= count) resolve();
+    else waiting = { count, resolve };
+    return promise;
+  };
+  return { client, posted, posts };
 };
 
 const cell: Cell = {
@@ -132,7 +147,7 @@ describe("RuntimeProcessor presence", () => {
         });
       }),
     });
-    const { client, posted } = postingClient(1);
+    const { client, posted, posts } = postingClient(1);
     const joined = await processor.handlePresenceJoin({
       cell,
       subscriptionId: "membership:1",
@@ -140,12 +155,13 @@ describe("RuntimeProcessor presence", () => {
     expect(joined.participants.map((record) => record.name)).toEqual([
       "Quinn",
     ]);
+    expect(posted).toEqual([]);
     const revoked = new Error("taken over");
     revoked.name = "SessionRevokedError";
     observe!({ kind: "remove", participantId: "q" });
     observe!({ kind: "snapshot", participantId: "p2", participants: [] });
     observe!({ kind: "failure", error: revoked });
-    await Promise.resolve();
+    await posts(3);
     const events: PresenceWireEvent[] = [
       { kind: "remove", participantId: "q" },
       { kind: "snapshot", participantId: "p2", participants: [] },
@@ -256,6 +272,131 @@ describe("RuntimeProcessor presence", () => {
       name: "Ada",
       facets: {},
     } as never, first)).toEqual({ value: false });
+  });
+
+  it("refuses a join under a subscription id already in use, and one over storage without presence", async () => {
+    let joins = 0;
+    const processor = buildProcessor({
+      runtime: presenceRuntime((_room, observer) => {
+        joins++;
+        observer({ kind: "snapshot", participantId: "p", participants: [] });
+        return Promise.resolve({
+          participantId: "p",
+          publish: () => {},
+          leave: () => Promise.resolve(),
+        });
+      }),
+    });
+    const { client } = postingClient(1);
+    await processor.handlePresenceJoin({
+      cell,
+      subscriptionId: "membership:1",
+    } as never, client);
+    await expect(processor.handlePresenceJoin({
+      cell,
+      subscriptionId: "membership:1",
+    } as never, client)).rejects.toThrow(
+      "presence membership id is already in use",
+    );
+    expect(joins).toBe(1);
+
+    const withoutPresence = buildProcessor({
+      runtime: {
+        ...presenceRuntime(() => Promise.reject(new Error("unreachable"))),
+        storageManager: {
+          open: () => ({ replica: {} }),
+          scopeKeyIdentity: () => identity,
+        },
+      },
+    });
+    await expect(withoutPresence.handlePresenceJoin({
+      cell,
+      subscriptionId: "membership:1",
+    } as never, client)).rejects.toThrow(
+      "runtime storage does not support presence",
+    );
+  });
+
+  it("frees the subscription id of a join the room refuses", async () => {
+    let refuse = true;
+    const processor = buildProcessor({
+      runtime: presenceRuntime((_room, observer) => {
+        if (refuse) return Promise.reject(new Error("room is full"));
+        observer({ kind: "snapshot", participantId: "p", participants: [] });
+        return Promise.resolve({
+          participantId: "p",
+          publish: () => {},
+          leave: () => Promise.resolve(),
+        });
+      }),
+    });
+    const { client } = postingClient(1);
+    const join = () =>
+      processor.handlePresenceJoin({
+        cell,
+        subscriptionId: "membership:1",
+      } as never, client);
+    await expect(join()).rejects.toThrow("room is full");
+    refuse = false;
+    expect((await join()).participantId).toBe("p");
+  });
+
+  it("returns no participants for a join whose room opened with no snapshot", async () => {
+    const processor = buildProcessor({
+      runtime: presenceRuntime(() =>
+        Promise.resolve({
+          participantId: "p",
+          publish: () => {},
+          leave: () => Promise.resolve(),
+        })
+      ),
+    });
+    const joined = await processor.handlePresenceJoin({
+      cell,
+      subscriptionId: "membership:1",
+    } as never, postingClient(1).client);
+    expect(joined.participants).toEqual([]);
+  });
+
+  it("posts nothing the room reports after its membership is left", async () => {
+    const observers: ((event: PresenceEvent) => void)[] = [];
+    const processor = buildProcessor({
+      runtime: presenceRuntime((_room, observer) => {
+        observers.push(observer);
+        observer({ kind: "snapshot", participantId: "p", participants: [] });
+        return Promise.resolve({
+          participantId: "p",
+          publish: () => {},
+          leave: () => Promise.resolve(),
+        });
+      }),
+    });
+    const { client, posted, posts } = postingClient(1);
+    for (const subscriptionId of ["membership:1", "membership:2"]) {
+      await processor.handlePresenceJoin(
+        { cell, subscriptionId } as never,
+        client,
+      );
+    }
+    const [left, kept] = observers;
+    const update = (subscriptionId: string, participantId: string) => ({
+      type: NotificationType.PresenceUpdate,
+      subscriptionId,
+      event: { kind: "remove", participantId },
+    });
+    left({ kind: "remove", participantId: "q" });
+    await posts(1);
+    expect(posted).toEqual([update("membership:1", "q")]);
+    await processor.handlePresenceLeave({
+      subscriptionId: "membership:1",
+    } as never, client);
+    left({ kind: "remove", participantId: "r" });
+    kept({ kind: "remove", participantId: "s" });
+    await posts(2);
+    expect(posted).toEqual([
+      update("membership:1", "q"),
+      update("membership:2", "s"),
+    ]);
   });
 
   it("leaves a membership whose client departed while the join was in flight", async () => {

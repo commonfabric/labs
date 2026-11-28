@@ -72,6 +72,37 @@ describe("Server", () => {
         }
       });
 
+      it("acknowledges a delivery re-sent under a fresh `localSeq` as deduped, with no commit, and appends another event", async () => {
+        const server = createServer();
+        try {
+          const first = await server.commitDelegatedAppend(
+            delivery("event-resent", STREAM),
+          );
+          const engine = await server.engineForSpace(SPACE);
+          const head = Engine.serverSeq(engine);
+
+          const resent = await server.commitDelegatedAppend({
+            ...delivery("event-resent", STREAM),
+            localSeq: 2,
+          });
+          expect(resent).toEqual({ deduped: true });
+          expect(Engine.serverSeq(engine)).toBe(head);
+
+          const next = await server.commitDelegatedAppend({
+            ...delivery("event-next", STREAM),
+            localSeq: 3,
+          });
+          expect(next).toEqual({ seq: head + 1, deduped: false });
+          expect(first.deduped).toBe(false);
+          expect(await storedEventIds(server)).toEqual([
+            "event-resent",
+            "event-next",
+          ]);
+        } finally {
+          await server.close();
+        }
+      });
+
       it("throws `ProtocolError` naming the sidecar, appending nothing, for a stream link that derives another sidecar", async () => {
         const server = createServer();
         try {

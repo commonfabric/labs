@@ -62,6 +62,7 @@ export default pattern<{ c: Writable<number> }>(({ c }) => ({ h: h({ c }) }));`,
       name: "event",
       capability: "opaque",
       readPaths: [],
+      fullShapePaths: [],
       writePaths: [],
       opaquePaths: [],
       passthrough: false,
@@ -311,6 +312,45 @@ export default pattern<{ c: Writable<number> }>(({ c }) => ({ h: h({ c }) }));`,
           Tree_narrowed: event({
             c: cell("opaque"),
             kids: { type: "array", items: { $ref: "#/$defs/Tree_narrowed" } },
+          }),
+        },
+      });
+    });
+
+    it("narrows each of two recursions that refer to each other as one definition of its own", () => {
+      const a = event({ c: cell("cell"), b: { $ref: "#/$defs/B" } });
+      const b = event({
+        c: cell("cell"),
+        a: { $ref: "#/$defs/A" },
+        next: { $ref: "#/$defs/B" },
+      });
+      const narrowed = narrowEventCapabilities(
+        {
+          ...event({
+            a: { $ref: "#/$defs/A" },
+            held: { $ref: "#/$defs/B", asCell: ["cell"] },
+          }),
+          $defs: { A: a, B: b },
+        },
+        summaryOf({}),
+      );
+
+      expect(narrowed).toEqual({
+        ...event({
+          a: { $ref: "#/$defs/A_narrowed" },
+          held: { $ref: "#/$defs/B", asCell: ["opaque"] },
+        }),
+        $defs: {
+          A: a,
+          B: b,
+          A_narrowed: event({
+            c: cell("opaque"),
+            b: { $ref: "#/$defs/B_narrowed" },
+          }),
+          B_narrowed: event({
+            c: cell("opaque"),
+            a: { $ref: "#/$defs/A_narrowed" },
+            next: { $ref: "#/$defs/B_narrowed" },
           }),
         },
       });

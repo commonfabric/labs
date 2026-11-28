@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import type { FabricValue } from "@commonfabric/data-model";
+import { type JSONSchema, Runtime } from "@commonfabric/runner";
+import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { pieceListSchema } from "@commonfabric/runner/schemas";
 import {
   EmulatedStorageManager,
@@ -55,6 +57,16 @@ function defaultRegistryPattern() {
 function address(cell: Cell<unknown>) {
   const { space, scope, id, path } = cell.getAsNormalizedFullLink();
   return { space, scope, id, path };
+}
+
+const valueSchema = {
+  type: "object",
+  properties: { value: { type: "number" } },
+} as const satisfies JSONSchema;
+
+/** The `value` field of a piece `valuePattern()` runs. */
+function valueOf(piece: Cell<unknown>) {
+  return piece.asSchema(valueSchema).key("value");
 }
 
 function valuePattern() {
@@ -133,6 +145,31 @@ describe("pieces-controller", () => {
       return () => {
         runtime.editWithRetry = editWithRetry;
       };
+    }
+
+    /**
+     * The document `cause` names, written with a `result` back-link that names
+     * `owner`, as the back-link of a cell a piece derives names that piece.
+     * Naming the document itself as `owner` makes the back-links circular.
+     */
+    async function backLinkedTo(
+      owner: Cell<unknown>,
+      cause: string,
+    ): Promise<Cell<{ derived: number }>> {
+      const doc = runtime.getCell<{ derived: number }>(
+        pieces.getSpace(),
+        cause,
+      );
+      const { error } = await runtime.editWithRetry((tx) => {
+        doc.withTx(tx).set({ derived: 1 });
+        doc.withTx(tx).setMetaRaw(
+          "result",
+          owner.getAsLink(),
+          rawMetaWriteAuthorization,
+        );
+      });
+      expect(error).toBeUndefined();
+      return doc;
     }
 
     async function installComputedRegistry(mode: "missing" | "noop" | "throw") {
@@ -524,6 +561,168 @@ export default pattern<{pieceRegistry: Writable<Writable<unknown>[]>}>(({pieceRe
 
             expect(await pieces.getReadingFrom(piece)).toEqual([]);
           });
+        });
+
+        /**
+         * Registers a piece whose argument holds `value`, written raw, at
+         * `value`.
+         */
+        async function registerRawReader(
+          value: FabricValue,
+          cause: string,
+        ): Promise<Cell<unknown>> {
+          const reader = await pieces.runPersistent(
+            valuePattern(),
+            { value: 0 },
+            cause,
+          );
+          const argument = pieces.getArgument<{ value: unknown }>(reader);
+          const { error } = await runtime.editWithRetry((tx) =>
+            argument.withTx(tx).key("value").setRawUntyped(value)
+          );
+          expect(error).toBeUndefined();
+          await pieces.add([reader]);
+          await runtime.idle();
+          return reader;
+        }
+
+        it("finds a link held in an array in the argument", async () => {
+          const reader = await registerRawReader(
+            [valueOf(piece).getAsLink()],
+            "pieces-controller-array-reader",
+          );
+
+          expect((await pieces.getReadByPieces(piece)).map(address)).toEqual([
+            address(reader),
+          ]);
+          expect((await pieces.getReadingFrom(reader)).map(address)).toEqual([
+            address(piece),
+          ]);
+        });
+
+        it("follows a link to a document whose result back-link names a piece to that piece", async () => {
+          const derived = await backLinkedTo(piece, "derived-from-piece");
+          const reader = await registerRawReader(
+            derived.getAsLink(),
+            "pieces-controller-derived-reader",
+          );
+
+          expect((await pieces.getReadByPieces(piece)).map(address)).toEqual([
+            address(reader),
+          ]);
+          expect((await pieces.getReadingFrom(reader)).map(address)).toEqual([
+            address(piece),
+          ]);
+          // The back-link names `piece`, so the reader reads nothing else.
+          expect(await pieces.getReadByPieces(defaultRoot)).toEqual([]);
+        });
+
+        it("names no piece for a link to a document whose result back-links return to it", async () => {
+          const circular = await backLinkedTo(
+            runtime.getCell(pieces.getSpace(), "circular"),
+            "circular",
+          );
+          const reader = await registerRawReader(
+            circular.getAsLink(),
+            "pieces-controller-circular-reader",
+          );
+
+          expect(await pieces.getReadingFrom(reader)).toEqual([]);
+          expect(await pieces.getReadByPieces(piece)).toEqual([]);
+        });
+
+        it("names a registered piece whose own result back-link names the piece", async () => {
+          const child = await backLinkedTo(piece, "registered-child");
+          await pieces.add([child]);
+          await runtime.idle();
+
+          expect((await pieces.getReadByPieces(piece)).map(address)).toEqual([
+            address(child),
+          ]);
+        });
+
+        it("meets only links that parse, since storage refuses to hold one that does not", async () => {
+          const reader = await registerReader();
+          const argument = pieces.getArgument<{ value: unknown }>(reader);
+
+          const { error } = await runtime.editWithRetry((tx) =>
+            argument.withTx(tx).key("value").setRawUntyped({
+              "/": { "link@1": { id: piece.sourceURI, path: "value" } },
+            })
+          );
+
+          expect(error).toBeDefined();
+          expect((await pieces.getReadingFrom(reader)).map(address)).toEqual([
+            address(piece),
+          ]);
+        });
+
+        it("names a reader the registry holds twice once", async () => {
+          const reader = await registerReader();
+          const registry = pieces.getArgument<
+            { pieceRegistry: Cell<unknown>[] }
+          >(defaultRoot).key("pieceRegistry");
+          const { error } = await runtime.editWithRetry((tx) =>
+            registry.withTx(tx).set([piece, reader, reader])
+          );
+          expect(error).toBeUndefined();
+          await runtime.idle();
+          expect((await pieces.getPieceRegistry()).get()).toHaveLength(3);
+
+          expect((await pieces.getReadByPieces(piece)).map(address)).toEqual([
+            address(reader),
+          ]);
+        });
+
+        it("names the linked piece past a link to a document outside the entity schemes", async () => {
+          const reader = await registerRawReader(
+            [
+              { "/": { "link@1": { id: "https://example.com/x", path: [] } } },
+              valueOf(piece).getAsLink(),
+            ],
+            "pieces-controller-foreign-link-reader",
+          );
+
+          expect((await pieces.getReadingFrom(reader)).map(address)).toEqual([
+            address(piece),
+          ]);
+          expect((await pieces.getReadByPieces(piece)).map(address)).toEqual([
+            address(reader),
+          ]);
+        });
+
+        it("names no piece for a link to a document of another kind with the piece's hash", async () => {
+          const hash = piece.sourceURI.slice("of:".length);
+          const reader = await registerRawReader(
+            { "/": { "link@1": { id: `computed:${hash}`, path: [] } } },
+            "pieces-controller-kind-alias-reader",
+          );
+
+          expect(await pieces.getReadingFrom(reader)).toEqual([]);
+          expect(await pieces.getReadByPieces(piece)).toEqual([]);
+        });
+      });
+
+      describe("link()", () => {
+        it("refuses a target that is neither a piece nor a cell", async () => {
+          await expect(
+            pieces.link(pieceId(piece)!, ["value"], "not-a-cell-id", ["value"]),
+          ).rejects.toThrow(
+            'Target "not-a-cell-id" not found as piece or cell',
+          );
+        });
+
+        it("refuses a target piece whose result back-links return to it", async () => {
+          const circular = await backLinkedTo(
+            runtime.getCell(pieces.getSpace(), "circular"),
+            "circular",
+          );
+
+          await expect(
+            pieces.link(pieceId(piece)!, ["value"], pieceId(circular)!, [
+              "value",
+            ]),
+          ).rejects.toThrow("Target piece has no result cell");
         });
       });
 

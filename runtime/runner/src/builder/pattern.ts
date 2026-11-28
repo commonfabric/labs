@@ -573,21 +573,19 @@ function factoryFromPattern<T, R>(
   ) => {
     const cellReference = cellReferenceForCell(cell);
     if (cellReference === undefined) return undefined;
-    if (cellReference.cell !== undefined) {
-      // make up a fake path that looks like cell type followed by the path
-      // this can only match argument and result aliases, since internal
-      // aliases link directly to their target cell.
-      const cellPath = [cellReference.cell, ...cellReference.path];
-      if (
-        ignoreSelfAliases &&
-        serializationPath.length === cellPath.length &&
-        serializationPath.every((part, index) => part === cellPath[index])
-      ) {
-        // this is a reference to the cell itself, so we shouldn't alias it or
-        // we'll have an infinite loop. Instead, we'll convert the alias to
-        // undefined, effectively removing it.
-        return null;
-      }
+    if (
+      ignoreSelfAliases &&
+      cellReference.cell === "result" &&
+      serializationPath.length === cellReference.path.length &&
+      serializationPath.every((part, index) =>
+        String(part) === cellReference.path[index]
+      )
+    ) {
+      // A result position bound to that same position of the result would be
+      // a link to itself, so the position is left out of the result instead.
+      // Alias paths are strings; the walk's path holds array indices as
+      // numbers.
+      return null;
     }
 
     const sanitizedSchema = aliasSchemaFor(cellReference.schema);

@@ -626,9 +626,6 @@ export async function link(
   entry: string,
   { render: out = render, ...access }: IndexDeps = {},
 ): Promise<void> {
-  if (options.beta && options.number !== undefined) {
-    throw new ValidationError("Pass --beta or --number, not both.");
-  }
   const channel: LinkChannel = options.number ??
     (options.beta ? "beta" : "stable");
   await ownerOnly(async () => {
@@ -927,7 +924,9 @@ export const pattern = new Command()
             "under it.",
         )
         .arguments("<entry:string>")
-        .option("--beta", "Link to beta, the newest shared version.")
+        .option("--beta", "Link to beta, the newest shared version.", {
+          conflicts: ["number"],
+        })
         .option(
           "--number <n:integer>",
           "Link to exactly shared version n, which never changes.",

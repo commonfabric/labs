@@ -2836,6 +2836,45 @@ describe("runtime-processor", () => {
       expect(result.piece.cell.schema).toBeUndefined();
     });
 
+    it("follows a redirect that names no scope, from a document read in none, into the space scope", async () => {
+      const targetRef = {
+        id: "of:fid1-unscoped-target" as CellRef["id"],
+        space,
+        path: [],
+      } as unknown as CellRef;
+      const slugRef = {
+        id: "of:fid1-unscoped-slug" as CellRef["id"],
+        space,
+        path: [],
+      } as unknown as CellRef;
+      const followed: CellRef[] = [];
+      const targetCell = mockCell(targetRef);
+      const processor = buildProcessor({
+        runtime: {
+          storageManager: {},
+          runner: noSessionPointers,
+          getCellFromEntityId: () =>
+            mockCell(slugRef, { raw: redirectRaw(targetRef) }),
+          getCellFromLink: (link: CellRef) => {
+            followed.push(link);
+            return targetCell;
+          },
+        },
+        cc: { getSpace: () => space },
+        space,
+      });
+
+      await processor.handlePieceGet({
+        type: RequestType.PieceGet,
+        pieceId: fid("unscoped-slug"),
+        space,
+        runIt: true,
+      });
+
+      expect(followed.map((link) => link.scope)).toEqual(["space"]);
+      expect(followed[0]).toMatchObject({ id: targetRef.id, space });
+    });
+
     it("returns a cell inside a piece under the piece's result schema at its path when its links carry none, syncing the piece's root alone", async () => {
       const targetRef: CellRef = {
         id: "of:fid1-parent-piece" as CellRef["id"],
@@ -4922,6 +4961,36 @@ describe("runtime-processor", () => {
         expect(worker.privateInboxSends()).toBe(1);
       });
 
+      it("reports a failed adoption of the catalog's rooms, and starts it again at the next bring-up", async () => {
+        await using worker = await homeWorker([]);
+        const adopt = stub(
+          PiecesController.prototype,
+          "adoptCatalogRooms",
+          () => Promise.reject(new Error("catalog unreadable")),
+        );
+        const warn = stub(console, "warn", () => {});
+        try {
+          // This bring-up resolves once the housekeeping has started.
+          const bringUp = () =>
+            worker.processor.handleEnsureHomePatternRunning({
+              type: RequestType.EnsureHomePatternRunning,
+            });
+          await bringUp();
+          await worker.processor.accessForTestingOnly.catalogRoomsAdopted;
+          expect(warn.calls.map(({ args }) => args[0])).toEqual([
+            "[RuntimeProcessor] Adopting the catalog's rooms:",
+          ]);
+          expect(worker.processor.accessForTestingOnly.catalogRoomsAdopted)
+            .toBeUndefined();
+
+          await bringUp();
+          expect(adopt.calls).toHaveLength(2);
+        } finally {
+          warn.restore();
+          adopt.restore();
+        }
+      });
+
       it("returns the root when Home's handling of the private inbox ensure fails, and reports the failure", async () => {
         const attempted = Promise.withResolvers<void>();
         await using worker = await homeWorker([], () => {
@@ -5289,7 +5358,10 @@ describe("runtime-processor", () => {
           scope: "space",
           path: [],
         };
-        const rootCell = { getAsLink: () => cellRefToSigilLink(ref) };
+        const rootCell = {
+          getAsLink: () => cellRefToSigilLink(ref),
+          getAsNormalizedFullLink: () => ref,
+        };
         const cc = {
           getDefaultPattern: () => Promise.resolve(undefined),
           ensureDefaultPattern: () =>
@@ -5331,6 +5403,7 @@ describe("runtime-processor", () => {
             calls.push(`getDefaultPattern:${JSON.stringify(open)}`);
             return Promise.resolve({
               getAsLink: () => cellRefToSigilLink(ref),
+              getAsNormalizedFullLink: () => ref,
             });
           },
           ensureDefaultPattern: () => {
@@ -6064,6 +6137,7 @@ describe("runtime-processor", () => {
                 },
               },
             }),
+            getAsNormalizedFullLink: () => ref,
           }),
         },
       });

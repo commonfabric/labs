@@ -10,7 +10,7 @@ import {
 } from "@commonfabric/test-support/test";
 
 import { isAliasBinding } from "../src/alias-binding.ts";
-import { lift } from "../src/builder/module.ts";
+import { createNodeFactory, lift } from "../src/builder/module.ts";
 import { resolvedSchema } from "./schema-ref-helpers.ts";
 import { pattern, popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { reactive } from "../src/builder/reactive.ts";
@@ -23,6 +23,7 @@ import {
   type JSONSchemaObj,
   type Module,
   type Pattern,
+  SELF,
 } from "../src/builder/types.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -871,5 +872,75 @@ describe("pattern", () => {
 
     expect(built.derivedInternalCells?.map((cell) => cell.partialCause))
       .toEqual([{ $generated: 0 }, "total"]);
+  });
+
+  it("leaves out a result position bound to that same position of the result", () => {
+    const built = pattern((input: any) => {
+      const self = input[SELF];
+      return {
+        loop: self.loop,
+        nested: { inner: self.nested.inner },
+        items: [self.items[0], self.items[0]],
+        copy: self.loop,
+        whole: self,
+        argument: input,
+        result: self,
+      };
+    });
+
+    const result = JSON.parse(JSON.stringify(built.result));
+    // Each of these would be a link to itself.
+    expect(result).not.toHaveProperty("loop");
+    expect(result.nested).toEqual({});
+    expect(result.items[0]).toBeNull();
+    // A position bound to some other position of the result, or to the
+    // argument, keeps its alias, whatever its key is called.
+    expect(result.items[1]).toEqual({
+      $alias: { cell: "result", path: ["items", "0"] },
+    });
+    expect(result.copy).toEqual({ $alias: { cell: "result", path: ["loop"] } });
+    expect(result.whole).toEqual({ $alias: { cell: "result", path: [] } });
+    expect(result.argument).toEqual({ $alias: { cell: "argument", path: [] } });
+    expect(result.result).toEqual({ $alias: { cell: "result", path: [] } });
+  });
+
+  describe("computed classification of a handler capture whose value and schema cycle together", () => {
+    // A hand-built handler module whose `$ctx` schema contains itself under
+    // `self`, bound to a value that contains itself under `self`.
+    const buildWithCtxSchema = (vSchema: JSONSchemaObj) => {
+      const ctxSchema: JSONSchemaObj & { properties: Record<string, unknown> } =
+        {
+          type: "object",
+          properties: { v: vSchema, w: { type: "number", asCell: ["cell"] } },
+        };
+      ctxSchema.properties.self = ctxSchema;
+      const handlerNode = createNodeFactory({
+        type: "javascript",
+        wrapper: "handler",
+        implementation: () => {},
+        argumentSchema: { type: "object", properties: { $ctx: ctxSchema } },
+      });
+      const double = lift((x: number) => x * 2);
+      return pattern<{ x: number }>(({ x }) => {
+        const doubled = double(x);
+        const ctx: Record<string, unknown> = { v: doubled };
+        ctx.self = ctx;
+        return { doubled, on: handlerNode({ $ctx: ctx }) };
+      });
+    };
+    const doubledKind = (built: Pattern) =>
+      built.derivedInternalCells?.find((cell) =>
+        cell.partialCause === "doubled"
+      )?.kind;
+
+    it("disqualifies a capture bound where the cycle grants a writable handle", () => {
+      expect(doubledKind(buildWithCtxSchema({ asCell: ["cell"] })))
+        .toBeUndefined();
+    });
+
+    it("keeps a capture computed where the cycle grants no handle", () => {
+      expect(doubledKind(buildWithCtxSchema({ type: "number" })))
+        .toBe("computed");
+    });
   });
 });

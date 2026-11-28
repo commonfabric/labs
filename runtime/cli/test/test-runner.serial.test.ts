@@ -9,7 +9,10 @@ import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { resolve } from "@std/path";
 import { Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import {
+  type IExtendedStorageTransaction,
+  Runtime,
+} from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
 import { describe, it } from "@commonfabric/test-support/test";
@@ -182,6 +185,64 @@ describe(
         );
         expect(result.failed).toBe(1);
         expect(result.results[0].error).toContain("settlement refused");
+      });
+
+      it("reports an unmeasured read budget for a `{ settle: true }` step whose settlement fails", async () => {
+        // On the server-execution arm the serving loop's own settlement is
+        // the first to be refused, before any step runs.
+        const settled = Runtime.prototype.settled;
+        using _settled = stub(
+          Runtime.prototype,
+          "settled",
+          function (maxRounds) {
+            if (maxRounds === undefined) {
+              return Promise.reject(new Error("settlement refused"));
+            }
+            return settled.call(this, maxRounds);
+          },
+        );
+        let outcome: Awaited<ReturnType<typeof runTests>> | undefined;
+        await withEnv("EXPERIMENTAL_SERVER_EXECUTION", "false", async () => {
+          ({ result: outcome } = await logged(() =>
+            runTests(fixture("budgeted-settle.test.tsx"), { root: FIXTURES })
+          ));
+        });
+        expect(outcome?.failed).toBe(1);
+        const error = outcome?.results[0].error ?? "";
+        expect(error).toContain("settlement refused");
+        expect(error).toContain(
+          "step 1: read budget measurement incomplete after a settlement " +
+            "failure",
+        );
+        expect(error).not.toContain("because settlement failed");
+      });
+
+      it("fails the file with the error running the test's pattern raises, aborting the transaction it ran in", async () => {
+        // The first run is the default pattern's, written before the test's
+        // own pattern runs.
+        const run = Runtime.prototype.run;
+        const transactions: (IExtendedStorageTransaction | undefined)[] = [];
+        using _run = stub(
+          Runtime.prototype,
+          "run",
+          function (tx, pattern, argument, resultCell, options) {
+            transactions.push(tx);
+            if (transactions.length === 2) throw new Error("run refused");
+            return run.call(this, tx, pattern, argument, resultCell, options);
+          },
+        );
+        let outcome: Awaited<ReturnType<typeof runTests>> | undefined;
+        await withEnv("EXPERIMENTAL_SERVER_EXECUTION", "false", async () => {
+          ({ result: outcome } = await logged(() =>
+            runTests(fixture("settle-only.test.tsx"), { root: FIXTURES })
+          ));
+        });
+        expect(outcome?.failed).toBe(1);
+        expect(outcome?.results[0].error).toContain("run refused");
+        expect(transactions.map((tx) => tx?.status().status)).toEqual([
+          "done",
+          "error",
+        ]);
       });
 
       it("fails an assertion whose value cannot be read, saying so", async () => {

@@ -205,14 +205,10 @@ const Note = pattern<NoteInput, NoteOutput>(
     content,
     isHidden,
     linkPattern,
-    parentNotebook: _parentNotebook,
+    parentNotebook,
     references,
     [SELF]: self,
   }) => {
-    // Ensure parentNotebook is always a Writable (input is optional)
-    const parentNotebook = _parentNotebook ??
-      new Writable(null as NotebookPiece | null);
-
     // Type-based discovery for notebooks and "All Notes" piece
     const notebookWish = wish<NotebookPiece>({
       query: "#notebook",

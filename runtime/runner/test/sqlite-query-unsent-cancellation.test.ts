@@ -29,6 +29,7 @@
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { table } from "@commonfabric/memory/sqlite/schema";
 import { describe, it } from "@commonfabric/test-support/test";
 
 import { sqliteQuery } from "../src/builtins/sqlite-builtins.ts";
@@ -165,6 +166,117 @@ describe("sqlite-query-unsent-cancellation", () => {
     const state = await drive({ requestKey: "private search", labeled: true });
     expect(String(state?.error)).toContain("refused before it started");
     expect(state?.requestKey).toBe("private search");
+  });
+
+  it("leaves a collection query's rows standing when its refresh is abandoned", async () => {
+    const storageManager = StorageManager.emulate({ as: signer });
+    const runtime = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager,
+    });
+    try {
+      const id = `of:unsent-refresh-${crypto.randomUUID()}`;
+      const tables = {
+        notes: table({ id: "integer primary key", body: "text" }),
+      };
+      // The declaration that makes this a query over an indexed collection,
+      // which follows the collection's revision without the revision joining
+      // the request's identity.
+      const index = {
+        kinds: {
+          note: {
+            table: "notes",
+            columns: ["body"],
+            relations: [],
+            relationTables: {},
+          },
+        },
+      };
+      const insert = async (body: string) => {
+        const tx = runtime.edit();
+        tx.recordSqliteWrite!(signer.did(), {
+          op: "sqlite",
+          db: { id, owner: signer.did(), tables },
+          sql: "INSERT INTO notes (body) VALUES (?)",
+          params: [body],
+        });
+        expect((await tx.commit().settled).error).toBeUndefined();
+      };
+      await insert("first");
+
+      const setup = runtime.edit();
+      const parent = runtime.getCell(space, "refresh-parent", undefined, setup);
+      parent.set({});
+      const inputs = runtime.getCell<{
+        db: Record<string, unknown>;
+        sql: string;
+      }>(space, "refresh-inputs", undefined, setup);
+      const query = (rev: number) => ({
+        db: { id, owner: signer.did(), tables, index, rev },
+        sql: "SELECT body FROM notes ORDER BY id",
+      });
+      inputs.set(query(0));
+      runtime.prepareTxForCommit(setup);
+      expect((await setup.commit().settled).error).toBeUndefined();
+
+      // deno-lint-ignore no-explicit-any -- the builtin's own result cell
+      let result: Cell<any> | undefined;
+      const builtin = sqliteQuery(
+        inputs,
+        (_tx, cell) => result = cell,
+        () => {},
+        [parent],
+        parent,
+        runtime,
+      );
+      const run = async (commit: boolean) => {
+        const tx = runtime.edit();
+        builtin.action(tx);
+        if (commit) {
+          expect((await tx.commit().settled).error).toBeUndefined();
+        } else {
+          tx.abandonStagedWork({
+            name: "StorageTransactionAborted",
+            message: "test abandon",
+            reason: new Error("test abandon"),
+            // deno-lint-ignore no-explicit-any -- the commit-error shape
+          } as any);
+          tx.abort("staging abandoned");
+        }
+        await runtime.idle();
+        await runtime.settled();
+        return result?.get() as QueryState & { result?: unknown[] };
+      };
+      const bodies = (state: { result?: unknown[] }) =>
+        state.result?.map((row) => (row as { body: string }).body);
+
+      const answered = await run(true);
+      expect(answered.pending).toBe(false);
+      expect(answered.error).toBeUndefined();
+      expect(bodies(answered)).toEqual(["first"]);
+
+      // The collection moves on, and the run that would ask again under the
+      // new revision is abandoned before its request goes out.
+      await insert("second");
+      const bump = runtime.edit();
+      inputs.withTx(bump).set(query(1));
+      expect((await bump.commit().settled).error).toBeUndefined();
+      const abandoned = await run(false);
+      expect(abandoned.error).toBeUndefined();
+      expect(abandoned.pending).toBe(false);
+      expect(abandoned.requestHash).toBe(answered.requestHash);
+      expect(bodies(abandoned)).toEqual(["first"]);
+
+      // The abandoned refresh is not recorded as served, so the next run
+      // asks again and the result follows the collection.
+      const refreshed = await run(true);
+      expect(refreshed.error).toBeUndefined();
+      expect(refreshed.requestHash).toBe(answered.requestHash);
+      expect(bodies(refreshed)).toEqual(["first", "second"]);
+    } finally {
+      await runtime.dispose({ closeStorage: false });
+      await storageManager.close();
+    }
   });
 
   it("omits a non-string request key from an asynchronous ending", async () => {

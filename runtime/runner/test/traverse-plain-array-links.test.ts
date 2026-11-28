@@ -143,6 +143,21 @@ describe("traverse-plain-array-links", () => {
     expect(missing).toEqual([]);
   });
 
+  it("reads an element's own properties and none it inherits", () => {
+    const element: FabricValue = Object.assign(
+      Object.create({ inherited: "from the prototype" }),
+      { n: 1, own: "kept" },
+    );
+    const { ok } = traverseArray([linkTo("of:item-a")], {
+      "of:item-a": { value: element },
+    });
+
+    expect(ok).toEqual([{ n: 1, own: "kept" }]);
+    expect("inherited" in (ok as Record<string, FabricValue>[])[0]).toBe(
+      false,
+    );
+  });
+
   it("reports nothing for a link to a document that holds no value", () => {
     const sparse: FabricValue[] = [];
     sparse[1] = linkTo("of:item-empty");

@@ -84,6 +84,34 @@ describe("startServingThread()", () => {
       expect(await answer).toEqual({ echo: { n: 1 } });
     });
 
+    it(`registers a listener once however often it is added, and removes only listeners it holds ${kind}`, async () => {
+      const thread = start(ECHO, heapLimitMb);
+      expect(await nextMessage(thread)).toBe("listening");
+      const heard: unknown[] = [];
+      const listener = (event: MessageEvent) => heard.push(event.data);
+      thread.port.addEventListener("message", listener);
+      thread.port.addEventListener("message", listener);
+
+      // Listeners hear a message in the order they were added, so `heard`
+      // holds what `listener` heard of a message once `nextMessage` has it.
+      const first = nextMessage(thread);
+      thread.port.postMessage(1);
+      expect(await first).toEqual({ echo: 1 });
+      expect(heard).toEqual([{ echo: 1 }]);
+
+      thread.port.removeEventListener("message", () => {});
+      const second = nextMessage(thread);
+      thread.port.postMessage(2);
+      expect(await second).toEqual({ echo: 2 });
+      expect(heard).toEqual([{ echo: 1 }, { echo: 2 }]);
+
+      thread.port.removeEventListener("message", listener);
+      const third = nextMessage(thread);
+      thread.port.postMessage(3);
+      expect(await third).toEqual({ echo: 3 });
+      expect(heard).toEqual([{ echo: 1 }, { echo: 2 }]);
+    });
+
     it(`shares a run beacon with the thread, and takes the post a run makes before its body holds the thread, while it does ${kind}`, async () => {
       const thread = start(BEACON, heapLimitMb);
       expect(await nextMessage(thread)).toBe("listening");

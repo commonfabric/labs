@@ -210,11 +210,11 @@ export class VDomRenderer {
 
   /**
    * Synchronous local teardown: detach listeners and drop DOM. Does not issue
-   * an unmount round-trip. Safe to call during connection disposal, and run
-   * directly from the connection's disposal hook.
+   * an unmount round-trip. Runs exactly once: either from `dispose()`, which
+   * first detaches it from the connection, or from the connection's disposal
+   * hook, after which `dispose()` returns early.
    */
   #disposeLocal = (): void => {
-    if (this.#disposed) return;
     this.#disposed = true;
     this.#mountId = null;
     this.#rootNodeId = null;
@@ -253,8 +253,6 @@ export class VDomRenderer {
   //
 
   #handleVDomBatch = (notification: VDomBatchNotification): void => {
-    if (this.#disposed) return;
-
     // Filter for our mount ID
     if (
       notification.mountId !== undefined &&

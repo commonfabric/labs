@@ -276,25 +276,25 @@ export interface LofiInductorOutput {
   unpublish: Stream<void>;
 }
 
-/** The item an `addItem` event describes; throws on one that is malformed. */
+/**
+ * The item an `addItem` event describes; throws on one that is malformed.
+ * The event's schema hands over either nothing, for an event that is not an
+ * item, or an item whose `fields` are strings and whose `id`, if any, is a
+ * string.
+ */
 function checkedItem(
   event: SubmittedItem,
 ): { id: string; fields: Item["fields"] } {
   if (typeof event !== "object" || event === null) {
     throw new Error("An item is an object with `fields`.");
   }
-  const raw = event.fields;
-  if (typeof raw !== "object" || raw === null) {
-    throw new Error("An item needs `fields`, an object of strings.");
-  }
   // A copy, so the item stored is plain data rather than the event's.
   const fields: Record<string, string> = {};
-  for (const [name, value] of Object.entries(raw)) fields[name] = value;
+  for (const [name, value] of Object.entries(event.fields)) {
+    fields[name] = value;
+  }
   if (Object.keys(fields).length === 0) {
     throw new Error("An item needs at least one field.");
-  }
-  if (event.id !== undefined && typeof event.id !== "string") {
-    throw new Error("An item's `id` is a string when given.");
   }
   return { id: event.id?.trim() ?? "", fields };
 }

@@ -15,12 +15,11 @@
  * CLI/controller boundary.
  */
 
+import type { PhaseTrace } from "@commonfabric/piece/ops";
+
 /** Where a phase reports, and whether it does. Injected by tests; commands
  * use {@link cliPhaseTrace}. */
-export interface PhaseTrace {
-  readonly enabled: boolean;
-  readonly log: (line: string) => void;
-}
+export type { PhaseTrace };
 
 /** The process-wide trace: read once, since the flag is a property of the
  * process rather than of any one call. */

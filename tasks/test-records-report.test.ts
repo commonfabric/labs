@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import * as path from "@std/path";
 
 import {
   aggregate,
@@ -18,7 +19,10 @@ import {
   type StoredReport,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
+
+const ROOT = path.fromFileUrl(new URL("..", import.meta.url));
 
 function record(
   n: string,
@@ -581,6 +585,36 @@ describe("test-records-report", () => {
       expect(status).toBe(2);
       expect(err).toBe("unknown flag --mystery");
       expect(urls).toEqual([]);
+    });
+
+    it("exits as a program with the status a malformed command line earns", async () => {
+      const run = async (args: string[]) => {
+        const output = await runDenoCommandWithTemporaryLock({
+          root: ROOT,
+          args: (lockPath) => [
+            "run",
+            "--config",
+            path.join(ROOT, "deno.jsonc"),
+            "--lock",
+            lockPath,
+            "--allow-read",
+            "--allow-env",
+            path.join(ROOT, "tasks/test-records-report.ts"),
+            ...args,
+          ],
+        });
+        return {
+          code: output.code,
+          err: new TextDecoder().decode(output.stderr),
+        };
+      };
+      const unknown = await run(["--mystery"]);
+      expect(unknown.code).toBe(2);
+      expect(unknown.err).toContain("unknown flag --mystery");
+      const zeroDays = await run(["--days", "0"]);
+      expect(zeroDays.code).toBe(2);
+      expect(zeroDays.err).toContain("--days takes a positive integer");
+      expect(zeroDays.err).not.toContain("unknown flag");
     });
   });
 

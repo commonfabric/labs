@@ -15,10 +15,13 @@
  * neither parent. `git log -S` finds nothing, because no commit added the line;
  * the merge did. Reviewing every commit of a branch can miss it entirely.
  *
- * Usage: deno run --allow-read --allow-run=git ./tasks/check-conflict-markers.ts
+ * Usage: deno run --allow-read --allow-run=git ./tasks/check-conflict-markers.ts [root]
+ *
+ * `root` is the repository to scan, and defaults to the one holding this file.
  */
 
 import { dirname, fromFileUrl } from "@std/path";
+import { runOnRoot } from "./root-argument.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -137,4 +140,7 @@ export async function main(root: string = REPO_ROOT): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) Deno.exit(await main());
+/** What the command line may hold. */
+const USAGE = "check-conflict-markers.ts [root]";
+
+if (import.meta.main) Deno.exit(await runOnRoot(Deno.args, USAGE, main));

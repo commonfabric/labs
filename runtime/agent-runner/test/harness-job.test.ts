@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { basename, join } from "@std/path";
+import { basename, dirname, join } from "@std/path";
 
 import {
   CfHarnessPromptLoop,
@@ -1023,6 +1023,9 @@ describe("runHarnessJob()", () => {
           usageCoverage: "including-descendants",
           toolCalls: 0,
         });
+        expect(dirname(result.report!.runRef!)).toBe(
+          join(runRoot, "artifacts"),
+        );
         expect(result.report).not.toHaveProperty("modelTurns");
       });
     }

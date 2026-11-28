@@ -1349,8 +1349,8 @@ test("Dashboard publishes only from main, never from a pull request", async () =
     "permissions:\n      contents: read\n      id-token: write",
   );
 
-  // Both tags go up in the one push: the immutable commit tag the infra
-  // overlay pins, and the `latest` the deployment follows.
+  // Both tags go up in the one push: the immutable commit tag, whose digest
+  // the infra overlay pins, and `latest`.
   const build = stepBlock(publish, "🏗️ Build and push dashboard image");
   assertStringIncludes(build, "\n          push: true\n");
   assertStringIncludes(

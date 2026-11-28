@@ -799,7 +799,7 @@ function requiredValueProperties(
 /**
  * Whether the property `name` of `resolved` declares a default, read the way
  * the object traversal reads it when it fills an absent property: through
- * the property's `$ref`.
+ * the property's `$ref` (`getPropertyDefaultSchema()`).
  */
 function propertyDeclaresDefault(
   resolved: JSONSchemaObj,
@@ -810,10 +810,7 @@ function propertyDeclaresDefault(
     : undefined;
   if (!isObjectNotArray(property)) return false;
   if (!("$ref" in property)) return property.default != undefined;
-  const atPath = ContextualFlowControl.getSchemaAtPath(resolved, [name]);
-  if (!isObjectOrArray(atPath)) return false;
-  const target = ContextualFlowControl.resolveSchemaRefs(atPath);
-  return isObjectOrArray(target) && target.default != undefined;
+  return getPropertyDefaultSchema(resolved, name) !== undefined;
 }
 
 /**
@@ -3778,7 +3775,9 @@ function followPointerOnce(
       // only the root doc, so a link can point at a doc no selector ever
       // walked); the receiver decides whether a fetch is actually needed —
       // Runtime.ensureLinkedDocLoaded kicks same-space targets only when
-      // the replica has never seen the doc, and at most once, so reads of
+      // `shouldPullDoc()` reserves the load, which for an absent doc it
+      // does once until the doc is dropped or the kicked sync rejects (one
+      // that resolves carrying an error keeps the reservation), so reads of
       // genuinely absent optional values do not turn into repeated server
       // queries. The reported link carries the selector's target-rooted
       // path (minus its "value" prefix) and schema so the fetch covers the
@@ -6326,13 +6325,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
     prepared: PreparedAnyOfBranch | undefined,
   ): boolean {
     if (!this.#narrowsReachedValues) return true;
-    if (prepared === undefined) {
-      if (typeof merged === "boolean") return merged;
-      if (
-        SchemaObjectTraverser.hasAsCell(merged) &&
-        !(this.#holdsCellsToShape && followsThroughCell(merged))
-      ) return true;
-    }
+    if (
+      prepared === undefined && SchemaObjectTraverser.hasAsCell(merged) &&
+      !(this.#holdsCellsToShape && followsThroughCell(merged))
+    ) return true;
     if (
       prepared?.capsFollowScope ?? isCellScope(schemaFollowScopeCap(merged))
     ) return true;

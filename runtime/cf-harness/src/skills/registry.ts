@@ -282,19 +282,11 @@ const collectSkillFiles = async (
   const skillFiles: string[] = [];
   const diagnostics: HarnessSkillDiagnostic[] = [];
   let directoriesVisited = 0;
-  const visit = async (dir: string, depth: number): Promise<void> => {
-    let resolvedDir: string;
-    try {
-      resolvedDir = await Deno.realPath(dir);
-    } catch {
-      diagnostics.push(createDiagnostic({
-        severity: "warning",
-        code: "unresolvable-skill-scan-path",
-        detail: `Could not resolve skill scan path: ${dir}`,
-        path: dir,
-      }));
-      return;
-    }
+  const visit = async (
+    dir: string,
+    resolvedDir: string,
+    depth: number,
+  ): Promise<void> => {
     if (!isPathWithinRoot(resolvedSkillsRoot, resolvedDir)) {
       diagnostics.push(createDiagnostic({
         severity: "warning",
@@ -366,17 +358,19 @@ const collectSkillFiles = async (
       }
       const entryPath = join(dir, entry.name);
       let stat: Deno.FileInfo;
+      let resolvedEntryPath: string;
       try {
         stat = await Deno.stat(entryPath);
+        resolvedEntryPath = await Deno.realPath(entryPath);
       } catch {
         continue;
       }
       if (stat.isDirectory) {
-        await visit(entryPath, depth + 1);
+        await visit(entryPath, resolvedEntryPath, depth + 1);
       }
     }
   };
-  await visit(skillsRoot, 0);
+  await visit(skillsRoot, resolvedSkillsRoot, 0);
   return { skillFiles, diagnostics };
 };
 
@@ -513,7 +507,10 @@ const collectSkillResources = async (
     resolvedSkillsRoot: string;
     sandboxSkillsRoot: string;
     skillDir: string;
+    /** The directory holding the resolved SKILL.md; resources stay in it. */
     resolvedSkillDir: string;
+    /** `skillDir` resolved, where the scan starts. */
+    resolvedScanDir: string;
     limits: HarnessSkillScanLimits;
   },
 ): Promise<{
@@ -526,19 +523,11 @@ const collectSkillResources = async (
   let directoriesVisited = 0;
   let filesVisited = 0;
 
-  const visit = async (dir: string, depth: number): Promise<void> => {
-    let resolvedDir: string;
-    try {
-      resolvedDir = await Deno.realPath(dir);
-    } catch {
-      diagnostics.push(createDiagnostic({
-        severity: "warning",
-        code: "unresolvable-skill-resource-scan-path",
-        detail: `Could not resolve skill resource scan path: ${dir}`,
-        path: dir,
-      }));
-      return;
-    }
+  const visit = async (
+    dir: string,
+    resolvedDir: string,
+    depth: number,
+  ): Promise<void> => {
     if (
       !isPathWithinRoot(options.resolvedSkillDir, resolvedDir) ||
       !isPathWithinRoot(options.resolvedSkillsRoot, resolvedDir)
@@ -608,19 +597,21 @@ const collectSkillResources = async (
       }
       const entryPath = join(dir, entry.name);
       let stat: Deno.FileInfo;
+      let resolvedEntryPath: string;
       try {
         stat = await Deno.stat(entryPath);
+        resolvedEntryPath = await Deno.realPath(entryPath);
       } catch {
         diagnostics.push(createDiagnostic({
           severity: "warning",
           code: "unstatable-skill-resource",
-          detail: `Could not stat skill resource path: ${entryPath}`,
+          detail: `Could not stat or resolve skill resource path: ${entryPath}`,
           path: entryPath,
         }));
         continue;
       }
       if (stat.isDirectory) {
-        await visit(entryPath, depth + 1);
+        await visit(entryPath, resolvedEntryPath, depth + 1);
         continue;
       }
       if (!stat.isFile) {
@@ -637,22 +628,9 @@ const collectSkillResources = async (
         }));
         return;
       }
-
-      let resolvedResourcePath: string;
-      try {
-        resolvedResourcePath = await Deno.realPath(entryPath);
-      } catch {
-        diagnostics.push(createDiagnostic({
-          severity: "warning",
-          code: "unresolvable-skill-resource",
-          detail: `Could not resolve skill resource path: ${entryPath}`,
-          path: entryPath,
-        }));
-        continue;
-      }
       if (
-        !isPathWithinRoot(options.resolvedSkillDir, resolvedResourcePath) ||
-        !isPathWithinRoot(options.resolvedSkillsRoot, resolvedResourcePath)
+        !isPathWithinRoot(options.resolvedSkillDir, resolvedEntryPath) ||
+        !isPathWithinRoot(options.resolvedSkillsRoot, resolvedEntryPath)
       ) {
         diagnostics.push(createDiagnostic({
           severity: "warning",
@@ -709,7 +687,7 @@ const collectSkillResources = async (
     }
   };
 
-  await visit(options.skillDir, 0);
+  await visit(options.skillDir, options.resolvedScanDir, 0);
   resources.sort((a, b) => a.path.localeCompare(b.path));
   return { resources, diagnostics };
 };
@@ -742,8 +720,10 @@ export const discoverHarnessSkills = async (
   for (const skillPath of skillFiles.sort()) {
     const skillDir = dirname(skillPath);
     let resolvedSkillPath: string;
+    let resolvedScanDir: string;
     try {
       resolvedSkillPath = await Deno.realPath(skillPath);
+      resolvedScanDir = await Deno.realPath(skillDir);
     } catch {
       diagnostics.push(createDiagnostic({
         severity: "warning",
@@ -841,6 +821,7 @@ export const discoverHarnessSkills = async (
         sandboxSkillsRoot,
         skillDir,
         resolvedSkillDir,
+        resolvedScanDir,
         limits,
       });
     for (const diagnostic of resourceDiagnostics) {

@@ -57,6 +57,7 @@ export type {
   Projection,
   ProjectionOf,
   ProjectionPath,
+  Reclassified,
   Ref,
   RefValue,
   RepresentsCurrentUser,

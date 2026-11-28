@@ -100,6 +100,17 @@ const selectorPathKey = (path: readonly string[]): string => {
 const SELECTOR_CACHE_SWEEP_THRESHOLD = 2048;
 
 /**
+ * Deletes every entry of `map` whose ref no longer reaches its target, that
+ * is, whose `deref()` returns `undefined`. Any value with a `deref()` method,
+ * `WeakRef` among them, serves as a ref.
+ */
+export function deleteDeadRefs<K>(map: Map<K, { deref(): unknown }>): void {
+  for (const [k, ref] of map) {
+    if (ref.deref() === undefined) map.delete(k);
+  }
+}
+
+/**
  * Returns a deep-frozen `SchemaPathSelector` whose `schema` (if any) is the
  * canonical interned instance and whose `path` array is frozen.
  *
@@ -152,11 +163,7 @@ export function internPathSelector(
     return existing;
   }
 
-  if (byPath.size >= SELECTOR_CACHE_SWEEP_THRESHOLD) {
-    for (const [k, ref] of byPath) {
-      if (ref.deref() === undefined) byPath.delete(k);
-    }
-  }
+  if (byPath.size >= SELECTOR_CACHE_SWEEP_THRESHOLD) deleteDeadRefs(byPath);
 
   // First instance with this content becomes the canonical one. Keep the
   // pre-existing in-place behavior: swap in the canonical schema and freeze

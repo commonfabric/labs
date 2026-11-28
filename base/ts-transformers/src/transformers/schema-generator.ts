@@ -50,7 +50,7 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
       };
     };
 
-    let schemaUse: ts.Node = sourceFile;
+    let schemaUse: ts.TextRange = sourceFile;
     const visit: ts.Visitor = (node) => {
       if (isToSchemaNode(node)) {
         const typeArg = node.typeArguments[0]!;
@@ -124,13 +124,12 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
               context.reportDiagnosticOnce({ ...diagnostic, node: original });
               return;
             }
-            const useRange = recoverAuthoredPosition(node) ??
-              recoverAuthoredPosition(schemaUse);
-            const at = (range: ts.TextRange) =>
-              ts.setTextRange(context.factory.createIdentifier(""), range);
             context.reportDiagnosticOnce({
               ...diagnostic,
-              node: useRange ? at(useRange) : schemaUse,
+              node: ts.setTextRange(
+                context.factory.createIdentifier(""),
+                recoverAuthoredPosition(node) ?? schemaUse,
+              ),
             });
           },
           // The program's own word on default-library membership; the
@@ -270,7 +269,7 @@ export class SchemaGeneratorTransformer extends HelpersOnlyTransformer {
       const enclosingUse = schemaUse;
       const range = recoverAuthoredPosition(node);
       if (range) {
-        schemaUse = node;
+        schemaUse = range;
       }
       const visited = visitEachChildWithJsx(node, visit, transformation);
       schemaUse = enclosingUse;

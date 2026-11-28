@@ -1,8 +1,9 @@
 /**
  * Tests the event-firing, binding and text helpers in `vnode-helpers.ts`: a
- * control that binds a handler receives the event, and one that binds nothing
- * under the prop, or a node that was not found, makes the helper throw rather
- * than pass as a control that did nothing.
+ * control that binds a handler receives the event, a bound cell found by
+ * `boundViewCell` writes through to what the control binds, and one that binds
+ * nothing under the prop, or a node that was not found, makes the helper throw
+ * rather than pass as a control that did nothing.
  */
 import {
   action,
@@ -11,14 +12,18 @@ import {
   pattern,
   TESTS,
   UI,
+  type VNode,
   Writable,
 } from "commonfabric";
 import {
+  boundViewCell,
   findElementByText,
   fireClick,
   fireEvent,
+  isElement,
   sendMessage,
   setBound,
+  viewCell,
   viewShows,
 } from "./vnode-helpers.ts";
 
@@ -33,14 +38,37 @@ const record = handler<
   sent.push(detail.message);
 });
 
+/** Sets the cell the first `cf-checkbox` under `ui` binds as `prop` to
+ * true, recording the message when it binds nothing there. */
+const checkThrough = handler<
+  void,
+  { ui: Writable<VNode>; prop: string; failures: Writable<string[]> }
+>((_, { ui, prop, failures }) => {
+  try {
+    boundViewCell(
+      viewCell(ui),
+      (node) => isElement(node, "cf-checkbox"),
+      prop,
+      "the checkbox",
+    ).set(true);
+  } catch (error) {
+    failures.push(error instanceof Error ? error.message : String(error));
+  }
+});
+
 const Controls = pattern<
-  { clicks: Writable<number>; sent: Writable<string[]> }
->(({ clicks, sent }) => ({
+  {
+    clicks: Writable<number>;
+    sent: Writable<string[]>;
+    done: Writable<boolean>;
+  }
+>(({ clicks, sent, done }) => ({
   [UI]: (
     <div>
       <cf-button onClick={count({ clicks })}>Count</cf-button>
       <span>Inert</span>
       <cf-message-input oncf-send={record({ sent })} />
+      <cf-checkbox $checked={done}>Done</cf-checkbox>
     </div>
   ),
 }));
@@ -50,9 +78,20 @@ const Label = pattern(() => ({ [UI]: <span>Inert</span> }));
 export default pattern(() => {
   const clicks = new Writable(0);
   const sent = new Writable<string[]>([]);
-  const controls = Controls({ clicks, sent });
+  const done = new Writable(false);
+  const controls = Controls({ clicks, sent, done });
   const label = Label({});
   const failures = new Writable<string[]>([]);
+  const action_check_unbound = checkThrough({
+    ui: controls[UI],
+    prop: "$value",
+    failures,
+  });
+  const action_check_bound = checkThrough({
+    ui: controls[UI],
+    prop: "$checked",
+    failures,
+  });
 
   const action_send = action(() => {
     sendMessage(controls[UI], "hello");
@@ -134,6 +173,18 @@ export default pattern(() => {
             "setBound: the inert label binds no $value|" +
               "setBound: the inert label was not found"
         ),
+      },
+      { action: action_check_unbound },
+      {
+        assertion: assert(() =>
+          !done.get() &&
+          failures.get().slice(5).join("|") ===
+            "boundViewCell: the checkbox binding $value was not found"
+        ),
+      },
+      { action: action_check_bound },
+      {
+        assertion: assert(() => done.get() && failures.get().length === 6),
       },
     ],
   };

@@ -18,8 +18,9 @@ import {
   createHasher,
   type IncrementalHasher,
 } from "@commonfabric/content-hash";
+import { assertExists } from "@std/assert";
 import { beforeAll, describe, it } from "@commonfabric/test-support/test";
-import { createHasherDeno } from "@/sha256-deno.ts";
+import { denoImplementation } from "@/sha256-deno.ts";
 import { createHasherNoble } from "@/sha256-noble.ts";
 import {
   createHasherWasm,
@@ -28,8 +29,10 @@ import {
 } from "@/sha256-wasm.ts";
 import { FIXTURES } from "./fixtures.ts";
 
+assertExists(denoImplementation);
+
 const createFuncs = [
-  createHasherDeno,
+  denoImplementation.createHasher,
   createHasherNoble,
   createHasherWasm,
   createHasherWasmCollecting,

@@ -8,10 +8,11 @@
  *
  * This checks the parse directly, then drives the note through its view: the
  * title editor, the model picker, Generate and Cancel, the keyboard shortcut,
- * and the editor's backlink events, which register the linked piece and, when
- * not navigating, make it mentionable. The model answers one conversation and
- * fails another, as `llmMocks` below states, and the failed generation stays
- * open until Cancel ends it.
+ * the editor's backlink events, which register the linked piece and, when
+ * not navigating, make it mentionable, and the footer, which lists the notes
+ * that mention this one, as the backlinks index finds them. The model answers
+ * one conversation and fails another, as `llmMocks` below states, and the
+ * failed generation stays open until Cancel ends it.
  *
  * Run: deno task cf test patterns/dev/experimental/chat-note.test.tsx --root patterns
  */
@@ -25,8 +26,12 @@ import {
   wish,
   Writable,
 } from "commonfabric";
+import BacklinksIndex, {
+  type MentionableCell,
+} from "../../system/backlinks-index/backlinks-index.tsx";
 import {
   clickButton,
+  countElements,
   findElement,
   findElementByText,
   findNode,
@@ -35,6 +40,7 @@ import {
   isButton,
   propsOf,
   propValue,
+  setBound,
 } from "../../tools/test-support/vnode-helpers.ts";
 import ChatNote, { parseContentToMessages } from "./chat-note.tsx";
 
@@ -85,6 +91,13 @@ const titleEditorShown = (ui: unknown): boolean => shownAround(ui, "cf-input");
 const generateDisabled = (ui: unknown): unknown =>
   propValue(findElementByText(ui, "cf-button", "Generate"), "disabled");
 
+/** The number of backlink buttons in a note's footer. */
+const backlinkButtons = (ui: unknown): number =>
+  countElements(
+    findNode(ui, (node) => propValue(node, "slot") === "footer"),
+    "cf-button",
+  );
+
 export default pattern(() => {
   const pieceRegistry = wish<Writable<Array<{ title?: string }>>>({
     query: "#pieceRegistry",
@@ -96,6 +109,9 @@ export default pattern(() => {
   const linked = ChatNote({ title: "Linked", content: "Linked content" });
   const child = ChatNote({ title: "Child", parentNotebook: linked });
   const editResult = new Writable("");
+  // The backlinks index over the same registry the notes add to.
+  const registry = wish<MentionableCell[]>({ query: "#pieceRegistry" }).result!;
+  const index = BacklinksIndex({ pieceRegistry: registry });
 
   const action_open_title = action(() => clickButton(subject[UI], "Subject"));
   const action_type_in_title = action(() =>
@@ -164,6 +180,24 @@ export default pattern(() => {
   // One navigation per step, as a person clicks one link at a time.
   const action_follow_backlink = action(() =>
     fire(subject[UI], "onbacklink-click", { detail: { piece: linked } })
+  );
+  const action_register_subject = action(() =>
+    fire(linked[UI], "onbacklink-create", {
+      detail: {
+        text: "Subject",
+        pieceId: "subject",
+        piece: subject,
+        navigate: false,
+      },
+    })
+  );
+  const action_linked_mentions_subject = action(() =>
+    setBound(findElement(linked[UI], "cf-code-editor"), "$mentioned", [
+      subject,
+    ])
+  );
+  const action_follow_footer_backlink = action(() =>
+    clickButton(subject[UI], "💬 Linked")
   );
   const action_follow_parent_chip = action(() =>
     fireEvent(
@@ -286,6 +320,23 @@ export default pattern(() => {
     subject.content === "Hi\n---\n## AI\n"
   );
 
+  const assert_no_backlinks_listed = assert(() =>
+    backlinkButtons(subject[UI]) === 0 && backlinkButtons(linked[UI]) === 0
+  );
+  // A mention lists the mentioning note in the footer of the note it
+  // mentions, and not the other way round.
+  const assert_mention_lists_backlink = assert(() =>
+    backlinkButtons(subject[UI]) === 1 &&
+    findElementByText(subject[UI], "cf-button", "💬 Linked") !== undefined &&
+    backlinkButtons(linked[UI]) === 0
+  );
+  // Following the backlink leaves both notes as they were.
+  const assert_following_backlink_changes_nothing = assert(() =>
+    backlinkButtons(subject[UI]) === 1 && backlinkButtons(linked[UI]) === 0 &&
+    subject.content === "Hi\n---\n## AI\n" &&
+    linked.content === "Linked content"
+  );
+
   return {
     [TESTS]: [
       { assertion: assert_parses_empty_document },
@@ -338,10 +389,18 @@ export default pattern(() => {
       { assertion: assert_following_links_changes_nothing },
       { action: action_follow_parent_chip },
       { assertion: assert_following_links_changes_nothing },
+
+      { action: action_register_subject },
+      { assertion: assert_no_backlinks_listed },
+      { action: action_linked_mentions_subject },
+      { assertion: assert_mention_lists_backlink },
+      { action: action_follow_footer_backlink },
+      { assertion: assert_following_backlink_changes_nothing },
     ],
     // The failed request warns.
     allowConsoleWarnings: true,
     subject,
+    index,
   };
 });
 

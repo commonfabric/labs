@@ -14,8 +14,10 @@ import {
   Writable,
 } from "commonfabric";
 import {
-  clickButton,
+  findElement,
+  fireEvent,
   hasText,
+  innermostNode,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Viewer, {
   groupViews,
@@ -25,6 +27,24 @@ import Viewer, {
   stepKey,
 } from "./viewer.tsx";
 import type { StepGroup } from "./schemas.tsx";
+
+/** Ticks the checkbox beside `text` under `root`, as a person does on the
+ * page. */
+const tick = (root: unknown, text: string): void =>
+  fireEvent(
+    findElement(
+      innermostNode(
+        root,
+        (node) =>
+          hasText(node, text) &&
+          findElement(node, "cf-checkbox") !== undefined,
+      ),
+      "cf-checkbox",
+    ),
+    "oncf-change",
+    { detail: { checked: true } },
+    `the checkbox beside "${text}"`,
+  );
 
 export default pattern(() => {
   const stepGroups = new Writable<StepGroup[]>([
@@ -100,11 +120,32 @@ export default pattern(() => {
     view.stepsTotal === 4 && hasText(view[UI], "Rest 10 minutes")
   );
 
-  const action_check_then_reset = action(() => {
-    view.toggleStep.send({ key: stepKey("roast", 0) });
-    clickButton(view[UI], "Start over");
-  });
-  const assert_reset = assert(() => view.stepsDone === 0);
+  // "Start over" on the page clears what was checked.
+  const action_check_roast = action(() =>
+    view.toggleStep.send({ key: stepKey("roast", 0) })
+  );
+  const assert_roast_checked = assert(() => view.stepsDone === 1);
+  const assert_reset = assert(() =>
+    view.stepsDone === 0 && hasText(view[UI], "0 of 4 steps done")
+  );
+
+  // Ticking a group's checkbox on the page checks its steps and no others.
+  const action_tick_roast_group = action(() =>
+    tick(view[UI], "425°F for 45 min")
+  );
+  const assert_roast_group_ticked = assert(() =>
+    view.stepsDone === 2 &&
+    view.done.join() === "roast#0,roast#1"
+  );
+
+  // Ticking a step's checkbox checks that step alone.
+  const action_tick_garlic = action(() => tick(view[UI], "Mince garlic"));
+  const assert_garlic_ticked = assert(() =>
+    view.stepsDone === 3 &&
+    view.done.includes(stepKey("prep", 1)) &&
+    !view.done.includes(stepKey("prep", 0)) &&
+    hasText(view[UI], "3 of 4 steps done")
+  );
 
   return {
     [TESTS]: [
@@ -119,8 +160,14 @@ export default pattern(() => {
       { assertion: assert_group_cleared },
       { action: action_add_step },
       { assertion: assert_follows_recipe },
-      { action: action_check_then_reset },
+      { action: action_check_roast },
+      { assertion: assert_roast_checked },
+      { press: view[UI], control: "Start over" },
       { assertion: assert_reset },
+      { action: action_tick_roast_group },
+      { assertion: assert_roast_group_ticked },
+      { action: action_tick_garlic },
+      { assertion: assert_garlic_ticked },
     ],
     view,
   };

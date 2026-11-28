@@ -375,13 +375,21 @@ export function streamDeclarationOf(
     if (link === null || link.id !== id || (link.path?.length ?? 0) > 0) {
       continue;
     }
-    const schema = link.schema as JSONSchema | undefined;
-    if (declaredHandleKind(schema, { resolveExternal }) !== "stream") continue;
-    // The declaration held, so the chain of references it was read through
-    // resolves; what is shown is the schema at its end, and the source names
-    // the last document followed into.
-    const reached = followExternalReferences(schema, { resolveExternal });
-    if (reached === undefined) return undefined;
+    // What is shown is the schema at the end of the chain of references, and
+    // the source names the last document followed into.
+    const reached = followExternalReferences(
+      link.schema as JSONSchema | undefined,
+      { resolveExternal },
+    );
+    if (
+      reached === undefined ||
+      declaredHandleKind(reached.schema, {
+          root: reached.root,
+          resolveExternal,
+        }) !== "stream"
+    ) {
+      continue;
+    }
     const ref = reached.followed.at(-1);
     return {
       schema: reached.schema,

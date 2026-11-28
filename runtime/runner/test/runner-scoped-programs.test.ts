@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
+import { spy } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
+import { isObjectOrArray } from "@commonfabric/js-values/types";
 import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
@@ -19,6 +21,7 @@ import {
   waveSettlementOf,
 } from "../src/executor/wave.ts";
 import { Runtime } from "../src/runtime.ts";
+import { getTransactionWriteAttempts } from "../src/storage/transaction-inspection.ts";
 import { TransactionWrapper } from "../src/storage/extended-storage-transaction.ts";
 import {
   EmulatedStorageManager,
@@ -136,6 +139,53 @@ export default pattern<{ value: number }, { doubled: number }>(
     expect(runtime.runner.cancels.size).toBe(1);
     await updateChild(result, 5);
     expect(result.get()).toEqual({ doubled: 10 });
+  });
+
+  it("has a program's action write nothing once the piece that ran it stopped", async () => {
+    const { lift, pattern } = createTrustedBuilder(runtime).commonfabric;
+    const double = (input: number) => input * 2;
+    const program = pattern<{ value: number }>(({ value }) => ({
+      doubled: lift(double)(value),
+    }));
+    const result = runtime.getCell<{ doubled: number }>(
+      space,
+      "stopped scoped program",
+      program.resultSchema,
+      undefined,
+      "user",
+    );
+    using registrations = spy(runtime.scheduler, "subscribe");
+    const tx = runtime.edit();
+    runtime.run(tx, program, { value: 3 }, result);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    demands.push(result.sink(() => {}));
+    expect(await result.pull()).toEqual({ doubled: 6 });
+    const action = registrations.calls.map((call) => call.args[0]).find((
+      action,
+    ) =>
+      "module" in action && isObjectOrArray(action.module) &&
+      action.module.implementation === double
+    );
+    expect(action).toBeDefined();
+    // Runs the action over an input of 5, and returns how many writes it
+    // made.
+    const writesOverFive = () => {
+      const run = runtime.edit();
+      try {
+        result.getArgumentCell<{ value: number }>()!.withTx(run).key("value")
+          .set(5);
+        const before = getTransactionWriteAttempts(run)!.length;
+        action!(run);
+        return getTransactionWriteAttempts(run)!.length - before;
+      } finally {
+        run.abort("the run is only inspected");
+      }
+    };
+
+    expect(writesOverFive()).toBeGreaterThan(0);
+    runtime.runner.stop(result);
+    expect(runtime.runner.isRunning(result)).toBe(false);
+    expect(writesOverFive()).toBe(0);
   });
 
   it("keeps a space-scoped child reactive when its clear transaction aborts", async () => {

@@ -20,6 +20,8 @@
  *   deno task check-pattern-tiers    # check (what CI runs; cannot write)
  *   deno task fix-pattern-tiers      # add or correct the markers
  *
+ * Either takes a directory to check in place of `patterns`.
+ *
  * Applying a marker can change a pattern's update contract, so run
  * `deno task pattern-compat` afterwards. A pattern carrying information-flow
  * labels derives part of its schema from its own source, and the two lines a
@@ -29,6 +31,7 @@
  * marker on an imported module moves the importing pattern's contract too.
  */
 
+import { runOnRoot } from "./root-argument.ts";
 import { PATTERNS_DIR } from "./pattern-files.ts";
 import {
   collectTierTargets,
@@ -183,7 +186,7 @@ export async function runTierCheck(
  */
 export async function main(
   dir: string = PATTERNS_DIR,
-  write: boolean = Deno.args.includes("--write"),
+  write: boolean = false,
 ): Promise<number> {
   const { examined, marked, written, problems, stale } = await runTierCheck(
     dir,
@@ -216,4 +219,17 @@ export async function main(
   return 1;
 }
 
-if (import.meta.main) Deno.exit(await main());
+/**
+ * Run the check the command line `args` asks for, `--write` and at most one
+ * directory, and answer with the exit status.
+ */
+export function command(args: readonly string[]): Promise<number> {
+  const write = args.includes("--write");
+  return runOnRoot(
+    args.filter((arg) => arg !== "--write"),
+    "check-pattern-tiers.ts [--write] [dir]",
+    (dir) => main(dir, write),
+  );
+}
+
+if (import.meta.main) Deno.exit(await command(Deno.args));

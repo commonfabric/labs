@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
 import {
   collectRecords,
@@ -25,6 +25,7 @@ import {
   describe,
   it,
 } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 /** Writes `lines` into the spool `dir`, as one test file's module does. */
 function writeResults(
@@ -36,6 +37,24 @@ function writeResults(
   )!;
   for (const line of lines) writer.write(line);
   writer.close();
+}
+
+/**
+ * Writes one record, for the `fmt` gate, into a new spool under `dir` and
+ * returns the spool.
+ */
+async function spoolOneRecord(dir: string): Promise<string> {
+  const spool = join(dir, "spool");
+  await Deno.mkdir(spool);
+  const writer = FragmentWriter.open(spool);
+  writer?.append({
+    line: "record",
+    test: { k: "gate", s: "repo", n: "fmt" },
+    outcome: "pass",
+    durationMs: 3,
+  });
+  writer?.close();
+  return spool;
 }
 
 /** One results line for `name` in `runtime/bakery/oven.test.ts`. */
@@ -386,26 +405,21 @@ describe("test-records-gather", () => {
       await Deno.remove(dir, { recursive: true });
     });
 
-    it("gathers the spool it is given into the output directory", async () => {
-      const spool = join(dir, "spool");
-      await Deno.mkdir(spool);
-      const writer = FragmentWriter.open(spool);
-      writer?.append({
-        line: "record",
-        test: { k: "gate", s: "repo", n: "fmt" },
-        outcome: "pass",
-        durationMs: 3,
-      });
-      writer?.close();
+    it("gathers the spool and the facts its environment names into the output directory", async () => {
+      const variables: Record<string, string> = {
+        [RECORDS_DIR_VARIABLE]: await spoolOneRecord(dir),
+        GITHUB_SHA: "abc123",
+      };
       const out = join(dir, "artifact");
       const code = await runGatherCommand(
         ["--out", out, "--job", "Probe", "--shard", "2/4"],
-        spool,
+        (name) => variables[name],
       );
       expect(code).toBe(0);
       const facts = JSON.parse(await Deno.readTextFile(join(out, "job.json")));
       expect(facts.job).toBe("Probe");
       expect(facts.shard).toBe("2/4");
+      expect(facts.commit).toBe("abc123");
       const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
         .trimEnd().split("\n");
       expect(lines.map((line) => parseRecordLine(line)?.test.n)).toEqual([
@@ -414,8 +428,23 @@ describe("test-records-gather", () => {
       expect(errors).toEqual([]);
     });
 
+    it("gathers no records when its environment names no spool", async () => {
+      const out = join(dir, "artifact");
+      const code = await runGatherCommand(
+        ["--out", out, "--job", "Probe"],
+        (name) => name === RECORDS_DIR_VARIABLE ? "" : undefined,
+      );
+      expect(code).toBe(0);
+      const facts = JSON.parse(await Deno.readTextFile(join(out, "job.json")));
+      expect(facts.job).toBe("Probe");
+      expect(facts.commit).toBeUndefined();
+      expect(await Deno.readTextFile(join(out, "records.ndjson"))).toBe("");
+      expect(errors).toEqual([]);
+    });
+
     it("returns 2 and prints the usage for a command line that names no output directory", async () => {
-      expect(await runGatherCommand(["--job", "Probe"], undefined)).toBe(2);
+      expect(await runGatherCommand(["--job", "Probe"], () => undefined))
+        .toBe(2);
       expect(errors).toEqual([
         "usage: test-records-gather.ts --out <dir> --job <name> " +
         "[--shard <label>] [--variant <name>]",
@@ -429,11 +458,73 @@ describe("test-records-gather", () => {
       await Deno.writeTextFile(file, "");
       const code = await runGatherCommand(
         ["--out", join(file, "artifact"), "--job", "Probe"],
-        undefined,
+        () => undefined,
       );
       expect(code).toBe(0);
       expect(warnings.length).toBe(1);
       expect(warnings[0]).toMatch(/^test records: gathering failed: /);
+    });
+  });
+
+  describe("as a program", () => {
+    // The ship step runs the script with the permissions below and reads only
+    // its exit status and the artifact it writes.
+
+    /** Runs the script with `args`, naming `spool` as the spool to gather. */
+    async function runScript(
+      args: string[],
+      spool: string,
+    ): Promise<Deno.CommandOutput> {
+      const root = fromFileUrl(new URL("..", import.meta.url));
+      return await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-write",
+          "--allow-env",
+          "--allow-run=git",
+          join(root, "tasks/test-records-gather.ts"),
+          ...args,
+        ],
+        env: { [RECORDS_DIR_VARIABLE]: spool },
+      });
+    }
+
+    let dir: string;
+
+    beforeEach(async () => {
+      dir = await Deno.makeTempDir({ prefix: "test-records-gather-program-" });
+    });
+
+    afterEach(async () => {
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    it("exits 0 and gathers the spool its environment names", async () => {
+      const spool = await spoolOneRecord(dir);
+      const out = join(dir, "artifact");
+      const { code } = await runScript(["--out", out, "--job", "Probe"], spool);
+      expect(code).toBe(0);
+      const lines = (await Deno.readTextFile(join(out, "records.ndjson")))
+        .trimEnd().split("\n");
+      expect(lines.map((line) => parseRecordLine(line)?.test.n)).toEqual([
+        "fmt",
+      ]);
+    });
+
+    it("exits 2 and writes nothing for a command line that names no job", async () => {
+      const out = join(dir, "artifact");
+      const { code, stderr } = await runScript(["--out", out], dir);
+      expect(code).toBe(2);
+      expect(new TextDecoder().decode(stderr)).toContain(
+        "usage: test-records-gather.ts",
+      );
+      await expect(Deno.stat(out)).rejects.toThrow(Deno.errors.NotFound);
     });
   });
 

@@ -217,6 +217,18 @@ describe("harness", () => {
             "second",
           ]);
         });
+
+        it("lists no test its options ignore, and lists one they do not", () => {
+          const { harness, document } = harnessFor("");
+          const kept = () => {};
+          harness.addTest({ name: "ignored", fn: () => {}, ignore: true });
+          harness.addTest({ name: "kept", fn: kept, ignore: false });
+          expect(harness.tests.map((test: Test) => [test.name, test.fn]))
+            .toEqual([["kept", kept]]);
+          expect(document.tests.children.map((el) => el.innerText)).toEqual([
+            "kept",
+          ]);
+        });
       });
 
       describe("runAt()", () => {
@@ -229,10 +241,14 @@ describe("harness", () => {
           expect(ran).toEqual(["second"]);
         });
 
-        it("returns null for an index no test registered at", async () => {
+        it("throws for an index no test registered at", async () => {
           const { harness } = harnessFor("");
-          harness.addTest("only", () => {});
-          expect(await harness.runAt(1)).toBeNull();
+          const ran: string[] = [];
+          harness.addTest("only", () => ran.push("only"));
+          await expect(harness.runAt(1)).rejects.toThrow(
+            "No test is registered at index 1.",
+          );
+          expect(ran).toEqual([]);
         });
       });
     });
@@ -306,7 +322,9 @@ describe("harness", () => {
           expect(await controller.runAt(0)).toMatchObject({
             ok: { name: "one", error: null },
           });
-          expect(await controller.runAt(1)).toEqual({ ok: null });
+          await expect(controller.runAt(1)).rejects.toThrow(
+            "No test is registered at index 1.",
+          );
         });
       });
     });

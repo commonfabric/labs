@@ -5314,6 +5314,200 @@ describe("routed output high and low marks", () => {
     }
   });
 
+  /**
+   * A connection with one open session, `s`, whose socket writes are held
+   * from when this returns until `drain()`. The answer to its watch addition `a`,
+   * sent once `answer` resolves, leaves less room under the bound than any
+   * other answer takes, so an answer queued behind it closes the socket.
+   */
+  async function heldWatchAnswer(name: string, watchesPerSession: number) {
+    const answer = Promise.withResolvers<void>();
+    const f = await routedRequestFixture(name, async (requestId, send) => {
+      if (requestId === "open") {
+        send({ type: "response", requestId, ok: { sessionId: "s" } });
+      } else if (requestId === "a") {
+        await answer.promise;
+        send(sizedResponse(requestId, BOUND - 16));
+      } else send({ type: "response", requestId, ok: {} });
+    }, { outputBytesPerSocket: BOUND, watchesPerSession });
+    await f.socket.receive(f.request("open"));
+    const opened = decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS);
+    expect(opened.body.ok).toEqual({ sessionId: "s" });
+    const callbacks: (() => void)[] = [];
+    let hold = true;
+    const send = f.socket.send.bind(f.socket);
+    const output = stubOutput(f.socket, (bytes, done) => {
+      assert(done);
+      if (hold) {
+        send(bytes);
+        callbacks.push(done);
+      } else send(bytes, done);
+    });
+    return {
+      ...f,
+      answer,
+      /** Sends session `s` a watch addition naming `watch`. */
+      add: (requestId: string, watch: string) =>
+        f.socket.receive(encodeMemoryBoundary({
+          type: "session.watch.add",
+          requestId,
+          space: f.space.did(),
+          sessionId: "s",
+          watches: [{ id: watch, kind: "graph", query: { roots: [] } }],
+        })),
+      /** Completes every held write and every write after it. */
+      drain: () => {
+        hold = false;
+        while (callbacks.length) callbacks.shift()!();
+      },
+      /** The next answer the router receives. */
+      next: async () =>
+        decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body,
+      close: async () => {
+        try {
+          await f.close();
+        } finally {
+          output.restore();
+        }
+      },
+    };
+  }
+
+  it("holds a session's next watch change while the answer to the one before it fills the output", async () => {
+    const f = await heldWatchAnswer("flow-session-change", 2);
+    try {
+      await f.add("a", "w0");
+      await f.add("b", "w1");
+      await setImmediate();
+      // `b` waits for the turn of `a`, which waits for its answer.
+      expect(f.handled).toEqual(["open", "a"]);
+      f.answer.resolve();
+      await setImmediate();
+      // The turn of `a` has ended, and its answer, still retained, holds `b`
+      // where its answer would have closed the socket.
+      expect(f.handled).toEqual(["open", "a"]);
+      expect(f.socket.isPaused).toBe(true);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+      f.drain();
+      expect((await f.next()).requestId).toBe("a");
+      const answer = await f.next();
+      expect(answer.requestId).toBe("b");
+      expect(answer.ok).toEqual({});
+      expect(f.handled).toEqual(["open", "a", "b"]);
+      expect(f.socket.isPaused).toBe(false);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("holds the refusal of a session's watch change while the answer to the one before it fills the output", async () => {
+    // One watch per session, so `b`, which would make the session's second,
+    // is refused once `a` is answered.
+    const f = await heldWatchAnswer("flow-session-refusal", 1);
+    try {
+      const reasons = await refusalReasons(async () => {
+        await f.add("a", "w0");
+        await f.add("b", "w1");
+        await setImmediate();
+        // `b` waits for the turn of `a`, which waits for its answer.
+        expect(f.handled).toEqual(["open", "a"]);
+        f.answer.resolve();
+        await setImmediate();
+        // The refusal of `b` waits for the output to drain, where sending it
+        // would have closed the socket.
+        expect(f.handled).toEqual(["open", "a"]);
+        expect(f.socket.isPaused).toBe(true);
+        expect(f.socket.readyState).toBe(WebSocket.OPEN);
+        f.drain();
+        expect((await f.next()).requestId).toBe("a");
+        const refusal = await f.next();
+        expect(refusal.requestId).toBe("b");
+        expect(refusal.error).toEqual({
+          name: "AuthorizationError",
+          message: "Routed memory request denied",
+        });
+      });
+      expect(reasons).toEqual(["frame-limit"]);
+      expect(f.handled).toEqual(["open", "a"]);
+      expect(f.socket.isPaused).toBe(false);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("refuses a session's resumption whose principal the router released while the answer before it filled the output", async () => {
+    const f = await heldWatchAnswer("flow-session-released", 2);
+    try {
+      const reasons = await refusalReasons(async () => {
+        await f.add("a", "w0");
+        await f.socket.receive(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: "r",
+          space: f.space.did(),
+          principal: f.principal.did(),
+          session: { sessionId: "s", sessionToken: "t" },
+        }));
+        await setImmediate();
+        // `r` resumes `s`, so it waits for the turn of `a`.
+        expect(f.handled).toEqual(["open", "a"]);
+        f.answer.resolve();
+        await setImmediate();
+        // The answer to `a` holds `r`, and the router releases the principal
+        // `r` opens for while it waits.
+        expect(f.socket.isPaused).toBe(true);
+        expect(
+          (await f.control(
+            4,
+            new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did())
+              .bytes,
+          )).status,
+        ).toBe(0);
+        f.drain();
+        expect((await f.next()).requestId).toBe("a");
+        const refusal = await f.next();
+        expect(refusal.requestId).toBe("r");
+        expect(refusal.error).toEqual({
+          name: "AuthorizationError",
+          message: "Routed memory request denied",
+        });
+      });
+      expect(reasons).toEqual(["principal-not-held"]);
+      expect(f.handled).toEqual(["open", "a"]);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("hands over a session's resumption once the answer before it drains, while its principal is held", async () => {
+    const f = await heldWatchAnswer("flow-session-held", 2);
+    try {
+      await f.add("a", "w0");
+      await f.socket.receive(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "r",
+        space: f.space.did(),
+        principal: f.principal.did(),
+        session: { sessionId: "s", sessionToken: "t" },
+      }));
+      await setImmediate();
+      f.answer.resolve();
+      await setImmediate();
+      expect(f.socket.isPaused).toBe(true);
+      expect(f.handled).toEqual(["open", "a"]);
+      f.drain();
+      expect((await f.next()).requestId).toBe("a");
+      const answer = await f.next();
+      expect(answer.requestId).toBe("r");
+      expect(answer.ok).toEqual({});
+      expect(f.handled).toEqual(["open", "a", "r"]);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("keeps the hard input reservation bound for requests arriving after pause", async () => {
     const produced = Promise.withResolvers<void>();
     // A lone response at the bound, wider than the send window, reaches the

@@ -595,14 +595,15 @@ still named `definitions` (`interface.ts`), and the README's `definitions`
 wording predates the migration.
 
 Whether a type gets a name is decided by `getNamedTypeKey`
-(`src/type-utils.ts`). The rule is structural plus two derived name
+(`src/type-utils.ts`). The rule is structural plus derived name
 sets — not the short name list in the README. A type is *excluded* when any of
 these holds:
 
 - the type **node** names a wrapper: `Default`, `Cell`, `Writable`,
   `ReadonlyCell`, `WriteonlyCell`, `ComparableCell`, `OpaqueCell`, `Stream`,
-  `SqliteDb` (name sets `CELL_LIKE_WRAPPER_NAMES` / `OPAQUE_WRAPPER_NAMES`;
-  `Reactive` is *not* excluded on the node axis);
+  `SqliteDb`, a cell wrapper counting only where its name resolves to the one
+  `commonfabric` declares, so a module's own type spelled `Cell` is no wrapper
+  (`wrapperKindOfReference`; `Reactive` is *not* excluded on the node axis);
 - the **aliasSymbol** is one of the above or `Reactive`;
 - the name is compiler-internal (`__type`, `__object`) or absent — with an
   aliasSymbol fallback, so **non-generic aliases to type literals

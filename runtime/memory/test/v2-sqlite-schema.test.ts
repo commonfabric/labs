@@ -183,4 +183,15 @@ describe("createIndexSQL", () => {
     const schema = { ...table({ a: "text" }), indexes: [[]] };
     expect(() => createIndexSQL("t", schema)).toThrow("names no column");
   });
+
+  it("accepts up to 32 indexes and rejects a 33rd (DoS cap)", () => {
+    const withIndexes = (count: number) => ({
+      ...table({ a: "text" }),
+      indexes: Array.from({ length: count }, () => ["a"]),
+    });
+    expect(createIndexSQL("t", withIndexes(32))).toHaveLength(32);
+    expect(() => createIndexSQL("t", withIndexes(33))).toThrow(
+      'table "t" declares too many indexes (limit 32)',
+    );
+  });
 });

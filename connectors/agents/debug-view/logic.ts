@@ -209,3 +209,12 @@ export function materializeRootCell(value: unknown): unknown {
   const root = isReadableCell(value) ? value.get() : value;
   return linkedCellJson(root);
 }
+
+/** `value` as indented JSON, or a sentence saying why it has none. */
+export function formatJson(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? "undefined";
+  } catch (error) {
+    return `Could not serialize value: ${String(error)}`;
+  }
+}

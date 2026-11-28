@@ -146,21 +146,23 @@ describe("WaveAccumulator", () => {
   };
 
   /**
-   * Seeds a list with `seeded`, has a peer session apply `peer` to it and then
-   * the firing session apply `patches`, both straight in the store, and
-   * commits a wave under the space's lease holding the handler run of the
-   * event `e-list`, which does `write` to the list, and a derivation that
-   * writes another document. The firing session's commit carries a recursive
-   * read of the list where it marks a splice, as a marked splice must. Returns
-   * the wave's outcome and the list as the store then holds it.
+   * Seeds a list with `seeded`, has a peer session apply `peer` to it, then
+   * the firing session apply `patches`, then the peer session apply
+   * `peerAfter`, all straight in the store, and commits a wave under the
+   * space's lease holding the handler run of the event `e-list`, which does
+   * `write` to the list, and a derivation that writes another document. The
+   * firing session's commit carries a recursive read of the list where it
+   * marks a splice, as a marked splice must. Returns the wave's outcome and
+   * the list as the store then holds it.
    */
-  const commitListRun = async (
-    seeded: string[],
+  const commitListRun = async <T = string[]>(
+    seeded: T,
     patches: PatchOp[],
-    write: (list: Cell<string[]>) => void,
+    write: (list: Cell<T>) => void,
     peer: PatchOp[] = [],
+    peerAfter: PatchOp[] = [],
   ) => {
-    const list = runtime.getCell<string[]>(space, "wave-list", undefined);
+    const list = runtime.getCell<T>(space, "wave-list", undefined);
     const other = runtime.getCell<number>(space, "wave-list-other", undefined);
     const seed = runtime.edit();
     list.withTx(seed).set(seeded);
@@ -168,17 +170,20 @@ describe("WaveAccumulator", () => {
     expect((await seed.commit().settled).error).toBeUndefined();
     const eventSeq = Engine.serverSeq(engine);
     const listId = list.getAsNormalizedFullLink().id;
-    if (peer.length > 0) {
+    let peerSeq = 0;
+    const applyPeer = (peerPatches: PatchOp[]) => {
+      if (peerPatches.length === 0) return;
       Engine.applyCommit(engine, {
         sessionId: "sess-peer",
         principal: "did:key:bob",
         commit: {
-          localSeq: 1,
+          localSeq: ++peerSeq,
           reads: { confirmed: [], pending: [] },
-          operations: [{ op: "patch", id: listId, patches: peer }],
+          operations: [{ op: "patch", id: listId, patches: peerPatches }],
         },
       });
-    }
+    };
+    applyPeer(peer);
     const marks = patches.some((patch) =>
       patch.op === "splice" && patch.pinned === true
     );
@@ -200,6 +205,7 @@ describe("WaveAccumulator", () => {
         operations: [{ op: "patch", id: listId, patches }],
       },
     });
+    applyPeer(peerAfter);
     await server.flushSessions([space]);
     await storageManager.open(space).pullToServerHead?.();
     await list.sync();
@@ -423,6 +429,60 @@ describe("WaveAccumulator", () => {
       });
       expect(outcome.dispositions).toEqual([
         { kind: "committed" },
+        { kind: "committed" },
+      ]);
+    });
+
+    it("keeps an event consequence at a key of an object that replaced the array the firing session spliced", async () => {
+      // The firing session's splice overwrote the list's element 0; a peer
+      // then replaced the list with an object. The key "00" names no array
+      // index, even though it reads as the number 0, so the splice did not
+      // overwrite the handler's write to it.
+      const { outcome, stored } = await commitListRun<
+        string[] | Record<string, string>
+      >(
+        ["a", "b", "c"],
+        [{
+          op: "splice",
+          path: "/value",
+          index: 0,
+          remove: 1,
+          add: ["typed"],
+          pinned: true,
+        }],
+        (list) => list.key("00").set("handler"),
+        [],
+        [{ op: "replace", path: "/value", value: { "00": "p", "0": "q" } }],
+      );
+
+      expect(stored).toEqual({ value: { "00": "handler", "0": "q" } });
+      expect(outcome.dispositions).toEqual([
+        { kind: "committed" },
+        { kind: "committed" },
+      ]);
+    });
+
+    it("drops an event consequence at an index key of an object that replaced the array the firing session spliced", async () => {
+      const { outcome, stored } = await commitListRun<
+        string[] | Record<string, string>
+      >(
+        ["a", "b", "c"],
+        [{
+          op: "splice",
+          path: "/value",
+          index: 0,
+          remove: 1,
+          add: ["typed"],
+          pinned: true,
+        }],
+        (list) => list.key("0").set("handler"),
+        [],
+        [{ op: "replace", path: "/value", value: { "00": "p", "0": "q" } }],
+      );
+
+      expect(stored).toEqual({ value: { "00": "p", "0": "q" } });
+      expect(outcome.dispositions).toEqual([
+        { kind: "dropped" },
         { kind: "committed" },
       ]);
     });

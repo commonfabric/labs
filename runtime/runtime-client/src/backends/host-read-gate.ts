@@ -38,7 +38,6 @@ import {
   type MetaField,
   type ProjectedRead,
   readProjected,
-  type SinkConsumedLabel,
   sinkProjected,
   useCancelGroup,
 } from "@commonfabric/runner";
@@ -477,36 +476,28 @@ export class HostReadGate {
       });
     }
     const [cancel, addCancel] = useCancelGroup();
-    let last:
-      | {
-        value: FabricValue;
-        cfcLabel: CfcLabelView | undefined;
-        writtenPrincipal: DID | undefined;
-      }
-      | undefined;
-    let consumed: SinkConsumedLabel | undefined;
-    const decide = () => {
-      if (last === undefined) return;
-      // No labels is a read whose labels could not be read, refused whatever
-      // the policy, as a one-shot read of the same cell is.
-      const refusal = consumed === undefined
-        ? UNREADABLE_LABELS
-        : readRefusal(cell, [consumed], policy, this.#sources, watch);
-      if (refusal === undefined) {
-        deliverValue(last.value, last.cfcLabel, last.writtenPrincipal);
-      } else deliver(refusedUpdate(refusal));
-    };
+    // Decides the latest value the sink delivered, again whenever a document
+    // the decision watches changes.
+    let decide = () => {};
     const watch: FitWatch = {
       watched: new Set<string>(),
       addCancel,
-      reeval: decide,
+      reeval: () => decide(),
     };
     addCancel(sinkProjected(cell, (value) => {
       inspect(value);
       return hostValueOf(value);
     }, (value, read, cfcLabel, writtenPrincipal) => {
-      last = { value, cfcLabel, writtenPrincipal };
-      consumed = read;
+      decide = () => {
+        // No labels is a read whose labels could not be read, refused
+        // whatever the policy, as a one-shot read of the same cell is.
+        const refusal = read === undefined
+          ? UNREADABLE_LABELS
+          : readRefusal(cell, [read], policy, this.#sources, watch);
+        if (refusal === undefined) {
+          deliverValue(value, cfcLabel, writtenPrincipal);
+        } else deliver(refusedUpdate(refusal));
+      };
       decide();
     }, sinkOptions));
     return cancel;

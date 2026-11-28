@@ -323,9 +323,8 @@ export class GraphQueryWalk {
       return sourceKey;
     };
     const referrerKeyOf = (
-      source: { id: string; scope?: CellScope } | undefined,
-    ): string | undefined => {
-      if (source === undefined) return undefined;
+      source: { id: string; scope?: CellScope },
+    ): string => {
       const sourceKey = trackerKeyOf(source);
       return this.#keyOverrides.get(sourceKey) ?? sourceKey;
     };
@@ -370,16 +369,14 @@ export class GraphQueryWalk {
         attributions.outside = entry.depth;
       }
     };
-    // Whether `made` is an attribution to `referrer` this visit has not made
-    // yet, which it then holds.
-    const attributesAnew = (
+    // Notes that this visit has made `made` to `referrer`, so that a
+    // memoized position replayed for it later does not make it again
+    // (`standsFor`).
+    const hold = (
       made: RecordAttribution,
       referrer: string | undefined,
-    ): boolean => {
-      const { held } = attributionsTo(referrer);
-      if (held.has(made)) return false;
-      held.add(made);
-      return true;
+    ): void => {
+      attributionsTo(referrer).held.add(made);
     };
     // The attributions `memoized` stands for that `held` does not, with
     // those of the memoized positions it stands for in turn, each once, and
@@ -419,7 +416,7 @@ export class GraphQueryWalk {
       made: MissingAttribution,
       referrerKey: string | undefined,
     ): void => {
-      if (!attributesAnew(made, referrerKey)) return;
+      hold(made, referrerKey);
       const { link } = made;
       const selector = internPathSelector({
         path: ["value", ...link.path],
@@ -446,7 +443,7 @@ export class GraphQueryWalk {
       made: TrackedAttribution,
       referrer: string | undefined,
     ): void => {
-      if (!attributesAnew(made, referrer)) return;
+      hold(made, referrer);
       onTrackedDoc?.(made.key, made.selector, referrer, made.kind);
     };
     const reportTracked = (

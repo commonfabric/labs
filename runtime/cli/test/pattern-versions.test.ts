@@ -9,7 +9,11 @@ import {
   type PatternIndexPublishRequest,
   type PatternIndexPublishResponse,
 } from "@commonfabric/pattern-index/client";
-import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
+import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
 import { Identity } from "@commonfabric/identity";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
@@ -27,9 +31,11 @@ import {
   type DeployedSource,
   entrySlot,
   gitCheckoutOf,
+  lineageForEntry,
   recordDeployedVersion,
   recordVersionInIndex as recordVersionInIndexLib,
   type VersionDeps,
+  versionJson,
   versionLine,
   type VersionOutcome,
 } from "../lib/pattern-versions.ts";
@@ -442,6 +448,66 @@ describe("pattern-versions", () => {
       expect(published).toHaveLength(0);
     });
 
+    it("records nothing when the deploy's pattern id cannot be read back", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps, opened } = depsWith(client);
+
+      const outcome = await recordDeployedVersion(
+        deployed({ patternId: () => Promise.resolve(undefined) }),
+        deps,
+      );
+
+      expect(outcome).toEqual({
+        status: "failed",
+        reason: "the deploy's pattern id could not be read back",
+      });
+      expect(opened.count).toBe(0);
+      expect(published).toHaveLength(0);
+    });
+
+    it("asks once whether the index keeps private versions, and remembers its yes", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      let asked = 0;
+      const { deps } = depsWith({
+        ...client,
+        getSharingSettings: () => {
+          asked += 1;
+          return client.getSharingSettings();
+        },
+      });
+
+      const first = await recordDeployedVersion(deployed(), deps);
+      const second = await recordDeployedVersion(deployed(), deps);
+
+      expect([first.status, second.status]).toEqual(["recorded", "recorded"]);
+      expect(asked).toBe(1);
+      expect(published).toHaveLength(2);
+    });
+
+    it("fails, quoting no index detail, when asking whether the index keeps versions fails for another reason than its absence", async () => {
+      await joinIndex();
+      const { client, published } = stubClient();
+      const { deps } = depsWith({
+        ...client,
+        getSharingSettings: () =>
+          Promise.reject(
+            new PatternIndexError("getSharingSettings", 500, "secret detail"),
+          ),
+      });
+
+      const outcome = await recordDeployedVersion(deployed(), deps);
+
+      expect(outcome).toEqual({
+        status: "failed",
+        reason: "pattern index getSharingSettings failed (500)",
+      });
+      expect(published).toHaveLength(0);
+      // Not an index without versions: the next deploy asks again.
+      expect(await store.keepsVersions()).toBe(false);
+    });
+
     it("answers an unreachable index as an outcome rather than throwing", async () => {
       await joinIndex();
       const { client } = stubClient({
@@ -473,9 +539,8 @@ describe("pattern-versions", () => {
   });
 
   describe("gitCheckoutOf()", () => {
-    // Deno refuses to start git synchronously, before the catch that turns
-    // a failed git into "no checkout", so the lineage never quietly falls
-    // back to a path slot. This pins that.
+    // A git that cannot be started is an error, never "no checkout", so the
+    // lineage never quietly falls back to a path slot. This pins that.
     it("finds this checkout, and throws rather than answer none when it may not run git", async () => {
       const here = fromFileUrl(new URL(".", import.meta.url));
       expect(await gitCheckoutOf(here)).toMatchObject({
@@ -508,6 +573,19 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
       expect(new TextDecoder().decode(stderr)).toMatch(
         /NotCapable|--allow-run/,
       );
+    });
+
+    it("answers none outside a checkout, and throws rather than answer none where git is not installed", async () => {
+      expect(await gitCheckoutOf(dir)).toBeUndefined();
+
+      const path = Deno.env.get("PATH");
+      Deno.env.set("PATH", join(dir, "no-git-here"));
+      try {
+        await expect(gitCheckoutOf(dir)).rejects.toThrow(Deno.errors.NotFound);
+      } finally {
+        if (path === undefined) Deno.env.delete("PATH");
+        else Deno.env.set("PATH", path);
+      }
     });
   });
 
@@ -612,7 +690,114 @@ await gitCheckoutOf(${JSON.stringify(here)});`,
     });
   });
 
+  describe("versionJson()", () => {
+    it("carries each outcome's status, and the version's number and sharing when it was recorded", () => {
+      expect(versionJson({ status: "not-joined", firstTime: true })).toEqual({
+        status: "not-joined",
+      });
+      expect(versionJson({ status: "failed", reason: "index down" })).toEqual({
+        status: "failed",
+        reason: "index down",
+      });
+      expect(
+        versionJson({
+          status: "recorded",
+          created: false,
+          response: {
+            patternId: "pat-1",
+            created: false,
+            versionId: "ver-1",
+            lineageId: "lin-1",
+          },
+        }),
+      ).toEqual({ status: "unchanged" });
+    });
+  });
+
+  describe("lineageForEntry()", () => {
+    it("finds the lineage kept under the entry's slot, and none for another entry", async () => {
+      const sources = {
+        pathKey: () => store.slotKey(),
+        checkoutOf: () => Promise.resolve(undefined),
+      };
+      const slot = await entrySlot(entry, sources);
+      const { client } = stubClient({ slots: ["cf-path:other", slot] });
+
+      expect((await lineageForEntry(client, entry, sources))?.slot).toBe(slot);
+      expect(
+        await lineageForEntry(client, join(dir, "work", "other.tsx"), sources),
+      ).toBeUndefined();
+    });
+  });
+
   describe("recordVersionInIndex()", () => {
+    it("records a joined machine's deploy in the index the environment names, signed as the identity", async () => {
+      const key = await Identity.generatePkcs8();
+      const keyFile = join(dir, "identity.key");
+      await Deno.writeFile(keyFile, key);
+      const signer = (await Identity.fromPkcs8(key)).did();
+      const calls: {
+        fn: string;
+        did: string;
+        body: Record<string, unknown>;
+      }[] = [];
+      const server = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen() {} },
+        async (request) => {
+          const { userDid } = await verifyFirstPartyHttpRequest({ request });
+          const fn = new URL(request.url).pathname.split("/").at(-1)!;
+          calls.push({ fn, did: userDid, body: await request.json() });
+          return Response.json(
+            fn === "getSharingSettings"
+              ? {
+                enabled: true,
+                selfBuilt: false,
+                receivesAnonymous: true,
+                updatedAt: null,
+              }
+              : RECORDED,
+          );
+        },
+      );
+      const baseUrl = `http://127.0.0.1:${server.addr.port}/index`;
+      const before = {
+        url: Deno.env.get("CF_PATTERN_INDEX_URL"),
+        home: Deno.env.get("CF_PATTERN_INDEX_HOME"),
+      };
+      const restore = (name: string, value: string | undefined) =>
+        value === undefined ? Deno.env.delete(name) : Deno.env.set(name, value);
+      Deno.env.set("CF_PATTERN_INDEX_URL", baseUrl);
+      Deno.env.set("CF_PATTERN_INDEX_HOME", join(dir, "home"));
+      try {
+        await new PatternIndexStore(patternIndexStoreDir(baseUrl))
+          .recordMembership({ handle: "quiet-fox", role: "user", root: ROOT });
+
+        const outcome = await recordVersionInIndexLib(keyFile, deployed());
+
+        expect(outcome).toEqual({
+          status: "recorded",
+          created: true,
+          response: RECORDED,
+        });
+        expect(calls.map(({ fn, did }) => [fn, did])).toEqual([
+          ["getSharingSettings", signer],
+          ["publishPattern", signer],
+        ]);
+        expect(calls[1].body).toMatchObject({
+          patternId: "pat-1",
+          meta: {
+            description:
+              "Reminds the household to take the bins out on collection day.",
+            hashtags: ["chores"],
+          },
+        });
+      } finally {
+        restore("CF_PATTERN_INDEX_URL", before.url);
+        restore("CF_PATTERN_INDEX_HOME", before.home);
+        await server.shutdown();
+      }
+    });
+
     it("answers a pattern index URL it cannot use as a failed version instead of throwing", async () => {
       const before = Deno.env.get("CF_PATTERN_INDEX_URL");
       Deno.env.set("CF_PATTERN_INDEX_URL", "https://index.test/?x=1");

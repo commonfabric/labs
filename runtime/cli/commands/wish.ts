@@ -10,7 +10,6 @@ import { absPath } from "../lib/utils.ts";
 import { setQuietMode } from "./piece.ts";
 import { projectWishValue, readWish } from "../lib/wish.ts";
 import {
-  type CellSelection,
   CellSelectionError,
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
@@ -86,34 +85,14 @@ export async function wishAction(
 
   const path = options.path ? parseCellPath(options.path).map(String) : [];
   const scope = parseScopeFlags(options.scope);
-  // Read before the wish is issued: a malformed selection is a fact about the
-  // flags, so it is reported without a resolution having been attempted. The
-  // same grammar and the same messages `cf cell get` and `cf piece call`
-  // report, because it is the same parser.
-  // Through the command's own exit seam rather than `exitWithDataError`, whose
-  // `exit` is typed `never`: this command's seam returns, because its unit
-  // tests inject a non-terminating exit and go on to read what was written. A
-  // direct `Deno.exit` here would take the test runner — or an embedder — down
-  // with it.
-  const exitSelectionError = (message: string): void => {
-    console.error(message);
-    deps.exit(1);
-  };
-
-  let selection: CellSelection | undefined;
-  try {
-    selection = await parseCellSelectionOptions(options);
-  } catch (error) {
-    if (error instanceof CellSelectionError) {
-      exitSelectionError(error.message);
-      return; // Reached only when a test injects a non-terminating exit.
-    }
-    throw error;
-  }
-
   let result: unknown;
   let error: string | undefined;
   try {
+    // Read before the wish is issued: a malformed selection is a fact about
+    // the flags, so it is reported without a resolution having been attempted.
+    // The same grammar and the same messages `cf cell get` and `cf piece call`
+    // report, because it is the same parser.
+    const selection = await parseCellSelectionOptions(options);
     ({ result, error } = await deps.readWish({
       apiUrl: normalizeApiUrl(options.apiUrl),
       space,
@@ -125,11 +104,15 @@ export async function wishAction(
       ...(selection === undefined ? {} : { selection }),
     }));
   } catch (thrown) {
-    // A selection that does not fit what the wish resolved to — a `--filter`
-    // over a non-array, a projection that kept nothing — is a data error about
-    // the target in hand, not a usage error about the command line.
+    // A malformed selection, or one that does not fit what the wish resolved
+    // to (a `--filter` over a non-array, a projection that kept nothing), is
+    // reported through the command's own exit seam rather than
+    // `exitWithDataError`, whose `exit` is typed `never`: this seam returns,
+    // because the unit tests inject a non-terminating exit and go on to read
+    // what was written.
     if (thrown instanceof CellSelectionError) {
-      exitSelectionError(thrown.message);
+      console.error(thrown.message);
+      deps.exit(1);
       return; // Reached only when a test injects a non-terminating exit.
     }
     throw thrown;

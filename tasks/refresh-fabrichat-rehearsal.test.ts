@@ -1,8 +1,9 @@
-import { join, relative } from "@std/path";
+import { fromFileUrl, join, relative } from "@std/path";
 import { walk } from "@std/fs";
 import { expect } from "@std/expect";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { refreshRehearsal } from "./refresh-fabrichat-rehearsal.ts";
-import type { Git } from "./repository-files.ts";
+import { type Git, gitIn } from "./repository-files.ts";
 import {
   afterEach,
   beforeEach,
@@ -155,6 +156,125 @@ describe("refresh-fabrichat-rehearsal", () => {
         refreshRehearsal(["no-such-revision"], { git: fakeGit(), fixtures }),
       ).rejects.toThrow("no-such-revision");
       await expect(Deno.stat(fixtures)).rejects.toThrow(Deno.errors.NotFound);
+    });
+  });
+
+  describe("the script", () => {
+    const repo = fromFileUrl(new URL("..", import.meta.url));
+
+    /**
+     * Runs the script at `script` on `argv` from a directory outside every
+     * checkout, letting it write only below `writable`.
+     */
+    async function runFromOutside(
+      script: string,
+      writable: string | undefined,
+      ...argv: string[]
+    ) {
+      const cwd = await Deno.makeTempDir({ prefix: "fabrichat-outside-" });
+      try {
+        const { success, stdout, stderr } =
+          await runDenoCommandWithTemporaryLock({
+            root: repo,
+            cwd,
+            args: (lock) => [
+              "run",
+              "--config",
+              join(repo, "deno.jsonc"),
+              "--lock",
+              lock,
+              "--frozen",
+              "--no-prompt",
+              "--allow-read",
+              ...writable === undefined ? [] : [`--allow-write=${writable}`],
+              "--allow-run=git",
+              script,
+              ...argv,
+            ],
+          });
+        return {
+          success,
+          stdout: new TextDecoder().decode(stdout),
+          stderr: new TextDecoder().decode(stderr),
+        };
+      } finally {
+        await Deno.remove(cwd, { recursive: true });
+      }
+    }
+
+    it("copies the revision its command line names into the checkout holding it", async () => {
+      const checkout = await Deno.realPath(join(fixtures, ".."));
+      const git = gitIn(checkout);
+      const files = {
+        ...SOURCES,
+        "patterns/system/fabrichat/room.test.tsx": "export {};\n",
+      };
+      for (const [path, text] of Object.entries(files)) {
+        await Deno.mkdir(join(checkout, path, ".."), { recursive: true });
+        await Deno.writeTextFile(join(checkout, path), text);
+      }
+      await git("init", "-q");
+      await git("add", ".");
+      await git(
+        "-c",
+        "user.name=Test",
+        "-c",
+        "user.email=test@example.com",
+        "-c",
+        "commit.gpgsign=false",
+        "commit",
+        "-q",
+        "--no-verify",
+        "-m",
+        "release",
+      );
+      const commit = (await git("rev-parse", "HEAD")).trim();
+      await Deno.mkdir(join(checkout, "tasks"));
+      for (
+        const module of ["refresh-fabrichat-rehearsal", "repository-files"]
+      ) {
+        await Deno.copyFile(
+          join(repo, "tasks", `${module}.ts`),
+          join(checkout, "tasks", `${module}.ts`),
+        );
+      }
+      const copy = join(
+        checkout,
+        "patterns/integration/fixtures/fabrichat-update-rehearsal",
+      );
+
+      const { success, stdout, stderr } = await runFromOutside(
+        join(checkout, "tasks/refresh-fabrichat-rehearsal.ts"),
+        checkout,
+        "HEAD",
+      );
+
+      expect(stderr).toBe("");
+      expect(success).toBe(true);
+      expect(stdout).toBe(
+        `Copied 3 modules from HEAD (${commit}) into ${copy}.\n`,
+      );
+      expect(await filesIn(copy)).toEqual({
+        "SOURCE.txt": `${commit}\n`,
+        "system/fabrichat/logic.ts.txt": "export const logic = 1;\n",
+        "system/fabrichat/room.tsx.txt": "export const room = 2;\n",
+        "system/loom/participants.tsx.txt": "export const roster = 3;\n",
+      });
+    });
+
+    it("fails and prints nothing for a revision the checkout holding it cannot name", async () => {
+      const { success, stdout, stderr } = await runFromOutside(
+        fromFileUrl(
+          new URL("./refresh-fabrichat-rehearsal.ts", import.meta.url),
+        ),
+        undefined,
+        "no-such-revision",
+      );
+      expect(success).toBe(false);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(
+        `\`git rev-parse --verify no-such-revision^{commit}\` failed in ${repo}`,
+      );
     });
   });
 });
