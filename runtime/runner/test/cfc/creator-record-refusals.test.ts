@@ -1,6 +1,8 @@
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import * as Engine from "@commonfabric/memory/v2/engine";
+import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
   afterEach,
   beforeEach,
@@ -12,8 +14,9 @@ import { prepareBoundaryCommit } from "../../src/cfc/prepare.ts";
 import { runtimeWritePolicyAuthorization } from "../../src/cfc/types.ts";
 import { rawMetaWriteAuthorization } from "../../src/meta-seam.ts";
 import { Runtime } from "../../src/runtime.ts";
-import { StorageManager } from "../../src/storage/cache.deno.ts";
 import type { IExtendedStorageTransaction } from "../../src/storage/interface.ts";
+import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
+import { newSharedServer } from "../memory-v2-test-utils.ts";
 
 const alice = await Identity.fromPassphrase("cfc-creator-record-alice");
 const bob = await Identity.fromPassphrase("cfc-creator-record-bob");
@@ -22,15 +25,15 @@ describe("prepareBoundaryCommit()", () => {
   // `prepareBoundaryCommit()` returns these reasons from the record of a
   // piece's creator, the `creator` meta field (specs#87, pending).
 
-  let storageManager: ReturnType<typeof StorageManager.emulate>;
+  let server: MemoryV2Server.Server;
   let runtime: Runtime;
   let tx: IExtendedStorageTransaction;
 
   beforeEach(() => {
-    storageManager = StorageManager.emulate({ as: alice });
+    server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     runtime = new Runtime({
       apiUrl: new URL("https://example.com"),
-      storageManager,
+      storageManager: EmulatedStorageManager.connectTo(server, { as: alice }),
     });
     tx = runtime.edit();
   });
@@ -38,7 +41,7 @@ describe("prepareBoundaryCommit()", () => {
   afterEach(async () => {
     tx.abort();
     await runtime.dispose();
-    await storageManager.close();
+    await server.close();
   });
 
   /** A new document in `tx` that the transaction brings into being as a piece. */
@@ -77,34 +80,27 @@ describe("prepareBoundaryCommit()", () => {
   });
 
   it("returns a reason for a write to a part of the field", async () => {
-    // A creator stored as a record, which a store written without
-    // enforcement can hold, is the one a write can reach a part of.
-    const unenforced = new Runtime({
-      apiUrl: new URL("https://example.com"),
-      storageManager,
-      cfcEnforcementMode: "disabled",
-    });
-    try {
-      const seed = unenforced.edit();
-      const stored = unenforced.getCell(
-        alice.did(),
-        "partial",
-        undefined,
-        seed,
-      );
-      stored.set({ count: 0 });
-      stored.setMetaRaw(
-        "creator",
-        { did: bob.did() },
-        rawMetaWriteAuthorization,
-      );
-      expect((await seed.commit().settled).error).toBeUndefined();
-    } finally {
-      await unenforced.dispose({ closeStorage: false });
-    }
-
+    // A creator stored as a record is the one a write can reach a part of.
+    // A store written before the store's creator admission can hold one, and
+    // no session can write one now, so it is landed in the store directly.
     const cell = runtime.getCell(alice.did(), "partial", undefined, tx);
     const { space, id } = cell.getAsNormalizedFullLink();
+    Engine.applyCommit(await server.engineForSpace(space), {
+      sessionId: "creator-record-seed",
+      space,
+      commitClass: "system",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "set",
+          id,
+          value: { value: { count: 0 }, creator: { did: bob.did() } },
+        }],
+      },
+    });
+    await cell.sync();
+
     tx.writeOrThrow(
       { space, id, path: ["creator", "did"] },
       alice.did(),
