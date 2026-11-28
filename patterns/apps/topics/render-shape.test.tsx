@@ -105,7 +105,7 @@ export default pattern(() => {
   const detail = Topic({
     title: "Detail topic",
     mentionable: board.mentionable,
-    board: board.board,
+    boardCrossrefs: board.crossrefs,
   });
 
   const action_open_the_editor = action(() => {

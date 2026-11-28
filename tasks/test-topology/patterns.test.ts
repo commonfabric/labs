@@ -63,8 +63,38 @@ describe("the pattern and package suites", () => {
     }
   });
 
+  it("requires the Topics pivot integration for changes to the board's and a topic's sources", async () => {
+    const pivot = "patterns/integration/topic-board-pivot-sessions.test.ts";
+    for (const defaultEnabled of [false, true]) {
+      const loaded = await loadPatternSuites(root, defaultEnabled);
+      for (const id of Object.values(arms(defaultEnabled))) {
+        const suite = pick(loaded, id);
+        for (
+          const source of [
+            "patterns/apps/topics/main.tsx",
+            "patterns/apps/topics/topic.tsx",
+            pivot,
+          ]
+        ) {
+          expect(suite.unitsForChange?.(new Set([source]))).toContain(pivot);
+        }
+        expect(
+          suite.unitsForChange?.(
+            new Set(["patterns/apps/topics/README.md"]),
+          ),
+        ).toEqual([]);
+      }
+    }
+  });
+
   it("requires the Topics measurements for changes to the authored sources and shared measurement inputs", async () => {
     const measurements = [
+      "topics-headless-fixture",
+      "topics-lazy-lookup-reruns",
+      "topics-read-budget-small-and-threads",
+      "topics-read-budget-single-bucket",
+      "topics-read-budget-high-degree",
+      "topics-read-budget-mentions-16",
       "topics-browser-measurement",
     ].map((name) => `patterns/integration/${name}.test.ts`).sort();
     for (const defaultEnabled of [false, true]) {
@@ -76,10 +106,18 @@ describe("the pattern and package suites", () => {
             suite.unitsForChange?.(
               new Set([`patterns/apps/topics/${source}`]),
             ),
-          ).toEqual(measurements);
+          ).toEqual([
+            ...measurements,
+            "patterns/integration/topic-board-pivot-sessions.test.ts",
+          ].sort());
         }
         for (
           const input of [
+            "topics-headless-fixture.ts",
+            "topics-cost-cases.ts",
+            "topics-read-budget.ts",
+            "topics-read-budget-limits.ts",
+            "topics-read-budget-suite.ts",
             "topics-browser-measurement.ts",
             "topics-browser-measurement-core.ts",
             "topics-browser-posture.ts",
