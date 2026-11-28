@@ -252,11 +252,14 @@ command that shows nothing of the person's stores beyond its arguments answers
   arguments and of every read's `ifc` together, joined with its own top-level
   `ifc` where it carries one, and with no integrity: it combines rows with the
   arguments the model wrote, and CFC §3.1.6.2 keeps of a combination only the
-  hereditary integrity every input carries. Its entry's `labelSource` is `row`,
-  or `query` for `reads: []`, which takes the arguments' label alone.
+  hereditary integrity every input carries. For `reads: []` that is the
+  arguments' label, with the answer's own `ifc` where it carries one. The
+  entry's `labelSource` is `row` for an answer that declares reads and `query`
+  for one that declares none.
 - A `reads` that is not a list of reads, each with a reference, a revision or
-  `null`, a coverage naming its kind, and a readable label, withholds the answer
-  (`cfc_label_read_failed`), as an unreadable `ifc` does.
+  `null`, a coverage naming its kind, and a readable label, in at most 16 KiB of
+  JSON, withholds the answer (`cfc_label_read_failed`), as an unreadable `ifc`
+  does.
 - The reads of an admitted answer are recorded, as declared and in order, on the
   run's model-context observation (`reads`), whatever the answer's label: an
   answer that is public and declares a read leaves an observation. An answer

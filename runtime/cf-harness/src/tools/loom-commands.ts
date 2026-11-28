@@ -9,9 +9,9 @@
  * A command's answer is Loom data, so it is measured the way the retrieval
  * tools measure a row: one row, against the run's observation ceiling. An
  * answer that declares the reads it made (`reads`, which `run_command` asks
- * the host for) is labeled by the join of those reads' labels, and the reads
- * are recorded on the run's model-context observation, never shown to the
- * model; one that declares none is labeled by its own `ifc` or else by the
+ * the host for) is labeled by the join of its arguments' label and those
+ * reads' labels, and the reads are recorded on the run's model-context
+ * observation, never shown to the model; one that declares none is labeled by its own `ifc` or else by the
  * query (`labelForUnlabeledLoomRow`). An admitted answer is shown to the
  * model and held as a referent a structured result can name; a withheld one
  * shows nothing of itself but the outcome's summary.
@@ -38,6 +38,7 @@ import {
   isHarnessCommandJsonValue,
 } from "../contracts/client-command.ts";
 import {
+  HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES,
   HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT,
   type HarnessCfcModelContextObservationInput,
   type HarnessCfcModelContextRead,
@@ -750,12 +751,19 @@ interface AnsweredCall {
 /**
  * Helper for {@link declaredReads}: `value` as one read, or `undefined` when
  * it lacks a reference, a revision or `null`, a coverage naming its kind, or
- * a readable label of its own.
+ * a readable label of its own, or when it is larger than
+ * {@link HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES} of JSON, which keeps what
+ * one observation retains bounded.
  */
 const declaredRead = (
   value: JSONValue,
 ): HarnessCfcModelContextRead | undefined => {
-  if (!isObjectNotArray(value)) return undefined;
+  if (
+    !isObjectNotArray(value) ||
+    harnessCommandJsonBytes(value) > HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES
+  ) {
+    return undefined;
+  }
   const { ref, revision, coverage, author, title, at } = value;
   const label = readLoomRowLabel(value);
   if (

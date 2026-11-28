@@ -49,6 +49,13 @@ export interface HarnessCfcModelContextRead {
  */
 export const HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT = 512;
 
+/**
+ * Most UTF-8 bytes of JSON one read may hold. A host's read of a source is a
+ * reference, a revision, a coverage, a label and a few details, well inside
+ * this; an output declaring a larger one is not shown to the model.
+ */
+export const HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES = 16_384;
+
 export interface HarnessCfcModelContextObservation {
   type: "cf-harness.cfc-model-context-observation";
   sequence: number;
@@ -250,8 +257,9 @@ export const appendHarnessCfcModelContextObservations = (
       ...newObservations.map((observation) => observation.label),
     ]),
   );
-  // An observation that declares a read is kept whatever its label; one whose
-  // only confidentiality was prompt-slot influence is not.
+  // An observation that declares a read is kept whatever its label; one that
+  // declares none and whose only confidentiality was prompt-slot influence
+  // is not.
   if (
     label === undefined &&
     !newObservations.some((observation) => (observation.reads?.length ?? 0) > 0)

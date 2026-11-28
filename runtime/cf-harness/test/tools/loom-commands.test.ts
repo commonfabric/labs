@@ -21,6 +21,7 @@ import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
   type PromptSlotBinding,
 } from "../../src/contracts/prompt-slot.ts";
+import { HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES } from "../../src/contracts/cfc-model-context.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
 import {
@@ -1893,6 +1894,9 @@ describe("loom-commands tools", () => {
           [{ ...readOf("gmail:thread-a", "r", [OWNER]), revision: 3 }],
           [{ ...readOf("gmail:thread-a", "r", [OWNER]), coverage: {} }],
           [{ ...readOf("", "r", [OWNER]) }],
+          [readOf("gmail:thread-a", "r", [OWNER], {
+            title: "x".repeat(HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES),
+          })],
         ]
       ) {
         const output = executed(await run({ ok: true, reads }).output);

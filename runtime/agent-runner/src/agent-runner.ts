@@ -62,7 +62,8 @@ export interface AgentRunReport {
    * each model-context observation that declares reads, in sequence order,
    * with its tool call, output, label, and reads. Empty for a run whose
    * outputs declared none; absent from a report of a harness that does not
-   * record reads.
+   * record reads. A local job keeps the report whole; a Fabric run's record
+   * copies the fields its schema names, and `reads` is not one of them.
    */
   reads?: HarnessCfcModelContextReadsEntry[];
 }
