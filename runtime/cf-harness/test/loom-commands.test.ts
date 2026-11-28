@@ -443,6 +443,7 @@ describe("loom-commands", () => {
           args: { ref: "page:A.md" },
           context: { loom_id: "loom-0123456789abcdef", expected_version: 3 },
           actor: "agent:agent-runner",
+          reads: true,
         },
       }]);
     });
@@ -457,6 +458,7 @@ describe("loom-commands", () => {
         id: "search.run",
         args: {},
         actor: "agent:agent-runner",
+        reads: true,
       });
     });
 

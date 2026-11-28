@@ -7,14 +7,20 @@
  * its arguments.
  *
  * A command's answer is Loom data, so it is measured the way the retrieval
- * tools measure a row: one row, labeled by its own `ifc` or else by the query
- * (`labelForUnlabeledLoomRow`), against the run's observation ceiling. An
- * admitted answer is shown to the model and held as a referent a structured
- * result can name; a withheld one shows nothing of itself but the outcome's
- * summary.
+ * tools measure a row: one row, against the run's observation ceiling. An
+ * answer that declares the reads it made (`reads`, which `run_command` asks
+ * the host for) is labeled by the join of those reads' labels, and the reads
+ * are recorded on the run's model-context observation, never shown to the
+ * model; one that declares none is labeled by its own `ifc` or else by the
+ * query (`labelForUnlabeledLoomRow`). An admitted answer is shown to the
+ * model and held as a referent a structured result can name; a withheld one
+ * shows nothing of itself but the outcome's summary.
  */
 
-import type { IFCLabel } from "@commonfabric/runner/cfc";
+import {
+  type IFCLabel,
+  joinCfcObservedConfidentiality,
+} from "@commonfabric/runner/cfc";
 import type { JSONObject, JSONValue } from "@commonfabric/api";
 import {
   isObjectNotArray,
@@ -32,7 +38,9 @@ import {
   isHarnessCommandJsonValue,
 } from "../contracts/client-command.ts";
 import {
+  HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT,
   type HarnessCfcModelContextObservationInput,
+  type HarnessCfcModelContextRead,
   mergeConfidentialityOnlyLabels,
 } from "../contracts/cfc-model-context.ts";
 import type { ToolOutputId, ToolResultRef } from "../contracts/tool-result.ts";
@@ -48,8 +56,10 @@ import {
 } from "../loom-commands.ts";
 import {
   LOOM_RETRIEVAL_MAX_OUTPUT_CHARS,
+  type LoomDeclaredRowLabel,
   type LoomRetrievalEntry,
   measureLoomRows,
+  readLoomRowLabel,
 } from "./loom-retrieval.ts";
 import type { HarnessToolContext, HarnessToolDefinition } from "./types.ts";
 import {
@@ -278,9 +288,19 @@ export const RUN_COMMAND_FAN_IN = 4;
 /** The host code for args its command layer refused as malformed. */
 const BAD_ARGS_HOST_CODE = "bad-args";
 
+/**
+ * The host code for an answer it would not send because a row it read comes
+ * from a store that carries no label; the answer names those stores.
+ */
+const UNLABELLED_READ_HOST_CODE = "unlabelled-read";
+
 /** What the model is told when a command is not this run's to run. */
 const notGrantedHint = (command: string): string =>
   `This run may not run \`${command}\`. Do not retry it; if the person should run it, name it in your result as an offer for them.`;
+
+/** What the model is told when the host would not send what a command read. */
+const UNLABELLED_READ_HINT =
+  "The host did not send this answer: the command read rows from stores that carry no label, which the answer names under `stores`. Do not retry it; read what you need through another command, or say in your result which stores could not be read.";
 
 /** What `list_commands` takes: commands whose description and schema to show. */
 export interface ListCommandsInput {
@@ -412,8 +432,16 @@ export type RunCommandCallOutput =
      */
     summaryOmitted?: true;
 
-    /** The answer's label, kept for the artifact and the observation. */
-    cfc: { version: 1; observedLabel?: IFCLabel };
+    /**
+     * The answer's label and the reads it declared, kept for the artifact
+     * and the observation. `reads` is present when the answer declared its
+     * reads and the model was shown it.
+     */
+    cfc: {
+      version: 1;
+      observedLabel?: IFCLabel;
+      reads?: HarnessCfcModelContextRead[];
+    };
   }
   | {
     outputId: ToolOutputId;
@@ -435,8 +463,15 @@ export interface RunCommandBatchOutput {
   /** Whether any executed call's answer was cut to a bound or left out. */
   truncated: boolean;
 
-  /** The join of the executed calls' labels, for the observation. */
-  cfc: { version: 1; observedLabel?: IFCLabel };
+  /**
+   * The join of the executed calls' labels, and their recorded reads in the
+   * calls' order, for the observation.
+   */
+  cfc: {
+    version: 1;
+    observedLabel?: IFCLabel;
+    reads?: HarnessCfcModelContextRead[];
+  };
 }
 
 /** What a command tool returns: a call's result, or a batch's. */
@@ -704,7 +739,93 @@ interface AnsweredCall {
   skeleton: Omit<ExecutedCallOutput, "entry" | "cfc">;
   body: JSONObject;
   provenance: HarnessCommandResultProvenance;
+
+  /**
+   * The reads the answer declared; `"unreadable"` when its `reads` is not a
+   * list of reads, and absent when the answer has no `reads` key.
+   */
+  reads?: HarnessCfcModelContextRead[] | "unreadable";
 }
+
+/**
+ * Helper for {@link declaredReads}: `value` as one read, or `undefined` when
+ * it lacks a reference, a revision or `null`, a coverage naming its kind, or
+ * a readable label of its own.
+ */
+const declaredRead = (
+  value: JSONValue,
+): HarnessCfcModelContextRead | undefined => {
+  if (!isObjectNotArray(value)) return undefined;
+  const { ref, revision, coverage, author, title, at } = value;
+  const label = readLoomRowLabel(value);
+  if (
+    typeof ref !== "string" || ref.length === 0 ||
+    (revision !== null && typeof revision !== "string") ||
+    !isObjectNotArray(coverage) || typeof coverage.kind !== "string" ||
+    label === undefined || label === "absent" ||
+    (author !== undefined && !isObjectNotArray(author)) ||
+    (title !== undefined && typeof title !== "string") ||
+    (at !== undefined && typeof at !== "string")
+  ) {
+    return undefined;
+  }
+  return {
+    ref,
+    revision,
+    coverage: structuredClone({ ...coverage, kind: coverage.kind }),
+    ifc: structuredClone({
+      confidentiality: label.confidentiality,
+      ...(label.integrity.length > 0 ? { integrity: label.integrity } : {}),
+    }),
+    ...(author !== undefined ? { author: structuredClone(author) } : {}),
+    ...(title !== undefined ? { title } : {}),
+    ...(at !== undefined ? { at } : {}),
+  };
+};
+
+/**
+ * Helper for command tools, which reads an answer's `reads`: each read in
+ * the host's order, or `"unreadable"` when it is not a list or any member is
+ * not a read, since a read the harness cannot record must not reach the
+ * model unrecorded.
+ */
+const declaredReads = (
+  value: JSONValue | undefined,
+): HarnessCfcModelContextRead[] | "unreadable" => {
+  if (!Array.isArray(value)) return "unreadable";
+  const reads: HarnessCfcModelContextRead[] = [];
+  for (const item of value) {
+    const read = declaredRead(item);
+    if (read === undefined) return "unreadable";
+    reads.push(read);
+  }
+  return reads;
+};
+
+/**
+ * Helper for command tools, which labels an answer by the reads it declared.
+ * The answer combines its call's arguments, which it may echo, with the rows
+ * it read, so its confidentiality is theirs together: the arguments' alone
+ * for an answer that declares it read nothing of the person's stores, which
+ * is all such an answer can show. It carries no integrity, since §3.1.6.2
+ * keeps of a combination only the hereditary atoms every input carries, and
+ * the arguments the model wrote carry none.
+ */
+const labelOfReads = (
+  reads: readonly HarnessCfcModelContextRead[],
+  argumentsLabel: IFCLabel | undefined,
+): LoomDeclaredRowLabel => ({
+  label: {
+    confidentiality: [
+      ...joinCfcObservedConfidentiality([
+        argumentsLabel?.confidentiality,
+        ...reads.map((read) => read.ifc.confidentiality),
+      ]),
+    ],
+    integrity: [],
+  },
+  labelSource: reads.length === 0 ? "query" : "row",
+});
 
 /**
  * Helper for command tools, which sends one checked call and reads what came
@@ -785,7 +906,14 @@ const sendCall = async (
   const { command, loomId } = invocation;
   const outcome = outcomeOf(body, bodyBytes);
   const version = isRecord(body.outputs) ? body.outputs.version : undefined;
+  // An answer with no `reads` key is a command that has not declared what it
+  // reads, and is labeled as it always was (`labelForUnlabeledLoomRow`).
+  // TODO(seefeldb): Refuse such an answer here, naming the command, and
+  // delete `labelForUnlabeledLoomRow`, once Loom's list of commands that do
+  // not declare yet (`tests/ci/command-reads-not-yet.json`) is empty
+  // (Loom's reads-on-record.md, L2).
   return {
+    ...("reads" in answered ? { reads: declaredReads(answered.reads) } : {}),
     skeleton: {
       outputId,
       status: "executed",
@@ -794,6 +922,8 @@ const sendCall = async (
       truncated: true,
       ...(outcome.code === "not_granted"
         ? { hint: notGrantedHint(command) }
+        : outcome.code === UNLABELLED_READ_HOST_CODE
+        ? { hint: UNLABELLED_READ_HINT }
         : {}),
       ...(outcome.code === BAD_ARGS_HOST_CODE && entry !== undefined
         ? { signature: renderCommandSignature(entry) }
@@ -823,13 +953,27 @@ const OMITTED_BODY_HINT_SIZE =
 /**
  * Helper for command tools, which measures an answer against the run's
  * ceiling and the output bound, `reserved` being the size of everything the
- * output carries beside this answer's entry.
+ * output carries beside this answer's entry, and `readsLeft` the reads the
+ * output's observation may still record. An answer that declares more reads
+ * than that is left out like one past the output bound, so the model is
+ * never shown a read the record leaves out. The declared reads are recorded
+ * only when the answer is admitted, since only then did the model see it.
  */
 const measureAnswer = async (
   context: HarnessToolContext,
   answered: AnsweredCall,
   reserved: number,
+  readsLeft: number,
 ): Promise<ExecutedCallOutput> => {
+  const { reads } = answered;
+  if (Array.isArray(reads) && reads.length > readsLeft) {
+    return {
+      ...answered.skeleton,
+      hint: answered.skeleton.hint ?? OMITTED_BODY_HINT,
+      truncated: true,
+      cfc: { version: 1 },
+    };
+  }
   const mint = context.mintReferentHandle?.bind(context);
   const measured = await measureLoomRows(
     [answered.body],
@@ -844,6 +988,9 @@ const measureAnswer = async (
         labelSource: "command",
         provenance: answered.provenance,
       }),
+    reads === undefined || reads === "unreadable"
+      ? reads
+      : labelOfReads(reads, context.toolInputCfcLabel),
   );
   const observedLabel = mergeConfidentialityOnlyLabels(measured.labels);
   const [entry] = measured.entries;
@@ -856,6 +1003,9 @@ const measureAnswer = async (
     cfc: {
       version: 1,
       ...(observedLabel !== undefined ? { observedLabel } : {}),
+      ...(Array.isArray(reads) && entry?.status === "admitted"
+        ? { reads }
+        : {}),
     },
   };
 };
@@ -1019,6 +1169,7 @@ export const runCommandTool: HarnessToolDefinition<
       sent,
       JSON.stringify(sent.skeleton).length + LABEL_JOIN_ALLOWANCE +
         OMITTED_BODY_HINT_SIZE,
+      HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT,
     );
   },
 };
@@ -1134,19 +1285,22 @@ const measureBatch = async (
       (isAnswered(a.call) ? a.call.skeleton.outcome.bodyBytes : 0) -
       (isAnswered(b.call) ? b.call.skeleton.outcome.bodyBytes : 0)
     );
+  let readsLeft = HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT;
   for (const { call, index } of allocationOrder) {
     if (!isAnswered(call)) {
       results[index] = call;
       continue;
     }
-    const measured = await measureAnswer(context, call, reserved);
+    const measured = await measureAnswer(context, call, reserved, readsLeft);
     reserved += JSON.stringify({ entry: measured.entry }).length;
+    readsLeft -= measured.cfc.reads?.length ?? 0;
     results[index] = measured;
   }
   const executed = results.filter((result) => result.status === "executed");
   const observedLabel = mergeConfidentialityOnlyLabels(
     executed.map((result) => result.cfc.observedLabel),
   );
+  const declaring = executed.filter((result) => result.cfc.reads !== undefined);
   return {
     outputId,
     status: "batch",
@@ -1155,15 +1309,19 @@ const measureBatch = async (
     cfc: {
       version: 1,
       ...(observedLabel !== undefined ? { observedLabel } : {}),
+      ...(declaring.length > 0
+        ? { reads: declaring.flatMap((result) => result.cfc.reads ?? []) }
+        : {}),
     },
   };
 };
 
 /**
  * The model-context observation a command's answer contributes: its label
- * over the output channel, marked truncated when the answer was bounded, or
- * nothing when the answer was withheld or never arrived. A batch contributes
- * one observation, the join of its executed calls' labels.
+ * over the output channel and the reads it declared, marked truncated when
+ * the answer was bounded, or nothing when the answer was withheld or never
+ * arrived. A batch contributes one observation, the join of its executed
+ * calls' labels and their reads in the calls' order.
  */
 export const loomCommandModelContextObservation = (
   output: unknown,
@@ -1173,17 +1331,22 @@ export const loomCommandModelContextObservation = (
   if (
     !isRecord(output) ||
     (output.status !== "executed" && output.status !== "batch") ||
-    !isRecord(output.cfc) || output.cfc.observedLabel === undefined
+    !isRecord(output.cfc) ||
+    (output.cfc.observedLabel === undefined && output.cfc.reads === undefined)
   ) {
     return undefined;
   }
+  const { observedLabel, reads } = output.cfc;
   return {
     toolCallId,
     toolId: resultRef.toolId,
     outputId: resultRef.outputId,
     channels: ["output"],
-    label: output.cfc.observedLabel as IFCLabel,
+    label: (observedLabel ?? { confidentiality: [] }) as IFCLabel,
     ...(output.truncated === true ? { truncated: true } : {}),
+    ...(reads !== undefined
+      ? { reads: reads as HarnessCfcModelContextRead[] }
+      : {}),
   };
 };
 

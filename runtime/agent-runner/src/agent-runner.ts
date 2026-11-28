@@ -12,6 +12,7 @@
  * `agent-run-harness.ts` backs with `cf-harness`.
  */
 
+import type { HarnessCfcModelContextReadsEntry } from "@commonfabric/cf-harness/contracts/cfc-model-context";
 import type { Cell, NormalizedFullLink, Runtime } from "@commonfabric/runner";
 import {
   AGENT_RUN_TERMINAL_STATES,
@@ -55,6 +56,15 @@ export interface AgentRunReport {
 
   /** Operator-only reference to the run's artifact root. */
   runRef?: string;
+
+  /**
+   * What the model was shown of the person's data, as the host declared it:
+   * each model-context observation that declares reads, in sequence order,
+   * with its tool call, output, label, and reads. Empty for a run whose
+   * outputs declared none; absent from a report of a harness that does not
+   * record reads.
+   */
+  reads?: HarnessCfcModelContextReadsEntry[];
 }
 
 /** How one run ended, as its executor reports it. */

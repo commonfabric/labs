@@ -7,8 +7,11 @@ import {
   appendHarnessCfcModelContextObservations,
   cloneIfcLabel,
   createHarnessCfcModelContextInputLabels,
+  HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT,
   type HarnessCfcModelContext,
   type HarnessCfcModelContextObservationInput,
+  type HarnessCfcModelContextRead,
+  harnessCfcModelContextReads,
   mergeConfidentialityOnlyLabels,
 } from "../../src/contracts/cfc-model-context.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
@@ -48,6 +51,38 @@ const trustedSource = {
   type: "test.cfc/TrustedSource",
   subject: "did:key:trusted-source",
 };
+
+/** A read of `ref` at `revision`, under `confidentiality`. */
+const readOf = (
+  ref: string,
+  revision: string | null,
+  confidentiality: NonNullable<
+    HarnessCfcModelContextRead["ifc"]["confidentiality"]
+  > = [],
+): HarnessCfcModelContextRead => ({
+  ref,
+  revision,
+  coverage: revision === null
+    ? { kind: "body", revisionScope: "none" }
+    : { kind: "body" },
+  ifc: { confidentiality },
+});
+
+/** A command output's observation input, declaring `reads` when given. */
+const commandOutput = (
+  n: number,
+  confidentiality: NonNullable<
+    HarnessCfcModelContext["label"]["confidentiality"]
+  >,
+  reads?: HarnessCfcModelContextRead[],
+): HarnessCfcModelContextObservationInput => ({
+  toolCallId: `call-${n}`,
+  toolId: "run_command",
+  outputId: createToolOutputId("run", "run_command", n),
+  channels: ["output"],
+  label: { confidentiality },
+  ...(reads !== undefined ? { reads } : {}),
+});
 
 describe("cfc-model-context", () => {
   describe("cloneIfcLabel()", () => {
@@ -248,6 +283,71 @@ describe("cfc-model-context", () => {
       }]);
     });
 
+    it("records an output that declares a read whatever its label, and a public one that declares none not at all", () => {
+      const publicRead = readOf("web:https://example.com/", null);
+      const context = appendHarnessCfcModelContextObservations(
+        undefined,
+        [
+          commandOutput(1, [], [publicRead]),
+          commandOutput(2, []),
+          commandOutput(3, [], []),
+        ],
+        "2026-09-21T10:00:00.000Z",
+      );
+
+      expect(context?.label).toEqual({ confidentiality: [] });
+      expect(context?.observations).toEqual([{
+        type: "cf-harness.cfc-model-context-observation",
+        sequence: 1,
+        at: "2026-09-21T10:00:00.000Z",
+        toolCallId: "call-1",
+        toolId: "run_command",
+        outputId: createToolOutputId("run", "run_command", 1),
+        channels: ["output"],
+        policy: "observed",
+        label: { confidentiality: [] },
+        reads: [publicRead],
+      }]);
+      expect(appendHarnessCfcModelContextObservations(
+        undefined,
+        [commandOutput(2, []), commandOutput(3, [], [])],
+        "2026-09-21T10:00:00.000Z",
+      )).toBeUndefined();
+    });
+
+    it("keeps a labeled output's declaration that it read nothing, and the label it joins", () => {
+      const context = appendHarnessCfcModelContextObservations(
+        undefined,
+        [commandOutput(1, [observedSecret], [])],
+        "2026-09-21T10:00:00.000Z",
+      );
+
+      expect(context?.label).toEqual({ confidentiality: [observedSecret] });
+      expect(context?.observations[0].reads).toEqual([]);
+    });
+
+    it("refuses an observation that declares more reads than one records", () => {
+      const reads = Array.from(
+        { length: HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT + 1 },
+        (_, n) => readOf(`ref-${n}`, "r"),
+      );
+
+      expect(() =>
+        appendHarnessCfcModelContextObservations(
+          undefined,
+          [commandOutput(1, [observedSecret], reads)],
+          "2026-09-21T10:00:00.000Z",
+        )
+      ).toThrow(RangeError);
+      expect(
+        appendHarnessCfcModelContextObservations(
+          undefined,
+          [commandOutput(1, [observedSecret], reads.slice(1))],
+          "2026-09-21T10:00:00.000Z",
+        )?.observations[0].reads,
+      ).toHaveLength(HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT);
+    });
+
     it("returns no model context when prompt-slot influence is all an observation's confidentiality holds", () => {
       const observation = (
         confidentiality: HarnessCfcModelContext["label"]["confidentiality"],
@@ -271,6 +371,44 @@ describe("cfc-model-context", () => {
           "2026-09-21T10:00:00.000Z",
         )?.label,
       ).toEqual({ confidentiality: [observedSecret] });
+    });
+  });
+
+  describe("harnessCfcModelContextReads()", () => {
+    it("returns the observations that declare reads, in sequence order, with their label and reads", () => {
+      const a = readOf("gmail:thread-a", "rev-a", [observedSecret]);
+      const b = readOf("gmail:thread-b", "rev-b", [otherReader]);
+      const c = readOf("web:https://example.com/", null);
+      const saved = appendHarnessCfcModelContextObservations(
+        undefined,
+        [commandOutput(1, [observedSecret, otherReader], [a, b])],
+        "2026-09-21T10:00:00.000Z",
+      );
+      const context = appendHarnessCfcModelContextObservations(
+        saved,
+        [commandOutput(2, [observedSecret]), commandOutput(3, [], [c])],
+        "2026-09-22T10:00:00.000Z",
+      );
+
+      expect(harnessCfcModelContextReads(context)).toEqual([{
+        sequence: 1,
+        toolCallId: "call-1",
+        outputId: createToolOutputId("run", "run_command", 1),
+        label: { confidentiality: [observedSecret, otherReader] },
+        reads: [a, b],
+      }, {
+        sequence: 3,
+        toolCallId: "call-3",
+        outputId: createToolOutputId("run", "run_command", 3),
+        label: { confidentiality: [] },
+        reads: [c],
+      }]);
+    });
+
+    it("returns no entries for a run without a model context or whose outputs declared none", () => {
+      expect(harnessCfcModelContextReads(undefined)).toEqual([]);
+      expect(harnessCfcModelContextReads(savedContext([observedSecret])))
+        .toEqual([]);
     });
   });
 });

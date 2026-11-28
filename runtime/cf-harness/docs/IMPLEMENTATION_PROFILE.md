@@ -439,10 +439,15 @@ placeholders resolve only at the SQLite query boundary.
     not by who asked. A row whose `ifc` is present and unreadable is still
     refused, and loom's own facet filtering still runs first on the host. The
     rule is `labelForUnlabeledLoomRow()` in `src/tools/loom-retrieval.ts`, and a
-    host command's answer, measured as one row, takes the same path; see
+    host command's answer, measured as one row, takes the same path unless it
+    declares the reads it made: such an answer is labeled by its reads' own
+    labels joined with its arguments', and only a command that has not declared
+    yet still takes the assumed label; see
     [Read-only Loom retrieval](LOOM_RETRIEVAL.md) and
     [Host commands](LOOM_COMMANDS.md). Owner: `cf-harness` and loom. Retirement:
-    loom returns a label per row and the function reads it.
+    loom returns a label per row and the function reads it, and every command a
+    run may be granted declares its reads, so that an answer declaring none is
+    refused.
 
 ## Test evidence
 

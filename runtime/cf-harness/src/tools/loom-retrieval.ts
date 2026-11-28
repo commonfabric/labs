@@ -12,6 +12,7 @@
 import type { CfcConfClause, IFCLabel } from "@commonfabric/runner/cfc";
 import {
   atomsOutsideCeiling,
+  joinCfcObservedConfidentiality,
   meetCfcObservationCeilings,
 } from "@commonfabric/runner/cfc";
 import type { JSONObject, JSONSchema, JSONValue } from "@commonfabric/api";
@@ -74,6 +75,16 @@ export type LoomRetrievalLabelSource =
   | "row"
   /** The label of the query, assigned because the row carries no `ifc`. */
   | "query";
+
+/**
+ * The label a host's declaration of what a row read gives it, and where that
+ * label came from: `row` for the join of the reads' own labels, `query` for a
+ * row that declares it read nothing, which takes the call's arguments' label.
+ * `"unreadable"` is a declaration that could not be read.
+ */
+export type LoomDeclaredRowLabel =
+  | { label: LoomRowLabel; labelSource: LoomRetrievalLabelSource }
+  | "unreadable";
 
 /** One row of a result, admitted with its label or withheld with a reason. */
 export type LoomRetrievalEntry =
@@ -174,7 +185,9 @@ const pick = (
   );
 
 /** A label as a row states it, or as the unlabeled-row policy assigns it. */
-type LoomRowLabel = Required<Pick<IFCLabel, "confidentiality" | "integrity">>;
+export type LoomRowLabel = Required<
+  Pick<IFCLabel, "confidentiality" | "integrity">
+>;
 
 /**
  * The label a row with no `ifc` field is given: the confidentiality of the
@@ -204,7 +217,7 @@ export const labelForUnlabeledLoomRow = (
  * kept apart because an absent label is assumed from the query while an
  * unreadable one is refused.
  */
-const readRowLabel = (
+export const readLoomRowLabel = (
   row: Record<string, unknown>,
 ): LoomRowLabel | "absent" | undefined => {
   if (!Object.hasOwn(row, "ifc")) return "absent";
@@ -311,6 +324,15 @@ const HANDLE_SIZE_STAND_IN = "cfh:v:22222";
  * counted rather than carried. Every tool that shows the model Loom data
  * measures it here, a host command's answer as one row, so one label rule
  * covers all of it.
+ *
+ * A row is labeled by its own `ifc`, or, without one, by the query
+ * (`labelForUnlabeledLoomRow`). Where the host declared what the rows read,
+ * `declared` is the label of those reads, which labels every row in place of
+ * the query, under the declaration's label source. A row that also carries
+ * its own `ifc` takes the confidentiality of both and no integrity, which
+ * §3.1.6.2 keeps of a combination only where every input carries it; a
+ * declaration that could not be read (`"unreadable"`) withholds every row,
+ * as an unreadable `ifc` does.
  */
 export const measureLoomRows = async (
   rows: readonly JSONValue[],
@@ -320,6 +342,7 @@ export const measureLoomRows = async (
   hold?: (
     referent: Omit<HarnessDocumentReferentDraft, "source">,
   ) => Promise<string>,
+  declared?: LoomDeclaredRowLabel,
 ): Promise<{
   entries: LoomRetrievalEntry[];
   omitted: number;
@@ -331,10 +354,28 @@ export const measureLoomRows = async (
   let size = reserved;
   let truncated = false;
   for (const row of rows) {
-    const read = isRecord(row) ? readRowLabel(row) : undefined;
-    const label = read === "absent"
-      ? labelForUnlabeledLoomRow(queryLabel)
-      : read;
+    const read = isRecord(row) ? readLoomRowLabel(row) : undefined;
+    const label = declared === undefined
+      ? read === "absent" ? labelForUnlabeledLoomRow(queryLabel) : read
+      : declared === "unreadable" || read === undefined
+      ? undefined
+      : read === "absent"
+      ? declared.label
+      : {
+        confidentiality: [
+          ...joinCfcObservedConfidentiality([
+            declared.label.confidentiality,
+            read.confidentiality,
+          ]),
+        ],
+        integrity: [],
+      };
+    const labelSource: LoomRetrievalLabelSource =
+      declared !== undefined && declared !== "unreadable"
+        ? declared.labelSource
+        : read === "absent"
+        ? "query"
+        : "row";
     let entry: LoomRetrievalEntry;
     if (label === undefined) {
       entry = { status: "withheld", reasonCode: "cfc_label_read_failed" };
@@ -346,7 +387,7 @@ export const measureLoomRows = async (
       entry = {
         status: "admitted",
         label: cfcLabelAtomTypes(label),
-        labelSource: read === "absent" ? "query" : "row",
+        labelSource,
         value: bounded.value,
         ...(bounded.cut ? { truncated: true as const } : {}),
       };

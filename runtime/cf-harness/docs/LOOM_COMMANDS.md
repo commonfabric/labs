@@ -31,19 +31,21 @@ from a local-job profile's `commands` entry, with the job's own id as the run
 id, and for a Fabric run from `cf agent runner --commands-url` and
 `--commands-actor`, with an id of the run's own.
 
-| Tool            | Request                                                                    |
-| --------------- | -------------------------------------------------------------------------- |
-| `list_commands` | `GET <url>/commands`                                                       |
-| `run_command`   | `POST <url>/command` with `{id, args, context?, actor}` for each call sent |
+| Tool            | Request                                                                                 |
+| --------------- | --------------------------------------------------------------------------------------- |
+| `list_commands` | `GET <url>/commands`                                                                    |
+| `run_command`   | `POST <url>/command` with `{id, args, context?, actor, reads: true}` for each call sent |
 
 A call's `loomId` and `expectedVersion` travel in `context` as `loom_id` and
-`expected_version`, and `context` is left out when the call names neither. The
-host answers with its manifest and with each command's result unchanged. The
-host decides what a run may list and run: it filters its listing for the caller,
-each command's `actors`, `origins_required`, and `origins_refused` apply to this
-caller as to any other, and the run-id header marks the call as an agent's
-session. cf-harness applies no additional command-selection filter to the host's
-catalog. The run's tool grants and CFC policy still apply.
+`expected_version`, and `context` is left out when the call names neither.
+`reads: true` asks the host to say what each answer read of the person's data
+(see [Declared reads](#declared-reads)). The host answers with its manifest and
+with each command's result unchanged. The host decides what a run may list and
+run: it filters its listing for the caller, each command's `actors`,
+`origins_required`, and `origins_refused` apply to this caller as to any other,
+and the run-id header marks the call as an agent's session. cf-harness applies
+no additional command-selection filter to the host's catalog. The run's tool
+grants and CFC policy still apply.
 
 The host may also name the commands relevant to a run: `--commands-relevant`,
 repeatable, or `relevant` in a local-job profile's `commands` entry. A hint
@@ -209,10 +211,12 @@ prompt slots; every other effect requires a `direct-command` binding. Under
 ## The answer is Loom data
 
 The command's whole answer is measured the way a [retrieval](LOOM_RETRIEVAL.md)
-row is, as one row and through the same function: its own `ifc` label where it
-carries one, else the query's label (`labelForUnlabeledLoomRow`, published as
-deviation 10 in the [implementation profile](IMPLEMENTATION_PROFILE.md)),
-measured against the run's observation ceiling.
+row is, as one row and through the same function, against the run's observation
+ceiling. An answer that declares its reads is labeled by them (below). One that
+does not, because its command has not declared yet, is labeled by its own `ifc`
+label where it carries one, else by the query's label
+(`labelForUnlabeledLoomRow`, published as deviation 10 in the
+[implementation profile](IMPLEMENTATION_PROFILE.md)).
 
 - An admitted answer is shown to the model as the `entry`, its strings bounded,
   and held as a `document` referent with label source `command` and provenance
@@ -227,3 +231,52 @@ measured against the run's observation ceiling.
 The admitted answer's label is recorded as the run's model-context observation
 over the output channel; the label itself stays on the artifact. A batch records
 one observation, the join of its admitted answers' labels.
+
+### Declared reads
+
+The host answers a request that asks with `reads: true` with a `reads` list
+beside the answer: one entry per row of the person's data the answer shows,
+`{ref, revision, coverage, ifc, author?, title?, at?}`. `ref` names the source,
+`revision` the revision it was read at (`null` for a source with none, with
+`coverage.revisionScope: "none"`), `coverage` how much of it was read (its
+`kind` is `query`, `search-snippet` or `body`), and `ifc` the row's own label. A
+command that shows nothing of the person's stores beyond its arguments answers
+`reads: []`. A command that has not declared what it reads answers with no
+`reads` key, which says nothing about what it read.
+
+- `run_command` takes `reads` out of the answer before anything else reads it:
+  the model is shown the answer without it, the outcome's `bodyBytes` is the
+  size of the answer without it, and it does not count against the output bound.
+  Nothing a model sees changes for an answer that declares no reads.
+- An answer with `reads` is labeled with the confidentiality of its call's
+  arguments and of every read's `ifc` together, joined with its own top-level
+  `ifc` where it carries one, and with no integrity: it combines rows with the
+  arguments the model wrote, and CFC §3.1.6.2 keeps of a combination only the
+  hereditary integrity every input carries. Its entry's `labelSource` is `row`,
+  or `query` for `reads: []`, which takes the arguments' label alone.
+- A `reads` that is not a list of reads, each with a reference, a revision or
+  `null`, a coverage naming its kind, and a readable label, withholds the answer
+  (`cfc_label_read_failed`), as an unreadable `ifc` does.
+- The reads of an admitted answer are recorded, as declared and in order, on the
+  run's model-context observation (`reads`), whatever the answer's label: an
+  answer that is public and declares a read leaves an observation. An answer
+  that is withheld or left out records none, since the model saw none of it. A
+  batch's observation carries its answers' reads in the calls' order.
+- One observation records at most 512 reads. An answer whose reads would take
+  its observation past that is left out of the result, with the omission hint,
+  like an answer past the output bound, so the model is never shown a read the
+  record leaves out. A batch shares the bound across its answers, in the order
+  their bodies are measured.
+- A host refusal with code `unlabelled-read` is an executed result: the host
+  would not send what the command read because a row came from a store that
+  carries no label, and the answer names those stores under `stores`. The result
+  carries a `hint` telling the model not to retry and to read through another
+  command or name the stores in its result.
+
+The run's report carries the observations that declare reads, with their
+sequence, tool call, output, label and reads
+([agent runner](../../agent-runner/src/agent-runner.ts), `AgentRunReport.reads`;
+`harnessCfcModelContextReads` in `src/contracts/cfc-model-context.ts`). Once
+every command a host grants a run declares its reads, an answer with no `reads`
+key is to be refused, naming the command, and `labelForUnlabeledLoomRow`
+deleted; the place is marked in `src/tools/loom-commands.ts`.

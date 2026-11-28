@@ -53,6 +53,7 @@
     "./contracts/run-depth": "./src/contracts/run-depth.ts",
     "./task-classification": "./src/task-classification.ts",
     "./contracts/cfc-invocation-context": "./src/contracts/cfc-invocation-context.ts",
+    "./contracts/cfc-model-context": "./src/contracts/cfc-model-context.ts",
     "./contracts/native-model-tool": "./src/contracts/native-model-tool.ts",
     "./contracts/browser-host": "./src/contracts/browser-host.ts",
     "./console/sse": "./console/sse.ts",

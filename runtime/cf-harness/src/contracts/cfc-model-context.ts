@@ -1,3 +1,4 @@
+import type { JSONObject } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type {
   CfcConfClause,
@@ -16,6 +17,38 @@ export type HarnessCfcModelContextChannel =
   | "exitCode"
   | "output";
 
+/**
+ * One read a host declared an output made of the person's data: the source's
+ * reference, the revision it was read at (`null`, with
+ * `coverage.revisionScope: "none"`, for a source that has none), how much of
+ * it the read covered, the row's own label, and the author, title, and date
+ * the host holds for it. The host decides every field; the harness records
+ * them as declared. A read is provenance recorded beside the observation's
+ * label, not an integrity atom, and the label algebra does not read it.
+ */
+export interface HarnessCfcModelContextRead {
+  ref: string;
+  revision: string | null;
+
+  /**
+   * `{kind: "query"}`, `{kind: "search-snippet"}`, or
+   * `{kind: "body", pages?, offset?, limit?}`, with an optional
+   * `revisionScope`; kept whole, so a field the host adds is kept too.
+   */
+  coverage: { kind: string } & JSONObject;
+  ifc: IFCLabel;
+  author?: JSONObject;
+  title?: string;
+  at?: string;
+}
+
+/**
+ * Most reads one observation records. An output whose reads would pass it is
+ * not shown to the model (`tools/loom-commands.ts`), so the record never
+ * leaves out a read of something the model saw.
+ */
+export const HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT = 512;
+
 export interface HarnessCfcModelContextObservation {
   type: "cf-harness.cfc-model-context-observation";
   sequence: number;
@@ -25,8 +58,17 @@ export interface HarnessCfcModelContextObservation {
   outputId: ToolOutputId;
   channels: readonly HarnessCfcModelContextChannel[];
   policy: "observed";
+
+  /** The output's confidentiality; `{confidentiality: []}` for a public one. */
   label: IFCLabel;
   truncated?: boolean;
+
+  /**
+   * The reads the host declared the output made, in its order: `[]` when it
+   * declared it read nothing, and absent when it made no declaration, which
+   * says nothing about what it read.
+   */
+  reads?: readonly HarnessCfcModelContextRead[];
 }
 
 export interface HarnessCfcModelContextObservationInput {
@@ -36,12 +78,22 @@ export interface HarnessCfcModelContextObservationInput {
   channels: readonly HarnessCfcModelContextChannel[];
   label: IFCLabel;
   truncated?: boolean;
+  reads?: readonly HarnessCfcModelContextRead[];
 }
 
 /**
+ * The record of what entered the model through tool outputs: one observation
+ * per output that reached it under a confidentiality label or that declares
+ * the reads it made, whatever its label, and the running join of their
+ * confidentiality as `label`. An output with no confidentiality that declares
+ * no reads leaves no observation. A host that declares its reads makes this
+ * the record of what the model was shown of the person's data, which a host
+ * builds its receipts from (`harnessCfcModelContextReads`).
+ *
  * Sensitive retained run metadata. Even without raw stdout/stderr bytes, these
- * labels and observation refs can reveal which confidential sources influenced
- * model-visible context, so treat this at least like transcript metadata.
+ * labels, observation refs, and reads can reveal which confidential sources
+ * influenced model-visible context, so treat this at least like transcript
+ * metadata.
  */
 export interface HarnessCfcModelContext {
   type: "cf-harness.cfc-model-context";
@@ -100,6 +152,12 @@ export const mergeConfidentialityOnlyLabels = (
   return confidentiality.length > 0 ? { confidentiality } : undefined;
 };
 
+/**
+ * The observation `input` records, or `undefined` when it reached the model
+ * through no channel, or carried no confidentiality and declares no read.
+ * Reads past {@link HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT} are refused: the
+ * tool that made the output bounds them before the model sees it.
+ */
 export const createHarnessCfcModelContextObservation = (
   input: HarnessCfcModelContextObservationInput & {
     sequence: number;
@@ -107,8 +165,19 @@ export const createHarnessCfcModelContextObservation = (
   },
 ): HarnessCfcModelContextObservation | undefined => {
   const label = confidentialityOnlyIfcLabel(input.label);
-  if (label === undefined || input.channels.length === 0) {
+  const { reads } = input;
+  if (
+    input.channels.length === 0 ||
+    (label === undefined && (reads === undefined || reads.length === 0))
+  ) {
     return undefined;
+  }
+  if (
+    reads !== undefined && reads.length > HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT
+  ) {
+    throw new RangeError(
+      `An observation records at most ${HARNESS_CFC_MODEL_CONTEXT_READS_LIMIT} reads; ${input.toolId} declared ${reads.length}.`,
+    );
   }
   return {
     type: "cf-harness.cfc-model-context-observation",
@@ -119,10 +188,38 @@ export const createHarnessCfcModelContextObservation = (
     outputId: input.outputId,
     channels: [...input.channels],
     policy: "observed",
-    label,
+    label: label ?? { confidentiality: [] },
     ...(input.truncated === true ? { truncated: true } : {}),
+    ...(reads !== undefined ? { reads: cloneJsonValue(reads) } : {}),
   };
 };
+
+/** One observation that declares reads, as a run's report carries it. */
+export interface HarnessCfcModelContextReadsEntry {
+  sequence: number;
+  toolCallId: string;
+  outputId: ToolOutputId;
+  label: IFCLabel;
+  reads: readonly HarnessCfcModelContextRead[];
+}
+
+/**
+ * The observations of `context` that declare reads, in sequence order, each
+ * with its sequence, tool call, output, label, and reads: what a host builds
+ * its receipts of the run's reads from. Empty for a run that declared none.
+ */
+export const harnessCfcModelContextReads = (
+  context: HarnessCfcModelContext | undefined,
+): HarnessCfcModelContextReadsEntry[] =>
+  (context?.observations ?? []).flatMap((observation) =>
+    observation.reads === undefined ? [] : [{
+      sequence: observation.sequence,
+      toolCallId: observation.toolCallId,
+      outputId: observation.outputId,
+      label: cloneJsonValue(observation.label),
+      reads: cloneJsonValue(observation.reads),
+    }]
+  );
 
 export const appendHarnessCfcModelContextObservations = (
   context: HarnessCfcModelContext | undefined,
@@ -153,14 +250,19 @@ export const appendHarnessCfcModelContextObservations = (
       ...newObservations.map((observation) => observation.label),
     ]),
   );
-  if (label === undefined) {
+  // An observation that declares a read is kept whatever its label; one whose
+  // only confidentiality was prompt-slot influence is not.
+  if (
+    label === undefined &&
+    !newObservations.some((observation) => (observation.reads?.length ?? 0) > 0)
+  ) {
     return context;
   }
   return {
     type: "cf-harness.cfc-model-context",
     version: 1,
     updatedAt: at,
-    label,
+    label: label ?? { confidentiality: [] },
     observations: [...existingObservations, ...newObservations],
   };
 };

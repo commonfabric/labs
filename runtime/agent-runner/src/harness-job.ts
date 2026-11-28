@@ -27,6 +27,7 @@ import {
 } from "@commonfabric/cf-harness/cli";
 import type { HarnessModelProviderId } from "@commonfabric/cf-harness/config";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
+import { harnessCfcModelContextReads } from "@commonfabric/cf-harness/contracts/cfc-model-context";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
 import type { HarnessRunDepth } from "@commonfabric/cf-harness/contracts/run-depth";
@@ -366,6 +367,7 @@ const runStateReport = (
   runState: HarnessPromptLoopResult["runState"],
 ): AgentRunReport => ({
   toolCalls: runState.toolOutputs.length,
+  reads: harnessCfcModelContextReads(runState.cfcModelContext),
   ...(runState.artifactRoot !== undefined
     ? { runRef: runState.artifactRoot }
     : {}),

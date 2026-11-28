@@ -11,7 +11,7 @@
  * JSON object the command layer returns.
  */
 
-import type { JSONObject } from "@commonfabric/api";
+import type { JSONObject, JSONValue } from "@commonfabric/api";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 
 import type {
@@ -96,9 +96,17 @@ export type LoomCommandListOutput =
 /**
  * A command's answer, or why there is none. `landed` says whether the
  * command could have taken effect: a run whose answer was lost may have.
+ * `body` is the answer without its `reads`, and `bodyBytes` its size;
+ * `reads` is the answer's `reads` as the host sent it, present exactly when
+ * the answer has the key.
  */
 export type LoomCommandRunOutput =
-  | { status: "ok"; body: JSONObject; bodyBytes: number }
+  | {
+    status: "ok";
+    body: JSONObject;
+    bodyBytes: number;
+    reads?: JSONValue;
+  }
   | {
     status: "error";
     code: LoomCommandHostErrorCode;
@@ -352,11 +360,13 @@ export const listLoomCommands = async (
 
 /**
  * Runs one command through `POST <url>/command`, as the configured actor,
- * with the loom and expected version as the command's context. The command
- * layer answers every command it reached with a JSON object carrying a
- * boolean `ok`, a refusal included and whatever the HTTP status, so anything
- * else is an answer that was lost — and a lost answer may follow a command
- * that took effect.
+ * with the loom and expected version as the command's context, asking for
+ * the reads the answer declares (`reads: true`). The command layer answers
+ * every command it reached with a JSON object carrying a boolean `ok`, a
+ * refusal included and whatever the HTTP status, so anything else is an
+ * answer that was lost — and a lost answer may follow a command that took
+ * effect. The answer's `reads` is taken out of its body, so the body is the
+ * one a caller that did not ask would have read.
  */
 export const runLoomCommand = async (
   config: HarnessLoomCommandsConfig,
@@ -386,6 +396,7 @@ export const runLoomCommand = async (
       args: invocation.args,
       ...(Object.keys(context).length > 0 ? { context } : {}),
       actor: config.actor,
+      reads: true,
     }, signal));
   } catch {
     return lost("command_failed", "The host command's answer was lost.");
@@ -402,10 +413,12 @@ export const runLoomCommand = async (
       "The host command's answer is not a command result.",
     );
   }
+  const { reads, ...answer } = body as JSONObject;
   return {
     status: "ok",
-    body: body as JSONObject,
-    bodyBytes: harnessCommandJsonBytes(body),
+    body: answer,
+    bodyBytes: harnessCommandJsonBytes(answer),
+    ...(Object.hasOwn(body, "reads") ? { reads } : {}),
   };
 };
 
