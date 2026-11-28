@@ -110,6 +110,8 @@ export default pattern(() => {
 
   const searched = new Writable<CatalogPage | null>(null);
   const listed = new Writable<CatalogPage | null>(null);
+  const narrowed = new Writable<CatalogPage | null>(null);
+  const narrowedSearch = new Writable<CatalogPage | null>(null);
   const refused = new Writable<CatalogPage | null>(null);
 
   const split = GetItButton({
@@ -216,6 +218,8 @@ export default pattern(() => {
   const action_page = action(() => {
     catalog.page.send({ text: " MONEY ", result: searched });
     catalog.page.send({ text: "  ", result: listed });
+    catalog.page.send({ text: "", standalone: true, result: narrowed });
+    catalog.page.send({ text: "r", standalone: true, result: narrowedSearch });
   });
   const assert_entries_say_which_stand_alone = assert(() =>
     listed.get()?.entries.map((e) => `${e.patternId}:${e.standalone}`)
@@ -225,6 +229,11 @@ export default pattern(() => {
     searched.get()?.entries.map((e) => e.patternId).join() === "split-1" &&
     searched.get()?.status.state === "ready" &&
     listed.get()?.entries.length === 2
+  );
+  // Asked for standalone entries only, the listing leaves out the part.
+  const assert_standalone_page_leaves_out_parts = assert(() =>
+    narrowed.get()?.entries.map((e) => e.patternId).join() === "split-1" &&
+    narrowedSearch.get()?.entries.map((e) => e.patternId).join() === "split-1"
   );
 
   const assert_button_names_catalog_title_and_destination = assert(() => {
@@ -421,6 +430,7 @@ export default pattern(() => {
     [TESTS]: [
       { action: action_page },
       { assertion: assert_page_answers_in_callers_cell },
+      { assertion: assert_standalone_page_leaves_out_parts },
       { assertion: assert_entries_say_which_stand_alone },
       { assertion: assert_button_names_catalog_title_and_destination },
       { assertion: assert_anonymous_shows_pseudonym_only },

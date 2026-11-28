@@ -13,6 +13,9 @@ export const patternIndexSearchRequest = (
     ...(tags !== undefined ? { tags } : {}),
     ...(typeof body.text === "string" ? { text: body.text } : {}),
     ...(typeof body.limit === "number" ? { limit: body.limit } : {}),
+    ...(typeof body.standalone === "boolean"
+      ? { standalone: body.standalone }
+      : {}),
   };
 };
 

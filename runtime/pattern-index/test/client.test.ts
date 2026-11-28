@@ -628,6 +628,26 @@ describe("PatternIndexClient", () => {
     expect(JSON.parse(requests[1].body)).toEqual({ text: "expenses" });
   });
 
+  it("asks for standalone patterns only when the caller does", async () => {
+    const { client, requests } = createClient([
+      jsonResponse({ results: [] }),
+      jsonResponse({ results: [] }),
+      jsonResponse({ results: [] }),
+    ]);
+    await client.searchPatterns({ text: "notes", standalone: true });
+    await client.searchPatterns({ text: "notes", standalone: false });
+    await client.searchPatterns({ text: "notes" });
+    expect(JSON.parse(requests[0].body)).toEqual({
+      text: "notes",
+      standalone: true,
+    });
+    expect(JSON.parse(requests[1].body)).toEqual({
+      text: "notes",
+      standalone: false,
+    });
+    expect(JSON.parse(requests[2].body)).toEqual({ text: "notes" });
+  });
+
   it("sends only the listPatterns filters the caller supplied", async () => {
     const { client, requests } = createClient([
       jsonResponse({ patterns: [], eventTypes: {} }),
