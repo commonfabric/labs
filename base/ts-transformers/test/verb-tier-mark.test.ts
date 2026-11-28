@@ -12,7 +12,14 @@
  */
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { transformSource } from "./utils.ts";
+import { expect } from "@std/expect";
+import { StaticCache } from "@commonfabric/static";
+import { describe, it, test } from "@commonfabric/test-support/test";
+import ts from "typescript";
+
+import { transformCfDirective } from "../src/mod.ts";
+import { VerbTierMarkTransformer } from "../src/transformers/verb-tier-mark.ts";
+import { createInMemoryProgram, transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 
 async function emit(source: string): Promise<string> {
@@ -30,7 +37,7 @@ function tierMarked(output: string, property: string): boolean {
   return slice.includes('tier: "wrapper"');
 }
 
-Deno.test("a void-event action over a session cell is wrapper-tier", async () => {
+test("a void-event action over a session cell is wrapper-tier", async () => {
   const output = await emit(`
     import { action, pattern, type PerSession, Stream, type Writable } from "commonfabric";
     interface Out {
@@ -49,7 +56,7 @@ Deno.test("a void-event action over a session cell is wrapper-tier", async () =>
   assertStringIncludes(output, 'tier: "wrapper"');
 });
 
-Deno.test("a quoted wrapper verb name is marked like a bare one", async () => {
+test("a quoted wrapper verb name is marked like a bare one", async () => {
   // Two things at once, both previously untested: the returned property is a
   // STRING-LITERAL name (the inference and mutation passes must agree on
   // static names), and the wrapper is a directly-authored `handler(...)`
@@ -74,7 +81,7 @@ Deno.test("a quoted wrapper verb name is marked like a bare one", async () => {
   assertEquals(tierMarked(output, '"open-composer"'), true);
 });
 
-Deno.test("a payload-carrying verb touching a session cell stays unmarked", async () => {
+test("a payload-carrying verb touching a session cell stays unmarked", async () => {
   // The addTopic shape: real event payload, incidental session-draft clear.
   const output = await emit(`
     import { action, pattern, type PerSession, Stream, type Writable } from "commonfabric";
@@ -97,7 +104,7 @@ Deno.test("a payload-carrying verb touching a session cell stays unmarked", asyn
   assertEquals(tierMarked(output, "create"), false);
 });
 
-Deno.test("a headless verb without session bindings stays unmarked", async () => {
+test("a headless verb without session bindings stays unmarked", async () => {
   const output = await emit(`
     import { action, pattern, Stream, type Writable } from "commonfabric";
     interface AddEvent { value: number; }
@@ -115,4 +122,243 @@ Deno.test("a headless verb without session bindings stays unmarked", async () =>
   `);
   assertEquals(tierMarked(output, "add"), false);
   assertEquals(output.includes('tier: "wrapper"'), false);
+});
+
+describe("VerbTierMarkTransformer", () => {
+  // These cases run the transformer alone over source already in the shape
+  // the stages before it emit: module-scope handler factories with literal
+  // schemas, and a pattern call carrying its input and result schemas.
+
+  const libraries = StaticCache.fromFileSystem().getText("types/es2023.d.ts");
+
+  /**
+   * The module printed before and after the transformer runs over it. The
+   * module declares `bump`, a handler factory whose state schema is
+   * session-scoped, and `plain`, one whose state schema is not.
+   */
+  async function markTiers(
+    moduleBody: string,
+  ): Promise<{ before: string; after: string }> {
+    const program = createInMemoryProgram({
+      "/test.ts": transformCfDirective(
+        `import { handler, pattern } from "commonfabric";
+const bump = handler(false, {
+  type: "object",
+  properties: { draft: { type: "string", scope: "session" } },
+}, (_event: unknown, _state: unknown) => {});
+const plain = handler(false, { type: "object" }, () => {});
+${moduleBody}`,
+      ),
+      "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+      "/cfc.ts": COMMONFABRIC_TYPES["cfc.ts"]!,
+      "/lib.d.ts": await libraries,
+    }, { target: ts.ScriptTarget.ES2020, module: ts.ModuleKind.CommonJS });
+    const sourceFile = program.getSourceFile("/test.ts")!;
+    const printer = ts.createPrinter();
+    const result = ts.transform(sourceFile, [
+      new VerbTierMarkTransformer({}).toFactory(program),
+    ]);
+    try {
+      return {
+        before: printer.printFile(sourceFile),
+        after: printer.printFile(result.transformed[0]!),
+      };
+    } finally {
+      result.dispose();
+    }
+  }
+
+  /**
+   * A pattern returning `go: <go>` with result schema `resultSchema`, whose
+   * input schema marks nothing session-scoped.
+   */
+  function patternReturning(go: string, resultSchema: string): string {
+    return `export default pattern((input: any) => {
+  const draft = input.draft;
+  return { draft, go: ${go} };
+}, {
+  type: "object",
+  properties: { draft: { type: "string" } },
+}, ${resultSchema});`;
+  }
+
+  const streamResult = `{
+  type: "object",
+  properties: { go: { asCell: ["stream"] } }
+}`;
+
+  it("marks a stream whose handler's state schema is session-scoped", async () => {
+    const { before, after } = await markTiers(
+      patternReturning("bump({ draft })", streamResult),
+    );
+    expect(after).toBe(
+      before.replace(
+        'go: { asCell: ["stream"] }',
+        'go: { asCell: ["stream"], tier: "wrapper" }',
+      ),
+    );
+  });
+
+  it("marks a stream returned from an expression-bodied callback", async () => {
+    const { before, after } = await markTiers(
+      `export default pattern((input: any) => ({ go: bump({ draft: input.draft }) }), {
+  type: "object",
+  properties: { draft: { type: "string" } },
+}, ${streamResult});`,
+    );
+    expect(after).toBe(
+      before.replace(
+        'go: { asCell: ["stream"] }',
+        'go: { asCell: ["stream"], tier: "wrapper" }',
+      ),
+    );
+  });
+
+  it("keeps the wrappers around a result schema it marks", async () => {
+    const { before, after } = await markTiers(
+      patternReturning("bump({ draft })", `(${streamResult} as const)`),
+    );
+    expect(after).toBe(
+      before.replace(
+        'go: { asCell: ["stream"] }',
+        'go: { asCell: ["stream"], tier: "wrapper" }',
+      ),
+    );
+    expect(after).toContain("} as const)");
+  });
+
+  it("marks a stream beside a spread in the result schema's properties", async () => {
+    const { before, after } = await markTiers(
+      `const extra = {};
+${
+        patternReturning(
+          "bump({ draft })",
+          `{
+  type: "object",
+  properties: { ...extra, go: { asCell: ["stream"] } }
+}`,
+        )
+      }`,
+    );
+    expect(after).toBe(
+      before.replace(
+        'go: { asCell: ["stream"] }',
+        'go: { asCell: ["stream"], tier: "wrapper" }',
+      ),
+    );
+  });
+
+  describe("leaves the module unchanged", () => {
+    const unchanged: Record<string, string> = {
+      "for a handler whose state schema is not session-scoped":
+        patternReturning(
+          "plain({ draft: 1 })",
+          streamResult,
+        ),
+      "for a pattern call without schemas":
+        `export default pattern((input: any) => ({ go: bump({ draft: input.draft }) }));`,
+      "for a callback that is not a function literal":
+        `const body = (input: any) => ({ go: bump({ draft: input.draft }) });
+export default pattern(body, { type: "object" }, ${streamResult});`,
+      "for a callback that returns no object literal":
+        `export default pattern((input: any) => {
+  const result = { go: bump({ draft: input.draft }) };
+  return result;
+}, { type: "object" }, ${streamResult});`,
+      "for a returned verb under a computed name":
+        `export default pattern((input: any) => {
+  const draft = input.draft;
+  return { ...input, ["go"]: bump({ draft }) };
+}, { type: "object" }, ${streamResult});`,
+      "for a verb applied through a callee that is not a call":
+        patternReturning(
+          "input.make({ draft })",
+          streamResult,
+        ),
+      "for a verb applied through a factory that is not a handler":
+        `declare function makeFactory(...args: unknown[]): any;
+const made = makeFactory(false, {
+  type: "object",
+  properties: { draft: { type: "string", scope: "session" } },
+});
+${patternReturning("made({ draft })", streamResult)}`,
+      "for a result schema that is not a literal":
+        `const result = ${streamResult};
+${patternReturning("bump({ draft })", "result")}`,
+      "for a result schema without `properties`": patternReturning(
+        "bump({ draft })",
+        `{ type: "object" }`,
+      ),
+      "for result schema `properties` that are not a literal":
+        `const props = {};
+${
+          patternReturning(
+            "bump({ draft })",
+            `{ type: "object", properties: props }`,
+          )
+        }`,
+      "for a property schema that is not a literal": `const goSchema = {};
+${
+        patternReturning(
+          "bump({ draft })",
+          `{ type: "object", properties: { go: goSchema } }`,
+        )
+      }`,
+      "for a property schema that is not a stream": patternReturning(
+        "bump({ draft })",
+        `{ type: "object", properties: { go: { type: "string" } } }`,
+      ),
+      "for a stream that already has a tier": patternReturning(
+        "bump({ draft })",
+        `{ type: "object", properties: { go: { asCell: ["stream"], tier: "headless" } } }`,
+      ),
+      "for names that resolve to each other in a cycle":
+        `const first: any = second;
+const second: any = first;
+${patternReturning("first", streamResult)}`,
+      "for a handler whose event schema is not a literal": `const event = false;
+const evented = handler(event, {
+  type: "object",
+  properties: { draft: { type: "string", scope: "session" } },
+}, () => {});
+${patternReturning("evented({ draft })", streamResult)}`,
+    };
+    for (const [description, moduleBody] of Object.entries(unchanged)) {
+      it(description, async () => {
+        const { before, after } = await markTiers(moduleBody);
+        expect(after).toBe(before);
+      });
+    }
+  });
+
+  describe("session-scoped bindings in the input schema", () => {
+    it("marks a stream whose handler binds a property the input schema marks session-scoped", async () => {
+      const { before, after } = await markTiers(
+        `export default pattern((input: any) => {
+  const draft = input.draft;
+  return { go: plain({ draft }) };
+}, {
+  type: "object",
+  properties: { other: {}, draft: { type: "string", scope: "session" } },
+}, ${streamResult});`,
+      );
+      expect(after).toBe(
+        before.replace(
+          'go: { asCell: ["stream"] }',
+          'go: { asCell: ["stream"], tier: "wrapper" }',
+        ),
+      );
+    });
+
+    it("reads no session-scoped names from input schema `properties` that are not a literal", async () => {
+      const { before, after } = await markTiers(
+        `const props = {};
+export default pattern((input: any) => {
+  const draft = input.draft;
+  return { go: plain({ draft }) };
+}, { type: "object", properties: props }, ${streamResult});`,
+      );
+      expect(after).toBe(before);
+    });
+  });
 });

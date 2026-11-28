@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { MutableJSONSchema } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   assertScopeDeclarationsAreReachable,
   memberScopeWithin,
@@ -47,6 +47,44 @@ describe("scope-placement", () => {
       assertScopeDeclarationsAreReachable(
         beside({ type: "string", scope: "user" }),
       )
+    ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  it("accepts boolean branches, which declare no scope", () => {
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        anyOf: [true, false, { type: "string" }],
+        scope: "user",
+      })
+    ).not.toThrow();
+  });
+
+  it("throws for a scope in a branch of a tuple element's slot", () => {
+    // Each `prefixItems` entry is a slot of its own, walked as the root is.
+
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        type: "array",
+        prefixItems: [{ type: "number" }, beside({ type: "string" })],
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        type: "array",
+        prefixItems: [
+          { type: "number" },
+          beside({ type: "string", scope: "user" }),
+        ],
+      })
+    ).toThrow("A scope wrapper cannot be a member of a union.");
+  });
+
+  it("throws for a scope in a branch of an array element's slot", () => {
+    expect(() =>
+      assertScopeDeclarationsAreReachable({
+        type: "array",
+        items: beside({ type: "string", scope: "user" }),
+      })
     ).toThrow("A scope wrapper cannot be a member of a union.");
   });
 

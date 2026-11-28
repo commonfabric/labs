@@ -1,0 +1,179 @@
+{
+  "argumentSchema": {
+    "properties": {
+      "reader": {
+        "description": "The DID the share's space grants READ.",
+        "type": "string"
+      }
+    },
+    "required": [
+      "reader"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/test/share-space-declassify/share-owner.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Fix": {
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "at"
+        ],
+        "type": "object"
+      },
+      "ShareLiveOutput": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "$UI": {
+            "$ref": "https://commonfabric.org/schemas/vnode.json"
+          },
+          "publish": {
+            "asCell": [
+              "stream",
+              "opaque"
+            ],
+            "description": "Copies `window` into `shared`."
+          },
+          "shared": {
+            "description": "The window as published to the share space.",
+            "ifc": {
+              "maxConfidentiality": [
+                {
+                  "anyOf": [
+                    {
+                      "subject": {
+                        "__ctCurrentPrincipal": true
+                      },
+                      "type": "https://commonfabric.org/cfc/atom/User"
+                    },
+                    {
+                      "moduleIdentity": "JjGlJ-DYl0fG5igGbpagoFnfHB8FbfMIW3m5f9U9isk",
+                      "policyDigest": "awBl557wkNu8HhAuhwFh6oGJIdm0RnXdwtYvf4uhfQY",
+                      "policyRefKind": "module",
+                      "subject": {
+                        "__ctOwningSpace": true
+                      },
+                      "symbol": "shareSpaceRules",
+                      "type": "https://commonfabric.org/cfc/atom/Policy"
+                    }
+                  ]
+                }
+              ]
+            },
+            "items": {
+              "$ref": "#/$defs/Fix"
+            },
+            "type": "array"
+          },
+          "space": {
+            "description": "The DID of the space the share was placed in.",
+            "type": [
+              "string",
+              "undefined"
+            ]
+          },
+          "window": {
+            "description": "The last five minutes, reclassified for the share space's readers.",
+            "ifc": {
+              "reclassify": [
+                {
+                  "moduleIdentity": "JjGlJ-DYl0fG5igGbpagoFnfHB8FbfMIW3m5f9U9isk",
+                  "policyDigest": "awBl557wkNu8HhAuhwFh6oGJIdm0RnXdwtYvf4uhfQY",
+                  "policyRefKind": "module",
+                  "subject": {
+                    "__ctOwningSpace": true
+                  },
+                  "symbol": "shareSpaceRules",
+                  "type": "https://commonfabric.org/cfc/atom/Policy"
+                }
+              ]
+            },
+            "items": {
+              "$ref": "#/$defs/Fix"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "space",
+          "window",
+          "shared",
+          "publish",
+          "$NAME",
+          "$UI"
+        ],
+        "type": "object"
+      },
+      "ShareSlot": {
+        "properties": {
+          "live": {
+            "$ref": "#/$defs/ShareLiveOutput"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "createShare": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "fixes": {
+        "ifc": {
+          "confidentiality": [
+            {
+              "subject": {
+                "__ctCurrentPrincipal": true
+              },
+              "type": "https://commonfabric.org/cfc/atom/User"
+            }
+          ]
+        },
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      },
+      "recordFixes": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ]
+      },
+      "share": {
+        "$ref": "#/$defs/ShareSlot"
+      }
+    },
+    "required": [
+      "fixes",
+      "share",
+      "createShare",
+      "recordFixes",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

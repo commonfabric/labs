@@ -66,8 +66,14 @@ export interface LocalJobsService {
 const newToken = (): string =>
   encodeHex(crypto.getRandomValues(new Uint8Array(32)));
 
+/** Opens a connection to a Unix socket, as `Deno.connect` does. */
+type ConnectUnix = (options: Deno.UnixConnectOptions) => Promise<Deno.UnixConn>;
+
 /** Reclaims only a Unix socket whose listener is gone. */
-const reclaimSocket = async (path: string): Promise<void> => {
+const reclaimSocket = async (
+  path: string,
+  connect: ConnectUnix,
+): Promise<void> => {
   try {
     if (!(await Deno.lstat(path)).isSocket) {
       throw new Error(`The local jobs socket path is occupied: ${path}`);
@@ -77,7 +83,7 @@ const reclaimSocket = async (path: string): Promise<void> => {
     throw error;
   }
   try {
-    const connection = await Deno.connect({ transport: "unix", path });
+    const connection = await connect({ transport: "unix", path });
     connection.close();
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return;
@@ -103,6 +109,7 @@ export const startLocalJobs = async (
     runJob?: LocalJobLaneOptions["runJob"];
     harnessDeps?: HarnessJobOptions["harnessDeps"];
     chmod?: typeof Deno.chmod;
+    connect?: ConnectUnix;
   } = {},
 ): Promise<LocalJobsService> => {
   const profiles = await readLocalJobProfiles(config.profilesPath);
@@ -180,7 +187,7 @@ export const startLocalJobs = async (
         throw new Error(`Local jobs resource is already owned: ${path}`);
       }
     }
-    await reclaimSocket(config.socketPath);
+    await reclaimSocket(config.socketPath, deps.connect ?? Deno.connect);
     // SQLite gives its journals the database file's mode.
     await Deno.writeFile(storePath, new Uint8Array(), {
       append: true,

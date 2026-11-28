@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -13,6 +12,12 @@ import {
   ownerReleaseByIntentSignedBytes,
   type SignedOwnerReleaseByIntentRequest,
 } from "@commonfabric/memory/v2/cfc-owner-release-by-intent";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ACLManager } from "../../src/acl-manager.ts";
 import {
@@ -25,11 +30,13 @@ import {
 } from "../../src/cfc/denial-report.ts";
 import {
   CFC_STRUCTURAL_PROVENANCE_RUNTIME_OWNED_STORE,
+  type CfcMetadata,
   type PostCommitSideEffect,
   type RuntimeWritePolicyAuthorization,
   runtimeWritePolicyAuthorization,
 } from "../../src/cfc/types.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
+import { COMPILE_CACHE_REPAIR_WRITER } from "../../src/compilation-cache/writer-identity.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { registerSchemaDocument } from "../../src/schema-registry.ts";
 import {
@@ -53,6 +60,7 @@ import type {
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
+  storedFields,
   writeSeedEnvelopeDoc,
 } from "../cfc-seed-envelope.ts";
 
@@ -807,6 +815,73 @@ describe("extended-storage-transaction", () => {
         tx.abort();
       });
 
+      it("repairs a compile-cache record through the transaction it wraps", () => {
+        const key = "pattern:wrapped-repair";
+        const record = {
+          space,
+          id: runtime.getCell(space, key).getAsNormalizedFullLink().id,
+          scope: "space" as const,
+          path: [],
+        };
+        const cfc: CfcMetadata = {
+          version: 1,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{
+              path: [],
+              origin: "derived",
+              label: { confidentiality: [cfcAtom.personalSpace(other)] },
+            }],
+          },
+        };
+        const tx = edit();
+        writeSeedEnvelopeDoc(tx, space);
+        const wrapper = new TransactionWrapper(tx);
+        expect(() =>
+          wrapper.writeRepairedCompileCacheRecord({ space, key }, undefined)
+        ).toThrow(COMPILE_CACHE_REPAIR_WRITER);
+        setCfcImplementationIdentity(wrapper, {
+          kind: "builtin",
+          builtinId: COMPILE_CACHE_REPAIR_WRITER,
+        });
+        expect(() =>
+          wrapper.writeRepairedCompileCacheRecord(
+            { space, key: "of:wrapped-repair" },
+            undefined,
+          )
+        ).toThrow("of:wrapped-repair is not a compile-cache record key");
+        expect(storedFields(tx, record)).toEqual({});
+
+        wrapper.writeRepairedCompileCacheRecord({ space, key }, {
+          value: { source: "repaired" },
+          cfc,
+        });
+        expect(storedFields(tx, record)).toEqual({
+          value: { source: "repaired" },
+          cfc,
+        });
+        wrapper.writeRepairedCompileCacheRecord({ space, key }, undefined);
+        expect(storedFields(tx, record)).toEqual({});
+        tx.abort();
+      });
+
+      it("freezes the read records of the transaction it wraps", async () => {
+        await seedText("frozen-source", "read");
+        const tx = edit();
+        const wrapper = new TransactionWrapper(tx);
+        const revision = wrapper.freezeReadActivityRecords();
+        expect(revision).toEqual(expect.any(Number));
+        expect(wrapper.freezeReadActivityRecords()).toBe(revision);
+        tx.readValueOrThrow(link("frozen-source"));
+        const records = [...wrapper.getPotentiallyExternalReadActivities()!];
+        expect(records.length).toBeGreaterThan(0);
+        expect(records.some((record) => Object.isFrozen(record))).toBe(false);
+        expect(wrapper.freezeReadActivityRecords()).not.toBe(revision);
+        expect(records.every((record) => Object.isFrozen(record))).toBe(true);
+        tx.abort();
+      });
+
       it("reads and writes through the transaction it wraps", () => {
         const tx = edit();
         const wrapper = new TransactionWrapper(tx);
@@ -900,6 +975,20 @@ describe("extended-storage-transaction", () => {
           });
           expect(sqlite.hasWrites()).toBe(true);
           sqlite.abort();
+        });
+
+        it("freezes no read records when the transaction cannot", async () => {
+          await seedText("unfrozen-source", "read");
+          const tx = edit();
+          const wrapper = new TransactionWrapper(
+            lacking(tx, "freezeReadActivityRecords"),
+          );
+          tx.readValueOrThrow(link("unfrozen-source"));
+          expect(wrapper.freezeReadActivityRecords()).toBeUndefined();
+          const records = [...wrapper.getPotentiallyExternalReadActivities()!];
+          expect(records.length).toBeGreaterThan(0);
+          expect(records.some((record) => Object.isFrozen(record))).toBe(false);
+          tx.abort();
         });
 
         it("reads the write attempts off the storage transaction", () => {

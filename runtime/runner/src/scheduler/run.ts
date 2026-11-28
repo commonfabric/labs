@@ -1,4 +1,8 @@
-import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
+import {
+  canResolveScopeKey,
+  resolveScopeKey,
+  type ScopeKey,
+} from "@commonfabric/memory/v2";
 import { getAuthoredDebugSource } from "../harness/authored-debug-source.ts";
 import { startReadStats } from "../read-stats.ts";
 import { getLogger } from "@commonfabric/logger";
@@ -15,6 +19,8 @@ import type {
   CommitError,
   IExtendedStorageTransaction,
   IMemorySpaceAddress,
+  MemorySpace,
+  UnproducedScopedInstance,
 } from "../storage/interface.ts";
 import {
   endLocalReadValidationStretch,
@@ -61,6 +67,7 @@ import {
   fanOutInstancesToRun,
   type FanOutNodeState,
   fanOutRunFinished,
+  fanOutRunOpened,
   fanOutRunStarted,
   fanOutUnionLog,
   keyAtRatchet,
@@ -139,12 +146,20 @@ export function invokeReactiveAction(state: {
     // Track executing action for parent-child relationship tracking.
     state.setExecutingAction(args.action, args.actionId);
     logger.timeStart("scheduler", "run", "action");
+    const body = () => {
+      state.runtime.scheduler.prepareViewAction(args.tx, args.action);
+      state.runtime.scheduler.beginViewAction(args.action);
+      return args.action(args.tx);
+    };
+    // A serving worker's runtime marks the body on its worker's run beacon
+    // (serving-loop.md §2, "The watchdog").
+    const beacon = state.runtime.runBeacon;
     return Promise.resolve(
-      state.runtime.harness.invoke(() => {
-        state.runtime.scheduler.prepareViewAction(args.tx, args.action);
-        state.runtime.scheduler.beginViewAction(args.action);
-        return args.action(args.tx);
-      }),
+      beacon === undefined ? state.runtime.harness.invoke(body) : beacon.hold(
+        args.action,
+        args.actionId,
+        () => state.runtime.harness.invoke(body),
+      ),
     )
       .then((actionResult) => {
         logger.timeEndDetailed(measureDetail, "scheduler", "run", "action");
@@ -488,6 +503,41 @@ function abandonAction(
   state.tx.abandonStagedWork(error as CommitError);
 }
 
+/**
+ * A read a served run made of a scoped instance that a writer registered on
+ * its runtime owes and had not produced yet, for which the run was
+ * withdrawn.
+ */
+export type UnproducedRead = {
+  /** The instance key of the run that read. */
+  slice: ScopeKey;
+
+  /** The space the instance is in. */
+  space: MemorySpace;
+  id: string;
+
+  /** The scope key of the instance, as the run's identity resolves it. */
+  scopeKey: ScopeKey;
+};
+
+/**
+ * The read of `unproduced` (`unproducedScopedInstance`) made by the run at
+ * `instance`. `undefined` where the scope is none the run's identity names
+ * an instance of.
+ */
+function unproducedReadOf(
+  { space, id, scope }: UnproducedScopedInstance,
+  instance: FanOutInstance,
+): UnproducedRead | undefined {
+  if (!canResolveScopeKey(scope, instance.identity)) return undefined;
+  return {
+    slice: instance.key,
+    space,
+    id,
+    scopeKey: resolveScopeKey(scope, instance.identity),
+  };
+}
+
 export function appendActionRunTrace(state: {
   readonly actionRunTrace: ActionRunTraceEntry[];
   readonly nodes: NodeRegistry;
@@ -569,6 +619,22 @@ export interface SchedulerActionRunState {
   readonly maybeAutoDebounce: (action: Action) => void;
   readonly markActionHasRun: (action: Action) => void;
   readonly markNodeHasRun: (action: Action) => void;
+
+  /** Notes that `action` finished a run that was not withdrawn
+   * (`Scheduler.watchProducedDocument()`). */
+  readonly noteProduced?: (action: Action) => void;
+
+  /**
+   * Notes what the run of `action` at the instance `run` found of the
+   * scoped instances it read: `read` where it read one its writer had not
+   * produced yet and was withdrawn for it, `undefined` where it read none
+   * (`Scheduler.unproducedReads()`).
+   */
+  readonly noteUnproducedRead?: (
+    action: Action,
+    run: ScopeKey,
+    read: UnproducedRead | undefined,
+  ) => void;
   readonly handleError: (error: Error, action: Action) => void;
   readonly resubscribe: (action: Action, log: ReactivityLog) => void;
   readonly markInvalid: (action: Action, options?: MarkInvalidOptions) => void;
@@ -722,6 +788,9 @@ export async function runSchedulerAction(
     }
     (tx.tx as { debugActionId?: string }).debugActionId = actionId;
     tx.tx.sourceAction = action;
+    if (fanOut !== undefined && instance !== undefined) {
+      fanOutRunOpened(fanOut, instance, tx.tx);
+    }
     tx.tx.validateReactiveReads = true;
     // The mark's one effect is the local fold of a write the space refuses
     // (`IStorageTransaction.derivedWrites`), so the flag gating the fold
@@ -1057,19 +1126,19 @@ function finalizeSchedulerAction(
     args.actionEndTime,
     args.reads,
   );
+  const annotated = args.action as Partial<TelemetryAnnotations>;
+  const src = getAuthoredDebugSource(annotated.module?.implementation)?.src;
+  const piece = annotated.schedulerObservationIdentity?.pieceRootId;
   state.runtime.telemetry.submit({
     type: "scheduler.run.complete",
     actionId: args.actionId,
     actionInfo: state.getActionTelemetryInfo(args.action),
     durationMs: elapsed,
-    ...(args.reads
-      ? {
-        reads: args.reads,
-        src: getAuthoredDebugSource(
-          (args.action as Partial<TelemetryAnnotations>).module?.implementation,
-        )?.src,
-      }
-      : {}),
+    inputDriven: args.invalidCauses !== undefined &&
+      args.invalidCauses.length > 0,
+    ...(piece === undefined ? {} : { piece }),
+    ...(src === undefined ? {} : { src }),
+    ...(args.reads ? { reads: args.reads } : {}),
     ...(args.error !== undefined
       ? { error: args.error instanceof Error ? args.error.message : "error" }
       : {}),
@@ -1295,7 +1364,8 @@ function finalizeReactiveActionCommit(
     } else if (unproduced !== undefined) {
       args.tx.abort(
         new Error(
-          `served derivation read a scoped instance not yet produced: ${unproduced}`,
+          "served derivation read a scoped instance not yet produced: " +
+            `${unproduced.space}/${unproduced.scope}/${unproduced.id}`,
         ),
       );
     }
@@ -1324,6 +1394,7 @@ function finalizeReactiveActionCommit(
         discovered: normalizeCellScope(args.tx.getNarrowestReadScope()),
         startGen: args.fanOutRun.startGen,
         log,
+        transaction: args.tx.tx,
       });
     }
     return log;
@@ -1492,10 +1563,21 @@ function finalizeReactiveActionCommit(
   // (`Scheduler.owesScopedInstance()`, which ignores the flag on a builtin,
   // whose output can land after its run returns). A withdrawn run read
   // something it could not take as state, so what it left is not its output.
-  if (
-    owner !== undefined && refused === undefined && unproduced === undefined
-  ) {
-    owner.produced = true;
+  // A run that was not withdrawn also wakes whoever watches the documents it
+  // writes (`Scheduler.watchProducedDocument()`): one that left its instance
+  // absent commits no write there to wake them otherwise.
+  if (refused === undefined && unproduced === undefined) {
+    if (owner !== undefined) owner.produced = true;
+    state.noteProduced?.(args.action);
+  }
+  if (args.fanOutRun !== undefined) {
+    state.noteUnproducedRead?.(
+      args.action,
+      args.fanOutRun.instance.key,
+      unproduced === undefined
+        ? undefined
+        : unproducedReadOf(unproduced, args.fanOutRun.instance),
+    );
   }
   const registrationToken = args.registrationToken;
   // Sealing is not durable acceptance. A withdrawn contribution can have read
@@ -1517,21 +1599,17 @@ function finalizeReactiveActionCommit(
     owner.pendingWaveRun = token;
     const outcome = await settlement;
     if (owner.pendingWaveRun !== token) return;
-    const canRunAgain = () => {
-      if (
-        node.registrationToken !== registrationToken ||
-        (!state.nodes.isEffect(args.action) &&
-          !state.nodes.isComputation(args.action))
-      ) return false;
-      const record = state.nodes.get(args.action);
-      return fanOutRun === undefined
-        ? record === node
-        : record?.fanOut === fanOutRun.state &&
-          fanOutRun.state.instances.get(
-              keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
-                fanOutRun.instance.key,
-            ) === instanceRecord;
-    };
+    // Unsubscribing an action deletes its node's `pendingWaveRun` and fan-out
+    // state, so a node that still holds `token` is registered as it was when
+    // it ran. A fanned-out run can run again only while its node keeps the
+    // fan-out state and instance it ran at.
+    const canRunAgain = () =>
+      fanOutRun === undefined ||
+      (node.fanOut === fanOutRun.state &&
+        fanOutRun.state.instances.get(
+            keyAtRatchet(fanOutRun.state, fanOutRun.instance.identity) ??
+              fanOutRun.instance.key,
+          ) === instanceRecord);
     const superseded = outcome.error?.supersededOutputs ??
       outcome.ok?.supersededOutputs;
     let owed: boolean | Promise<boolean> =
@@ -1546,10 +1624,9 @@ function finalizeReactiveActionCommit(
       if (owner.pendingWaveRun !== token) return;
     }
     delete owner.pendingWaveRun;
-    const record = state.nodes.get(args.action);
-    if (!owed || record === undefined || !canRunAgain()) return;
+    if (!owed || !canRunAgain()) return;
     for (const cause of args.invalidCauses ?? []) {
-      addInvalidCause(record, cause);
+      addInvalidCause(node, cause);
     }
     commitState.markInvalid(args.action, { retry: true });
     state.pending.add(args.action);

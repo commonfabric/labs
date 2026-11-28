@@ -28,23 +28,12 @@ export class ArrayFormatter implements TypeFormatter {
       };
     }
 
+    // `supportsType()` has found this same element info.
     const info = getArrayElementInfo(
       type,
       context.typeChecker,
       context.typeNode,
-    );
-
-    if (!info) {
-      throw new Error(
-        "ArrayFormatter.formatType called but getArrayElementInfo returned null - this indicates a bug in supportsType logic",
-      );
-    }
-
-    if (!info.elementType) {
-      throw new Error(
-        "ArrayFormatter received malformed array element info with missing elementType",
-      );
-    }
+    )!;
 
     // Handle special cases for any[], unknown[], and never[] with JSON Schema shortcuts
     const elementFlags = info.elementType.flags;

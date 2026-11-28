@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { deepFreeze, type FabricValue, hashOf } from "@";
 
 import { hex } from "./hex.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("value-hash/caching", () => {
   describe("`hashOf()` caching", () => {

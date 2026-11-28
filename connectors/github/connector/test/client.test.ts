@@ -1,6 +1,6 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { createGithubGraphqlTransport, GithubClient } from "../mod.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function pullRequest(number: number, checkState = "SUCCESS") {
   return {

@@ -75,6 +75,8 @@ const byRegion = (region: string) => (node: TestVNode) =>
 
 // A stand-in for a picture; nothing here decodes it.
 const PICTURE = [0x89, 0x50, 0x4e, 0x47];
+// The blob a picture the user chose was stored in.
+const OWN_BLOB = { space: "did:key:z6MkOwnPicture", id: "fid1:own" };
 
 const bytesAre = (actual: FabricBytes | undefined, expected: number[]) =>
   actual?.slice().join() === expected.join();
@@ -193,8 +195,9 @@ export default pattern(() => {
     seed.send({ name: "Sam", profile: created as any });
   });
   const assert_seed_names_the_profile = assert(() => created.name === "Sam");
+  // A host's suggestion holds bytes, which the profile holds inline.
   const assert_seed_gives_the_suggested_picture = assert(() =>
-    bytesAre(created.picture, PICTURE)
+    bytesAre(created.picture, PICTURE) && created.pictureBlob?.id === undefined
   );
 
   // A choice the user made wins over the suggestion: their own picture, or
@@ -202,6 +205,7 @@ export default pattern(() => {
   const chose = ProfileHome({});
   const choice = new Writable<PictureChoice | undefined>({
     picture: new FabricBytes(new Uint8Array(OWN)),
+    pictureBlob: OWN_BLOB,
   });
   const choseSeed = seedProfileName({
     profileSuggestion: withPicture,
@@ -211,8 +215,10 @@ export default pattern(() => {
     // deno-lint-ignore no-explicit-any
     choseSeed.send({ name: "Sam", profile: chose as any });
   });
+  // A picture the user chose is held as the blob it was stored in.
   const assert_seed_gives_the_chosen_picture = assert(() =>
-    bytesAre(chose.picture, OWN)
+    bytesAre(chose.picture, []) && chose.pictureBlob?.id === OWN_BLOB.id &&
+    chose.pictureBlob?.space === OWN_BLOB.space
   );
   const removed = ProfileHome({});
   const removedSeed = seedProfileName({
@@ -224,11 +230,11 @@ export default pattern(() => {
     removedSeed.send({ name: "Sam", profile: removed as any });
   });
   const assert_seed_after_removal_sets_no_picture = assert(() =>
-    removed.name === "Sam" && removed.picture === undefined
+    removed.name === "Sam" && bytesAre(removed.picture, [])
   );
 
   // Without a suggestion, the seed step names the profile and sets no
-  // picture.
+  // picture, which a profile holds as empty bytes.
   const plain = ProfileHome({});
   const plainSeed = seedProfileName({});
   const action_seed_without_suggestion = action(() => {
@@ -236,7 +242,7 @@ export default pattern(() => {
     plainSeed.send({ name: "Ada", profile: plain as any });
   });
   const assert_plain_seed_sets_no_picture = assert(() =>
-    plain.name === "Ada" && plain.picture === undefined
+    plain.name === "Ada" && bytesAre(plain.picture, [])
   );
 
   return {

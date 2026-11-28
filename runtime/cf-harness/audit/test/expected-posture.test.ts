@@ -9,7 +9,6 @@
  * refuses it.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 
@@ -19,6 +18,7 @@ import {
   parseExpectedPosture,
   postureMismatches,
 } from "../expected-posture.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const PROFILES_DIR = join(
   dirname(fromFileUrl(import.meta.url)),

@@ -123,7 +123,12 @@ graph, keyed by stored path. A module reading one gets its own view of the
 runtime namespaces that expose `dataFile`, whose reader resolves a path against
 that module's own stored name — the way the record compiler resolves an import
 specifier against the importing source — and then looks it up in that closure.
-The result is a graph of per-module records.
+The reader records each string it returns in the engine's `DataFileStrings`,
+and setup writes such a string into a result document as a link to the code
+document holding it rather than inline, so a data file a pattern passes to its
+view is stored once per space
+([static assets for iframe guests](iframe-static-assets.md), part 1). The
+result is a graph of per-module records.
 It:
 
 1. Derives a per-load program id and prefixes every file path with it
@@ -629,7 +634,8 @@ source document stores one identity-only link per member of its source package
 that no import reaches and that its module owns: [`SOURCE_ROOT_SPECIFIER`][c7]
 (`cf:source-root/`) for an attached source entry point such as a test, owned
 by the entry, and [`DATA_FILE_SPECIFIER`][c7] (`cf:data-file/`) for an attached
-data file, owned by the module whose `dataFile()` call names it. The entry owns
+data file, owned by the module whose `dataFile()` or `dataFile.url()` call names
+it, or whose `dataFile.urls()` call names the directory holding it. The entry owns
 a data file that no module's source names, such as one read by a computed path
 ([`sourcePackageOwners`][c17] assigns the owners). Unlike a retention
 link, these participate in the owning module's identity, and through it in the
@@ -642,9 +648,12 @@ program's source roots and the data files no module's source names. Neither
 link resolves a module record. A data
 document is hashed as a leaf over its own bytes and filename rather than through
 a parse of its contents, which is what lets a data file hold bytes that are not
-TypeScript. Both namespaces are reserved against authored imports. The compiled
-set carries the same data documents under `kind: "data"`, with the authored
-bytes as their `code`, so a warm load has everything the pattern needs without
+TypeScript. Its stored bytes are text: a binary media file, decided by its
+extension, is stored as a base64 `data:` URL (`decodeDataFile` in
+`base/text/src/data-file.ts`). Both namespaces are reserved against authored
+imports. The compiled
+set carries the same data documents under `kind: "data"`, with their stored
+text as their `code`, so a warm load has everything the pattern needs without
 reading the source set. Cold recovery preserves source-package links on every
 module that owns them, including when the requested pattern is a child of that
 module. Recompilation resolves those attached sources and partitions those data
@@ -977,15 +986,19 @@ cell's contents. The cache is designed around this:
     setup is refused as before. A clean closure costs a read of its labels,
     and a sync of each member's compiled record, in the transaction that
     already loaded it.
-  - A refused closure is not tried again in the session. One whose commit lost a
-    race, was refused for want of write access, or failed for another reason is
-    tried again at the next load: a session that may only read the space
-    verifies the closure again at each load of it, about 40 to 50 ms for a
-    28-module closure. A module that is a non-entry member of one closure and
-    the entry of another is repaired with its own cache-root edges only through
-    the closure it enters: a test program's closure verified before its page's
-    is refused when the page's dropped edges were the only way to reach a
-    member, and is clean once the page's closure is repaired.
+  - Loads of a closure that overlap share one repair: a load that finds a
+    repair of the closure under way in the session starts none, and waits for
+    that one to end before it goes on, whatever its outcome. A refused closure
+    is not tried again in the session. One whose commit lost a race, was
+    refused for want of write access, or failed for another reason is tried
+    again by the next load that finds no repair of it under way: a session
+    that may only read the space verifies the closure again at each load of
+    it, about 40 to 50 ms for a 28-module closure. A module that is a
+    non-entry member of one closure and the entry of another is repaired with
+    its own cache-root edges only through the closure it enters: a test
+    program's closure verified before its page's is refused when the page's
+    dropped edges were the only way to reach a member, and is clean once the
+    page's closure is repaired.
   - Not repaired: a stamped compiled record of a module the source closure
     does not reach, such as a `fabric:` dependency the compiled closure
     links, is neither checked nor erased. A setup of its importer still
@@ -1207,7 +1220,7 @@ index's restart-stable `action` column,
   and the `dataFile()` reads that decide which module owns a data file's edge:
   [`scanModuleDeclarations`][c5], one parse per module, shared across a
   compile through [`scanModules`][c3]. [`collectImportSpecifiers`][c5] and
-  [`collectDataFileNames`][c5] each return one half of that scan.
+  [`collectDataReads`][c5] each return one half of that scan.
 - Record assembly and the warm-load rebuild: [`compileSourcesToRecords`][c7],
   [`deriveModuleRecordFields`][c7], [`buildRecordsFromCompiled`][c7].
 - Loading: [`openModuleGraph`][c6], [`loadModuleGraph`][c6] and

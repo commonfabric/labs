@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
@@ -28,6 +27,12 @@ import {
   repairProfileSpaceRoot,
 } from "../../src/ops/profile-space-root.ts";
 import { namesInstancesByDefault } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const owner = await Identity.fromPassphrase("profile root housekeeping owner");
 const stranger = await Identity.fromPassphrase(
@@ -372,6 +377,30 @@ describe("profile-space-root", () => {
         aborted.signal,
       );
 
+      expect(await rootIdOf(listed.space)).toBeUndefined();
+    });
+
+    it("repairs nothing, and resolves, when its signal aborts while it inspects a profile", async () => {
+      const listed = await createProfileThroughHome(runtimeAs(owner), "U", {
+        shape: "not-root",
+        hostIsRoot: true,
+      });
+      const runtime = runtimeAs(owner);
+      const aborting = new AbortController();
+
+      await repairProfileRootsOf(
+        await homeListing(runtime, [listed]),
+        owner.did(),
+        (space) => {
+          // Runs after the check that precedes the inspection, and before the
+          // inspection settles.
+          queueMicrotask(() => aborting.abort());
+          return controllerOver(runtime, owner, space);
+        },
+        aborting.signal,
+      );
+
+      expect(aborting.signal.aborted).toBe(true);
       expect(await rootIdOf(listed.space)).toBeUndefined();
     });
 

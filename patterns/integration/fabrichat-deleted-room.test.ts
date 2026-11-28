@@ -12,8 +12,8 @@ import { env, type Page, waitForCondition } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { ACLManager, type Cell } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   clickCfButton,
   clickTrustedAction,
@@ -22,6 +22,7 @@ import {
   waitForSettledText,
   waitForText,
 } from "./cfc-browser-helpers.ts";
+import { directRoomLabel } from "./fabrichat-room-fixture.ts";
 import { initializePiecesController } from "./pieces-controller.ts";
 
 const { API_URL, FRONTEND_URL } = env;
@@ -100,7 +101,7 @@ describe("fabrichat-deleted-room", () => {
         await waitForSettledText(
           page,
           "#fabrichat-rooms",
-          `With ${counterpart}`,
+          directRoomLabel(counterpart),
         );
       }
 

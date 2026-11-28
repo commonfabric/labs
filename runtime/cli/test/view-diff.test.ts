@@ -1,12 +1,12 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { looksLikeDiff, parseDiff } from "../lib/view/diff.ts";
 import {
   buildDiffDocument,
   type DiffWorkspace,
   realWorkspace,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 import { createDiffSemantics } from "../lib/view/languages/typescript/semantics.ts";
 import type { Semantics } from "../lib/view/languages/language.ts";
@@ -18,6 +18,7 @@ import { Session } from "../lib/view/session.ts";
 import type { Key } from "../lib/view/keys.ts";
 import { bgCode, SAMPLE } from "./view-helpers.ts";
 import { lineBg } from "../lib/view/theme.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function press(session: Session, ...names: string[]): void {
   for (const name of names) {
@@ -141,7 +142,7 @@ const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 // detection
 //
 
-Deno.test("diff: detection accepts git and plain unified diffs, rejects code", () => {
+test("diff: detection accepts git and plain unified diffs, rejects code", () => {
   assert(looksLikeDiff(DIFF), "git diff detected");
   const plain = `--- m.ts\t2026-01-01
 +++ m.ts\t2026-01-02
@@ -202,7 +203,7 @@ rename to new.ts
 // parsing
 //
 
-Deno.test("diff: parses files, hunks and per-line old/new numbering", () => {
+test("diff: parses files, hunks and per-line old/new numbering", () => {
   const model = parseDiff(DIFF)!;
   assertEquals(model.files.length, 1);
   const f = model.files[0];
@@ -225,7 +226,7 @@ Deno.test("diff: parses files, hunks and per-line old/new numbering", () => {
   assertEquals(model.lines[10], { kind: "add", newLine: 4 });
 });
 
-Deno.test("diff: hunk counts are the authority, not +/- sniffing", () => {
+test("diff: hunk counts are the authority, not +/- sniffing", () => {
   // The second file's `--- a/n.ts` begins with '-': the first hunk must end
   // exactly when its counts are consumed, not swallow the next file header.
   const diff = `diff --git a/m.ts b/m.ts
@@ -247,7 +248,7 @@ diff --git a/n.ts b/n.ts
   assertEquals(model.files[1].newPath, "n.ts");
 });
 
-Deno.test("diff: created/deleted files, no-newline and binary metadata", () => {
+test("diff: created/deleted files, no-newline and binary metadata", () => {
   const diff = `diff --git a/gone.ts b/gone.ts
 deleted file mode 100644
 --- a/gone.ts
@@ -279,7 +280,7 @@ new file mode 100644
 // document
 //
 
-Deno.test("diff doc: verbatim text, tints, markers and syntax color", () => {
+test("diff doc: verbatim text, tints, markers and syntax color", () => {
   const { ws, done } = tempWorkspace();
   try {
     const model = parseDiff(DIFF)!;
@@ -310,7 +311,7 @@ Deno.test("diff doc: verbatim text, tints, markers and syntax color", () => {
   }
 });
 
-Deno.test("diff doc: removed lines use the reconstructed complete old file", () => {
+test("diff doc: removed lines use the reconstructed complete old file", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "comment.ts"), NEW_COMMENT_FILE);
@@ -334,7 +335,7 @@ Deno.test("diff doc: removed lines use the reconstructed complete old file", () 
   }
 });
 
-Deno.test("diff doc: CRLF transport matches complete LF files", () => {
+test("diff doc: CRLF transport matches complete LF files", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "comment.ts"), NEW_COMMENT_FILE);
@@ -360,7 +361,7 @@ Deno.test("diff doc: CRLF transport matches complete LF files", () => {
   }
 });
 
-Deno.test("diff doc: old-file cache separates reconstruction sources", () => {
+test("diff doc: old-file cache separates reconstruction sources", () => {
   const visibleNewSide = `sharedOne;
 sharedTwo;
 sharedThree;
@@ -407,7 +408,7 @@ ${visibleNewSide}`,
       diff,
       parseDiff(diff)!,
       stubWs(root),
-      new Map(),
+      new WorkspaceCache(),
     );
     const removed = diff.split("\n").flatMap((line, index) =>
       line === "-export const removed = 1;" ? [index] : []
@@ -422,7 +423,7 @@ ${visibleNewSide}`,
   }
 });
 
-Deno.test("diff doc: old-file cache separates repeated file versions", () => {
+test("diff doc: old-file cache separates repeated file versions", () => {
   const diff = [
     "diff --git a/m.ts b/m.ts",
     "--- a/m.ts",
@@ -446,7 +447,7 @@ Deno.test("diff doc: old-file cache separates repeated file versions", () => {
     diff,
     parseDiff(diff)!,
     ws,
-    new Map(),
+    new WorkspaceCache(),
   );
   const removed = diff.split("\n").flatMap((line, index) =>
     line === "-value" ? [index] : []
@@ -461,7 +462,7 @@ Deno.test("diff doc: old-file cache separates repeated file versions", () => {
   );
 });
 
-Deno.test("diff doc: structure is file → hunk → the workspace file's nodes", () => {
+test("diff doc: structure is file → hunk → the workspace file's nodes", () => {
   const { ws, done } = tempWorkspace();
   try {
     const model = parseDiff(DIFF)!;
@@ -567,7 +568,7 @@ describe("decoded diff input", () => {
   });
 });
 
-Deno.test("diff doc: missing workspace file still highlights and structures via fragments", () => {
+test("diff doc: missing workspace file still highlights and structures via fragments", () => {
   const model = parseDiff(DIFF)!;
   const { doc, maps } = buildDiffDocument(DIFF, model, NO_WS);
   // Verbatim still holds; code still classifies.
@@ -593,7 +594,7 @@ Deno.test("diff doc: missing workspace file still highlights and structures via 
   assert(hunk.label.includes("(no workspace file)"), `label: ${hunk.label}`);
 });
 
-Deno.test("diff doc: fragment parsing follows the file extension", () => {
+test("diff doc: fragment parsing follows the file extension", () => {
   const diff = `diff --git a/generic.ts b/generic.ts
 --- a/generic.ts
 +++ b/generic.ts
@@ -610,7 +611,7 @@ Deno.test("diff doc: fragment parsing follows the file extension", () => {
   );
 });
 
-Deno.test("diff doc: renamed fragments use each side's extension", () => {
+test("diff doc: renamed fragments use each side's extension", () => {
   const diff = `diff --git a/generic.ts b/generic.tsx
 --- a/generic.ts
 +++ b/generic.tsx
@@ -628,7 +629,7 @@ Deno.test("diff doc: renamed fragments use each side's extension", () => {
   );
 });
 
-Deno.test("diff doc: a drifted workspace line unmaps the whole hunk", () => {
+test("diff doc: a drifted workspace line unmaps the whole hunk", () => {
   const { root, ws, done } = tempWorkspace();
   try {
     // Workspace file drifts from the diff's new side on the `answer` line.
@@ -665,7 +666,7 @@ Deno.test("diff doc: a drifted workspace line unmaps the whole hunk", () => {
   }
 });
 
-Deno.test("diff doc: a stale diff shifted against the workspace maps nothing", () => {
+test("diff doc: a stale diff shifted against the workspace maps nothing", () => {
   // Lines were inserted ABOVE the hunk after the diff was taken: every
   // new-side line number now points at a different workspace line. Even if a
   // low-entropy line coincided at the shifted position, the hunk-level check
@@ -690,7 +691,7 @@ Deno.test("diff doc: a stale diff shifted against the workspace maps nothing", (
   }
 });
 
-Deno.test("diff doc: a shifted coincidental match cannot answer about the wrong occurrence", () => {
+test("diff doc: a shifted coincidental match cannot answer about the wrong occurrence", () => {
   // The reviewer's repro: function b was inserted above function a after the
   // diff was taken; the added `log(x)` coincides textually with b's body at
   // the diff's stated line numbers, but neighboring lines do not match, so
@@ -748,7 +749,7 @@ function a() {
 // semantics
 //
 
-Deno.test("diff semantics: types and definitions answer against the workspace", () => {
+test("diff semantics: types and definitions answer against the workspace", () => {
   const { root, ws, done } = tempWorkspace();
   try {
     const model = parseDiff(DIFF)!;
@@ -776,7 +777,7 @@ Deno.test("diff semantics: types and definitions answer against the workspace", 
   }
 });
 
-Deno.test("diff semantics: a definition outside the diff opens as a file", () => {
+test("diff semantics: a definition outside the diff opens as a file", () => {
   const { root, ws, done } = tempWorkspace();
   try {
     // helper.ts defines ext(); the diff only adds a use of it in m.ts.
@@ -817,7 +818,7 @@ Deno.test("diff semantics: a definition outside the diff opens as a file", () =>
 // rendering
 //
 
-Deno.test("diff render: added lines carry the add tint under the syntax color", () => {
+test("diff render: added lines carry the add tint under the syntax color", () => {
   const { ws, done } = tempWorkspace();
   try {
     const model = parseDiff(DIFF)!;
@@ -858,7 +859,7 @@ Deno.test("diff render: added lines carry the add tint under the syntax color", 
 // review fixes
 //
 
-Deno.test("diff doc: a hunk interior to nested code hoists the inner nodes", () => {
+test("diff doc: a hunk interior to nested code hoists the inner nodes", () => {
   // Both `outer` and `middle` clamp to the same visible range; the fold must
   // hoist middle's children instead of dropping the subtree, so the nodes the
   // hunk actually touches stay reachable.
@@ -913,7 +914,7 @@ Deno.test("diff doc: a hunk interior to nested code hoists the inner nodes", () 
   }
 });
 
-Deno.test("diff: multi-file plain diff -u splits files and strips timestamps", () => {
+test("diff: multi-file plain diff -u splits files and strips timestamps", () => {
   const diff = `--- d1/one.ts\t2026-06-11 15:08:19
 +++ d2/one.ts\t2026-06-11 15:08:25
 @@ -1,1 +1,1 @@
@@ -933,7 +934,7 @@ Deno.test("diff: multi-file plain diff -u splits files and strips timestamps", (
   assertEquals(model.files[1].hunks.length, 1);
 });
 
-Deno.test("diff: a combined (merge) section is skipped without corrupting files", () => {
+test("diff: a combined (merge) section is skipped without corrupting files", () => {
   const diff = `diff --git a/normal.ts b/normal.ts
 --- a/normal.ts
 +++ b/normal.ts
@@ -959,7 +960,7 @@ index 1111111,2222222..3333333
   );
 });
 
-Deno.test("diff: CRLF input still parses files, hunks and body lines", () => {
+test("diff: CRLF input still parses files, hunks and body lines", () => {
   const crlf = DIFF.replace(/\n/g, "\r\n");
   assert(looksLikeDiff(crlf), "detected despite CR line endings");
   const model = parseDiff(crlf)!;
@@ -969,7 +970,7 @@ Deno.test("diff: CRLF input still parses files, hunks and body lines", () => {
   assertEquals(model.lines[9].kind, "add", "body classified despite CR");
 });
 
-Deno.test("diff doc: CRLF content matches a CRLF workspace and stays semantic", () => {
+test("diff doc: CRLF content matches a CRLF workspace and stays semantic", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -994,7 +995,7 @@ Deno.test("diff doc: CRLF content matches a CRLF workspace and stays semantic", 
   }
 });
 
-Deno.test("diff: git C-style-quoted paths are decoded for special bytes", () => {
+test("diff: git C-style-quoted paths are decoded for special bytes", () => {
   // git wraps a path with special bytes in double quotes with C-style escapes:
   // `\t` for tab, `\"` for quote, `\\` for backslash, octal `\NNN` for
   // non-ASCII bytes (UTF-8). Without decoding, the resolved path is the literal
@@ -1038,7 +1039,7 @@ diff --git "a/back\\\\slash.ts" "b/back\\\\slash.ts"
   assertEquals(model.files[3].newPath, "back\\slash.ts");
 });
 
-Deno.test("diff: an unquoted plain diff path keeps a literal backslash", () => {
+test("diff: an unquoted plain diff path keeps a literal backslash", () => {
   // No surrounding quotes means no C-style decoding: a literal backslash in an
   // unquoted plain `diff -u` header survives verbatim.
   const diff = `--- d1/lit\\tname.ts\t2026-06-11 15:08:19
@@ -1051,7 +1052,7 @@ Deno.test("diff: an unquoted plain diff path keeps a literal backslash", () => {
   assertEquals(model.files[0].newPath, "d2/lit\\tname.ts");
 });
 
-Deno.test("diff workspace: realWorkspace resolves via the repo root and blocks escapes", () => {
+test("diff workspace: realWorkspace resolves via the repo root and blocks escapes", () => {
   const root = Deno.makeTempDirSync();
   const outside = Deno.makeTempDirSync();
   try {
@@ -1077,7 +1078,7 @@ Deno.test("diff workspace: realWorkspace resolves via the repo root and blocks e
   }
 });
 
-Deno.test("diff workspace: the test Git attribute declares tests and non-tests", () => {
+test("diff workspace: the test Git attribute declares tests and non-tests", () => {
   const root = Deno.makeTempDirSync();
   try {
     runGit(root, ["init", "-q"]);
@@ -1105,7 +1106,7 @@ Deno.test("diff workspace: the test Git attribute declares tests and non-tests",
   }
 });
 
-Deno.test("diff workspace: test attributes follow a diff relative to a subdirectory", () => {
+test("diff workspace: test attributes follow a diff relative to a subdirectory", () => {
   const root = Deno.makeTempDirSync();
   try {
     runGit(root, ["init", "-q"]);
@@ -1122,7 +1123,7 @@ Deno.test("diff workspace: test attributes follow a diff relative to a subdirect
   }
 });
 
-Deno.test("diff workspace: test attributes span batches and skip outside paths", () => {
+test("diff workspace: test attributes span batches and skip outside paths", () => {
   const root = Deno.makeTempDirSync();
   try {
     runGit(root, ["init", "-q"]);
@@ -1162,7 +1163,7 @@ Deno.test("diff workspace: test attributes span batches and skip outside paths",
   }
 });
 
-Deno.test("diff workspace: removed lines use the complete old Git blob", () => {
+test("diff workspace: removed lines use the complete old Git blob", () => {
   const root = Deno.makeTempDirSync();
   try {
     runGit(root, ["init", "-q"]);
@@ -1195,7 +1196,7 @@ Deno.test("diff workspace: removed lines use the complete old Git blob", () => {
   }
 });
 
-Deno.test("diff doc: old-file spans preserve CRLF diff transport", () => {
+test("diff doc: old-file spans preserve CRLF diff transport", () => {
   const diff = [
     "diff --git a/comment.ts b/comment.ts\r",
     "index 1234..5678 100644\r",
@@ -1226,7 +1227,7 @@ Deno.test("diff doc: old-file spans preserve CRLF diff transport", () => {
   assertEquals(doc.lines[removed].spans.at(-1)?.text, "\r");
 });
 
-Deno.test("diff workspace: an in-repo symlink pointing outside is rejected", () => {
+test("diff workspace: an in-repo symlink pointing outside is rejected", () => {
   const root = Deno.makeTempDirSync();
   const outside = Deno.makeTempDirSync();
   try {
@@ -1247,7 +1248,7 @@ Deno.test("diff workspace: an in-repo symlink pointing outside is rejected", () 
   }
 });
 
-Deno.test("diff semantics: root files outside the config root are dropped", () => {
+test("diff semantics: root files outside the config root are dropped", () => {
   const configRoot = Deno.makeTempDirSync(); // holds deno.json; the cwd
   const elsewhere = Deno.makeTempDirSync(); // workspace stub resolves here
   try {
@@ -1267,7 +1268,7 @@ Deno.test("diff semantics: root files outside the config root are dropped", () =
   }
 });
 
-Deno.test("diff doc: multi-file, multi-hunk diff builds per-file structure and maps", () => {
+test("diff doc: multi-file, multi-hunk diff builds per-file structure and maps", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -1317,7 +1318,7 @@ diff --git a/n.ts b/n.ts
   }
 });
 
-Deno.test("mod: buildView routes diffs to diff mode, sources to source mode", () => {
+test("mod: buildView routes diffs to diff mode, sources to source mode", () => {
   // A real diff routes to diff mode.
   const diffView = buildView(DIFF);
   assert(diffView.doc.flatStructure.some((n) => n.kind === "hunk"));
@@ -1344,7 +1345,7 @@ Deno.test("mod: buildView routes diffs to diff mode, sources to source mode", ()
   );
 });
 
-Deno.test("session: navigates, cards and reveals over a diff document", () => {
+test("session: navigates, cards and reveals over a diff document", () => {
   const { root, ws, done } = tempWorkspace();
   try {
     const model = parseDiff(DIFF)!;
@@ -1375,7 +1376,7 @@ Deno.test("session: navigates, cards and reveals over a diff document", () => {
   }
 });
 
-Deno.test("session: clamped nodes sharing a start offset select the right child", () => {
+test("session: clamped nodes sharing a start offset select the right child", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -1426,7 +1427,7 @@ Deno.test("session: clamped nodes sharing a start offset select the right child"
   }
 });
 
-Deno.test("session: structures inside an unverified hunk are still navigable", () => {
+test("session: structures inside an unverified hunk are still navigable", () => {
   // The user-reported case: a hunk whose workspace cannot vouch for it (here:
   // no workspace at all) must still let WASD descend into the code structures.
   const model = parseDiff(DIFF)!;
@@ -1445,7 +1446,7 @@ Deno.test("session: structures inside an unverified hunk are still navigable", (
   assertEquals(inside.name, "double", "the fragment node is selectable");
 });
 
-Deno.test("diff doc: git log -p keeps the newest commit's hunk mapped", () => {
+test("diff doc: git log -p keeps the newest commit's hunk mapped", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -1492,7 +1493,7 @@ diff --git a/m.ts b/m.ts
   }
 });
 
-Deno.test("diff doc: offsets stay correct past non-BMP characters", () => {
+test("diff doc: offsets stay correct past non-BMP characters", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -1525,7 +1526,7 @@ Deno.test("diff doc: offsets stay correct past non-BMP characters", () => {
   }
 });
 
-Deno.test("diff maps: fromFile lands inside a trimmed empty context line", () => {
+test("diff maps: fromFile lands inside a trimmed empty context line", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -1555,7 +1556,7 @@ Deno.test("diff maps: fromFile lands inside a trimmed empty context line", () =>
   }
 });
 
-Deno.test("card: uses over a diff exclude the removed side", () => {
+test("card: uses over a diff exclude the removed side", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -1584,7 +1585,7 @@ Deno.test("card: uses over a diff exclude the removed side", () => {
   }
 });
 
-Deno.test("card: removed calls do not consume the definition lookup budget", () => {
+test("card: removed calls do not consume the definition lookup budget", () => {
   const removed = Array.from(
     { length: 40 },
     () => "-  oldWorker.run(),",
@@ -1611,6 +1612,7 @@ ${removed}
   const sem: Semantics = {
     typeAt: () => null,
     prewarm: () => {},
+    dispose: () => {},
     fileLines: () => null,
     definitionOf: (offset) => {
       lookedUp.push(offset);
@@ -1640,7 +1642,7 @@ ${removed}
 // object-literal properties are navigable in a diff hunk
 //
 
-Deno.test("diff structure: an object literal's properties are each navigable", () => {
+test("diff structure: an object literal's properties are each navigable", () => {
   const root = Deno.makeTempDirSync();
   try {
     const file = `export function make() {

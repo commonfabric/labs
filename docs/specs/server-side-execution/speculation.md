@@ -130,6 +130,46 @@ currency. The existing overlay and retirement rules below still apply.
   speculable (compilation is an effectful step): that branch renders
   its ordinary loading state until the authoritative push delivers
   the child (runtime-mapping.md N37/N38).
+- **A speculative run mints the ids the served run mints.** Retirement
+  (§4) waits until every document an entry wrote has arrived, so a
+  document the client's run minted under an id the served run never
+  mints holds its entry for the life of the process, and with it every
+  entry that read through that entry's layer. The ids a run mints for
+  what it writes therefore derive from the node and the run, not from
+  the runtime doing the running. A lift's run and a handler's run each
+  carry a frame of their own, derived from the node and, for a handler,
+  the event. A builtin's run carries one too, whose cause is the node's
+  identity, the cause the stores the builtin keeps derive from. An
+  object a builtin's run writes as an element of an array becomes a
+  document of its own whose id derives from that cause, from what the
+  write writes, in the form it is stored in (with, for an append, the
+  stored array it extends), and from the object's place among the
+  objects that write anchors. The client's run of a builtin and the served run of the same
+  node therefore mint the same documents when they write the same value,
+  and a later run that writes anything else mints documents of its own
+  rather than reusing those of an earlier run, whose stores it reads
+  back and rewrites. Before builtins' runs carried a frame, a builtin drew those
+  ids from a counter each runtime keeps for its whole life: a client
+  running `generateObject` minted its `messages` elements under ids the
+  served run never wrote, and the echo masked the served answer until
+  the client restarted (top/3639). Three writers still draw on a
+  counter rather than on what they write, none of them a speculative
+  run of a node: a builtin's setup, which runs once as the node starts
+  and commits as an authored act, on a frame of its own when the
+  builtin has an implementation identity and on the runtime's counter
+  otherwise; work a builtin does once its run has settled, such as an
+  effect's answer, which only the serving runtime does; and the event
+  handlers a
+  builtin registers, whose writes are a handled event's echo and retire
+  with its intent (§4 step 2) rather than on arrival. And convergence
+  needs the two runs to write the same value: a client whose replica of
+  what the run reads, the builtin's own store included, differs from the
+  serving runtime's when each runs, such as an append extending a list
+  that has since grown, writes other content, mints other documents,
+  and its entry still waits for them. Lifts' and handlers' frame
+  counters share that exposure. Retiring an entry on the served run of
+  its node rather than on the arrival of each document it wrote would
+  close it, and is an open question for §4 (top/3641).
 - **Unreplicated inputs**: a speculative read of a doc/path the client
   has not replicated is PENDING for that branch — speculation NEVER
   blocks on a fetch and never triggers a network read. The branch
@@ -226,6 +266,34 @@ currency. The existing overlay and retirement rules below still apply.
      read-propagation path — the OW51 shape — with the deliberate
      body-throw awaiting that export.
 
+  **A run refused for an input in transit keeps a result its node
+  already holds (DECIDED 2026-11-19, narrowing the 2026-08-21 ruling's
+  "output `undefined`").** Where the read that refused found a document
+  still in transit to this replica, one it has never examined and the
+  store has not reported absent (`IStorageProvider.unexaminedAbsences()`
+  and `storeReportedAbsent()`), and the node's output already holds a
+  value, the disposal writes nothing: the output keeps that value. The
+  same holds for an argument that did not resolve because a document it
+  reads is in transit. Such a run runs again once the loads of those
+  documents have settled, whatever they find, since a document that
+  arrives absent changes nothing its reads could see. A document whose
+  load has settled is no longer in transit, whether the load failed or
+  ended without delivering it, as a load from a space that refuses this
+  replica ends (the store's ledger records no failure for one: the
+  document is absent for its reader), so the run after that clears the
+  result rather than asking for the load again. Everywhere else
+  the disposal is as above: a refusal over an input that has arrived
+  clears the result, as the [2026-09-14 derived-state correction
+  decision](../../history/development/2026-09-14-derived-state-correction.md)
+  requires, and a node whose output holds nothing takes the `undefined`
+  result. So a result derived from an input that had not arrived never
+  replaces one derived from inputs that had. The case this governs is a
+  client starting a piece cold: its first runs read inputs in spaces it
+  has not loaded yet, and each would otherwise commit `undefined` over
+  the stored result, blanking it for every client until the inputs
+  arrived and the run came again. — decided by @danfuzz, 2026-11-19;
+  @seefeldb, who made the 2026-08-21 ruling, is informed.
+
   **The serving-side re-trigger, explicit (RULED 2026-08-21 — the
   option-3 ruling on the demand-closure fork):**
 
@@ -269,8 +337,11 @@ currency. The existing overlay and retirement rules below still apply.
   `scheduler/handler-load-wait.ts` for the handler withdrawal; pinned in
   `runtime/runner/test/unresolved-input-lift.test.ts` (the hop-target
   dead-end disposes and re-triggers on arrival; the stated-null
-  control still flows; its case has no previous result, so it does not
-  pin that one is overwritten), with the serving-runtime match
+  control still flows) and in
+  `runtime/runner/test/refused-run-keeps-result.test.ts` (a cold
+  start's refused run leaves a stored result in place and the run after
+  the input arrives writes the new one; a node holding no result writes
+  none until then), with the serving-runtime match
   witnessed by `integration/default-app.test.ts` greening ON (the
   surface whose serving-runtime crash first recorded the bug —
   verification-coverage.md OW51).

@@ -1,10 +1,12 @@
 /**
  * Own-write echo, end to end over a LIVE in-process server: a session's own
- * accepted patch-produced heads ride its covering frame as full post-apply
- * documents. The risk this suite pins is DOUBLE-APPLY — the echoed base swap
- * must not compose with a still-standing pending overlay — and the
- * notification contract: an echo fully shadowed by the write it confirms must
- * not re-notify the writer.
+ * accepted patch-produced head rides its covering frame as the full post-apply
+ * document where another session's write merged into it, and is left out of
+ * the frame where the session holds the revision it patched. The risk this
+ * suite pins is DOUBLE-APPLY — neither the echoed base swap nor the promotion
+ * that replays the patch may compose with a still-standing pending overlay —
+ * and the notification contract: a frame that confirms what the overlay
+ * already showed must not re-notify the writer.
  *
  * Fan-out is gated manually and flushed explicitly, so which commits share a
  * fan-out batch — and therefore whether the dirty-origin survives as this
@@ -12,10 +14,16 @@
  * timer.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
@@ -47,12 +55,12 @@ describe("own-write echo (live)", () => {
     await server?.close();
   });
 
-  it("applies its own patch echo exactly once and does not re-notify", async () => {
-    // Pure echo: the only write in the batch is this session's own append, so
-    // the dirty-origin survives and the covering frame carries the patch head
-    // as a full post-apply document. The echoed base swap and the parked
-    // promotion run in the same frame application; the list must come out
-    // exactly once-appended, and the sink must not fire again for a frame that
+  it("applies its own patch exactly once and does not re-notify when the frame leaves the document out", async () => {
+    // The only write in the batch is this session's own append over the
+    // revision it holds, so the dirty-origin survives and the covering frame
+    // carries the marker without the document. The parked promotion replays
+    // the append over the confirmed list; the list must come out exactly
+    // once-appended, and the sink must not fire again for a frame that
     // confirms what the overlay already showed.
 
     const rt = new Runtime({
@@ -100,7 +108,7 @@ describe("own-write echo (live)", () => {
       await rt.idle();
 
       expect(cell.get()).toEqual(["seed", "A"]);
-      // The echo confirmed exactly what the optimistic overlay already
+      // The promotion confirmed exactly what the optimistic overlay already
       // showed; a second notification would be a spurious integrate.
       expect(seen.length).toBe(notificationsAtVerdict);
       expect(seen[seen.length - 1]).toEqual(["seed", "A"]);

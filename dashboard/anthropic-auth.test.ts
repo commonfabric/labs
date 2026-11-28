@@ -10,6 +10,7 @@ import {
   anthropicAdminHeaders,
   METADATA_IDENTITY_URL,
 } from "./anthropic-auth.ts";
+import { test } from "@commonfabric/test-support/test";
 
 interface Call {
   url: string;
@@ -45,7 +46,7 @@ const FED = {
 };
 const tokenOk = () => new Response(JSON.stringify({ access_token: "sk-ant-oat01-t", expires_in: 600 }));
 
-Deno.test("the identity token is requested for the Anthropic audience with the email claim", () => {
+test("the identity token is requested for the Anthropic audience with the email claim", () => {
   const url = new URL(METADATA_IDENTITY_URL);
   assertEquals(url.hostname, "metadata.google.internal");
   assertEquals(url.pathname, "/computeMetadata/v1/instance/service-accounts/default/identity");
@@ -53,7 +54,7 @@ Deno.test("the identity token is requested for the Anthropic audience with the e
   assertEquals(url.searchParams.get("format"), "full");
 });
 
-Deno.test("federation: a metadata identity token is exchanged with the rule, org, and account", async () => {
+test("federation: a metadata identity token is exchanged with the rule, org, and account", async () => {
   const { calls, result } = await withFetch(
     (_c, i) => (i === 0 ? new Response("header.payload.sig\n") : tokenOk()),
     () => anthropicAdminHeaders(envWith(FED)),
@@ -73,7 +74,7 @@ Deno.test("federation: a metadata identity token is exchanged with the rule, org
   assertEquals(result, { authorization: "Bearer sk-ant-oat01-t", "anthropic-version": "2023-06-01" });
 });
 
-Deno.test("federation: the workspace is sent only when it is set", async () => {
+test("federation: the workspace is sent only when it is set", async () => {
   const { calls } = await withFetch(
     (_c, i) => (i === 0 ? new Response("jwt") : tokenOk()),
     () => anthropicAdminHeaders(envWith({ ...FED, ANTHROPIC_WORKSPACE_ID: "wrkspc_w" })),
@@ -81,7 +82,7 @@ Deno.test("federation: the workspace is sent only when it is set", async () => {
   assertEquals(JSON.parse(calls[1].body).workspace_id, "wrkspc_w");
 });
 
-Deno.test("federation: each call mints a fresh identity token, since Anthropic rejects a reused one", async () => {
+test("federation: each call mints a fresh identity token, since Anthropic rejects a reused one", async () => {
   const { calls } = await withFetch(
     (c) => (c.url === METADATA_IDENTITY_URL ? new Response("jwt") : tokenOk()),
     async () => {
@@ -92,7 +93,7 @@ Deno.test("federation: each call mints a fresh identity token, since Anthropic r
   assertEquals(calls.filter((c) => c.url === METADATA_IDENTITY_URL).length, 2);
 });
 
-Deno.test("federation wins over a leftover Admin key", async () => {
+test("federation wins over a leftover Admin key", async () => {
   const { result } = await withFetch(
     (_c, i) => (i === 0 ? new Response("jwt") : tokenOk()),
     () => anthropicAdminHeaders(envWith({ ...FED, ANTHROPIC_ADMIN_KEY: "sk-ant-admin01-old" })),
@@ -101,7 +102,7 @@ Deno.test("federation wins over a leftover Admin key", async () => {
   assertEquals(result.authorization, "Bearer sk-ant-oat01-t");
 });
 
-Deno.test("federation failures reject rather than fall back to the key", async () => {
+test("federation failures reject rather than fall back to the key", async () => {
   const env = envWith({ ...FED, ANTHROPIC_ADMIN_KEY: "sk-ant-admin01-old" });
   await withFetch(() => new Response("nope", { status: 404 }), () =>
     assertRejects(() => anthropicAdminHeaders(env), Error, "metadata identity token failed: HTTP 404"));
@@ -113,7 +114,7 @@ Deno.test("federation failures reject rather than fall back to the key", async (
     assertRejects(() => anthropicAdminHeaders(env), Error, "no access_token string"));
 });
 
-Deno.test("without federation, the Admin key is sent as x-api-key", async () => {
+test("without federation, the Admin key is sent as x-api-key", async () => {
   const { calls, result } = await withFetch(
     () => new Response("unexpected", { status: 500 }),
     () => anthropicAdminHeaders(envWith({ ANTHROPIC_ADMIN_KEY: "sk-ant-admin01-k" })),
@@ -122,7 +123,7 @@ Deno.test("without federation, the Admin key is sent as x-api-key", async () => 
   assertEquals(result, { "x-api-key": "sk-ant-admin01-k", "anthropic-version": "2023-06-01" });
 });
 
-Deno.test("any federation setting selects federation, and the missing ones are named", async () => {
+test("any federation setting selects federation, and the missing ones are named", async () => {
   const { ANTHROPIC_SERVICE_ACCOUNT_ID: _a, ANTHROPIC_ORGANIZATION_ID: _o, ...partial } = FED;
   const env = envWith({ ...partial, ANTHROPIC_ADMIN_KEY: "sk-ant-admin01-old" });
   assertEquals(anthropicAdminConfigured(env), true);
@@ -135,7 +136,7 @@ Deno.test("any federation setting selects federation, and the missing ones are n
   assertEquals(calls.length, 0);
 });
 
-Deno.test("with neither route configured, nothing is configured and asking for headers rejects", async () => {
+test("with neither route configured, nothing is configured and asking for headers rejects", async () => {
   assertEquals(anthropicAdminConfigured(envWith({})), false);
   assertEquals(anthropicAdminConfigured(envWith({ ANTHROPIC_ADMIN_KEY: "k" })), true);
   assertEquals(anthropicAdminConfigured(envWith(FED)), true);

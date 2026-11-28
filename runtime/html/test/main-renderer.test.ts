@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   $conn,
@@ -9,6 +8,7 @@ import {
 } from "@commonfabric/runtime-client";
 import { getLogger } from "@commonfabric/logger";
 import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
+import { describe, it } from "@commonfabric/test-support/test";
 import { MockDoc } from "../src/mock-doc.ts";
 import {
   VDomRenderer,
@@ -506,6 +506,66 @@ describe("main-renderer", () => {
 
         expect(renderer.getApplicator().getNode(1)).toBeUndefined();
         expect(connection.acknowledgedBatches).toEqual([]);
+      });
+
+      it("ignores batches once its connection is disposed", async () => {
+        const { connection, renderer, cellRef, container } = setup();
+        await renderer.render(container, cellRef);
+        const mountId = activeMountId(renderer);
+        const batch = (batchId: number) => ({
+          batchId,
+          mountId,
+          rootId: batchId,
+          ops: [{ op: "create-element", nodeId: batchId, tagName: "b" }],
+        });
+        connection.emit("vdombatch", batch(1));
+        expect(renderer.getApplicator().getNode(1)).toBeDefined();
+
+        connection.abort();
+        connection.emit("vdombatch", batch(2));
+        // A batch naming no mount is applied by any live renderer.
+        connection.emit("vdombatch", { ...batch(3), mountId: undefined });
+
+        expect(renderer.getApplicator().getNode(2)).toBeUndefined();
+        expect(renderer.getApplicator().getNode(3)).toBeUndefined();
+        expect(renderer.getRootNode()).toBe(null);
+        expect(connection.acknowledgedBatches).toEqual([{
+          mountId,
+          batchId: 1,
+        }]);
+        // The connection's teardown dropped the mount, so there is nothing
+        // left for `dispose()` to unmount.
+        await renderer.dispose();
+        expect(connection.unmountCalls).toEqual([]);
+      });
+
+      describe("tears down its DOM exactly once", () => {
+        const disposals = () =>
+          getLogger("vdom-applicator").getTimeStats("dispose")?.count ?? 0;
+
+        it("when disposed before its connection", async () => {
+          const { connection, renderer, cellRef, container } = setup();
+          await renderer.render(container, cellRef);
+          const before = disposals();
+
+          await renderer.dispose();
+          expect(disposals()).toBe(before + 1);
+          connection.abort();
+
+          expect(disposals()).toBe(before + 1);
+        });
+
+        it("when its connection is disposed first", async () => {
+          const { connection, renderer, cellRef, container } = setup();
+          await renderer.render(container, cellRef);
+          const before = disposals();
+
+          connection.abort();
+          expect(disposals()).toBe(before + 1);
+          await renderer.dispose();
+
+          expect(disposals()).toBe(before + 1);
+        });
       });
 
       it("reports a batch that fails to apply through `onError`", async () => {

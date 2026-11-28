@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { TILES } from "./registry.ts";
 import { type Ctx, runSourceKey } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const context: Ctx = {
   runs: () => Promise.resolve([]),
@@ -15,11 +15,11 @@ describe("registry", () => {
     expect(TILES.map((tile) => tile.label)).toEqual([
       "ci",
       "labs ci trust",
-      "loom ci trust",
+      "cfs ci trust",
       "weaver ci trust",
       "flaky tests",
       "labs ci duration",
-      "loom ci duration",
+      "cfs ci duration",
       "weaver ci duration",
       "test selection",
       "labs coverage debt",
@@ -55,7 +55,7 @@ describe("registry", () => {
       TILES.find((tile) => tile.label === label)?.runSources ?? [];
     expect(sources("ci")).toEqual([
       ...sources("labs ci trust"),
-      ...sources("loom ci trust"),
+      ...sources("cfs ci trust"),
     ]);
   });
 

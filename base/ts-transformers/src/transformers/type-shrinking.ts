@@ -106,7 +106,6 @@ function groupPathsByHead(
 ): Map<string, readonly (readonly string[])[]> {
   const grouped = new Map<string, (readonly string[])[]>();
   for (const path of paths) {
-    if (path.length === 0) continue;
     const [head, ...tail] = path;
     if (head === undefined) continue;
     const existing = grouped.get(head);
@@ -132,7 +131,7 @@ function getTopLevelRequestedHeads(
 
 function getTopLevelRepresentedHeads(
   node: ts.TypeNode,
-  checker?: ts.TypeChecker,
+  checker: ts.TypeChecker,
 ): Set<string> {
   const current = unwrapTypeParentheses(node);
   if (!ts.isTypeLiteralNode(current)) {
@@ -151,7 +150,7 @@ function getTopLevelRepresentedHeads(
 function countRepresentedRequestedHeads(
   node: ts.TypeNode,
   requestedHeads: ReadonlySet<string>,
-  checker?: ts.TypeChecker,
+  checker: ts.TypeChecker,
 ): number {
   if (typeNodeIsArrayShape(node, checker)) {
     let count = 0;
@@ -195,7 +194,7 @@ function deriveCapabilityShrinkPlan(
     ...paramSummary.writePaths,
     ...(paramSummary.opaquePaths ?? []),
   ]);
-  const fullShapePaths = uniquePaths(paramSummary.fullShapePaths ?? []);
+  const fullShapePaths = uniquePaths(paramSummary.fullShapePaths);
   const identityPaths = uniquePaths(paramSummary.identityPaths ?? []);
   const identityCellPaths = uniquePaths(paramSummary.identityCellPaths ?? []);
   const comparableCellPaths = uniquePaths([
@@ -561,7 +560,7 @@ function isArrayLikeIndexType(
 
 function typeNodeIsArrayShape(
   node: ts.TypeNode,
-  checker?: ts.TypeChecker,
+  checker: ts.TypeChecker,
 ): boolean {
   const current = unwrapTypeParentheses(node);
   if (ts.isArrayTypeNode(current)) {
@@ -584,9 +583,6 @@ function typeNodeIsArrayShape(
   }
   if (ts.isTypeLiteralNode(current)) {
     return !!getArrayLikeTypeLiteralElementType(current, checker);
-  }
-  if (!checker) {
-    return false;
   }
   const resolvedType = getTypeFromTypeNodeWithFallback(current, checker);
   return isArrayShapeType(resolvedType, checker);
@@ -620,7 +616,6 @@ function getArrayItemPaths(
 ): readonly (readonly string[])[] {
   const itemPaths: (readonly string[])[] = [];
   for (const path of paths) {
-    if (path.length === 0) continue;
     const [head, ...tail] = path;
     if (head === undefined) continue;
     if (isArrayRootOnlyPath(path)) {
@@ -686,7 +681,7 @@ function buildUnknownShapeTypeNodeFromPaths(
   factory: ts.NodeFactory,
   checker?: ts.TypeChecker,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
-): ts.TypeNode | undefined {
+): ts.TypeNode {
   const grouped = groupPathsByHead(paths);
   const members: ts.TypeElement[] = [];
 
@@ -699,7 +694,7 @@ function buildUnknownShapeTypeNodeFromPaths(
         factory,
         checker,
         typeRegistry,
-      ) ?? factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword)
+      )
       : factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
 
     members.push(
@@ -712,9 +707,6 @@ function buildUnknownShapeTypeNodeFromPaths(
     );
   }
 
-  if (members.length === 0) {
-    return undefined;
-  }
   return checker
     ? createRegisteredTypeLiteral(members, { factory, checker, typeRegistry })
     : factory.createTypeLiteralNode(members);
@@ -749,7 +741,7 @@ function shrinkArrayElementTypeNode(
       factory,
       checker,
       typeRegistry,
-    ) ?? shrunkElement;
+    );
   }
   return shrunkElement;
 }
@@ -814,10 +806,8 @@ const CELL_LIKE_TYPE_NODE_NAMES = spellingsWhere({
 });
 
 export function isCellLikeTypeNode(node: ts.TypeNode): boolean {
-  if (!ts.isTypeReferenceNode(node)) return false;
-  const name = getTypeReferenceNodeName(node);
-  if (!name) return false;
-  return CELL_LIKE_TYPE_NODE_NAMES.has(name);
+  return ts.isTypeReferenceNode(node) &&
+    CELL_LIKE_TYPE_NODE_NAMES.has(getTypeReferenceNodeName(node));
 }
 
 /**
@@ -876,14 +866,10 @@ function namesCommonFabricType(
   return names.has(declared.getName()) && isCommonFabricSymbol(declared);
 }
 
-function getTypeReferenceNodeName(
-  node: ts.TypeReferenceNode,
-): string | undefined {
+function getTypeReferenceNodeName(node: ts.TypeReferenceNode): string {
   return ts.isIdentifier(node.typeName)
     ? node.typeName.text
-    : ts.isQualifiedName(node.typeName)
-    ? node.typeName.right.text
-    : undefined;
+    : node.typeName.right.text;
 }
 
 export function isStreamTypeNode(node: ts.TypeNode): boolean {
@@ -978,9 +964,6 @@ function shrinkTypeToNode(
 ): ts.TypeNode | undefined {
   const normalized = uniquePaths(paths);
   const normalizedFullShapePaths = uniquePaths(fullShapePaths);
-  if (normalized.length === 0) {
-    return undefined;
-  }
   // The scope lives in the wrapper's alias and brand, not in the scoped
   // type's structure, so a node built from that structure would drop it.
   const scopeWrapper = getScopeWrapper(type, checker);
@@ -1232,7 +1215,7 @@ function shrinkTypeToNode(
   const properties: ts.TypeElement[] = [];
 
   for (const [head, childPaths] of grouped) {
-    let propType: ts.Type | undefined;
+    let propType: ts.Type;
     let isOptional = false;
 
     const prop = findPropertySymbol(type, head, checker);
@@ -1241,7 +1224,7 @@ function shrinkTypeToNode(
         sourceFile;
       propType = checker.getTypeOfSymbolAtLocation(prop, declaration);
       isOptional = !!(prop.flags & ts.SymbolFlags.Optional) ||
-        (propType ? typeIncludesUndefined(propType, checker) : false);
+        typeIncludesUndefined(propType, checker);
     } else {
       // Numeric/unknown-key accesses can be represented via index signatures
       // rather than named properties. Use the index type when available.
@@ -1262,10 +1245,6 @@ function shrinkTypeToNode(
 
     const hasDirectAccess = childPaths.some((path) => path.length === 0);
     const fullShapeChildPaths = fullShapeGrouped.get(head) ?? [];
-
-    if (!propType) {
-      continue;
-    }
 
     // Nested primitive leaves still need their original runtime shape. For
     // object properties like `input.text.length`, shrinking `text` to
@@ -1370,7 +1349,6 @@ function recomposedLiteralUnion(
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
   const [first] = alternatives;
-  if (!first) return undefined;
   const base = checker.getBaseTypeOfLiteralType(first);
   return base !== first && base.isUnion() &&
       base.types.length === alternatives.length &&
@@ -1548,7 +1526,7 @@ function scopedCellNode(
   const type = getTypeFromTypeNodeWithFallback(node, checker, typeRegistry);
   return {
     name: (type && getScopedCell(type, checker)?.name) ??
-      getTypeReferenceNodeName(node as ts.TypeReferenceNode)!,
+      getTypeReferenceNodeName(node),
     cell,
     nullish: [],
     type,
@@ -1870,9 +1848,6 @@ function shrinkTypeNode(
 
   const normalized = uniquePaths(paths);
   const normalizedFullShapePaths = uniquePaths(fullShapePaths);
-  if (normalized.length === 0) {
-    return undefined;
-  }
   if (normalizedFullShapePaths.some((path) => path.length === 0)) {
     return node;
   }
@@ -2087,7 +2062,6 @@ function shrinkTypeNode(
     node.typeArguments.length > 0
   ) {
     const [inner, ...rest] = node.typeArguments;
-    if (!inner) return undefined;
     const shrunkInner = buildShrunkTypeNodeFromTypeNode(
       inner,
       normalized,
@@ -2320,35 +2294,26 @@ function mergeResolvedMembers(
 
 /**
  * Returns true when the shrunk TypeLiteral is structurally identical to the
- * original declaration members — same member count, same member names, and
- * each member's type node is the original (not a newly created node).
+ * original declaration members: each member keeps the type node of an
+ * original member, which a recursive shrink that changed it would have
+ * recreated, and none is left out. A member whose name is not static text is
+ * taken as changed.
  */
 function isUnchangedShrink(
   originalMembers: readonly ts.TypeElement[],
-  shrunk: ts.TypeNode,
+  shrunk: ts.TypeLiteralNode,
 ): boolean {
-  if (!ts.isTypeLiteralNode(shrunk)) return false;
-  const origProps = originalMembers.filter(
-    (m): m is ts.PropertySignature =>
-      ts.isPropertySignature(m) && !!m.name && !!m.type,
+  const originalTypes = new Set(
+    originalMembers.flatMap((member) =>
+      ts.isPropertySignature(member) && member.type ? [member.type] : []
+    ),
   );
-  if (shrunk.members.length !== origProps.length) return false;
-  // Check each shrunk member's type is the exact same node object as the
-  // original — if any type was recreated by recursive shrinking, the node
-  // identity will differ.
-  for (const member of shrunk.members) {
-    if (!ts.isPropertySignature(member) || !member.name || !member.type) {
-      return false;
-    }
-    const name = getPropertyNameText(member.name);
-    if (!name) return false;
-    const orig = origProps.find(
-      (p) => getPropertyNameText(p.name) === name,
+  return shrunk.members.length === originalTypes.size &&
+    shrunk.members.every((member) =>
+      ts.isPropertySignature(member) && member.type !== undefined &&
+      originalTypes.has(member.type) &&
+      getPropertyNameText(member.name) !== undefined
     );
-    if (!orig) return false;
-    if (member.type !== orig.type) return false;
-  }
-  return true;
 }
 
 /**
@@ -2364,7 +2329,7 @@ function shrinkTypeLiteralMembers(
   state?: CrossStageState,
   fullShapePaths: readonly (readonly string[])[] = [],
   sourceFile?: ts.SourceFile,
-): ts.TypeNode | undefined {
+): ts.TypeLiteralNode | undefined {
   const grouped = groupPathsByHead(normalizedPaths);
   const fullShapeGrouped = groupPathsByHead(fullShapePaths);
   const result: ts.TypeElement[] = [];
@@ -2461,16 +2426,8 @@ function typeHasHead(
   head: string,
   checker: ts.TypeChecker,
 ): boolean {
-  // Direct property lookup (works for simple object types)
+  // Direct property lookup, which looks in each member of a union
   if (findPropertySymbol(type, head, checker)) return true;
-
-  // For unions, check each non-primitive constituent individually
-  // (getProperty on a union uses intersection semantics)
-  if (type.isUnion()) {
-    for (const constituent of type.types) {
-      if (constituent.getProperty(head)) return true;
-    }
-  }
 
   // Numeric heads are valid on array-like types (index access)
   if (Number.isFinite(Number(head))) {
@@ -2521,20 +2478,17 @@ function getArrayElementTypeNode(
 
   const current = unwrapTypeParentheses(node);
 
-  if (ts.isUnionTypeNode(current)) {
-    for (const member of current.types) {
-      if (isNullishTypeNode(member)) continue;
-      const elementNode = getArrayElementTypeNode(
-        member,
-        checker,
-        sourceFile,
-        typeRegistry,
-      );
-      if (elementNode) {
-        return elementNode;
-      }
+  // A union names its element where one of its members does.
+  for (const member of ts.isUnionTypeNode(current) ? current.types : []) {
+    const elementNode = getArrayElementTypeNode(
+      member,
+      checker,
+      sourceFile,
+      typeRegistry,
+    );
+    if (elementNode) {
+      return elementNode;
     }
-    return undefined;
   }
 
   if (ts.isArrayTypeNode(current)) {
@@ -2559,8 +2513,13 @@ function getArrayElementTypeNode(
     return current.typeArguments[0];
   }
 
-  if (ts.isTypeLiteralNode(current)) {
-    return getArrayLikeTypeLiteralElementType(current, checker);
+  // A literal that writes its element as a numeric member names it there,
+  // and one that holds it in an index signature is read through its type.
+  const literalElement = ts.isTypeLiteralNode(current)
+    ? getArrayLikeTypeLiteralElementType(current, checker)
+    : undefined;
+  if (literalElement) {
+    return literalElement;
   }
 
   const resolvedType = getTypeFromTypeNodeWithFallback(
@@ -2671,14 +2630,26 @@ export function validateShrinkCoverage(
     return;
   }
 
-  if (nonNullableBaseType && isArrayShapeType(nonNullableBaseType, checker)) {
-    const arrayRootPaths = uniquePaths(
-      paths.filter((path) => isArrayRootOnlyPath(path)),
+  // A path whose head the array type itself has, such as a member of an
+  // object the array is intersected with, is checked against the array, and
+  // every other path against its element. An array whose element is the array
+  // itself, as `type R = R[]` declares, would hand its paths to its element
+  // without end, so they are checked against the array.
+  const elementType = nonNullableBaseType &&
+      isArrayShapeType(nonNullableBaseType, checker)
+    ? getArrayElementType(nonNullableBaseType, checker)
+    : nonNullableBaseType;
+  if (nonNullableBaseType && elementType !== nonNullableBaseType) {
+    const isArrayRootPath = (path: readonly string[]) =>
+      isArrayRootOnlyPath(path) ||
+      (path[0] !== undefined && !isNumericPathSegment(path[0]) &&
+        typeHasHead(nonNullableBaseType, path[0], checker));
+    const arrayRootPaths = uniquePaths(paths.filter(isArrayRootPath));
+    const arrayItemPaths = getArrayItemPaths(
+      paths.filter((path) => !isArrayRootPath(path)),
     );
-    const arrayItemPaths = getArrayItemPaths(paths);
 
     if (arrayItemPaths.length > 0) {
-      const elementType = getArrayElementType(nonNullableBaseType, checker);
       const elementTypeNode = getArrayElementTypeNode(
         baseTypeNode,
         checker,
@@ -2927,9 +2898,12 @@ export function getAuthoredCellValueTypeNode(
     : undefined;
 }
 
+/** The capabilities a path through a cell can earn. */
+type CellCapability = Exclude<ReactiveCapability, "comparable">;
+
 interface CellCapabilityPath {
   readonly path: readonly string[];
-  readonly capability: ReactiveCapability;
+  readonly capability: CellCapability;
 
   /** Whether the function only hands the value on to a pattern. */
   readonly forwarded?: boolean;
@@ -3218,31 +3192,26 @@ function cellTypeArguments(
   return value ? [value] : [];
 }
 
+/**
+ * The capability a cell earns from the paths through it: read and write both,
+ * one of them, or neither, which leaves the cell opaque.
+ */
 function selectCellPathCapability(
   entries: readonly CellCapabilityPath[],
-): ReactiveCapability | undefined {
-  let hasRead = false;
-  let hasWrite = false;
-  let hasOpaque = false;
-
-  for (const entry of entries) {
-    if (entry.capability === "writable") {
-      hasRead = true;
-      hasWrite = true;
-    } else if (entry.capability === "readonly") {
-      hasRead = true;
-    } else if (entry.capability === "writeonly") {
-      hasWrite = true;
-    } else if (entry.capability === "opaque") {
-      hasOpaque = true;
-    }
-  }
-
-  if (hasRead && hasWrite) return "writable";
-  if (hasRead) return "readonly";
-  if (hasWrite) return "writeonly";
-  if (hasOpaque) return "opaque";
-  return undefined;
+): CellCapability {
+  const read = entries.some((entry) =>
+    entry.capability === "writable" || entry.capability === "readonly"
+  );
+  const write = entries.some((entry) =>
+    entry.capability === "writable" || entry.capability === "writeonly"
+  );
+  return read && write
+    ? "writable"
+    : read
+    ? "readonly"
+    : write
+    ? "writeonly"
+    : "opaque";
 }
 
 function buildCellCapabilityPaths(
@@ -3275,32 +3244,31 @@ function buildCellCapabilityPaths(
   };
 
   for (const path of paramSummary.opaquePaths ?? []) {
-    if (path.length === 0) continue;
     ensure(path).opaque = true;
   }
   for (const path of paramSummary.forwardedPaths ?? []) {
-    if (path.length === 0) continue;
     ensure(path).forwarded = true;
   }
   for (const path of paramSummary.readPaths) {
-    if (path.length === 0) continue;
     ensure(path).read = true;
   }
   for (const path of paramSummary.writePaths) {
-    if (path.length === 0) continue;
     ensure(path).write = true;
   }
 
-  return Array.from(byPath.values()).map((entry) => {
-    const capability = entry.read && entry.write
-      ? "writable"
-      : entry.read
-      ? "readonly"
-      : entry.write
-      ? "writeonly"
-      : "opaque";
-    return { path: entry.path, capability, forwarded: entry.forwarded };
-  });
+  // A capability belongs to a cell below the root; the root's own is the
+  // wrapper's.
+  return Array.from(byPath.values()).filter((entry) => entry.path.length > 0)
+    .map((entry) => {
+      const capability = entry.read && entry.write
+        ? "writable"
+        : entry.read
+        ? "readonly"
+        : entry.write
+        ? "writeonly"
+        : "opaque";
+      return { path: entry.path, capability, forwarded: entry.forwarded };
+    });
 }
 
 function groupCellCapabilityPathsByHead(
@@ -3308,9 +3276,7 @@ function groupCellCapabilityPathsByHead(
 ): Map<string, CellCapabilityPath[]> {
   const grouped = new Map<string, CellCapabilityPath[]>();
   for (const entry of entries) {
-    if (entry.path.length === 0) continue;
     const [head, ...tail] = entry.path;
-    if (head === undefined) continue;
     const existing = grouped.get(head);
     const childEntry = { ...entry, path: tail };
     if (existing) {
@@ -3427,31 +3393,28 @@ function applyCellCapabilityPathsToTypeNode(
         state,
       );
     if (inner) {
-      const capability = selectCellPathCapability(childPaths);
-      if (capability) {
-        updated = wrapTypeNodeWithCapabilityOrStream(
-          inner,
-          capability,
+      updated = wrapTypeNodeWithCapabilityOrStream(
+        inner,
+        selectCellPathCapability(childPaths),
+        factory,
+        preservedWrapperFor(cellNode, memberSemanticType, checker),
+      );
+      // A nullable cell's value alternatives are inside the wrapper, which
+      // stands for a cell, so it is registered only with a cell's own type.
+      if (
+        typeRegistry && memberSemanticType &&
+        !memberSemanticType.isUnion() &&
+        isCellLikeType(memberSemanticType, checker)
+      ) {
+        typeRegistry.set(updated, memberSemanticType);
+      }
+      if (scopedCell) {
+        updated = wrapScopedCell(
+          updated,
+          scopedCell,
           factory,
-          preservedWrapperFor(cellNode, memberSemanticType, checker),
+          typeRegistry,
         );
-        // A nullable cell's value alternatives are inside the wrapper, which
-        // stands for a cell, so it is registered only with a cell's own type.
-        if (
-          typeRegistry && memberSemanticType &&
-          !memberSemanticType.isUnion() &&
-          isCellLikeType(memberSemanticType, checker)
-        ) {
-          typeRegistry.set(updated, memberSemanticType);
-        }
-        if (scopedCell) {
-          updated = wrapScopedCell(
-            updated,
-            scopedCell,
-            factory,
-            typeRegistry,
-          );
-        }
       }
     } else if (
       childPaths.length === 1 && childPaths[0]!.path.length === 0 &&
@@ -3588,15 +3551,11 @@ function unfoldTypeAs(
         factory,
         print,
       );
-    case "union": {
-      if (!type.isUnion()) return undefined;
-      if (
-        type.types.some((member) => getDefaultMarkerPayload(member, checker))
-      ) {
-        return undefined;
-      }
-      return factory.createUnionTypeNode(type.types.map(print));
-    }
+    case "union":
+      return type.isUnion() &&
+          !type.types.some((member) => getDefaultMarkerPayload(member, checker))
+        ? factory.createUnionTypeNode(type.types.map(print))
+        : undefined;
     case "array":
     case "readonly array": {
       const element = getArrayElementType(type, checker);
@@ -3717,14 +3676,10 @@ function createIdentityOnlyReplacementTypeNode(
       factory,
       preservedWrapperFor(node, resolvedType, checker),
     );
-    const wrappedType = resolveIdentitySemanticType(
+    typeRegistry?.set(
       wrappedNode,
-      checker,
-      typeRegistry,
+      getTypeFromTypeNodeWithFallback(wrappedNode, checker, typeRegistry),
     );
-    if (wrappedType && typeRegistry) {
-      typeRegistry.set(wrappedNode, wrappedType);
-    }
     return wrappedNode;
   }
   return unknownNode;
@@ -3752,28 +3707,13 @@ function createIdentityOnlyNullishTypeNode(
 
 function createIdentityOnlyRootTypeNode(
   node: ts.TypeNode,
-  semanticType: ts.Type | undefined,
+  resolvedType: ts.Type,
   forceOpaque: boolean,
   forceComparable: boolean,
   checker: ts.TypeChecker,
   factory: ts.NodeFactory,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): ts.TypeNode {
-  const resolvedType = semanticType ??
-    resolveIdentitySemanticType(node, checker, typeRegistry);
-
-  if (!resolvedType) {
-    return createIdentityOnlyReplacementTypeNode(
-      node,
-      resolvedType,
-      forceOpaque,
-      forceComparable,
-      checker,
-      factory,
-      typeRegistry,
-    );
-  }
-
   if (isNullishType(resolvedType)) {
     return createIdentityOnlyNullishTypeNode(
       resolvedType,
@@ -3809,10 +3749,6 @@ function createIdentityOnlyRootTypeNode(
         )
     );
 
-    if (members.length === 1) {
-      return members[0]!;
-    }
-
     const unionNode = factory.createUnionTypeNode(members);
     ensureTypeNodeRegistered(unionNode, checker, typeRegistry);
     return unionNode;
@@ -3830,15 +3766,11 @@ function createIdentityOnlyRootTypeNode(
 }
 
 function getIdentityChildSemanticType(
-  type: ts.Type | undefined,
+  type: ts.Type,
   head: string,
   location: ts.Node,
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
-  if (!type) {
-    return undefined;
-  }
-
   const nonNullable = checker.getNonNullableType(type);
   const prop = findPropertySymbol(nonNullable, head, checker);
   if (prop) {
@@ -3852,18 +3784,6 @@ function getIdentityChildSemanticType(
     nonNullable,
     numericIndex ? ts.IndexKind.Number : ts.IndexKind.String,
   ) ?? checker.getIndexTypeOfType(nonNullable, ts.IndexKind.String);
-}
-
-function resolveIdentitySemanticType(
-  node: ts.TypeNode,
-  checker: ts.TypeChecker,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
-): ts.Type | undefined {
-  try {
-    return getTypeFromTypeNodeWithFallback(node, checker, typeRegistry);
-  } catch (_error: unknown) {
-    return undefined;
-  }
 }
 
 function applyIdentityOnlyPathsToTypeNode(
@@ -3883,11 +3803,8 @@ function applyIdentityOnlyPathsToTypeNode(
   const normalizedComparableCellLikePaths = uniquePaths(
     comparableCellLikePaths,
   );
-  if (normalized.length === 0) {
-    return node;
-  }
   const resolvedSemanticType = semanticType ??
-    resolveIdentitySemanticType(node, checker, typeRegistry);
+    getTypeFromTypeNodeWithFallback(node, checker, typeRegistry);
   if (
     normalized.some((path) => path.length === 0) &&
     !normalized.some((path) => path.length > 0)
@@ -3981,12 +3898,10 @@ function applyIdentityOnlyPathsToTypeNode(
     normalizedComparableCellLikePaths,
   );
   if (itemPaths.length > 0) {
-    const itemSemanticType = resolvedSemanticType
-      ? getArrayElementType(
-        checker.getNonNullableType(resolvedSemanticType),
-        checker,
-      )
-      : undefined;
+    const itemSemanticType = getArrayElementType(
+      checker.getNonNullableType(resolvedSemanticType),
+      checker,
+    );
     if (ts.isArrayTypeNode(node)) {
       const updated = applyIdentityOnlyPathsToTypeNode(
         node.elementType,
@@ -4266,16 +4181,12 @@ function applySingleDefaultToTypeNode(
   factory: ts.NodeFactory,
   checker?: ts.TypeChecker,
 ): { node: ts.TypeNode; applied: boolean } {
-  if (path.length === 0) {
+  const [head, ...tail] = path;
+  if (head === undefined) {
     return {
       node: wrapTypeNodeWithDefault(node, defaultType, factory),
       applied: true,
     };
-  }
-
-  const [head, ...tail] = path;
-  if (!head) {
-    return { node, applied: false };
   }
 
   if (ts.isTypeLiteralNode(node)) {

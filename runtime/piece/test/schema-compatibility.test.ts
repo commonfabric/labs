@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema, Pattern } from "@commonfabric/runner";
 import { validateSchemaValue } from "@commonfabric/runner/cfc";
@@ -15,6 +14,7 @@ import { FABRIC_PRIMITIVE_EXAMPLES_FOR_TESTING_ONLY } from "@commonfabric/data-m
 import { FABRIC_SPECIAL_OBJECT_BRAND } from "@commonfabric/runner/fabric-special-object-brand";
 import { internSchema } from "@commonfabric/data-model-schema";
 import { formatExternalSchemaRef } from "@commonfabric/data-model-schema/schema-refs";
+import { describe, it } from "@commonfabric/test-support/test";
 import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import {
   assertPatternSchemasBackwardCompatible,
@@ -250,7 +250,7 @@ describe("piece schema compatibility", () => {
     // `moduleIdentity` changes while `file`, `path`, and the `uiContract` stay
     // identical. That is a recompile of the same authorization, not a narrowed
     // contract, so the backward-compatibility check accepts it: the
-    // content-addressed identity is normalized out of the `ifc` comparison. The
+    // content-addressed identity is removed before the proof begins. The
     // ten baselined patterns that carry a CFC write (system/home,
     // system/profile-*, lobby, and the cfc-* demos) depend on this to stay
     // editable.
@@ -434,6 +434,257 @@ describe("piece schema compatibility", () => {
           ),
         )
       ).toThrow("result.flag: ifc changed");
+    });
+  });
+
+  describe("contracts that differ only in writer identity", () => {
+    // The pattern update gate records a contract by a hash of its schemas
+    // without the volatile identity of their writer claims, so it relies on
+    // the proof giving two such contracts the same issues against every other
+    // contract, as previous or as candidate. Each schema here serves as both
+    // argument and result, so every comparison runs both roles.
+
+    const issues = (previous: JSONSchema, candidate: JSONSchema) =>
+      patternSchemaIncompatibilities(
+        pattern(previous, previous),
+        pattern(candidate, candidate),
+      );
+
+    const writer = (moduleIdentity: string, path = "setFlag") => ({
+      writeAuthorizedBy: {
+        __ctWriterIdentityOf: {
+          file: "/patterns/demo/main.tsx",
+          path: [path],
+          moduleIdentity,
+        },
+      },
+    });
+
+    // Two definitions of the same shape, each holding an object whose fields
+    // name either definition, beneath enough nested unions that proving one
+    // through the other reaches the bound on splitting them. With equal
+    // writers, the two definitions are one schema to the proof, and its
+    // recursion stops one level sooner than with different ones.
+    const recursiveDefinitions = (
+      identities: readonly [string, string],
+      path?: string,
+    ): JSONSchema => {
+      const definition = (moduleIdentity: string): JSONSchema => {
+        let schema: JSONSchema = {
+          anyOf: [{ type: "string" }, {
+            type: "object",
+            ifc: writer(moduleIdentity, path),
+            properties: {
+              d0: { $ref: "#/$defs/d0" },
+              d1: { $ref: "#/$defs/d1" },
+            },
+          }],
+        };
+        for (let wrappers = 0; wrappers < 8; wrappers++) {
+          schema = { anyOf: [schema] };
+        }
+        return schema;
+      };
+      return {
+        type: "object",
+        properties: { x: { $ref: "#/$defs/d0" } },
+        $defs: {
+          d0: definition(identities[0]),
+          d1: definition(identities[1]),
+        },
+      };
+    };
+    const recursiveTarget: JSONSchema = {
+      type: "object",
+      properties: { x: { $ref: "#/$defs/t" } },
+      $defs: {
+        t: {
+          anyOf: [{ type: "string" }, {
+            type: "object",
+            ifc: writer("target"),
+            properties: {
+              d0: { $ref: "#/$defs/t" },
+              d1: { $ref: "#/$defs/t" },
+            },
+          }],
+        },
+      },
+    };
+
+    const nested = (moduleIdentity: string, path?: string): JSONSchema => ({
+      type: "object",
+      allOf: [{
+        properties: { flag: { type: "boolean", ifc: writer(moduleIdentity) } },
+      }],
+      if: { properties: { mode: { const: "edit" } } },
+      then: {
+        properties: {
+          list: {
+            type: "array",
+            items: {
+              ifc: {
+                writePolicyAnyOf: [{
+                  ...writer(moduleIdentity, path),
+                  uiContract: baselineUiContract,
+                }],
+              },
+            },
+          },
+        },
+      },
+    });
+
+    // A list of results held in a document of the schema registry, which a
+    // schema reaches only through a content-addressed `$ref`.
+    const registered = (
+      moduleIdentity: string,
+      path = baselineIdentity.path,
+    ): JSONSchema => {
+      const document = trustedWriteResult(
+        { ...baselineIdentity, moduleIdentity, path },
+        baselineUiContract,
+      );
+      const { taggedHashString } = internSchema(document, true);
+      registerSchemaDocument(taggedHashString, document);
+      return {
+        type: "array",
+        items: { $ref: formatExternalSchemaRef(taggedHashString) },
+      };
+    };
+
+    const twins: readonly [string, JSONSchema, JSONSchema][] = [
+      [
+        "a field's writer",
+        trustedWriteResult(baselineIdentity, baselineUiContract),
+        trustedWriteResult(
+          {
+            ...baselineIdentity,
+            moduleIdentity: "DCTZZ89BogydamlP301Qx",
+            file: "/api/patterns/demo/main.tsx",
+          },
+          baselineUiContract,
+        ),
+      ],
+      ["writers under `allOf` and `then`", nested("a"), nested("b")],
+      [
+        "definitions recursing through nested unions",
+        recursiveDefinitions(["a", "b"]),
+        recursiveDefinitions(["a", "a"]),
+      ],
+    ];
+    const thirds: readonly JSONSchema[] = [
+      { type: "object" },
+      { type: "object", properties: { x: { type: "string" } } },
+      trustedWriteResult(
+        { ...baselineIdentity, path: ["other"] },
+        baselineUiContract,
+      ),
+      nested("c", "other"),
+      recursiveTarget,
+      recursiveDefinitions(["c", "c"]),
+      recursiveDefinitions(["c", "d"], "other"),
+      ...twins.map(([, left]) => left),
+    ];
+
+    for (const [name, left, right] of twins) {
+      it(`returns the same issues for twins with ${name}, as previous or as candidate`, () => {
+        for (const third of thirds) {
+          expect(issues(left, third)).toEqual(issues(right, third));
+          expect(issues(third, left)).toEqual(issues(third, right));
+        }
+      });
+    }
+
+    it("accepts a candidate over definitions whose writers differ, where nested unions reach the split bound", () => {
+      for (
+        const previous of [
+          recursiveDefinitions(["a", "b"]),
+          recursiveDefinitions(["a", "a"]),
+        ]
+      ) {
+        expect(
+          patternSchemaIncompatibilities(
+            pattern(previous, true),
+            pattern(recursiveTarget, true),
+          ),
+        ).toEqual([]);
+      }
+    });
+
+    it("proves a link through a registered document whose writer differs only in identity", () => {
+      expect(() => assertSchemaSubset(registered("a"), registered("b")))
+        .not.toThrow();
+      expect(() =>
+        assertSchemaSubset(registered("a"), registered("a", ["other"]))
+      ).toThrow("value[].flag: ifc changed");
+    });
+
+    it("returns issues for twins whose writers differ in their binding path", () => {
+      expect(issues(nested("a"), nested("a", "other"))).toEqual([
+        {
+          path: "argument",
+          reason:
+            "then changed in a way compatibility checking cannot prove safe",
+        },
+        {
+          path: "result",
+          reason:
+            "then changed in a way compatibility checking cannot prove safe",
+        },
+      ]);
+      expect(
+        issues(
+          recursiveDefinitions(["a", "b"]),
+          recursiveDefinitions(["a", "b"], "other"),
+        ),
+      ).not.toEqual([]);
+    });
+
+    it("refuses a writer identity that changes from a list to a record", () => {
+      // A stored schema can hold an identity of any shape, which the schema
+      // type does not admit, so this one is read the way a stored one is.
+
+      const listed = (identity: unknown): JSONSchema =>
+        JSON.parse(JSON.stringify({
+          type: "object",
+          properties: {
+            flag: {
+              type: "boolean",
+              ifc: { writeAuthorizedBy: { __ctWriterIdentityOf: identity } },
+            },
+          },
+        }));
+      expect(
+        issues(listed(["setFlag"]), listed({ 0: "setFlag" })),
+      ).toEqual([
+        { path: "argument.flag", reason: "ifc changed" },
+        { path: "result.flag", reason: "ifc changed" },
+      ]);
+    });
+
+    it("compares a writer identity's own `__proto__` key as written", () => {
+      // `JSON.parse` makes `__proto__` an own key, as it would for a schema
+      // read off the wire, and the runtime reads the identity's own keys.
+
+      const identity = (moduleIdentity: string, proto: string): JSONSchema =>
+        JSON.parse(
+          JSON.stringify(
+            trustedWriteResult(
+              { ...baselineIdentity, moduleIdentity },
+              baselineUiContract,
+            ),
+          ).replace(
+            '"moduleIdentity"',
+            `"__proto__":${proto},"moduleIdentity"`,
+          ),
+        );
+      expect(issues(identity("a", '{"v":1}'), identity("b", '{"v":1}')))
+        .toEqual([]);
+      expect(issues(identity("a", '{"v":1}'), identity("b", '{"v":2}')))
+        .toEqual([
+          { path: "argument.flag", reason: "ifc changed" },
+          { path: "result.flag", reason: "ifc changed" },
+        ]);
     });
   });
 
@@ -1360,6 +1611,31 @@ describe("piece schema compatibility", () => {
         additionalProperties: false,
       })
     ).not.toThrow();
+  });
+
+  it("refuses a link whose reference chain never reaches a schema", () => {
+    const linked = (definitions: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: { x: { $ref: "#/$defs/A" } },
+      $defs: definitions,
+    });
+    const reader: JSONSchema = {
+      type: "object",
+      properties: { x: { type: "string" } },
+    };
+    const looping = linked({
+      A: { $ref: "#/$defs/B" },
+      B: { $ref: "#/$defs/A" },
+    });
+    expect(() => assertSchemaSubset(looping, reader, "link")).toThrow(
+      "link schema is not compatible: link.x: cannot resolve a local schema reference",
+    );
+
+    const ending = linked({
+      A: { $ref: "#/$defs/B" },
+      B: { type: "string" },
+    });
+    expect(() => assertSchemaSubset(ending, reader, "link")).not.toThrow();
   });
 
   it("uses target defaults as link proofs only under default-stable ancestors", () => {
@@ -3067,6 +3343,48 @@ describe("piece schema compatibility", () => {
           reason: "existing result field was removed",
         }]);
       });
+
+      it("refuses dropping an optional field whose reference resolves to no schema", () => {
+        // `ui`'s verb sits beside a reference whose chain loops back on
+        // itself, so there is no contract to follow the binding through.
+        // Without the reference, the same binding lets `ui` go.
+
+        const withUi = (ui: JSONSchema | undefined) =>
+          pattern(oldPattern.argumentSchema, {
+            type: "object",
+            properties: {
+              doubled: { type: "number" },
+              ...(ui === undefined ? {} : { ui }),
+            },
+            required: ["doubled"],
+            $defs: {
+              Loop: { $ref: "#/$defs/Back" },
+              Back: { $ref: "#/$defs/Loop" },
+            },
+          });
+        const candidate = withUi(undefined);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withUi({ $ref: "#/$defs/Loop", properties: { tick } }),
+              { ui: { tick: handlerStream } },
+            ),
+            candidate,
+          ),
+        ).toEqual([{
+          path: "result.ui",
+          reason: "existing result field was removed",
+        }]);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withUi({ type: "object", properties: { tick } }),
+              { ui: { tick: handlerStream } },
+            ),
+            candidate,
+          ),
+        ).toEqual([]);
+      });
     });
 
     it("refuses dropping an optional verb whose marker its reference carries", () => {
@@ -3541,6 +3859,115 @@ describe("piece schema compatibility", () => {
       }
     });
   }
+
+  describe("a comparable handle where none was declared", () => {
+    // The Topics pivot's rows, as a topic's argument declares them: each
+    // row's references were `unknown`, and are now comparable cells.
+    const rows = (reference: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        rows: {
+          type: "array",
+          asCell: ["readonly"],
+          items: {
+            type: "object",
+            properties: {
+              topic: reference,
+              mentionedBy: { type: "array", items: reference },
+            },
+            required: ["topic", "mentionedBy"],
+          },
+        },
+      },
+    });
+
+    it("accepts a comparable handle added where the node declared no cell", () => {
+      for (
+        const comparable of [
+          ["comparable"],
+          [{ kind: "comparable" }],
+          [{ kind: "comparable", scope: undefined }],
+        ]
+      ) {
+        expect(() =>
+          assertSchemaSubset(
+            { type: "unknown" },
+            { type: "unknown", asCell: comparable } as JSONSchema,
+          )
+        ).not.toThrow();
+      }
+      expect(() =>
+        assertPatternSchemasBackwardCompatible(
+          pattern(rows({ type: "unknown" }), true),
+          pattern(
+            rows({ type: "unknown", asCell: ["comparable"] }),
+            true,
+          ),
+        )
+      ).not.toThrow();
+    });
+
+    it("still compares every other cell change exactly", () => {
+      for (
+        const [before, after] of [
+          // A comparable handle taken away.
+          [{ asCell: ["comparable"] }, {}],
+          // A comparable handle that names a scope reads another instance.
+          [{}, { asCell: [{ kind: "comparable", scope: "user" }] }],
+          // Another kind beside it, or in place of the one declared.
+          [{}, { asCell: ["comparable", "readonly"] }],
+          [{ asCell: ["cell"] }, { asCell: ["comparable"] }],
+          [{ asCell: ["readonly"] }, { asCell: ["comparable"] }],
+          // Kinds that change what a reader can do with the value.
+          [{}, { asCell: ["readonly"] }],
+          [{}, { asCell: ["cell"] }],
+          [{}, { asCell: ["opaque"] }],
+        ] as const
+      ) {
+        expect(() =>
+          assertSchemaSubset(
+            { type: "unknown", ...before } as JSONSchema,
+            { type: "unknown", ...after } as JSONSchema,
+          )
+        ).toThrow(/asCell changed/);
+      }
+    });
+
+    it("keeps a result's marker exact, whichever way it changes", () => {
+      // A result proof reads from the candidate to the previous contract, the
+      // other way from an argument's, so neither a result gaining a
+      // comparable handle nor one losing it rides the argument's exception.
+      const result = (field: JSONSchema): JSONSchema => ({
+        type: "object",
+        properties: { field },
+        required: ["field"],
+      });
+      const plain: JSONSchema = { type: "string" };
+      const comparable: JSONSchema = { type: "string", asCell: ["comparable"] };
+      for (
+        const [previous, candidate] of [
+          [plain, comparable],
+          [comparable, plain],
+        ]
+      ) {
+        expect(() =>
+          assertPatternSchemasBackwardCompatible(
+            pattern(true, result(previous)),
+            pattern(true, result(candidate)),
+          )
+        ).toThrow(/result\.field: asCell changed/);
+      }
+    });
+
+    it("still proves the constraints beside it", () => {
+      expect(() =>
+        assertSchemaSubset(
+          { type: "string" },
+          { type: "number", asCell: ["comparable"] },
+        )
+      ).toThrow(/type string is not accepted by the candidate schema/);
+    });
+  });
 
   describe("semantic extensions on union nodes", () => {
     const a: JSONSchema = {
@@ -6837,6 +7264,188 @@ describe("piece schema compatibility", () => {
       }
       expect(message).toMatch(/value\.a: /);
       expect(message).not.toMatch(/value\.b/);
+    });
+  });
+
+  describe("result rules inside a union branch", () => {
+    // A union's branches are each proved against the previous union's
+    // branches, and the object rules a result field obeys at the top level
+    // decide whether a branch is still accepted.
+
+    const result = (branch: JSONSchema): Pattern =>
+      pattern(oldPattern.argumentSchema, {
+        anyOf: [branch, { type: "null" }],
+      });
+    const refused = [{
+      path: "result",
+      reason:
+        "a schema alternative accepted previously is not accepted by the candidate",
+    }];
+
+    it("refuses a branch whose required field stops being required", () => {
+      const previous = result({
+        type: "object",
+        properties: { a: { type: "number" } },
+        required: ["a"],
+      });
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({ type: "object", properties: { a: { type: "number" } } }),
+        ),
+      ).toEqual(refused);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({
+            type: "object",
+            properties: { a: { type: "number" } },
+            required: ["a"],
+          }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses a branch that drops a field and publishes another type under its name", () => {
+      const previous = result({
+        type: "object",
+        properties: { a: { type: "number" } },
+      });
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({ type: "object", additionalProperties: { type: "string" } }),
+        ),
+      ).toEqual(refused);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({ type: "object", additionalProperties: { type: "number" } }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses a branch naming a field its previous pattern property types otherwise", () => {
+      const previous = result({
+        type: "object",
+        patternProperties: { "^a$": { type: "number" } },
+      });
+      const naming = (type: "number" | "string") =>
+        result({
+          type: "object",
+          properties: { a: { type } },
+          additionalProperties: false,
+        });
+      expect(patternSchemaIncompatibilities(previous, naming("string")))
+        .toEqual(refused);
+      expect(patternSchemaIncompatibilities(previous, naming("number")))
+        .toEqual([]);
+    });
+
+    it("refuses a branch naming a field its previous additional properties reject", () => {
+      const candidate = result({
+        type: "object",
+        properties: { a: { type: "string" } },
+        additionalProperties: false,
+      });
+      expect(
+        patternSchemaIncompatibilities(
+          result({ type: "object", additionalProperties: false }),
+          candidate,
+        ),
+      ).toEqual(refused);
+      expect(
+        patternSchemaIncompatibilities(
+          result({ type: "object", additionalProperties: { type: "string" } }),
+          candidate,
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses an event branch that newly requires a field with no default", () => {
+      const verb = (field: JSONSchema, required: string[]) =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties: {
+            go: {
+              asCell: ["stream"],
+              anyOf: [
+                { type: "object", properties: { a: field }, required },
+                { type: "null" },
+              ],
+            },
+          },
+          required: ["go"],
+        });
+      const previous = verb({ type: "number" }, []);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          verb({ type: "number" }, ["a"]),
+        ),
+      ).toEqual([{
+        path: "result.go",
+        reason:
+          "a schema alternative accepted previously is not accepted by the candidate",
+      }]);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          verb({ type: "number", default: 0 }, ["a"]),
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe("one issue per field", () => {
+    it("reports an event field the candidate requires but no longer names only as removed", () => {
+      const verb = (
+        properties: Record<string, JSONSchema>,
+        required: string[],
+      ) =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties: {
+            go: { asCell: ["stream"], type: "object", properties, required },
+          },
+          required: ["go"],
+        });
+      const previous = verb({ a: { type: "number" } }, []);
+      expect(patternSchemaIncompatibilities(previous, verb({}, ["a"])))
+        .toEqual([{
+          path: "result.go.a",
+          reason: "existing result field was removed",
+        }]);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          verb({ a: { type: "number" } }, ["a"]),
+        ),
+      ).toEqual([{
+        path: "result.go.a",
+        reason: "newly required verb event field has no default",
+      }]);
+    });
+
+    it("reports an argument field once however many candidate patterns refuse it", () => {
+      const previous = pattern({
+        type: "object",
+        properties: { x: { type: "string" } },
+        additionalProperties: false,
+      }, oldPattern.resultSchema);
+      const candidate = (type: "boolean" | "number" | "string") =>
+        pattern({
+          type: "object",
+          patternProperties: { "^x$": { type }, "x": { type } },
+          additionalProperties: false,
+        }, oldPattern.resultSchema);
+      expect(patternSchemaIncompatibilities(previous, candidate("number")))
+        .toEqual([{
+          path: "argument.x",
+          reason: "type string is not accepted by the candidate schema",
+        }]);
+      expect(patternSchemaIncompatibilities(previous, candidate("string")))
+        .toEqual([]);
     });
   });
 });

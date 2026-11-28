@@ -15,6 +15,10 @@
  * matches. A tree that already records a memo for itself is left as it is and
  * nothing is compiled; otherwise compiling the corpus takes a minute or two.
  *
+ * As each corpus entry finishes compiling under each variant, the task prints
+ * a line saying so: on standard output with `--memo`, and on standard error
+ * otherwise, so that standard output holds only the version.
+ *
  * Usage: deno task compile-cache-version [--memo]
  */
 
@@ -24,26 +28,69 @@ import {
   memoizeOutputVersion,
   OUTPUT_VERSION_MEMO_PATH,
 } from "../runtime/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
-import { computeCompilerOutputVersion } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
+import {
+  type CompilerOutputVersionOptions,
+  computeCompilerOutputVersion,
+  type CorpusEntryCompiled,
+} from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 const USAGE = "Usage: deno task compile-cache-version [--memo]";
 
-/** What `main()` runs for each form; a test passes its own. */
+/**
+ * What `main()` runs for each form; a test passes its own. Each calls
+ * `onCompiled` as a corpus entry finishes compiling under a variant.
+ */
 export interface CompileCacheVersionCommands {
   /** Compute the version of this tree. */
-  print(): Promise<string>;
+  print(
+    onCompiled: (compiled: CorpusEntryCompiled) => void,
+  ): Promise<string>;
 
   /** Record the version of this tree as its memo. */
-  memoize(): Promise<MemoizedOutputVersion>;
+  memoize(
+    onCompiled: (compiled: CorpusEntryCompiled) => void,
+  ): Promise<MemoizedOutputVersion>;
 }
 
-const COMMANDS: CompileCacheVersionCommands = {
-  print: () => computeCompilerOutputVersion(REPO_ROOT),
-  memoize: () => memoizeOutputVersion(REPO_ROOT, computeCompilerOutputVersion),
-};
+/**
+ * The commands for the tree at `repoRoot`, each computing the version with
+ * `options` handed to the corpus compile; the task gives none. `--memo`
+ * records the memo in that tree.
+ */
+export function compileCacheVersionCommands(
+  repoRoot: string,
+  options: Omit<CompilerOutputVersionOptions, "onCompiled"> = {},
+): CompileCacheVersionCommands {
+  const computeVersion = (
+    root: string,
+    onCompiled: (compiled: CorpusEntryCompiled) => void,
+  ) => computeCompilerOutputVersion(root, { ...options, onCompiled });
+  return {
+    print: (onCompiled) => computeVersion(repoRoot, onCompiled),
+    memoize: (onCompiled) =>
+      memoizeOutputVersion(
+        repoRoot,
+        (root) => computeVersion(root, onCompiled),
+      ),
+  };
+}
 
+const COMMANDS = compileCacheVersionCommands(REPO_ROOT);
+
+/** The line the task prints as one corpus entry finishes compiling. */
+function compiledLine(compiled: CorpusEntryCompiled): string {
+  return `compiled ${compiled.entry} ` +
+    `(variant ${compiled.variantNumber} of ${compiled.variantCount}, ` +
+    `entry ${compiled.entryNumber} of ${compiled.entryCount})`;
+}
+
+/**
+ * Run the form `args` names and return the process's exit status: 2 for an
+ * argument the task does not take, and 0 otherwise. A command that fails
+ * rejects the returned promise with its error.
+ */
 export async function main(
   args: readonly string[],
   commands: CompileCacheVersionCommands = COMMANDS,
@@ -54,14 +101,18 @@ export async function main(
     return 2;
   }
   if (args.includes("--memo")) {
-    const { version, recorded } = await commands.memoize();
+    const { version, recorded } = await commands.memoize((compiled) =>
+      console.log(compiledLine(compiled))
+    );
     console.log(
       recorded
         ? `${OUTPUT_VERSION_MEMO_PATH}: recorded ${version}.`
         : `${OUTPUT_VERSION_MEMO_PATH}: already records ${version} for this tree.`,
     );
   } else {
-    console.log(await commands.print());
+    console.log(
+      await commands.print((compiled) => console.error(compiledLine(compiled))),
+    );
   }
   return 0;
 }

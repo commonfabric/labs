@@ -38,6 +38,7 @@ import {
   isCell,
   isCellResultForDereferencing,
   isLink,
+  isStoredArgumentOwnData,
   isStream,
   type JSONSchema,
   KeepAsCell,
@@ -47,6 +48,7 @@ import {
   type MemorySpace,
   mergeSchemaDefaults,
   NAME,
+  type NormalizedFullLink,
   type NormalizedLink,
   normalizePieceSourceOrigin,
   overlayUnreadableLinkPlaceholders,
@@ -64,6 +66,7 @@ import {
   type PieceSourceTransitionBaseline,
   preparePieceSourceTransitionBaseline,
   readResultSchemaMeta,
+  readStoredLinkChainRaw,
   resolveCellPath,
   resolveLink,
   type Runtime,
@@ -313,11 +316,7 @@ function replaceMaterializedCellValueAtPath(
   path: readonly (string | number)[],
   value: unknown,
 ): unknown {
-  while (isCell(current) && !isStream(current)) {
-    const next = current.get();
-    if (next === current) break;
-    current = next;
-  }
+  while (isCell(current) && !isStream(current)) current = current.get();
   if (path.length === 0) return value;
 
   const [segment, ...remaining] = path;
@@ -938,11 +937,7 @@ export function materializedValueAtPath(
 ): unknown {
   let current = root;
   const followCell = (): void => {
-    while (isCell(current) && !isStream(current)) {
-      const next = current.get();
-      if (next === current) break;
-      current = next;
-    }
+    while (isCell(current) && !isStream(current)) current = current.get();
   };
   for (const segment of path) {
     followCell();
@@ -1087,11 +1082,12 @@ export function currentValuePathContracts(
   active = new WeakSet<object>(),
 ): PathSchemaContract[] {
   const contract = resolvePathSchemaContract(unresolved);
+  const { schema, root } = contract;
+  // A boolean schema is every child's contract as it stands.
+  if (!isObjectOrArray(schema)) return [contract];
   try {
     return linkPathContracts([contract], [segment]);
   } catch (originalError) {
-    const { schema, root } = contract;
-    if (!isObjectOrArray(schema)) throw originalError;
     if (active.has(schema)) {
       throw new Error("recursive correlated write schema cannot be localized");
     }
@@ -1656,11 +1652,17 @@ function canFollowSourceScope(
  * carried by the supplied alias. A caller can narrow a Cell view before
  * serializing it, so the envelope itself is not evidence about future writes.
  *
+ * The contract of a piece's input or internal document includes the result
+ * projections that expose it, and finding those reads the piece's result.
+ * `mayReadResult`, when given, is asked before that read, and a result it
+ * refuses leaves the contract unproven: `undefined`.
+ *
  * @internal Exported for focused producer-topology contract tests.
  */
 export function durableSourceContract(
   linkedCell: Cell<unknown>,
   pieces: PiecesController,
+  mayReadResult?: (result: NormalizedFullLink) => boolean,
 ): DurableSourceContract | undefined {
   const rawSourceLink = linkedCell.getAsNormalizedFullLink();
   // Producer-owned metadata (`schema`, and the `result` backlink) is
@@ -1804,6 +1806,14 @@ export function durableSourceContract(
   const ownerSchema = readResultSchemaMeta(ownerResult);
   const projected: DurableSchemaPath[] = [];
   if (ownerSchema !== undefined) {
+    // The projections are part of the contract, and finding them reads the
+    // owner's result. Where the caller may not read that result, the
+    // contract cannot be established, and it is unproven rather than
+    // partial.
+    if (
+      mayReadResult !== undefined &&
+      !mayReadResult(ownerResult.getAsNormalizedFullLink())
+    ) return undefined;
     const rawResult = ownerResult.getRawUntyped({ lastNode: "top" });
     const seen = new WeakSet<object>();
     const visit = (
@@ -1916,11 +1926,14 @@ function suppliedLinks(
  * complete source intersection is accepted by the target intersection.
  * Possible absence of a source value rides the contracts' `mayBeMissing`
  * flags and is resolved per source/target pair inside the proof.
+ * `pieceEvolution` says the sources are the piece's own prior input contract,
+ * as `SchemaSubsetOptions.pieceEvolution` describes.
  */
 function assertContractSubset(
   sources: readonly PathSchemaContract[],
   targets: readonly PathSchemaContract[],
   label: string,
+  pieceEvolution: boolean = false,
 ): void {
   for (const target of targets) {
     let lastError: unknown;
@@ -1946,7 +1959,11 @@ function assertContractSubset(
           withoutTopLevelScope(sourceSchema),
           withoutTopLevelScope(target.schema),
           label,
-          { sourceRoot: source.root, targetRoot: target.root },
+          {
+            sourceRoot: source.root,
+            targetRoot: target.root,
+            pieceEvolution,
+          },
         );
         return true;
       } catch (error) {
@@ -2085,7 +2102,102 @@ function deriveTargetContracts(
 }
 
 /**
+ * The most documents {@link durableSourceThroughRows} reads on from one link.
+ * A row is one hop, so the bound is far past any stored shape; what it ends
+ * is a chain a write built on purpose.
+ */
+const MAX_ROW_HOPS = 8;
+
+/**
+ * The cell a row passes its reader on to, or `undefined` when `row` is not
+ * one that is read on from.
+ *
+ * A row is a whole document with no contract of its own whose value is a
+ * link. A link to a place inside a document is not one: the path to that
+ * place could cross a link partway, into a document that is not the input's
+ * own data. A row's value is read only when the document is the input's own
+ * data by the runner's rule (`isStoredArgumentOwnData`: the space and scope
+ * of `baseCell`'s document, and no confidentiality label) and belongs to no
+ * piece ({@link carriesPieceMetadata}), which is asked before the read:
+ * setup's validation of the stored input reads no other document, and a read
+ * of a labeled one would join its label to the transaction. `visited` holds
+ * the rows already read from in this chain, and a repeat ends it.
+ */
+function rowTarget(
+  row: Cell<unknown>,
+  baseCell: Cell<unknown>,
+  pieces: PiecesController,
+  visited: Set<string>,
+): Cell<unknown> | undefined {
+  const at = row.getAsNormalizedFullLink();
+  if (at.path.length > 0) return undefined;
+  const key = JSON.stringify([at.space, at.scope, at.id]);
+  if (visited.has(key)) return undefined;
+  visited.add(key);
+  const tx = cellTx(row) ?? pieces.runtime.readTx();
+  if (
+    !isStoredArgumentOwnData(tx, at, baseCell.getAsNormalizedFullLink()) ||
+    carriesPieceMetadata(at, pieces, tx)
+  ) return undefined;
+  const stored = row.getRaw();
+  if (isCell(stored) || !isLink(stored)) return undefined;
+  return pieces.runtime.getCellFromLink(
+    { ...parseLinkOrThrow(stored, row), schema: undefined },
+    undefined,
+    cellTx(row),
+  );
+}
+
+/**
+ * Recover the contract of what `linkedCell` stands for, and the cell that
+ * carries it.
+ *
+ * A document with no contract of its own whose whole value is a link only
+ * passes its reader on: pushing a piece onto a list stores such a row, linked
+ * from the list and linking to the piece. The link to the row stands for the
+ * link the row holds, so the contract is the one found by following rows
+ * ({@link rowTarget}) to the first document that carries one.
+ *
+ * Following ends, with no contract, at a document that is not the input's own
+ * data, one that is absent, one that holds anything but a link, one already
+ * visited, and after {@link MAX_ROW_HOPS} rows.
+ */
+function durableSourceThroughRows(
+  linkedCell: Cell<unknown>,
+  baseCell: Cell<unknown>,
+  pieces: PiecesController,
+): { durableSource: DurableSourceContract | undefined; source: Cell<unknown> } {
+  const visited = new Set<string>();
+  const home = baseCell.getAsNormalizedFullLink();
+  const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
+  // A producer reached through a row is one this proof went looking for.
+  // Recovering the contract of a piece's input reads that piece's result,
+  // and the result is read only where setup's validation of the stored
+  // input would read it. Elsewhere the contract is unproven.
+  const mayReadResult = (result: NormalizedFullLink) =>
+    isStoredArgumentOwnData(tx, result, home);
+  let source: Cell<unknown> | undefined = linkedCell;
+  for (let hops = 0; source !== undefined && hops <= MAX_ROW_HOPS; hops++) {
+    const durableSource = durableSourceContract(
+      source,
+      pieces,
+      hops === 0 ? undefined : mayReadResult,
+    );
+    if (durableSource !== undefined) return { durableSource, source };
+    source = rowTarget(source, baseCell, pieces, visited);
+  }
+  return { durableSource: undefined, source: linkedCell };
+}
+
+/**
  * Parse a supplied link and recover its producer's durable schema contract.
+ * Under `followRows` the contract is recovered through any rows between the
+ * link and the producer ({@link durableSourceThroughRows}); `source` is the
+ * cell that carries the contract, or the linked cell when none does. A caller
+ * sets `followRows` for a link the piece already holds. A row can be pointed
+ * at another producer later, so a new binding through one would be proved
+ * against a contract the binding does not keep, and it takes the linked
+ * document's own contract or none.
  * A metadata-less linked document is held to the prior argument contract on
  * a pattern update, and `heldToPriorContract` says so. Dynamic binding can
  * explicitly accept an unproven source; other supplied-link operations
@@ -2100,9 +2212,11 @@ function resolveDurableSource(
   priorArgumentSchema: JSONSchema | undefined,
   displayPath: string,
   allowUnprovenSource: boolean,
+  followRows: boolean,
 ): {
   link: NormalizedLink;
   linkedCell: Cell<unknown>;
+  source: Cell<unknown>;
   durableSource: DurableSourceContract | undefined;
   heldToPriorContract: boolean;
 } {
@@ -2115,7 +2229,14 @@ function resolveDurableSource(
   // A direct Cell view can be narrowed with asSchema() just as easily as a
   // serialized alias can carry a narrowed schema. Neither is a future-value
   // invariant, so a static producer proof needs producer-owned metadata.
-  let durableSource = durableSourceContract(linkedCell, pieces);
+  const through = followRows
+    ? durableSourceThroughRows(linkedCell, baseCell, pieces)
+    : {
+      durableSource: durableSourceContract(linkedCell, pieces),
+      source: linkedCell,
+    };
+  const source = through.source;
+  let durableSource = through.durableSource;
   const heldToPriorContract = durableSource === undefined &&
     priorArgumentSchema !== undefined;
   if (heldToPriorContract) {
@@ -2163,7 +2284,7 @@ function resolveDurableSource(
       }
     }
   }
-  return { link, linkedCell, durableSource, heldToPriorContract };
+  return { link, linkedCell, source, durableSource, heldToPriorContract };
 }
 
 /** Localize the destination contracts and derive their agreed outer shape. */
@@ -2434,11 +2555,16 @@ function policePreservedEnvelope(
   };
 }
 
-/** Prove a rebuilt link's payload flow from source to destination. */
+/**
+ * Prove a rebuilt link's payload flow from source to destination, under the
+ * piece-evolution policy when `pieceEvolution` says the source is the piece's
+ * own prior input contract.
+ */
 function proveRebuiltContracts(
   sourceContracts: readonly PathSchemaContract[],
   targetContracts: readonly PathSchemaContract[],
   displayPath: string,
+  pieceEvolution: boolean,
 ): void {
   // Nested (non-stream) Cell wrappers are read-side projections, not part
   // of the payload contract: a wrapper-declaring source may serve a plain
@@ -2466,6 +2592,7 @@ function proveRebuiltContracts(
     sourceContracts,
     proofTargets,
     `input link at ${displayPath}`,
+    pieceEvolution,
   );
 }
 
@@ -2494,6 +2621,123 @@ function provePreservedContracts(
       label,
     );
   }
+}
+
+/**
+ * The most documents {@link holdsOwnPlainInput} reads on the way from one
+ * element to a value, the element among them and every document that only
+ * links on. An element that links into another reads two; the bound ends a
+ * chain a write built on purpose.
+ */
+const MAX_OWN_INPUT_DEPTH = 8;
+
+/**
+ * Whether the document `link` is in belongs to a piece: it carries a result
+ * schema, a `result` backlink, or a pattern identity, in its own scope's
+ * metadata or the space's. Only metadata is read.
+ */
+function carriesPieceMetadata(
+  link: NormalizedFullLink,
+  pieces: PiecesController,
+  tx: IExtendedStorageTransaction,
+): boolean {
+  const scopes = link.scope === "space"
+    ? [link.scope]
+    : [link.scope, "space"] as const;
+  return scopes.some((scope) => {
+    const root = pieces.runtime.getCellFromLink(
+      { ...link, path: [], schema: undefined, scope },
+      undefined,
+      tx,
+    );
+    return root.getMetaRaw("schema") !== undefined ||
+      root.getMetaRaw("result") !== undefined ||
+      getPatternIdentityRef(root) !== undefined;
+  });
+}
+
+/**
+ * Whether what `linkedCell` holds is input that setup's validation of the
+ * stored input reads in full: a value present in this transaction, in
+ * documents that are the input's own data by the runner's rule
+ * (`isStoredArgumentOwnData`: the input document's own space and scope, and
+ * no confidentiality label) and belong to no piece, in which every link
+ * leads to more of the same. Setup validates such a value against the
+ * candidate and refuses one the candidate cannot read, which is what keeps
+ * the piece-evolution policy sound for it.
+ *
+ * Every document is read as setup reads it, one hop at a time
+ * (`readStoredLinkChainRaw`), and the rule is asked of each before its value
+ * is read: a path that starts in the input's own data can cross a link into
+ * another document partway, and neither a labeled document nor a piece's is
+ * read here. A document that belongs to a piece is told by its metadata
+ * alone ({@link carriesPieceMetadata}), since recovering its contract can
+ * read its owner's result.
+ *
+ * A link inside the value is followed where setup follows it: at a position
+ * the candidate reads as a value, which `readsAsValue` decides from the path
+ * below the link being proved. Setup reads only the top level behind a
+ * position typed as a cell handle. Links that lead back to where they
+ * started reach nothing for setup to read, which the reader reports, and no
+ * more than {@link MAX_OWN_INPUT_DEPTH} documents are read on the way to any
+ * one value, which ends every other walk.
+ */
+function holdsOwnPlainInput(
+  linkedCell: Cell<unknown>,
+  baseCell: Cell<unknown>,
+  pieces: PiecesController,
+  readsAsValue: (path: readonly (string | number)[]) => boolean,
+): boolean {
+  const home = baseCell.getAsNormalizedFullLink();
+  const tx = cellTx(linkedCell) ?? pieces.runtime.readTx();
+  const ownPlainDocument = (link: NormalizedFullLink) =>
+    isStoredArgumentOwnData(tx, link, home) &&
+    !carriesPieceMetadata(link, pieces, tx);
+  const plain = (
+    start: NormalizedFullLink,
+    path: readonly (string | number)[],
+    depth: number,
+  ): boolean => {
+    // Every document on the way counts against the bound, and the reader
+    // asks before each one, so the count is kept where it asks.
+    let read = depth;
+    const within = (link: NormalizedFullLink) =>
+      ++read <= MAX_OWN_INPUT_DEPTH && ownPlainDocument(link);
+    const reached = readStoredLinkChainRaw(tx, start, new Set(), within);
+    if (
+      reached.outside === true || reached.cyclic === true ||
+      reached.value === undefined
+    ) return false;
+    const holder = pieces.runtime.getCellFromLink(
+      { ...reached.base, schema: undefined },
+      undefined,
+      tx,
+    );
+    for (const nested of suppliedLinks(reached.value)) {
+      const nestedPath = [...path, ...nested.path];
+      if (!readsAsValue(nestedPath)) return false;
+      let from = holder;
+      for (const segment of nested.path) {
+        from = from.key(segment as keyof unknown) as Cell<unknown>;
+      }
+      // A link envelope is recognized by its outside, and stored bytes can
+      // hold one with nothing a link is made of inside it. That one cannot
+      // be followed, so what it stands for was not read.
+      let target: NormalizedFullLink;
+      try {
+        target = pieces.runtime.getCellFromLink(
+          { ...parseLinkOrThrow(nested.value, from), schema: undefined },
+          undefined,
+          tx,
+        ).getAsNormalizedFullLink();
+      } catch {
+        return false;
+      }
+      if (!plain(target, nestedPath, read)) return false;
+    }
+    return true;
+  };
+  return plain(linkedCell.getAsNormalizedFullLink(), [], 0);
 }
 
 /**
@@ -2590,7 +2834,11 @@ export function assertSuppliedLinkSchemasCompatible(
      * handle's consumer contract unchanged. Such a handle keeps the linked
      * producer's policy without requiring that policy on the consumer schema.
      * The same proof admits a committed link to a metadata-less document
-     * whose contract is unchanged, without the new-link proof.
+     * whose contract is unchanged, without the new-link proof. Where that
+     * contract changed, a committed link at a position read as a value, to
+     * such a document holding plain input in the piece's own space and
+     * scope, is proved under the piece-evolution policy, as the same value
+     * written inline in the input is (`holdsOwnPlainInput`).
      */
     priorArgumentSchema?: JSONSchema;
 
@@ -2636,7 +2884,7 @@ export function assertSuppliedLinkSchemasCompatible(
       suppliedLink.path,
       displayPath,
     );
-    const { link, linkedCell, durableSource, heldToPriorContract } =
+    const { link, linkedCell, source, durableSource, heldToPriorContract } =
       resolveDurableSource(
         suppliedLink,
         linkBase,
@@ -2646,6 +2894,8 @@ export function assertSuppliedLinkSchemasCompatible(
         options.priorArgumentSchema,
         displayPath,
         options.allowUnprovenSource === true && isCell(suppliedLink.value),
+        options.linksPreservedVerbatim === true &&
+          linkMatchesCommittedState(suppliedLink, baseCell, basePath),
       );
     const { localizedTargets, targetOuter } = localizeTargetOuter(
       targetContracts,
@@ -2661,6 +2911,11 @@ export function assertSuppliedLinkSchemasCompatible(
     if (preservedOuter !== undefined) preservedDirectHandles.add(suppliedLink);
 
     assertSourceScopeFits(targetContracts, linkedCell, displayPath);
+    // A producer reached through rows is read through them, so its scope is
+    // held to the destination's cap as the first document's is.
+    if (source !== linkedCell) {
+      assertSourceScopeFits(targetContracts, source, displayPath);
+    }
     if (durableSource === undefined) continue;
 
     const { rawSourceContracts, sourceContracts } = buildSourceContracts(
@@ -2677,11 +2932,9 @@ export function assertSuppliedLinkSchemasCompatible(
       );
     }
     if (preservedOuter === undefined) {
-      // A metadata-less document is held to the prior contract, so its
-      // producer proof compares that contract with the candidate's. When the
-      // link is the one already committed and the contract is unchanged, that
-      // proof can only refuse what new-link default insertion refuses, and a
-      // link carried over byte for byte is not new.
+      // When the contract is also unchanged, the proof can only refuse what
+      // new-link default insertion refuses, and a link carried over byte for
+      // byte is not new.
       if (
         heldToPriorContract &&
         options.linksPreservedVerbatim === true &&
@@ -2694,7 +2947,51 @@ export function assertSuppliedLinkSchemasCompatible(
           targetContracts,
         )
       ) continue;
-      proveRebuiltContracts(sourceContracts, targetContracts, displayPath);
+      // A metadata-less document is held to the piece's prior input contract,
+      // so the proof below compares that contract with the candidate's at this
+      // path. Where the link is also the one already committed, at a position
+      // the candidate reads as a value, and what it reaches is the piece's own
+      // plain input one hop away, the update judges that input as it judges the
+      // same value written inline: under the piece-evolution policy. A link
+      // staged by this update, or one a caller rebuilds, is a new binding and
+      // keeps the proof without it, as does a handle and anything setup's
+      // validation of the stored input does not read in full. This is decided
+      // only here, past the unchanged-contract case above, since deciding it
+      // reads what the link reaches.
+      const pieceEvolution = heldToPriorContract &&
+        targetOuter === undefined &&
+        options.linksPreservedVerbatim === true &&
+        options.destinationIsStream !== true &&
+        linkMatchesCommittedState(suppliedLink, baseCell, basePath) &&
+        holdsOwnPlainInput(linkedCell, baseCell, pieces, (below) => {
+          // A position the candidate reads as a value localizes without an
+          // issue and has no outer Cell wrapper. One whose wrappers it cannot
+          // settle, or that it cannot place, is not known to be read as a
+          // value.
+          try {
+            const localized = localizeUniformOuter(
+              deriveTargetContracts(
+                destinationSchema,
+                options.destinationRoot ?? destinationSchema,
+                false,
+                basePath,
+                [...suppliedLink.path, ...below],
+                displayPath,
+              ),
+              "destination Cell constraints disagree",
+            );
+            return localized.issue === undefined &&
+              localized.outer === undefined;
+          } catch {
+            return false;
+          }
+        });
+      proveRebuiltContracts(
+        sourceContracts,
+        targetContracts,
+        displayPath,
+        pieceEvolution,
+      );
     } else {
       const localized = policePreservedEnvelope(
         suppliedLink,
@@ -3097,6 +3394,8 @@ function validateDurableSourceRoots(
 
   for (const group of groups) {
     const schemaView = group.cell.asSchema(group.root).get();
+    // The schema view is present, so the root itself is never reported as a
+    // missing alias.
     let candidate = omitMissingProjectionAliases(
       group.cell.asSchema(undefined).get(),
       group.cell.getRawUntyped(),
@@ -3107,7 +3406,6 @@ function validateDurableSourceRoots(
       group.paths,
       acceptOpaqueValue,
     );
-    if (candidate === MISSING_PROJECTION_ALIAS) candidate = undefined;
     for (const path of group.paths) {
       candidate = replaceMaterializedValueAtPath(candidate, path, nextValue);
     }
@@ -3805,19 +4103,11 @@ class PiecePropIo implements PieceCellIo {
             // server-derived-late sibling race the ruling closed.
             for (let depth = writePath.length - 1; depth >= 0; depth--) {
               const ancestorPath = writePath.slice(0, depth);
-              let ancestorContracts:
-                | ReturnType<typeof linkPathContracts>
-                | undefined;
-              try {
-                ancestorContracts = linkPathContracts(
-                  [{ schema, root: schema }],
-                  ancestorPath,
-                );
-              } catch {
-                // Undecomposable (correlated anyOf): the whole-result
-                // fallback branch below owns those paths.
-                continue;
-              }
+              // Every prefix of a path that decomposed decomposes too.
+              const ancestorContracts = linkPathContracts(
+                [{ schema, root: schema }],
+                ancestorPath,
+              );
               for (const contract of ancestorContracts) {
                 const ancestorSchema = contract.schema;
                 if (
@@ -4676,18 +4966,19 @@ export class PieceController<T = unknown> {
       }
     }
 
+    // Source the origin offers failing to compile, or exporting no pattern,
+    // is the origin's failure; retained source doing so is not.
     let candidate: Pattern;
     try {
       candidate = await compileProgram(this.#pieces, program);
     } catch (error) {
-      // Source the origin offers failing to compile is the origin's failure;
-      // retained source failing to is not.
       throw origin === null ? error : originFailure(error);
     }
     const candidateRef = this.#pieces.runtime.patternManager
       .getArtifactEntryRef(candidate);
     if (candidateRef === undefined) {
-      throw new Error("the candidate source has no pattern identity");
+      const error = new Error("the candidate source has no pattern identity");
+      throw origin === null ? error : originFailure(error);
     }
     // Only an origin says when what it serves was released; a restore
     // adopts retained source, which no deployment is serving.
@@ -5705,49 +5996,86 @@ async function syncRetainedLinkMetadata(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): Promise<void> {
-  const roots = new Map<string, Cell<unknown>>();
-  for (const supplied of suppliedLinks(argumentCell.getRaw())) {
-    let base = argumentCell;
-    for (const segment of supplied.path) {
-      base = base.key(segment as keyof unknown) as Cell<unknown>;
-    }
-    const link = parseLinkOrThrow(supplied.value, base);
+  const loads = new Map<string, Promise<void>>();
+  // Loads the document `cell` is in, once, with the metadata its contract is
+  // recovered from.
+  const load = (cell: Cell<unknown>): Promise<void> => {
     const root = pieces.runtime.getCellFromLink({
-      ...link,
+      ...cell.getAsNormalizedFullLink(),
       path: [],
       schema: undefined,
     });
     const { space, id, scope } = root.getAsNormalizedFullLink();
-    roots.set(JSON.stringify([space, id, scope]), root);
-  }
-  await Promise.all([...roots.values()].map(async (root) => {
-    // Naming the source root loads the document with its metadata; a value
-    // crossing loads only the selected value and does not establish that
-    // contract evidence. The owner result an argument or internal document
-    // names through its `result` backlink is a document of its own, named
-    // in turn: the contract reads its metadata, and the store delivers no
-    // link target with the document that carries the link.
-    await root.sync();
-    const link = root.getAsNormalizedFullLink();
-    let metaRoot = root;
-    if (
-      link.scope !== "space" && root.getMetaRaw("schema") === undefined &&
-      root.getMetaRaw("result") === undefined
-    ) {
-      // Scoped input redirects keep their producer metadata in base scope;
-      // scoped results instead own their metadata in the selected partition.
-      metaRoot = pieces.runtime.getCellFromLink({ ...link, scope: "space" });
-      await metaRoot.sync();
+    const key = JSON.stringify([space, id, scope]);
+    let pending = loads.get(key);
+    if (pending === undefined) {
+      pending = loadSourceRoot(root, pieces);
+      loads.set(key, pending);
     }
-    const ownerLink = getMetaLink(metaRoot, "result");
-    if (ownerLink !== undefined) {
-      await pieces.runtime.getCellFromLink({
-        ...ownerLink,
-        path: [],
+    return pending;
+  };
+  await Promise.all(
+    suppliedLinks(argumentCell.getRaw()).map(async (supplied) => {
+      let base = argumentCell;
+      for (const segment of supplied.path) {
+        base = base.key(segment as keyof unknown) as Cell<unknown>;
+      }
+      // The proof recovers a contract through rows, and a row's target is a
+      // document of its own that the store delivers with nothing else, so
+      // each is loaded before the next is looked for.
+      const visited = new Set<string>();
+      let source: Cell<unknown> | undefined = pieces.runtime.getCellFromLink({
+        ...parseLinkOrThrow(supplied.value, base),
         schema: undefined,
-      }).sync();
-    }
-  }));
+      });
+      for (
+        let hops = 0;
+        source !== undefined && hops <= MAX_ROW_HOPS;
+        hops++
+      ) {
+        await load(source);
+        // A document that is not a row ends the chain, a piece's among
+        // them, so nothing here recovers a contract or reads a result.
+        source = rowTarget(source, argumentCell, pieces, visited);
+      }
+    }),
+  );
+}
+
+/**
+ * Helper for {@link syncRetainedLinkMetadata}, which loads `root`, a linked
+ * document, and the documents its contract is recovered from.
+ */
+async function loadSourceRoot(
+  root: Cell<unknown>,
+  pieces: PiecesController,
+): Promise<void> {
+  // Naming the source root loads the document with its metadata; a value
+  // crossing loads only the selected value and does not establish that
+  // contract evidence. The owner result an argument or internal document
+  // names through its `result` backlink is a document of its own, named
+  // in turn: the contract reads its metadata, and the store delivers no
+  // link target with the document that carries the link.
+  await root.sync();
+  const link = root.getAsNormalizedFullLink();
+  let metaRoot = root;
+  if (
+    link.scope !== "space" && root.getMetaRaw("schema") === undefined &&
+    root.getMetaRaw("result") === undefined
+  ) {
+    // Scoped input redirects keep their producer metadata in base scope;
+    // scoped results instead own their metadata in the selected partition.
+    metaRoot = pieces.runtime.getCellFromLink({ ...link, scope: "space" });
+    await metaRoot.sync();
+  }
+  const ownerLink = getMetaLink(metaRoot, "result");
+  if (ownerLink !== undefined) {
+    await pieces.runtime.getCellFromLink({
+      ...ownerLink,
+      path: [],
+      schema: undefined,
+    }).sync();
+  }
 }
 
 function assertPieceSourceRetainedLinksCompatible(
@@ -5776,7 +6104,8 @@ function assertPieceSourceRetainedLinksCompatible(
   }
 }
 
-function pieceSourceArgumentEvidence(
+/** @internal Exported for focused confirmation-evidence tests. */
+export function pieceSourceArgumentEvidence(
   argumentCell: Cell<unknown>,
   pieces: PiecesController,
 ): string {
@@ -5793,7 +6122,16 @@ function pieceSourceArgumentEvidence(
         undefined,
         cellTx(linkBase),
       );
-      const contract = durableSourceContract(linkedCell, pieces);
+      // The contract reviewed is the one the retained-link proof used, which
+      // a row passes on from its target, and a row can be pointed at another
+      // target without the link to it changing. So the evidence names the
+      // document the contract came from as well as the one the link names.
+      const { durableSource: contract, source } = durableSourceThroughRows(
+        linkedCell,
+        argumentCell,
+        pieces,
+      );
+      const reviewed = source.getAsNormalizedFullLink();
       return {
         path: suppliedLink.path,
         target: {
@@ -5802,6 +6140,14 @@ function pieceSourceArgumentEvidence(
           scope: linkedCell.getAsNormalizedFullLink().scope,
           path: linkedCell.getAsNormalizedFullLink().path,
         },
+        ...(source === linkedCell ? {} : {
+          source: {
+            space: reviewed.space,
+            id: reviewed.id,
+            scope: reviewed.scope,
+            path: reviewed.path,
+          },
+        }),
         contract: contract?.schemas.map((schema) => ({
           root: schema.root,
           path: schema.path,
@@ -5839,6 +6185,7 @@ function systemRoute(
   try {
     classified = classifyOrigin(pieces.runtime, pieces.getSpace(), origin);
   } catch (error) {
+    // An origin classifyOrigin refuses names no route.
     if (error instanceof PieceOriginError) return undefined;
     throw error;
   }
@@ -5875,8 +6222,10 @@ function systemRoute(
  * not commits: a deployment whose patterns route served source its gate never
  * judged is trusted for it here, as the automatic update from the origin
  * trusts it.
+ *
+ * @internal Exported for focused release-gate tests.
  */
-async function isGatedReleaseStep(
+export async function isGatedReleaseStep(
   pieces: PiecesController,
   running: { identity: string; symbol: string },
   piece: Cell<unknown>,

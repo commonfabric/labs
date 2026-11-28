@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { ChangeSet } from "@codemirror/state";
@@ -27,6 +26,12 @@ import {
 } from "../v2/operation-codec.ts";
 import { Server } from "../v2/server.ts";
 import { parseViewQuery } from "../v2/view-interest.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const space = "did:key:z6Mk-view-space";
 const principal = "did:key:z6Mk-view-reader";
@@ -350,7 +355,9 @@ describe("view interests", () => {
   });
 
   it("does not publish a watch replacement evaluated across session replacement", async () => {
-    await set([], [view()]);
+    // A session's first view is evaluated whole, which is the evaluation a
+    // resume can land in the middle of.
+    await set([watch("of:ordinary")]);
     const evaluate = server.evaluateWatchSet.bind(server);
     const sync = server.syncSessionForConnection.bind(server);
     const replacing = Promise.withResolvers<void>();
@@ -377,7 +384,7 @@ describe("view interests", () => {
     });
     expect(result.error?.name).toBe("SessionError");
     await resuming;
-    expect(server.viewInterestsForSpace(space)[0].view).toEqual(view());
+    expect(server.viewInterestsForSpace(space)).toEqual([]);
   });
 
   it("evaluates render demand once when adding supporting delivery", async () => {
@@ -1423,6 +1430,150 @@ describe("view interests", () => {
     }
   });
 
+  it("replaces a view's revision without walking the demand or support it keeps", async () => {
+    await set([watch("of:ordinary")], [view()]);
+    const [{ handle }] = server.viewInterestsForSpace(space);
+    await server.setViewSelection(space, handle, {
+      generation: 1,
+      delivery: [query("of:support")],
+    });
+    await server.flushSessions();
+    using evaluations = spy(server, "evaluateWatchSet");
+    const sync = await set([watch("of:ordinary")], [view()]);
+    const replaced = await set([watch("of:ordinary")], [view(1)]);
+    expect(evaluations.calls).toHaveLength(0);
+    expect(sync.upserts.map((entry) => entry.id).toSorted()).toEqual([
+      "of:ordinary",
+      "of:render",
+      "of:support",
+    ]);
+    // The new revision has no selection yet, so its support goes, and the
+    // documents its demand keeps stay.
+    expect(replaced.upserts.map((entry) => entry.id).toSorted()).toEqual([
+      "of:ordinary",
+      "of:render",
+    ]);
+    expect(replaced.removes.map((entry) => entry.id)).toEqual(["of:support"]);
+  });
+
+  for (const namedDirtyDocuments of [true, false]) {
+    it(`delivers pending changes when replacing views with ${namedDirtyDocuments ? "named" : "unnamed"} dirty documents`, async () => {
+      await set([watch("of:ordinary")], [view()]);
+      const [{ handle }] = server.viewInterestsForSpace(space);
+      await server.setViewSelection(space, handle, {
+        generation: 1,
+        delivery: [query("of:support")],
+      });
+      await server.flushSessions();
+      const holdings = await set([watch("of:ordinary")], [view()]);
+      const markDirty = server.markSpaceDirty.bind(server);
+      using _dirty = stub(server, "markSpaceDirty", (space, ids, origin) => {
+        markDirty(space, namedDirtyDocuments ? ids : undefined, origin);
+      });
+      const ids = ["of:ordinary", "of:render", "of:support"];
+      for (const id of ids) {
+        await server.writeDocument(space, id, { label: `${id} updated` });
+      }
+      const replaced = await server.watchSet({
+        type: "session.watch.set",
+        requestId: "pending-changes",
+        space,
+        sessionId,
+        watches: [watch("of:ordinary")],
+        views: [view()],
+        holdings: holdings.upserts.map(({ id, seq }) => ({ id, seq })),
+      });
+      expect(replaced.error).toBeUndefined();
+      expect(replaced.ok?.sync.upserts.map((entry) => entry.id).toSorted())
+        .toEqual(ids);
+      for (const entry of replaced.ok!.sync.upserts) {
+        expect(entry.doc?.value).toEqual({ label: `${entry.id} updated` });
+      }
+    });
+  }
+
+  it("walks the root a replacement view adds, and retracts what the root it drops reached", async () => {
+    await server.writeDocument(space, "of:screen", {
+      child: { "/": { "link@1": { space, id: "of:child", path: [] } } },
+    });
+    await server.writeDocument(space, "of:child", { label: "child" });
+    const reaching = (id: string): ViewInterest => ({
+      ...view(),
+      query: {
+        roots: [{ id, selector: { path: [], schema: true as const } }],
+      },
+    });
+    await set([], [reaching("of:screen")]);
+    using evaluations = spy(server, "evaluateWatchSet");
+    const replaced = await set([], [{ ...reaching("of:render"), revision: 1 }]);
+    expect(evaluations.calls).toHaveLength(0);
+    expect(replaced.upserts.map((entry) => entry.id)).toEqual(["of:render"]);
+    expect(replaced.removes.map((entry) => entry.id).toSorted()).toEqual([
+      "of:child",
+      "of:screen",
+    ]);
+    expect(server.demandedInstancesForSpace(space).map((row) => row.id))
+      .toEqual(["of:render"]);
+    // The moved graph tracks the added root and no longer the dropped one.
+    messages.length = 0;
+    await server.writeDocument(space, "of:child", { label: "updated" });
+    await server.writeDocument(space, "of:render", { label: "updated" });
+    await server.flushSessions();
+    const ids = messages.flatMap((message) =>
+      message.type === "session/effect"
+        ? message.effect.upserts.map((entry) => entry.id)
+        : []
+    );
+    expect(ids).toEqual(["of:render"]);
+  });
+
+  it("walks a graph a replacement adds on another branch while keeping the view's", async () => {
+    const engine = await server.engineForSpace(space);
+    createBranch(engine, "feature");
+    await set([], [view()]);
+    const [session] = server.accessForTestingOnly.sessionsForSpace(space);
+    const viewGraphs = new Map(session.graphs);
+    expect(viewGraphs.size).toBeGreaterThan(0);
+    using evaluations = spy(server, "evaluateWatchSet");
+
+    const replaced = await set([{
+      id: "feature-owner",
+      kind: "graph",
+      query: { ...query("of:ordinary"), branch: "feature" },
+    }], [view()]);
+
+    expect(evaluations.calls).toHaveLength(0);
+    expect(replaced.upserts.map(({ id, branch }) => ({ id, branch })))
+      .toEqual([
+        { id: "of:render", branch: "" },
+        { id: "of:ordinary", branch: "feature" },
+      ]);
+    expect(replaced.removes).toEqual([]);
+    expect([...session.graphs.keys()].toSorted()).toEqual(
+      [...viewGraphs.keys(), "view-demand:feature"].toSorted(),
+    );
+  });
+
+  it("removes an ordinary watch from a view session without walking the rendered demand", async () => {
+    await set([watch("of:ordinary")], [view()]);
+    using evaluations = spy(server, "evaluateWatchSet");
+    const removed = await server.watchRemove({
+      type: "session.watch.remove",
+      requestId: "remove-ordinary",
+      space,
+      sessionId,
+      watchIds: ["of:ordinary"],
+    });
+    expect(removed.error).toBeUndefined();
+    expect(evaluations.calls).toHaveLength(0);
+    expect(removed.ok?.sync.removes.map((entry) => entry.id)).toEqual([
+      "of:ordinary",
+    ]);
+    expect(removed.ok?.sync.upserts).toEqual([]);
+    expect(server.demandedInstancesForSpace(space).map((row) => row.id))
+      .toEqual(["of:render"]);
+  });
+
   it("reuses an ordinary query under another watch ID while retaining visible demand", async () => {
     await set([watch("of:ordinary")], [view()]);
     const [session] = server.accessForTestingOnly.sessionsForSpace(space);
@@ -1440,14 +1591,18 @@ describe("view interests", () => {
     expect(added.ok?.sync.upserts).toEqual([]);
     expect(evaluations.calls).toHaveLength(0);
     expect(session.graphs.size).toBe(graphs.size);
-    // The added root is covered by the record its query already made, so
-    // the graph tracks and delivers what it did; only the root's
-    // attribution to that record is new.
+    // The added watch names the root and selector the first one does, so the
+    // graph tracks and delivers what it did, and the root's record keeps the
+    // one walker the two watches share rather than gaining a cover.
     for (const [branch, graph] of graphs) {
       const reused = session.graphs.get(branch)!;
       expect([...reused.entities]).toEqual([...graph.entities]);
       expect([...reused.tracker]).toEqual([...graph.tracker]);
-      expect(reused.coveredBy.size).toBe(1);
+      expect(reused.coveredBy.size).toBe(0);
+      const rootRecords = [...reused.trackedBy].filter(([entry]) =>
+        entry.includes("/of:ordinary\0")
+      );
+      expect(rootRecords.map(([, referrers]) => referrers.size)).toEqual([1]);
     }
     expect(server.viewInterestsForSpace(space)).toHaveLength(1);
     expect(

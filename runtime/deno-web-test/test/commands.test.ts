@@ -2,8 +2,9 @@ import { assertEquals, assertThrows } from "@std/assert";
 
 import { commandId, readKeyPress } from "../driver-commands.ts";
 import { runDenoWebTest } from "./utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("a test presses keys the browser treats as the person's", async function () {
+test("a test presses keys the browser treats as the person's", async function () {
   const run = await runDenoWebTest("commands-project");
 
   for (
@@ -11,6 +12,7 @@ Deno.test("a test presses keys the browser treats as the person's", async functi
       "a pressed Tab moves focus, and Shift\\+Tab moves it back",
       "a dispatched Tab moves nothing",
       "a press settles once the browser has handled all of it",
+      "a command with no id is reported, and the next command still runs",
     ]
   ) {
     run.assert(
@@ -34,17 +36,28 @@ Deno.test("a test presses keys the browser treats as the person's", async functi
     /`Hyper` is not a key a test may hold down/.test(run.stdoutText),
     "the failure names the modifier",
   );
-  run.assert(/3 passed \| 2 failed/.test(run.stdoutText), "summary");
+  const reports = run.stderrText.match(
+    /browser: A test sent a command with no id: `not a command`/g,
+  );
+  run.assert(
+    reports?.length === 1,
+    "the command with no id is reported on the console, once",
+  );
+  run.assert(
+    !/could not be settled/.test(run.stderrText),
+    "every command with an id, refused or not, is settled",
+  );
+  run.assert(/4 passed \| 2 failed/.test(run.stdoutText), "summary");
 });
 
-Deno.test("the driver reads a command's id only where it is a number", function () {
+test("the driver reads a command's id only where it is a number", function () {
   assertEquals(commandId({ id: 3, press: "Tab" }), 3);
   for (const parsed of [{ id: "3" }, { press: "Tab" }, null, "3", undefined]) {
     assertEquals(commandId(parsed), undefined);
   }
 });
 
-Deno.test("the driver reads a key press, and refuses a key it does not press", function () {
+test("the driver reads a key press, and refuses a key it does not press", function () {
   assertEquals(readKeyPress({ press: " " }), { press: " ", modifiers: [] });
   assertEquals(
     readKeyPress({ press: "Tab", modifiers: ["Shift", "Alt"] }),

@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   connect,
@@ -19,6 +18,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A client of a server of its own for the case named `name`. */
 async function connected(name: string) {
@@ -191,6 +191,61 @@ describe("client", () => {
         expect(
           t.transport.sentTypes.filter((type) => type === "session.open"),
         ).toHaveLength(1);
+      } finally {
+        await t.close();
+      }
+    });
+
+    it("restores both sessions on the next connection when the connection drops while one restore's signer holds the turn the other waits for", async () => {
+      // A restore's open waiting its turn when the connection drops must not
+      // wait for the next connection: the reconnect that would bring it is
+      // the one waiting for this restore.
+
+      const t = await connected("dropped-while-waiting");
+      try {
+        const signing = Promise.withResolvers<void>();
+        const signed = Promise.withResolvers<void>();
+        let opens = 0;
+        // The mount signs at once, and its restore's reopen waits.
+        const heldOnReopen: SessionOpenAuthFactory = async (
+          space,
+          session,
+          context,
+        ) => {
+          if (++opens === 2) {
+            signing.resolve();
+            await signed.promise;
+          }
+          return await testSessionOpenAuthFactory(space, session, context);
+        };
+        const ahead = await t.client.mount(
+          spaceFor("dropped-while-waiting", "ahead"),
+          {},
+          heldOnReopen,
+        );
+        const behind = await t.client.mount(
+          spaceFor("dropped-while-waiting", "behind"),
+          {},
+          testSessionOpenAuthFactory,
+        );
+        t.transport.clearSent();
+        t.transport.drop();
+        await signing.promise;
+        t.transport.drop();
+        signed.resolve();
+        await t.client.restoreConnection();
+        await ahead.whenRestored();
+        await behind.whenRestored();
+
+        expect(ahead.closeError).toBeUndefined();
+        expect(behind.closeError).toBeUndefined();
+        // Neither restore's open went out on the connection that dropped
+        // under them; each went out once on the one after it.
+        expect(
+          t.transport.sentTypes.filter((type) =>
+            type === "hello" || type === "session.open"
+          ),
+        ).toEqual(["hello", "hello", "session.open", "session.open"]);
       } finally {
         await t.close();
       }

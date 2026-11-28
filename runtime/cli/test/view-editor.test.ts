@@ -15,7 +15,7 @@ import {
   promptText,
 } from "./view-helpers.ts";
 import { highlightDocument } from "../lib/view/languages/typescript/parse.ts";
-import { renderFrame } from "../lib/view/render.ts";
+import { cursorScreenPos, renderFrame } from "../lib/view/render.ts";
 import { Session } from "../lib/view/session.ts";
 import type { Key } from "../lib/view/keys.ts";
 import {
@@ -23,6 +23,7 @@ import {
   fileSource,
   readonlySource,
 } from "../lib/view/editsource.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function key(name: string, opts: Partial<Key> = {}): Key {
   return { name, ...opts };
@@ -67,7 +68,7 @@ function editSession(text: string, src: EditableSource, height = 10): Session {
   );
 }
 
-Deno.test("editor: e reveals the cursor, a bare arrow scrolls, ESC hides it", () => {
+test("editor: e reveals the cursor, a bare arrow scrolls, ESC hides it", () => {
   const { src } = memSource();
   const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") +
     "\n";
@@ -87,7 +88,49 @@ Deno.test("editor: e reveals the cursor, a bare arrow scrolls, ESC hides it", ()
   assertEquals(s.view().cursor, null, "ESC hides it again");
 });
 
-Deno.test("editor: revealing the cursor forces the pictures display mode", () => {
+test("editor: the cursor stays on screen at the end of a line of wide characters", () => {
+  // Thirty Han characters take sixty columns of a forty-column view.
+  const { src } = memSource();
+  const s = editSession(`${"漢".repeat(30)}\n`, src, 6);
+
+  press(s, "e", "end");
+  const pos = cursorScreenPos(s.displayDoc(), s.view());
+
+  assertEquals(s.view().cursor, { line: 0, col: 30 });
+  assertEquals(pos, { row: 1, col: 40 });
+  assertEquals(s.view().left, 21);
+});
+
+test("editor: the whole of a wide character under the cursor comes into view", () => {
+  // The twentieth Han character after the a takes columns 39 and 40 of a
+  // forty-column view, counting from 0.
+  const { src } = memSource();
+  const s = editSession(`a${"漢".repeat(30)}\n`, src, 6);
+
+  press(s, "e", "home");
+  for (let i = 0; i < 20; i++) press(s, "right");
+
+  assertEquals(s.view().cursor, { line: 0, col: 20 });
+  assertEquals(s.view().left, 1);
+  assertEquals(cursorScreenPos(s.displayDoc(), s.view()), { row: 1, col: 39 });
+});
+
+test("editor: Page Down keeps the cursor's display column over wide characters", () => {
+  // The view shows five rows, so Page Down moves four; the cursor's display
+  // column 4 falls on the third Han character, at column 2.
+  const { src } = memSource();
+  const lines = ["abcdef", "x", "x", "x", "漢字かなab", "x", "x"];
+  const s = editSession(`${lines.join("\n")}\n`, src, 6);
+
+  press(s, "e", "home", "right", "right", "right", "right", "pagedown");
+  const paged = s.view().cursor;
+  press(s, "up", "up", "up", "up");
+
+  assertEquals(paged, { line: 4, col: 2 });
+  assertEquals(s.view().cursor, { line: 0, col: 4 }, "the goal column stays");
+});
+
+test("editor: revealing the cursor forces the pictures display mode", () => {
   const { src } = memSource();
   const s = editSession("hello\nworld\n", src);
   // The initial mode hides color sequences, breaking the 1:1 column mapping
@@ -103,7 +146,7 @@ Deno.test("editor: revealing the cursor forces the pictures display mode", () =>
   assertEquals(s.view().message, "", "nothing visible changed");
 });
 
-Deno.test("editor: revealing the cursor reports control pictures replacing color", () => {
+test("editor: revealing the cursor reports control pictures replacing color", () => {
   const { src } = memSource();
   const s = editSession("\x1b[31mred\x1b[0m\n", src);
   assertEquals(renderFrame(s.displayDoc(), s.view())[0].trimEnd(), "red");
@@ -119,7 +162,7 @@ Deno.test("editor: revealing the cursor reports control pictures replacing color
   );
 });
 
-Deno.test("editor: revealing the cursor turns line wrapping off", () => {
+test("editor: revealing the cursor turns line wrapping off", () => {
   const { src } = memSource();
   const s = editSession("x".repeat(90), src, 3);
   press(s, "\\", "j", "e");
@@ -133,7 +176,7 @@ Deno.test("editor: revealing the cursor turns line wrapping off", () => {
   assertEquals(s.view().message, "Line wrapping turned off for editing.");
 });
 
-Deno.test("editor: revealing the cursor reports control pictures only if they differ", () => {
+test("editor: revealing the cursor reports control pictures only if they differ", () => {
   const { src } = memSource();
   const bell = editSession("ring\x07\n", src);
   press(bell, "e");
@@ -157,7 +200,7 @@ Deno.test("editor: revealing the cursor reports control pictures only if they di
   );
 });
 
-Deno.test("editor: a pipe rejects the cursor with a reason", () => {
+test("editor: a pipe rejects the cursor with a reason", () => {
   const reason =
     "This view is of a pipe — there is no underlying file to edit.";
   const s = editSession("piped text\n", readonlySource(reason));
@@ -166,7 +209,7 @@ Deno.test("editor: a pipe rejects the cursor with a reason", () => {
   assert(s.view().message.includes("pipe"), "explains it is a pipe");
 });
 
-Deno.test("editor: a sourceless view has nothing to edit", () => {
+test("editor: a sourceless view has nothing to edit", () => {
   const doc = parseDocument("x\n");
   const s = new Session(
     doc,
@@ -178,7 +221,7 @@ Deno.test("editor: a sourceless view has nothing to edit", () => {
   assert(s.view().message.toLowerCase().includes("no underlying file"));
 });
 
-Deno.test("editor: typing inserts and re-highlights live", () => {
+test("editor: typing inserts and re-highlights live", () => {
   const { src } = memSource();
   const s = editSession("hello\nworld\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -190,7 +233,7 @@ Deno.test("editor: typing inserts and re-highlights live", () => {
   assertEquals(s.doc.lines[0].text, "Xhello");
 });
 
-Deno.test("editor: backspace deletes and Enter splits the line", () => {
+test("editor: backspace deletes and Enter splits the line", () => {
   const { src } = memSource();
   const s = editSession("ab\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -202,7 +245,7 @@ Deno.test("editor: backspace deletes and Enter splits the line", () => {
   assertEquals(s.view().cursor, { line: 1, col: 0 });
 });
 
-Deno.test("editor: edits text before CRLF transport but can edit a final carriage return", () => {
+test("editor: edits text before CRLF transport but can edit a final carriage return", () => {
   const encoder = new TextEncoder();
   const cases = [
     { input: "new\r\n", expected: "ne\r\n" },
@@ -226,7 +269,7 @@ Deno.test("editor: edits text before CRLF transport but can edit a final carriag
   }
 });
 
-Deno.test("editor: structural edits treat CRLF as one line boundary", () => {
+test("editor: structural edits treat CRLF as one line boundary", () => {
   const encoder = new TextEncoder();
   const cases = [
     {
@@ -266,7 +309,7 @@ Deno.test("editor: structural edits treat CRLF as one line boundary", () => {
   }
 });
 
-Deno.test("editor: Enter at an unterminated EOF inherits nearby CRLF", () => {
+test("editor: Enter at an unterminated EOF inherits nearby CRLF", () => {
   const encoder = new TextEncoder();
   for (
     const testCase of [
@@ -288,7 +331,7 @@ Deno.test("editor: Enter at an unterminated EOF inherits nearby CRLF", () => {
   }
 });
 
-Deno.test("editor: Ctrl-K kills to end of line, Ctrl-Y yanks it back", () => {
+test("editor: Ctrl-K kills to end of line, Ctrl-Y yanks it back", () => {
   const { src } = memSource();
   const s = editSession("hello world\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -299,7 +342,7 @@ Deno.test("editor: Ctrl-K kills to end of line, Ctrl-Y yanks it back", () => {
   assertEquals(s.doc.text, "hello world\n");
 });
 
-Deno.test("editor: M-c capitalises the word at the cursor", () => {
+test("editor: M-c capitalises the word at the cursor", () => {
   const { src } = memSource();
   const s = editSession("hello world\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -307,7 +350,7 @@ Deno.test("editor: M-c capitalises the word at the cursor", () => {
   assertEquals(s.doc.text, "Hello world\n");
 });
 
-Deno.test("editor: Alt+arrows still scroll while the cursor is shown", () => {
+test("editor: Alt+arrows still scroll while the cursor is shown", () => {
   const { src } = memSource();
   const long = Array.from({ length: 40 }, (_, i) => `line ${i}`).join("\n") +
     "\n";
@@ -320,7 +363,7 @@ Deno.test("editor: Alt+arrows still scroll while the cursor is shown", () => {
   assertEquals(s.view().cursor, { line: 0, col: 0 }, "cursor unchanged");
 });
 
-Deno.test("editor: F3 saves the edited text to disk", async () => {
+test("editor: F3 saves the edited text to disk", async () => {
   const path = await Deno.makeTempFile({ suffix: ".ts" });
   try {
     await Deno.writeTextFile(path, "hello\nworld\n");
@@ -335,7 +378,7 @@ Deno.test("editor: F3 saves the edited text to disk", async () => {
   }
 });
 
-Deno.test("editor: F3 on an unchanged file reports zero and does not write", async () => {
+test("editor: F3 on an unchanged file reports zero and does not write", async () => {
   const path = await Deno.makeTempFile({ suffix: ".ts" });
   try {
     await Deno.writeTextFile(path, "hello\n");
@@ -355,7 +398,7 @@ Deno.test("editor: F3 on an unchanged file reports zero and does not write", asy
   }
 });
 
-Deno.test("editor: C-x C-s saves to disk", async () => {
+test("editor: C-x C-s saves to disk", async () => {
   const path = await Deno.makeTempFile({ suffix: ".ts" });
   try {
     await Deno.writeTextFile(path, "abc\n");
@@ -370,7 +413,7 @@ Deno.test("editor: C-x C-s saves to disk", async () => {
   }
 });
 
-Deno.test("editor: quitting dirty prompts, s saves and quits", () => {
+test("editor: quitting dirty prompts, s saves and quits", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -383,7 +426,7 @@ Deno.test("editor: quitting dirty prompts, s saves and quits", () => {
   assertEquals(saved(), "Zabc\n");
 });
 
-Deno.test("editor: dialog shortcut letters accept either case", () => {
+test("editor: dialog shortcut letters accept either case", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -394,7 +437,7 @@ Deno.test("editor: dialog shortcut letters accept either case", () => {
   assertEquals(saved(), "Zabc\n");
 });
 
-Deno.test("editor: the save prompt ignores keys that are not its buttons", () => {
+test("editor: the save prompt ignores keys that are not its buttons", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -409,7 +452,7 @@ Deno.test("editor: the save prompt ignores keys that are not its buttons", () =>
   assertEquals(saved(), "Zabc\n");
 });
 
-Deno.test("editor: the save prompt focuses its default button; Space activates it", () => {
+test("editor: the save prompt focuses its default button; Space activates it", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -425,7 +468,7 @@ Deno.test("editor: the save prompt focuses its default button; Space activates i
   assertEquals(saved(), "Zabc\n");
 });
 
-Deno.test("editor: Tab moves the focus ring; Enter activates the focused button", () => {
+test("editor: Tab moves the focus ring; Enter activates the focused button", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -438,7 +481,7 @@ Deno.test("editor: Tab moves the focus ring; Enter activates the focused button"
   assertEquals(saved(), null, "Discard was activated, not Save");
 });
 
-Deno.test("editor: Shift-Tab wraps the focus ring to the last button", () => {
+test("editor: Shift-Tab wraps the focus ring to the last button", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -450,7 +493,7 @@ Deno.test("editor: Shift-Tab wraps the focus ring to the last button", () => {
   assertEquals(s.view().message, "Cancelled");
 });
 
-Deno.test("editor: activating a button captures the pushed frame for its press", () => {
+test("editor: activating a button captures the pushed frame for its press", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -483,7 +526,7 @@ function savePromptWithDiscard() {
   return { s, saved, discard: cellOf(drawnRows(s), "Discard") };
 }
 
-Deno.test("editor: a mouse press pushes a dialog button and its release activates it", () => {
+test("editor: a mouse press pushes a dialog button and its release activates it", () => {
   const { s, saved, discard } = savePromptWithDiscard();
 
   s.handleKey(mouseKey(true, discard));
@@ -502,7 +545,7 @@ Deno.test("editor: a mouse press pushes a dialog button and its release activate
   assertEquals(s.pendingPush?.view.dialog?.pushed, 1, "its press is played");
 });
 
-Deno.test("editor: releasing the mouse off the pressed button lets go of it", () => {
+test("editor: releasing the mouse off the pressed button lets go of it", () => {
   const { s, discard } = savePromptWithDiscard();
   const cancel = cellOf(drawnRows(s), "Cancel");
 
@@ -514,7 +557,7 @@ Deno.test("editor: releasing the mouse off the pressed button lets go of it", ()
   assertEquals(s.view().dialog?.pushed, -1, "nothing is drawn pushed");
 });
 
-Deno.test("editor: a key between the press and the release lets go of the button", () => {
+test("editor: a key between the press and the release lets go of the button", () => {
   const { s, discard } = savePromptWithDiscard();
 
   s.handleKey(mouseKey(true, discard));
@@ -525,7 +568,7 @@ Deno.test("editor: a key between the press and the release lets go of the button
   assert(promptText(s.view()).includes("Save changes"), "the prompt is up");
 });
 
-Deno.test("editor: a click away from a dialog's buttons does nothing", () => {
+test("editor: a click away from a dialog's buttons does nothing", () => {
   const { s, discard } = savePromptWithDiscard();
   const title = cellOf(drawnRows(s), "Save Changes");
 
@@ -539,7 +582,7 @@ Deno.test("editor: a click away from a dialog's buttons does nothing", () => {
   }
 });
 
-Deno.test("editor: a click with no prompt up leaves the edit as it was", () => {
+test("editor: a click with no prompt up leaves the edit as it was", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e", "right");
@@ -552,7 +595,7 @@ Deno.test("editor: a click with no prompt up leaves the edit as it was", () => {
   assertEquals(drawnRows(s), before, "and nothing else changed on screen");
 });
 
-Deno.test("editor: quitting dirty, d discards and quits", () => {
+test("editor: quitting dirty, d discards and quits", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -563,7 +606,7 @@ Deno.test("editor: quitting dirty, d discards and quits", () => {
   assertEquals(saved(), null, "nothing written");
 });
 
-Deno.test("editor: quitting dirty, c cancels", () => {
+test("editor: quitting dirty, c cancels", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -574,7 +617,7 @@ Deno.test("editor: quitting dirty, c cancels", () => {
   assertEquals(s.view().message, "Cancelled");
 });
 
-Deno.test("editor: a clean quit needs no prompt", () => {
+test("editor: a clean quit needs no prompt", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e"); // reveal, but no edits
@@ -583,7 +626,7 @@ Deno.test("editor: a clean quit needs no prompt", () => {
   assert(s.quit, "quits straight away when there are no changes");
 });
 
-Deno.test("editor: Ctrl-C on a dirty buffer also prompts", () => {
+test("editor: Ctrl-C on a dirty buffer also prompts", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -593,7 +636,7 @@ Deno.test("editor: Ctrl-C on a dirty buffer also prompts", () => {
   assert(promptText(s.view()).includes("Save changes"));
 });
 
-Deno.test("editor: a SIGINT routes a dirty quit through the save prompt", () => {
+test("editor: a SIGINT routes a dirty quit through the save prompt", () => {
   const { src, saved } = memSource();
   const s = editSession("abc\n", src);
   press(s, "e");
@@ -609,7 +652,7 @@ Deno.test("editor: a SIGINT routes a dirty quit through the save prompt", () => 
   assertEquals(saved(), "Zabc\n");
 });
 
-Deno.test("editor: a SIGINT on a clean buffer just terminates", () => {
+test("editor: a SIGINT on a clean buffer just terminates", () => {
   const { src } = memSource();
   const s = editSession("abc\n", src);
   assert(!s.requestQuitFromSignal(), "nothing to save → driver terminates");
@@ -618,7 +661,7 @@ Deno.test("editor: a SIGINT on a clean buffer just terminates", () => {
 const spanText = (line: { spans: readonly { text: string }[] }) =>
   line.spans.map((s) => s.text).join("");
 
-Deno.test("editor: typing re-highlights live and defers only the structure reparse", () => {
+test("editor: typing re-highlights live and defers only the structure reparse", () => {
   const { src } = memSource();
   const s = editSession("const a = 1;\nconst b = 2;\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -632,7 +675,7 @@ Deno.test("editor: typing re-highlights live and defers only the structure repar
   assert(!s.needsReparse, "reparse clears the deferred flag");
 });
 
-Deno.test("editor: opening a block comment re-colors the following lines live", () => {
+test("editor: opening a block comment re-colors the following lines live", () => {
   const { src } = memSource();
   const s = editSession("const a = 1;\nconst b = 2;\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -650,7 +693,7 @@ Deno.test("editor: opening a block comment re-colors the following lines live", 
   );
 });
 
-Deno.test("editor: live re-highlighting stays consistent across newlines and joins", () => {
+test("editor: live re-highlighting stays consistent across newlines and joins", () => {
   const { src } = memSource();
   const s = editSession("alpha\nbeta\ngamma\n", src);
   press(s, "e", "down"); // reveal, move to line 1
@@ -664,7 +707,7 @@ Deno.test("editor: live re-highlighting stays consistent across newlines and joi
   assertEquals(s.doc.lines.length, 5); // 4 lines + the split adds one
 });
 
-Deno.test("editor: a deferred reparse matches a full parse of the edited text", () => {
+test("editor: a deferred reparse matches a full parse of the edited text", () => {
   const { src } = memSource();
   const s = editSession("const a = 1;\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -680,7 +723,7 @@ Deno.test("editor: a deferred reparse matches a full parse of the edited text", 
   );
 });
 
-Deno.test("editor: the status line shows edit hints while the cursor is active", () => {
+test("editor: the status line shows edit hints while the cursor is active", () => {
   const { src } = memSource();
   const s = editSession("hello\nworld\n", src);
   assertEquals(s.view().editHint, null, "no hint before editing");
@@ -694,7 +737,7 @@ Deno.test("editor: the status line shows edit hints while the cursor is active",
   assertEquals(s.view().editHint, null, "hint gone once editing stops");
 });
 
-Deno.test("editor: Ctrl-S searches and lands the cursor on the match", () => {
+test("editor: Ctrl-S searches and lands the cursor on the match", () => {
   const { src } = memSource();
   const s = editSession("alpha\nbeta target\ngamma\n", src);
   press(s, "e"); // reveal at (0,0)
@@ -706,7 +749,7 @@ Deno.test("editor: Ctrl-S searches and lands the cursor on the match", () => {
   assertEquals(s.view().cursor, { line: 1, col: 5 });
 });
 
-Deno.test("editor: line numbers stay on while editing", () => {
+test("editor: line numbers stay on while editing", () => {
   const { src } = memSource();
   const s = editSession("aaaa\nbbbb\ncccc\n", src);
   s.handleKey({ name: "#", char: "#" }); // pager mode: line numbers → input

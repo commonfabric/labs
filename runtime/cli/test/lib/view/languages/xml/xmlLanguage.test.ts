@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -9,6 +8,7 @@ import {
 } from "../../../../../lib/view/languages/language.ts";
 import { xmlLanguage } from "../../../../../lib/view/languages/xml/language.ts";
 import type { Line, TokenClass } from "../../../../../lib/view/model.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The source each colored line reconstructs. */
 function verbatim(lines: readonly Line[]): string {
@@ -201,6 +201,14 @@ describe("xmlLanguage", () => {
     ) {
       expect(verbatim(xmlLanguage.parseDocument(source).lines)).toBe(source);
     }
+  });
+
+  it("lists elements nested deeper than the call stack", () => {
+    const depth = 20_000;
+    const document = xmlLanguage.parseDocument("<a>".repeat(depth));
+
+    expect(document.flatStructure.length).toBe(depth);
+    expect(document.flatStructure.at(-1)?.depth).toBe(depth - 1);
   });
 
   it("recolors each edit", () => {

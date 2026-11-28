@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { float64BytesOfForTestingOnly } from "@/for-testing-only.ts";
 
 import { hex } from "./hex.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("float64BytesOf()", () => {
   // The function returns one buffer for every number other than `NaN`, and

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   closeDelegationsFor,
@@ -8,6 +7,7 @@ import {
   recordEdge,
   type StampedEdges,
 } from "../src/module-delegations.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Stamped edges from `[successor, predecessor, stamp]` triples, each a

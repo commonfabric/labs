@@ -7,8 +7,9 @@
 // tables as they are. The run, `compactStore`, is the plan's §1 option (a),
 // materialize-and-truncate: it plans the same way first, refuses a store the
 // plan says it must not write, and then opens the store through the engine so
-// that the schema it rewrites is the one the server writes and the document
-// it materializes at a boundary is the engine's own reconstruction.
+// that the schema it rewrites is the one the server writes, the document it
+// materializes at a boundary is the engine's own reconstruction, and a
+// leftover history fork is deleted the way the server deletes a branch.
 
 import { Database } from "@db/sqlite";
 import { resolve, toFileUrl } from "@std/path";
@@ -20,10 +21,12 @@ import {
   decodeTrustedMemoryBoundary,
   encodeMemoryBoundary,
   type EntityDocument,
+  HISTORY_FORK_BRANCH_PREFIX,
 } from "../v2.ts";
 import {
   close,
   COMPACTION_SESSION_PREFIX,
+  deleteBranch,
   open,
   read,
   readRevision,
@@ -99,8 +102,16 @@ export type CompactionReport = {
   keepPayloadsMs: number;
   /** What the run would check before writing; each false is a refusal. */
   preconditions: {
+    /** No branch but the default one is active, leftover history forks
+     * aside. */
     singleBranch: boolean;
+    /** The active branches that are neither the default one nor a leftover
+     * history fork: each is a refusal (I8). */
     branches: string[];
+    /** The active branches named as history forks
+     * ({@link HISTORY_FORK_BRANCH_PREFIX}). They are not a refusal: the run
+     * deletes them before it removes a row. */
+    historyForks: string[];
     genesisPresent: boolean;
     opTableRows: number;
     /** Rows `PRAGMA foreign_key_check` reports; any means the store is not
@@ -322,6 +333,26 @@ type RevisionRow = {
 };
 
 /**
+ * The store's active branches other than the default one, split into the
+ * leftover history forks — those named with {@link HISTORY_FORK_BRANCH_PREFIX}
+ * — and the rest, each in name order.
+ */
+const activeBranches = (
+  db: Database,
+): { branches: string[]; historyForks: string[] } => {
+  const names = db.prepare(
+    `SELECT name FROM branch WHERE name <> '' AND status <> 'deleted'
+     ORDER BY name`,
+  ).all<{ name: string }>().map((row) => row.name);
+  const isHistoryFork = (name: string) =>
+    name.startsWith(HISTORY_FORK_BRANCH_PREFIX);
+  return {
+    branches: names.filter((name) => !isHistoryFork(name)),
+    historyForks: names.filter(isHistoryFork),
+  };
+};
+
+/**
  * Computes the plan for `options` against `db`, reading only.
  *
  * The walk is one ordered scan of the selected instances' rows, newest first
@@ -368,11 +399,9 @@ export const planCompaction = (
       ? db.prepare(`SELECT count(*) AS n FROM "${table}"`).get<{ n: number }>()!
         .n
       : 0;
-  const branches = tableExists("branch")
-    ? db.prepare(
-      `SELECT name FROM branch WHERE name <> '' AND status <> 'deleted'`,
-    ).all<{ name: string }>().map((row) => row.name)
-    : [];
+  const { branches, historyForks } = tableExists("branch")
+    ? activeBranches(db)
+    : { branches: [], historyForks: [] };
   const genesisPresent =
     db.prepare(`SELECT 1 FROM "commit" WHERE seq = 1`).get() !== undefined;
   const foreignKeyViolations =
@@ -559,6 +588,7 @@ export const planCompaction = (
     preconditions: {
       singleBranch: branches.length === 0,
       branches,
+      historyForks,
       genesisPresent,
       opTableRows,
       foreignKeyViolations,
@@ -673,6 +703,15 @@ export const formatCompactionReport = (report: CompactionReport): string => {
       : preconditions.singleBranch
       ? "one branch"
       : `REFUSED: branches ${preconditions.branches.join(", ")}`,
+    ...(preconditions.historyForks.length > 0
+      ? [
+        `${
+          n(preconditions.historyForks.length)
+        } leftover history fork(s) deleted by a run (${
+          preconditions.historyForks.join(", ")
+        })`,
+      ]
+      : []),
     preconditions.genesisPresent ? "genesis present" : "REFUSED: no commit 1",
     preconditions.foreignKeyViolations === 0
       ? "foreign keys intact"
@@ -785,6 +824,8 @@ export type CompactionRun = {
   snapshotsDeleted: number;
   hollowed: number;
   hollowedBytes: number;
+  /** The leftover history forks the run deleted, by branch name. */
+  historyForksDeleted: string[];
   acl: AclOutcome;
   lastCommitSeq: number;
   out: string;
@@ -951,7 +992,7 @@ export const refusals = (report: CompactionReport): string[] => {
     reasons.push(
       `the store has a second branch (${
         preconditions.branches.join(", ")
-      }); a forked branch reads its parent's rows, which compaction removes (I8)`,
+      }); a forked branch reads its parent's rows, which compaction removes, and only a leftover history fork is deleted for it (I8)`,
     );
   }
   if (!preconditions.genesisPresent) {
@@ -970,8 +1011,9 @@ export const refusals = (report: CompactionReport): string[] => {
  * `VACUUM INTO` (docs/plans/compact-space.md, §1 option (a) and §2).
  *
  * In order: plan read-only and refuse what the plan refuses; open through
- * the engine and take the exclusive lock; insert the compaction commit at
- * the next seq in its own transaction; compact each instance in its own
+ * the engine and take the exclusive lock; delete every leftover history
+ * fork and insert the compaction commit at the next seq, in one transaction
+ * of their own; compact each instance in its own
  * transaction — materialize a patch boundary as a `set` holding the engine's
  * reconstruction at exactly that row, re-attribute the boundary whatever its
  * op, delete the rows and snapshots behind it; hollow every payload outside
@@ -1094,7 +1136,12 @@ export const compactStore = async (
 
     // 1. The compaction commit, at the next seq, with the run's plan as its
     //    payload (I4). The branch head advances to it, so the branch's
-    //    history reaches the revisions the run writes at that seq.
+    //    history reaches the revisions the run writes at that seq. The
+    //    leftover history forks go in the same transaction, ahead of the
+    //    commit, so that no row is removed while a branch that reads its
+    //    parent's rows is active (I8). The branches are read again here,
+    //    under the lock: a branch created since the plan creates no commit,
+    //    so the seq check below does not notice one.
     const commitSeq = tx(() => {
       const seq = db.prepare(
         `SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM "commit"`,
@@ -1104,6 +1151,15 @@ export const compactStore = async (
           `the next seq is ${seq}, not the plan's ${report.compactionCommit.seq}: the store changed since it was planned`,
         );
       }
+      const { branches, historyForks } = activeBranches(db);
+      report.preconditions.singleBranch = branches.length === 0;
+      report.preconditions.branches = branches;
+      report.preconditions.historyForks = historyForks;
+      const reasons = refusals(report);
+      if (reasons.length > 0) {
+        throw new CompactionRefused(`refused: ${reasons.join("; ")}`);
+      }
+      for (const name of historyForks) deleteBranch(engine, name);
       db.prepare(
         `INSERT INTO "commit" (seq, branch, session_id, local_seq, original, resolution, class)
          VALUES (?, '', ?, 1, ?, ?, 'system')`,
@@ -1356,6 +1412,7 @@ export const compactStore = async (
       snapshotsDeleted,
       hollowed,
       hollowedBytes,
+      historyForksDeleted: report.preconditions.historyForks,
       acl,
       lastCommitSeq,
       out,
@@ -1380,6 +1437,15 @@ export const formatCompactionRun = (run: CompactionRun): string => {
     `payloads   ${n(run.hollowed)} commits hollowed, ${
       size(run.hollowedBytes)
     }`,
+    ...(run.historyForksDeleted.length > 0
+      ? [
+        `branches   ${
+          n(run.historyForksDeleted.length)
+        } leftover history fork(s) deleted (${
+          run.historyForksDeleted.join(", ")
+        })`,
+      ]
+      : []),
     `acl        ${
       run.acl.status === "marked"
         ? `${run.acl.id} marked at seq ${run.commitSeq}`

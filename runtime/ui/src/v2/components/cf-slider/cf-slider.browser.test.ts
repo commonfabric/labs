@@ -10,6 +10,7 @@
 import { expect } from "@std/expect";
 import "./index.ts";
 import type { CFSlider } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const pointer = {
   bubbles: true,
@@ -54,7 +55,7 @@ async function mounted(): Promise<{
   };
 }
 
-Deno.test("pressing the track moves there, and a drag commits once on release", async () => {
+test("pressing the track moves there, and a drag commits once on release", async () => {
   const { slider, track, at, events } = await mounted();
   try {
     const y = track.getBoundingClientRect().top + 2;
@@ -91,7 +92,7 @@ Deno.test("pressing the track moves there, and a drag commits once on release", 
   }
 });
 
-Deno.test("grabbing the thumb keeps its value until it moves", async () => {
+test("grabbing the thumb keeps its value until it moves", async () => {
   const { slider, thumb, at, events } = await mounted();
   try {
     const rect = thumb.getBoundingClientRect();
@@ -129,7 +130,7 @@ Deno.test("grabbing the thumb keeps its value until it moves", async () => {
   }
 });
 
-Deno.test("a capture lost before release ends the drag", async () => {
+test("a capture lost before release ends the drag", async () => {
   const { slider, track, at } = await mounted();
   try {
     const y = track.getBoundingClientRect().top + 2;
@@ -159,7 +160,7 @@ Deno.test("a capture lost before release ends the drag", async () => {
   }
 });
 
-Deno.test("a press focuses the slider, and the keys that follow move it", async () => {
+test("a press focuses the slider, and the keys that follow move it", async () => {
   const { slider, track, at } = await mounted();
   try {
     const y = track.getBoundingClientRect().top + 2;
@@ -188,7 +189,7 @@ Deno.test("a press focuses the slider, and the keys that follow move it", async 
   }
 });
 
-Deno.test("only the primary pointer drags, one drag at a time", async () => {
+test("only the primary pointer drags, one drag at a time", async () => {
   const { slider, track, at } = await mounted();
   try {
     const y = track.getBoundingClientRect().top + 2;

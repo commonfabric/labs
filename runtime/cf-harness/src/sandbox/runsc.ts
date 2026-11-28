@@ -547,6 +547,25 @@ const pathParts = (path: string, fromLink: boolean): PathPart[] =>
     fromLink,
   }));
 
+/** The calls through which `canonicalHostPath()` reads the host's filesystem. */
+export interface HostPathReader {
+  /** What `path` itself is, as `Deno.lstatSync()` reports it. */
+  lstat(path: string): Pick<Deno.FileInfo, "isSymlink" | "isDirectory">;
+
+  /** The target of the symbolic link `path`, as `Deno.readLinkSync()` reads it. */
+  readLink(path: string): string;
+
+  /** The canonical path of `path`, as `Deno.realPathSync()` returns it. */
+  realPath(path: string): string;
+}
+
+/** The {@link HostPathReader} that reads this host's filesystem. */
+const hostPathReader: HostPathReader = {
+  lstat: (path) => Deno.lstatSync(path),
+  readLink: (path) => Deno.readLinkSync(path),
+  realPath: (path) => Deno.realPathSync(path),
+};
+
 /**
  * Returns the path the filesystem takes the absolute host path `path` to: a
  * path with no symbolic link, no `.` and no `..` in it. `label` names the
@@ -570,11 +589,28 @@ const pathParts = (path: string, fromLink: boolean): PathPart[] =>
  * {@link MAX_SYMBOLIC_LINKS} links, or a `.` or `..` follows a name that does
  * not exist.
  */
-export const canonicalHostPath = (label: string, path: string): string => {
+export const canonicalHostPath = (label: string, path: string): string =>
+  canonicalHostPathThrough(hostPathReader, label, path);
+
+/**
+ * {@link canonicalHostPath}, reading the filesystem through `reader` instead
+ * of from this host. Kept out of the exported form so that no caller can hand
+ * the resolution a filesystem other than the one the sandbox will see.
+ */
+const canonicalHostPathThrough = (
+  reader: HostPathReader,
+  label: string,
+  path: string,
+): string => {
   requireAbsoluteHostPath(label, path);
   const refuse = (why: string): never => {
     throw new Error(`${label} ${path} ${why}`);
   };
+  /** Refuses the path for passing through `link`, which leads nowhere. */
+  const leadsNowhere = (link: string): never =>
+    refuse(
+      `leads through a symbolic link whose target does not exist (${link})`,
+    );
   // `reached` holds no link and no dot name, so handing it to Deno, which
   // folds `..` out of a spelling before the kernel sees it, changes nothing.
   let reached = "/";
@@ -592,9 +628,9 @@ export const canonicalHostPath = (label: string, path: string): string => {
       continue;
     }
     const next = joinHostPath(reached, part.name);
-    let info: Deno.FileInfo;
+    let info: Pick<Deno.FileInfo, "isSymlink" | "isDirectory">;
     try {
-      info = Deno.lstatSync(next);
+      info = reader.lstat(next);
     } catch (error) {
       if (!(error instanceof Deno.errors.NotFound)) {
         refuse(
@@ -603,11 +639,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
           })`,
         );
       }
-      if (part.fromLink) {
-        refuse(
-          `leads through a symbolic link whose target does not exist (${next})`,
-        );
-      }
+      if (part.fromLink) leadsNowhere(next);
       rest = [part, ...pending].map((p) => p.name);
       if (rest.some((name) => name === "." || name === "..")) {
         refuse(
@@ -629,7 +661,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
     }
     let target: string;
     try {
-      target = Deno.readLinkSync(next);
+      target = reader.readLink(next);
     } catch (error) {
       target = refuse(
         `cannot be resolved: the symbolic link ${next} could not be read (${
@@ -637,11 +669,8 @@ export const canonicalHostPath = (label: string, path: string): string => {
         })`,
       );
     }
-    if (target === "") {
-      refuse(
-        `leads through a symbolic link whose target does not exist (${next})`,
-      );
-    }
+    // Only some systems make a link whose target is empty.
+    if (target === "") leadsNowhere(next);
     if (target.startsWith("/")) reached = "/";
     pending = [...pathParts(target, true), ...pending];
   }
@@ -649,7 +678,7 @@ export const canonicalHostPath = (label: string, path: string): string => {
   try {
     // For what the walk cannot see: the case a case-insensitive volume
     // stores a name in.
-    real = Deno.realPathSync(reached);
+    real = reader.realPath(reached);
   } catch (error) {
     real = refuse(
       `cannot be resolved: ${reached} could not be examined (${
@@ -659,6 +688,19 @@ export const canonicalHostPath = (label: string, path: string): string => {
   }
   return rest.length === 0 ? real : joinHostPath(real, ...rest);
 };
+
+/**
+ * {@link canonicalHostPath} over the filesystem `reader` describes. A test
+ * reaches through it the states a real filesystem cannot be put in on demand:
+ * a link that vanishes or turns unreadable between two reads, a link whose
+ * target is empty, a volume that stores names in another case. The suffix is
+ * there to keep it from gaining any other caller.
+ */
+export const canonicalHostPathForTestingOnly = (
+  label: string,
+  path: string,
+  reader: HostPathReader,
+): string => canonicalHostPathThrough(reader, label, path);
 
 /**
  * Helper for `resolveRunscBinary()`, which finds the file a bare `name` leads

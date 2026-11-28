@@ -1,19 +1,20 @@
 /**
  * What `Server.watchRemove()` delivers when releasing a watch walks a watch
- * it had covered again: the documents that walk reaches at a newer version
- * than the session was delivered, the crossings it records that the session
- * was not told of, and, for a session marked for a full re-evaluation, the
- * operation cursors of the watches that remain.
+ * it had covered again: nothing for the documents that walk reaches at the
+ * version delivered, and the crossings it records that the session was not
+ * told of. What it keeps of operation watches: the tracked documents of the
+ * watches that remain, and, for a session marked for a full re-evaluation,
+ * their operation cursors.
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ChangeSet } from "@codemirror/state";
 
 import {
   type GraphWatchSpec,
   type Operation,
+  toDirtyKey,
   toValuePath,
   type WatchSpec,
 } from "../v2.ts";
@@ -23,6 +24,7 @@ import {
 } from "../v2/operation-codec.ts";
 import { Server, SessionRegistry } from "../v2/server.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-watch-remove-release-space";
 const OTHER_SPACE = "did:key:z6Mk-watch-remove-release-other";
@@ -59,6 +61,13 @@ const narrow = (id: string): GraphWatchSpec => ({
       },
     }],
   },
+});
+
+/** A watch on the operations applied to the `body` of `id`. */
+const operationWatch = (id: string): WatchSpec => ({
+  id,
+  kind: "operation",
+  query: { id, path: toValuePath(["body"]) },
 });
 
 let serverCount = 0;
@@ -125,41 +134,6 @@ const createFixture = () => {
 describe("Server", () => {
   describe("instance members", () => {
     describe("watchRemove()", () => {
-      it("upserts, at the version stored, a covered root that was absent when delivered and written since", async () => {
-        const fixture = createFixture();
-        try {
-          await fixture.watch("set", [permissive("of:a")]);
-          await fixture.watch("add", [narrow("of:a")]);
-          // Written after the watches were delivered, and before any refresh
-          // tells the reading session of it.
-          await fixture.write({
-            op: "set",
-            id: "of:a",
-            value: { value: { name: "born" } },
-          });
-
-          const removed = await fixture.remove(["of:a:all"]);
-          expect(removed.error).toBeUndefined();
-          const sync = removed.ok!.sync;
-          expect(sync.upserts.map(({ id, seq, doc }) => ({ id, seq, doc })))
-            .toEqual([{
-              id: "of:a",
-              seq: 1,
-              doc: { value: { name: "born" } },
-            }]);
-          expect(sync.removes).toEqual([]);
-          const delivered = [
-            ...fixture.sessions.get(SPACE, fixture.reader.sessionId)!.entities
-              .values(),
-          ];
-          expect(delivered.map(({ id, seq }) => ({ id, seq }))).toEqual([
-            { id: "of:a", seq: 1 },
-          ]);
-        } finally {
-          await fixture.server.close();
-        }
-      });
-
       it("upserts nothing for a document the covered watch reaches at the version delivered", async () => {
         const fixture = createFixture();
         try {
@@ -209,6 +183,38 @@ describe("Server", () => {
         }
       });
 
+      it("stops tracking the document of a removed operation watch, and keeps tracking the remaining watch's", async () => {
+        const fixture = createFixture();
+        try {
+          for (const id of ["of:op-1", "of:op-2"]) {
+            await fixture.write({
+              op: "set",
+              id,
+              value: { value: { body: "a" } },
+            });
+          }
+          await fixture.watch("set", [
+            operationWatch("of:op-1"),
+            operationWatch("of:op-2"),
+          ]);
+          const state = () =>
+            fixture.sessions.get(SPACE, fixture.reader.sessionId)!;
+          expect([...state().trackedIds].toSorted()).toEqual([
+            toDirtyKey("of:op-1"),
+            toDirtyKey("of:op-2"),
+          ]);
+
+          const removed = await fixture.remove(["of:op-1"]);
+          expect(removed.error).toBeUndefined();
+          expect([...state().trackedIds]).toEqual([toDirtyKey("of:op-2")]);
+          expect(state().watches.map((watch) => watch.id)).toEqual([
+            "of:op-2",
+          ]);
+        } finally {
+          await fixture.server.close();
+        }
+      });
+
       it("keeps, for a session marked for a full re-evaluation, the operation cursors of the remaining watches and drops the removed watch's", async () => {
         const fixture = createFixture();
         try {
@@ -234,11 +240,6 @@ describe("Server", () => {
               },
             });
           }
-          const operationWatch = (id: string): WatchSpec => ({
-            id,
-            kind: "operation",
-            query: { id, path: toValuePath(["body"]) },
-          });
           await fixture.watch("set", [
             operationWatch("of:op-1"),
             operationWatch("of:op-2"),

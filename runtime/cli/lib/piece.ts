@@ -140,6 +140,7 @@ import {
   isObjectOrArray,
   isPlainObject,
 } from "@commonfabric/js-values/types";
+import { encodeDataFile } from "@commonfabric/text/data-file";
 import { caseFold } from "unicode-case-folding";
 
 import { isHandlerCell } from "../../fuse/callables.ts";
@@ -160,7 +161,6 @@ import {
   detectCallableKind,
   executeResolvedCallable,
   type InvocationOutcome,
-  runtimeErrorLog,
   VerbInputValidationError,
 } from "./callable.ts";
 import {
@@ -622,13 +622,6 @@ interface PieceOperationDependencies extends PieceResolutionDeps {
   /** Where creation's phases report; the process-wide trace by default. */
   phaseTrace?: PhaseTrace;
 
-  /**
-   * Resolves when a created piece has had as long as it gets to start, and
-   * stops counting once `settled` aborts; {@link pieceStartDeadline} by
-   * default.
-   */
-  startDeadline?: (settled: AbortSignal) => Promise<void>;
-
   reportSearchError?: (
     pieceId: string,
     source: "input data" | "result data" | "metadata",
@@ -719,8 +712,9 @@ async function makeSession(config: SpaceConfig): Promise<Session> {
 export interface ConnectionOutput {
   /**
    * Takes each line the connection writes for itself: the navigate callback's
-   * three, the two warnings a failed connect's own cleanup writes, and the
-   * warning that the profile delegations Home records could not be loaded.
+   * three, the two warnings a failed connect's own cleanup writes, the
+   * warning that the profile delegations Home records could not be loaded,
+   * and the report that the directory of compiled modules failed.
    */
   readonly report?: (message: string) => void;
 
@@ -819,12 +813,18 @@ export async function loadPieces(
   // both stand for.
   await validateEmbeddedSpaces(config.embeddedSpaces, session);
   const runtimeErrors: CliRuntimeErrorRecord[] = [];
+  // Only a connection reads compiled modules, and the cache reaches the
+  // runner's shared compile cache, so a command that never connects should not
+  // load it.
+  // deno-lint-ignore cf-imports/no-inline-module-import
+  const { connectionCompileCache } = await import("./compile-byte-cache.ts");
+  const compileCache = connectionCompileCache().reportingTo(navigateFailure);
   const runtime = await timeCliPhase(
     "loadPieces.runtime",
     () =>
       // Shared first-party posture for client runtimes against a deployed
-      // API (CT-1814); collectors and the navigate hook are this CLI's
-      // declared deltas.
+      // API (CT-1814); collectors, the navigate hook, and the compile cache
+      // are this CLI's declared deltas.
       new Runtime({
         ...runtimePresets.remoteClient({
           apiUrl: new URL(config.apiUrl),
@@ -848,7 +848,9 @@ export async function loadPieces(
             },
           ],
           navigateCallback: navigateReporter(navigateLine, navigateFailure),
+          moduleByteCache: compileCache,
         }),
+        compileTurns: compileCache,
         ...(consoleHandler === undefined ? {} : { consoleHandler }),
       }),
   );
@@ -1212,9 +1214,7 @@ async function resolveRegisteredDocumentOwner(
     const key = cellDocumentTraversalKey(current);
     if (visited.has(key)) {
       throw new Error(
-        `Cycle found while resolving piece ownership for ${
-          pieceId(cell) ?? "an unknown Cell"
-        }`,
+        `Cycle found while resolving piece ownership for ${pieceId(cell)}`,
       );
     }
     if (ownerCache.documents.has(key)) {
@@ -1223,7 +1223,6 @@ async function resolveRegisteredDocumentOwner(
     visited.add(key);
     traversed.push(key);
 
-    const currentId = pieceId(current);
     // Nested piece results can point to a parent result. Stop at the nearest
     // registered result before following its parent metadata.
     const currentDocument = pieceDocumentIdentity(current);
@@ -1234,9 +1233,8 @@ async function resolveRegisteredDocumentOwner(
     await current.sync();
     const argumentLink = getMetaLink(current, "argument");
     if (
-      currentId !== undefined &&
-      (getPatternIdentityRef(current) !== undefined ||
-        argumentLink !== undefined)
+      getPatternIdentityRef(current) !== undefined ||
+      argumentLink !== undefined
     ) {
       return finish(currentDocument);
     }
@@ -1940,7 +1938,6 @@ function servedScope(
  * deployment executes the transaction remotely; an ordinary client executes
  * the same operation locally. Registration retains its delivery identity, so
  * an uncertain response can be retried without reinitializing the document.
- * `boundStart` bounds only the local start, after creation and registration.
  *
  * With phase tracing on, each step reports as `newPiece.create.<step>`, and
  * a served creation reports the steps the serving side timed as
@@ -1959,7 +1956,6 @@ async function createWithReceipt(
     requestKey?: string;
   } | undefined,
   deps: PieceOperationDependencies,
-  boundStart: <T>(start: Promise<T>) => Promise<T>,
 ): Promise<string> {
   const requestKey = options?.requestKey ?? crypto.randomUUID();
   const trace = deps.phaseTrace ?? cliPhaseTrace;
@@ -2042,25 +2038,11 @@ async function createWithReceipt(
     );
     await timeCliPhase(
       "newPiece.create.start",
-      () => boundStart(pieces.startPiece(cell)),
+      () => pieces.startPiece(cell),
       trace,
     );
   }
   return receipt.pieceId;
-}
-
-/** How long `cf piece new` waits for a created piece to start. */
-const PIECE_START_TIMEOUT_MS = 60_000;
-
-/**
- * Resolves once {@link PIECE_START_TIMEOUT_MS} has passed, unless `settled`
- * aborts first, in which case it never resolves and holds no timer.
- */
-function pieceStartDeadline(settled: AbortSignal): Promise<void> {
-  return new Promise((resolve) => {
-    const timer = setTimeout(resolve, PIECE_START_TIMEOUT_MS);
-    settled.addEventListener("abort", () => clearTimeout(timer));
-  });
 }
 
 /**
@@ -2094,6 +2076,10 @@ export interface NewPieceReceipt {
  * leaves nothing behind. Otherwise the refusal arrives after the piece exists,
  * so it names the piece as well as the flag: an operator who meant to repoint
  * has an id to name, and one who did not has a piece to find.
+ *
+ * When this client starts the piece, this returns once the start has finished,
+ * however long that takes. A pattern that fails to compile, or that throws
+ * while it is set up, makes this reject with the pattern's own error.
  */
 export async function newPieceWithReceipt(
   config: SpaceConfig,
@@ -2224,31 +2210,6 @@ export async function newPieceWithReceipt(
   const named = indexed?.name === undefined ? {} : { name: indexed.name };
   // A published pattern carries no repository locator of its own.
   const repository = "patternId" in entry ? undefined : entry.repository;
-  // A piece whose pattern never settles leaves `pieces.create` awaiting a
-  // scheduler `idle()` that never resolves, and the runtime surfaces no
-  // event that a start has definitively failed (a thrown pattern reports its
-  // error and still resolves; a stuck async load reports nothing). The
-  // start's deadline is the only thing that turns that hang into a message.
-  // When it passes, report the actual runtime error the pattern recorded
-  // while starting rather than only pointing at the server logs.
-  const runtimeErrors = runtimeErrorLog(pieces.runtime);
-  const errorCountBefore = runtimeErrors.length;
-  const startDeadline = deps.startDeadline ?? pieceStartDeadline;
-  const boundStart = <T>(starting: Promise<T>): Promise<T> => {
-    const settled = new AbortController();
-    const expired = startDeadline(settled.signal).then((): never => {
-      const recorded = runtimeErrors.slice(errorCountBefore).at(-1)?.message;
-      const detail = recorded !== undefined
-        ? `A runtime error was reported while it started: ${recorded}`
-        : `Check toolshed logs for runtime errors.`;
-      throw new Error(
-        `Piece created but failed to start within ${
-          PIECE_START_TIMEOUT_MS / 1000
-        }s. ${detail}`,
-      );
-    });
-    return Promise.race([starting, expired]).finally(() => settled.abort());
-  };
   // Receipt-backed creation returns after both setup and registration commit.
   // Only a request key replays a receipt, so a creation with no program to
   // hand on (`indexed` absent) always takes this path.
@@ -2263,7 +2224,6 @@ export async function newPieceWithReceipt(
           repository,
           options,
           deps,
-          boundStart,
         ),
     ).catch(async (error) => {
       // The serving side refuses a space with no history as `forbidden`,
@@ -2294,11 +2254,11 @@ export async function newPieceWithReceipt(
   const piece = await timeCliPhase(
     "newPiece.create",
     () =>
-      boundStart(pieces.create(program, {
+      pieces.create(program, {
         repository,
         start: options?.start,
         ...(options?.input === undefined ? {} : { input: options.input }),
-      })),
+      }),
   );
   // Here rather than after the registry add below: the piece now exists in
   // the space, and a slug or registry step that throws afterwards leaves a
@@ -2825,6 +2785,71 @@ export async function checkPiecePattern(
   return await piece.checkPattern(program);
 }
 
+/** What a piece runs now: the pattern it points at and that pattern's source. */
+export interface RunningPattern {
+  /** The space (a DID) the piece is in. */
+  space: string;
+
+  /** The piece's id. */
+  id: string;
+
+  /** The content-addressed id of the pattern it runs. */
+  patternId: string;
+
+  program: RuntimeProgram;
+
+  /** The origin the piece follows, when it follows one (`setsrc --origin`). */
+  origin?: string;
+}
+
+/**
+ * Reads what the piece `config` names runs now, without changing it. The
+ * pattern pointer is read once, so the id and the source always match.
+ *
+ * @throws Error when the piece points at no pattern, or its pattern's source
+ * is not in the space.
+ */
+export async function readRunningPattern(
+  config: PieceConfig,
+  deps: PieceResolutionDeps = {},
+): Promise<RunningPattern> {
+  const pieces = await (deps.loadPieces ?? loadPieces)(config);
+  try {
+    const resolvedConfig = await resolvePieceConfigWithPieces(
+      config,
+      pieces,
+      deps,
+    );
+    const piece = await pieces.get(
+      resolvedConfig.piece,
+      false,
+      undefined,
+      resolvedConfig.pieceScope,
+    );
+    const ref = await piece.getPatternRef();
+    const program = ref === undefined
+      ? undefined
+      : await pieces.runtime.patternManager.getPatternSourceProgramByIdentity(
+        ref.identity,
+        pieces.getSpace(),
+      );
+    if (ref === undefined || program === undefined) {
+      throw new Error(
+        `Piece "${resolvedConfig.piece}" does not contain a pattern source.`,
+      );
+    }
+    return {
+      space: pieces.getSpace(),
+      id: resolvedConfig.piece,
+      patternId: ref.identity,
+      program: { ...program, mainExport: ref.symbol },
+      ...(ref.source.origin === undefined ? {} : { origin: ref.source.origin }),
+    };
+  } finally {
+    await pieces.dispose();
+  }
+}
+
 export async function savePiecePattern(
   config: PieceConfig,
   outPath: string,
@@ -2894,18 +2919,30 @@ async function recordSavedIndexSource(
  * layout it comes back to, and a `setsrc` from here resolves the same imports
  * and the same data files. A name that is not grounded belongs to no layout
  * and is refused rather than written somewhere arbitrary.
+ *
+ * Each file is written as the bytes it was stored from, so a binary media
+ * file, which the package holds as a `data:` URL, comes back as the image,
+ * font, or sound it was read from. Every name is checked and every file
+ * encoded before the first is written, so a refused name or a file that
+ * cannot be encoded writes nothing; a failure to write a file can still leave
+ * the files before it written.
  */
 export async function writeSourcePackage(
   program: RuntimeProgram,
   outPath: string,
 ): Promise<void> {
-  for (const { name, contents } of program.files) {
+  const files = program.files.map(({ name, contents }) => {
     if (name[0] !== "/") {
       throw new Error("Ungrounded file in pattern.");
     }
-    const outFilePath = join(outPath, name.substring(1));
-    await Deno.mkdir(dirname(outFilePath), { recursive: true });
-    await Deno.writeTextFile(outFilePath, contents);
+    return {
+      path: join(outPath, name.substring(1)),
+      bytes: encodeDataFile(contents, name),
+    };
+  });
+  for (const { path, bytes } of files) {
+    await Deno.mkdir(dirname(path), { recursive: true });
+    await Deno.writeFile(path, bytes);
   }
 }
 
@@ -3296,8 +3333,7 @@ async function resolveLinkedPiece(
   // A piece is the document its pattern identity is written on.
   const piece = pieceId(resolved);
   if (
-    link.path.length > 0 || piece === undefined ||
-    getPatternIdentityRef(resolved) === undefined
+    link.path.length > 0 || getPatternIdentityRef(resolved) === undefined
   ) {
     const ending = `\`cf piece call\` takes a piece, or a path that links ` +
       `to one.`;

@@ -14,6 +14,7 @@ import {
   isSyntheticNode,
   type ReactiveContextInfo,
 } from "../ast/mod.ts";
+import type { CallbackContext } from "../ast/reactive-context.ts";
 import type { TransformationContext } from "../core/mod.ts";
 import {
   isValueComputationExpressionKind,
@@ -143,20 +144,10 @@ function isLogicalBinaryExpression(
     );
 }
 
-function getControlFlowRewriteExpression(
-  expr: ts.Expression,
-): ts.Expression | undefined {
-  const current = unwrapExpression(expr);
-  if (
-    ts.isConditionalExpression(current) || isLogicalBinaryExpression(current)
-  ) {
-    return current;
-  }
-  return undefined;
-}
-
 export function isControlFlowRewriteExpression(expr: ts.Expression): boolean {
-  return !!getControlFlowRewriteExpression(expr);
+  const current = unwrapExpression(expr);
+  return ts.isConditionalExpression(current) ||
+    isLogicalBinaryExpression(current);
 }
 
 function isPostClosureWrapperRewriteExpression(
@@ -181,15 +172,9 @@ function isPostClosureWrapperRewriteExpression(
   }
 
   if (ts.isBinaryExpression(expression)) {
-    const operator = expression.operatorToken.kind;
-    if (
-      operator === ts.SyntaxKind.AmpersandAmpersandToken ||
-      operator === ts.SyntaxKind.BarBarToken
-    ) {
-      return false;
-    }
-
-    if (operator === ts.SyntaxKind.QuestionQuestionToken) {
+    // Logical `&&` and `||` are control-flow roots, which callers route
+    // before asking.
+    if (expression.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken) {
       return !shouldDeferFallbackMapReceiverRewrite(
         expression,
         context.checker,
@@ -206,12 +191,8 @@ function isLocalValueReference(
   expression: ts.Expression,
   checker: ts.TypeChecker,
 ): boolean {
-  const symbol = checker.getSymbolAtLocation(expression);
-  if (!symbol) {
-    return false;
-  }
-
-  const declarations = symbol.getDeclarations() ?? [];
+  const declarations =
+    checker.getSymbolAtLocation(expression)?.getDeclarations() ?? [];
   return declarations.some((declaration) =>
     !declaration.getSourceFile().isDeclarationFile && declaration.pos >= 0
   );
@@ -434,28 +415,21 @@ function isEligiblePatternOwnedWrapperCallbackSite(
   expression: ts.Expression,
   context: TransformationContext,
 ): boolean {
+  // Only the nearest enclosing callback's boundary can refuse a pattern-owned
+  // wrapper; a site outside every callback has no boundary to refuse it.
   const callbackContext = context.getEnclosingCallbackContext(expression);
-  if (!callbackContext) {
-    return true;
-  }
-
-  const boundarySemantics = getCallbackBoundarySemantics(
-    callbackContext.callback,
-    context.checker,
-    context,
-  );
-  return boundarySemantics.supportsPatternOwnedWrapperCallbackSite;
+  return !callbackContext ||
+    getCallbackBoundarySemantics(
+      callbackContext.callback,
+      context.checker,
+      context,
+    ).supportsPatternOwnedWrapperCallbackSite;
 }
 
 function hasEnclosingComputeLikeCallback(
-  expression: ts.Expression,
+  callbackContext: CallbackContext,
   context: TransformationContext,
 ): boolean {
-  const callbackContext = context.getEnclosingCallbackContext(expression);
-  if (!callbackContext) {
-    return false;
-  }
-
   let current: ts.Node | undefined = callbackContext.call.parent;
   while (current) {
     if (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) {
@@ -498,7 +472,7 @@ function isWithinComputeLikePlainArrayValueCallback(
   );
 
   return boundarySemantics.isPlainArrayValueCallback &&
-    hasEnclosingComputeLikeCallback(expression, context);
+    hasEnclosingComputeLikeCallback(callbackContext, context);
 }
 
 function isAtomicWholeBranchIife(
@@ -519,10 +493,6 @@ function isAtomicWholeBranchIife(
   }
 
   const statements = callee.body.statements;
-  if (statements.length === 0) {
-    return false;
-  }
-
   const lastStatement = statements[statements.length - 1];
   if (
     !lastStatement ||
@@ -538,29 +508,24 @@ function isAtomicWholeBranchIife(
   );
 }
 
+// `expression` is a control-flow root (see `isControlFlowRewriteExpression`).
 function isSharedPreClosureAtomicControlFlowExpression(
   expression: ts.Expression,
 ): boolean {
-  const current = getControlFlowRewriteExpression(expression);
-  if (!current) {
-    return false;
-  }
-
-  if (ts.isConditionalExpression(current)) {
-    return isAtomicWholeBranchIife(current.whenTrue) ||
-      isAtomicWholeBranchIife(current.whenFalse);
-  }
-
-  return false;
+  const current = unwrapExpression(expression);
+  return ts.isConditionalExpression(current) &&
+    (isAtomicWholeBranchIife(current.whenTrue) ||
+      isAtomicWholeBranchIife(current.whenFalse));
 }
 
+// `expression` is a control-flow root (see `isControlFlowRewriteExpression`).
 function isSharedPreClosureDeferredArrayMethodControlFlowExpression(
   expression: ts.Expression,
   context: TransformationContext,
   analyze: AnalyzeFn,
 ): boolean {
-  const current = getControlFlowRewriteExpression(expression);
-  if (!current || !ts.isConditionalExpression(current)) {
+  const current = unwrapExpression(expression);
+  if (!ts.isConditionalExpression(current)) {
     return false;
   }
 
@@ -572,26 +537,26 @@ function isSharedPreClosureDeferredArrayMethodControlFlowExpression(
     isOwnedDeferredJsxArrayMethodRoot(current.whenFalse, context, analyze);
 }
 
-// An interpolation `${expr}` inside a TAGGED template (e.g. str`...${expr}...`).
+// The tagged template that `expression` is an interpolation of, when it is an
+// interpolation `${expr}` inside a TAGGED template (e.g. str`...${expr}...`).
 // AST shape: expr.parent is a TemplateSpan, span.parent is a TemplateExpression,
 // and that template's parent is a TaggedTemplateExpression. Untagged template
 // literals are deliberately excluded — they already lower as a single reactive
 // unit via emitTemplateExpression, so we must not also classify their spans as
 // independent sites. Tagged templates (str/llm/…) lift over the *values* they
 // receive, so a computed interpolation must be lifted per-span or it freezes.
-function isTaggedTemplateSpanInterpolation(
+function getInterpolatingTaggedTemplate(
   expression: ts.Expression,
-  parent: ts.Node,
-): boolean {
-  if (!ts.isTemplateSpan(parent) || parent.expression !== expression) {
-    return false;
+): ts.TaggedTemplateExpression | undefined {
+  const span = expression.parent;
+  if (!ts.isTemplateSpan(span) || span.expression !== expression) {
+    return undefined;
   }
-  const template = parent.parent;
-  return !!template &&
-    ts.isTemplateExpression(template) &&
-    !!template.parent &&
-    ts.isTaggedTemplateExpression(template.parent) &&
-    template.parent.template === template;
+  const tagged = span.parent?.parent;
+  return tagged && ts.isTaggedTemplateExpression(tagged) &&
+      tagged.template === span.parent
+    ? tagged
+    : undefined;
 }
 
 // True when `expression` is an interpolation inside a tagged template whose tag
@@ -601,13 +566,8 @@ function isReactiveRuntimeCallTaggedTemplateSpan(
   expression: ts.Expression,
   context: TransformationContext,
 ): boolean {
-  const span = expression.parent;
-  if (!span || !ts.isTemplateSpan(span)) return false;
-  const template = span.parent;
-  if (!template || !ts.isTemplateExpression(template)) return false;
-  const tagged = template.parent;
-  if (!tagged || !ts.isTaggedTemplateExpression(tagged)) return false;
-  return isReactiveOriginTaggedTemplate(tagged, context.checker);
+  const tagged = getInterpolatingTaggedTemplate(expression);
+  return !!tagged && isReactiveOriginTaggedTemplate(tagged, context.checker);
 }
 
 /**
@@ -625,7 +585,7 @@ export function getExpressionContainerKind(
   if (ts.isJsxExpression(parent) && parent.expression === expression) {
     return "jsx-expression";
   }
-  if (isTaggedTemplateSpanInterpolation(expression, parent)) {
+  if (getInterpolatingTaggedTemplate(expression)) {
     return "template-span";
   }
   if (
@@ -756,15 +716,13 @@ function isDeferredJsxArrayMethodExpression(
       return true;
     }
 
+    // A classified array method's callee is always a member access.
+    const callee = unwrapExpression(current.expression);
     if (
-      !ts.isPropertyAccessExpression(current.expression) &&
-      !ts.isElementAccessExpression(current.expression)
+      (ts.isPropertyAccessExpression(callee) ||
+        ts.isElementAccessExpression(callee)) &&
+      analyze(callee.expression).containsReactive
     ) {
-      return false;
-    }
-
-    const receiverAnalysis = analyze(current.expression.expression);
-    if (receiverAnalysis.containsReactive) {
       return true;
     }
   }
@@ -803,16 +761,11 @@ function isOwnedDeferredJsxArrayMethodRoot(
     return false;
   }
 
-  const callee = current.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return false;
-  }
-
-  const receiverAnalysis = analyze(callee.expression);
-  return receiverAnalysis.containsReactive;
+  // A deferred array method's callee is always a member access.
+  const callee = unwrapExpression(current.expression);
+  return (ts.isPropertyAccessExpression(callee) ||
+    ts.isElementAccessExpression(callee)) &&
+    analyze(callee.expression).containsReactive;
 }
 
 export function isDirectArrayMethodRootExpression(
@@ -1187,13 +1140,6 @@ export function classifyExpressionSiteHandling(
     return sharedDecision("shared-post-closure");
   }
 
-  if (siteInfo.deferredJsxArrayMethod) {
-    return {
-      kind: "skip",
-      reason: "deferred-jsx-array-method-root",
-    };
-  }
-
   if (
     supportedCallRootKind === "array-method-owned-receiver-method"
   ) {
@@ -1430,15 +1376,9 @@ export function findPreferredNestedLowerableExpressionSite(
   context: TransformationContext,
   analyze: AnalyzeFn,
 ): LowerableExpressionSite | undefined {
-  let nestedSite: LowerableExpressionSite | undefined;
-
-  const visit = (node: ts.Node): void => {
-    if (nestedSite) {
-      return;
-    }
-
+  const visit = (node: ts.Node): LowerableExpressionSite | undefined => {
     if (node !== expression && ts.isFunctionLike(node)) {
-      return;
+      return undefined;
     }
 
     if (node !== expression && ts.isExpression(node)) {
@@ -1455,21 +1395,15 @@ export function findPreferredNestedLowerableExpressionSite(
           analyze,
         );
         if (decision.kind !== "skip" && decision.lowerable) {
-          nestedSite = {
-            expression: node,
-            containerKind,
-          };
-          return;
+          return { expression: node, containerKind };
         }
       }
     }
 
-    ts.forEachChild(node, visit);
+    return ts.forEachChild(node, visit);
   };
 
-  visit(expression);
-
-  return nestedSite;
+  return visit(expression);
 }
 
 export function classifyRestrictedReactiveComputation(

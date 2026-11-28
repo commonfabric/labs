@@ -9,6 +9,7 @@ import { Database } from "@db/sqlite";
 
 import type { DiscoveredSpace } from "../discover.ts";
 import { groupDiscoveredSpaces, principalFromSession } from "../grouping.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -60,7 +61,7 @@ function disc(path: string): DiscoveredSpace {
   return { did, path, sizeBytes: 0, mtimeMs: 0 };
 }
 
-Deno.test("space grouping recovers a user's world", async (t) => {
+test("space grouping recovers a user's world", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-group-" });
   const homePath = `${dir}/${HOME}.sqlite`;
   const profilePath = `${dir}/${PROFILE}.sqlite`;
@@ -188,6 +189,29 @@ Deno.test("space grouping recovers a user's world", async (t) => {
           },
         ]);
         expect(result.ungrouped).toEqual([]);
+      },
+    );
+
+    await t.step(
+      "a placeholder space with no commits counts zero and is empty",
+      () => {
+        const placeholderPath = `${dir}/did:key:zPlaceholderFFFF.sqlite`;
+        newDb(placeholderPath).close();
+
+        const result = groupDiscoveredSpaces([disc(placeholderPath)]);
+        expect(result.groups).toEqual([{
+          principal: "did:key:zPlaceholderFFFF",
+          homePresent: false,
+          spaces: [{
+            did: "did:key:zPlaceholderFFFF",
+            role: "main",
+            present: true,
+            empty: true,
+            commits: 0,
+            entities: 0,
+            evidence: ["group principal (owner home)"],
+          }],
+        }]);
       },
     );
   } finally {

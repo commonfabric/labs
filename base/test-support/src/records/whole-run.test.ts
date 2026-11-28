@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 
 import { markWholeRun, readWholeRuns, type WholeRun } from "./whole-run.ts";
 import { RECORDS_DIR_VARIABLE } from "./paths.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** An environment naming `spool` as the run's spool, and nothing else. */
 function spoolAt(spool: string): (name: string) => string | undefined {

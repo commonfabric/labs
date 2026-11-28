@@ -329,6 +329,16 @@ export type ServedEventFailureOutcome =
 
     cause: "handler-not-run";
     message: string;
+
+    /** The scoped instance the run read while the serving loop had not
+     * produced it, where a writer that owes it will still run
+     * (`Scheduler.comingOwedScopedInstance()`): its document and its
+     * instance's scope key. When the instance is in the stream's own space,
+     * the deferral is settlement: it spends none of the drain's deferral
+     * budget, and a commit writing that instance re-drains the entry
+     * (events.md §5). An instance in another space, whose commits the drain
+     * does not see, spends the budget as any other deferral does. */
+    waitsOn?: { space: MemorySpace; id: string; scopeKey: ScopeKey };
   }
   | {
     /** The piece the event addresses records an origin the serving loop

@@ -13,7 +13,6 @@
  * written.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -35,6 +34,7 @@ import type { JsonCodecValue } from "@/codec-json/interface.ts";
 import { BaseFabricSpecialObject } from "@/fabric-bases";
 import { FabricError } from "@/fabric-instances";
 import { FabricBytes } from "@/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Declares a direct subclass of the runtime root as the `FabricSpecialObject`

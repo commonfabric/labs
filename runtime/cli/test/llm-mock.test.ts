@@ -5,15 +5,17 @@
  * runner reports.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
+  LLMClient,
   type LLMGenerateObjectRequest,
   type LLMRequest,
   setLLMResponder,
 } from "@commonfabric/llm";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   answerForwardedLLMRequest,
+  installLLMResponder,
   type LLMForwardedRequest,
   LLMForwardingResponder,
   LLMMockResponder,
@@ -371,6 +373,81 @@ describe("llm-mock", () => {
         undefined,
       );
       expect(reply.id).toBe("llm-mock-0");
+    });
+
+    it("returns each unanswered request from takeUnreported() once", async () => {
+      const responder = new LLMMockResponder([{ text: "hi" }]);
+      const ask = (last: string) =>
+        responder.sendRequest(textRequest(last), undefined, undefined).then(
+          () => "answered",
+          () => "unanswered",
+        );
+
+      expect(await ask("a")).toBe("answered");
+      expect(responder.takeUnreported()).toEqual([]);
+      expect(await ask("b")).toBe("unanswered");
+      expect(await ask("c")).toBe("unanswered");
+      const first = responder.takeUnreported();
+      expect(first.length).toBe(2);
+      expect(first[0]).toContain('last message: "b"');
+      expect(first[1]).toContain('last message: "c"');
+      expect(responder.takeUnreported()).toEqual([]);
+      expect(await ask("d")).toBe("unanswered");
+      const second = responder.takeUnreported();
+      expect(second.length).toBe(1);
+      expect(second[0]).toContain('last message: "d"');
+      expect(responder.unanswered.length).toBe(3);
+    });
+  });
+
+  describe("installLLMResponder()", () => {
+    afterEach(() => setLLMResponder(undefined));
+
+    const client = new LLMClient();
+
+    it("answers this process's requests with the responder while installed", async () => {
+      const responder = new LLMMockResponder([{ text: "Paris." }]);
+      using _installed = installLLMResponder(responder, "x.test.tsx");
+
+      const reply = await client.sendRequest(textRequest("capital?"));
+
+      expect(reply.content).toEqual([{ type: "text", text: "Paris." }]);
+    });
+
+    it("uninstalls quietly when every unanswered request was taken", async () => {
+      const responder = new LLMMockResponder([]);
+      const installed = installLLMResponder(responder, "x.test.tsx");
+      await expect(client.sendRequest(textRequest("a"))).rejects.toThrow(
+        "No llmMocks entry answers",
+      );
+      expect(responder.takeUnreported().length).toBe(1);
+
+      expect(() => installed[Symbol.dispose]()).not.toThrow();
+    });
+
+    it("throws on uninstall for the requests made after the last take, naming the test", async () => {
+      const responder = new LLMMockResponder([]);
+      const installed = installLLMResponder(responder, "x.test.tsx");
+      await expect(client.sendRequest(textRequest("early"))).rejects
+        .toThrow("No llmMocks entry answers");
+      responder.takeUnreported();
+      await expect(client.sendRequest(textRequest("late"))).rejects
+        .toThrow("No llmMocks entry answers");
+
+      let thrown: unknown;
+      try {
+        installed[Symbol.dispose]();
+      } catch (error) {
+        thrown = error;
+      }
+
+      const message = thrown instanceof Error ? thrown.message : "";
+      expect(message).toContain(
+        "x.test.tsx: requests no llmMocks entry answered, made after the " +
+          "test's results were collected:",
+      );
+      expect(message).toContain('last message: "late"');
+      expect(message).not.toContain('last message: "early"');
     });
   });
 

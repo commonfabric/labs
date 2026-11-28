@@ -10,6 +10,10 @@
  * new pattern with no structural check at all, so nothing but CI stands between
  * an incompatible schema and every running piece. See `pattern-compat-lib.ts`.
  *
+ * It also holds each `main.tsx` under `patterns/` to the standalone floor: a
+ * `main.tsx` entry is offered to people to place alone, so one that requires
+ * an input with no default fails.
+ *
  *   deno task pattern-compat             # check (what CI runs)
  *   deno task pattern-compat --update    # record contracts that have no baseline
  *   deno task pattern-compat --only home # restrict to matching paths
@@ -30,15 +34,18 @@
  * the run prints, so a test can state the facts and read the verdict.
  */
 
+import { basename } from "@std/path/basename";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { FragmentWriter } from "@commonfabric/test-support/records";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
+  baselineKeysByPattern,
   BASELINES_DIR,
   collectAllPatternFiles,
   collectCompatibilityPaths,
   patternKey,
+  PATTERNS_DIR,
   REPO_ROOT,
 } from "./pattern-files.ts";
 import { UNEVALUABLE_PATTERNS } from "./pattern-compat-unevaluable.ts";
@@ -51,6 +58,7 @@ import { type CommandOutput, emit } from "./command-output.ts";
 import {
   acceptedBreakKey,
   checkPattern,
+  checkRunsAlone,
   type Finding,
   parseArgs,
   partitionAcceptedBreaks,
@@ -119,13 +127,13 @@ export async function judgeCompatibility(
     ),
     input.only,
   );
+  const recordedUnder = await baselineKeysByPattern(input.baselinesDir);
   // An item with no file is a pattern that is gone. It has no contract, and
   // is judged below on its baselines and accepted breaks alone.
   const present = new Set(input.files);
-  const files = items.filter((item) => present.has(item));
-  const gone = items
-    .filter((item) => !present.has(item))
-    .map((item) => patternKey(item));
+  const goneKeys = new Set(
+    items.filter((item) => !present.has(item)).map((item) => patternKey(item)),
+  );
 
   input.say(`Checking update compatibility for ${items.length} patterns.`);
 
@@ -145,48 +153,6 @@ export async function judgeCompatibility(
   const evaluationErrors: { pattern: string; error: string }[] = [];
 
   const timings: { key: string; ms: number }[] = [];
-  // One gate-kind record per pattern this run judges, named
-  // "pattern-compat <key>", with the compile and check time and whether
-  // that pattern produced findings.
-  const checkMsByKey = new Map<string, number>();
-  const failedKeys = new Set<string>();
-  for (const file of files) {
-    const key = patternKey(file);
-    const started = performance.now();
-    try {
-      const exports = await input.evaluate(file);
-      const pattern = (exports as Record<string, unknown>)?.default as
-        | PatternContract
-        | undefined;
-      if (
-        pattern?.argumentSchema === undefined ||
-        pattern?.resultSchema === undefined
-      ) {
-        unavailable.set(key, "no pattern default export");
-        continue;
-      }
-      contracts.set(key, {
-        argumentSchema: pattern.argumentSchema,
-        resultSchema: pattern.resultSchema,
-      });
-    } catch (error) {
-      const reason = describeFailure(error);
-      unavailable.set(key, reason);
-      evaluationErrors.push({ pattern: key, error: reason });
-    } finally {
-      // In a finally so a file without a pattern export is timed too; its
-      // record below still carries the compile it cost.
-      timings.push({ key, ms: performance.now() - started });
-    }
-  }
-  if (input.slowCheckMs !== undefined) {
-    input.say("\nSlowest compiles:");
-    for (
-      const timing of [...timings].sort((a, b) => b.ms - a.ms).slice(0, 10)
-    ) {
-      input.say(`  ${Math.round(timing.ms)}ms  ${timing.key}`);
-    }
-  }
 
   const findings: Finding[] = [];
 
@@ -205,48 +171,74 @@ export async function judgeCompatibility(
     ),
   );
   const forgivenBreaks: Finding[] = [];
-  // `unavailable` keys are included so a file that USED to export a pattern is
-  // caught: it has baselines but no contract, which `checkPattern` reports.
-  const compiled = [...new Set([...contracts.keys(), ...unavailable.keys()])];
-  // A gone pattern goes through the same check with no contract, so its
-  // baselines are reported the same way.
-  const keys = [...compiled, ...gone].sort();
   // An accepted break naming a gone pattern forgives nothing, so it fails
   // that pattern's record.
-  const goneKeys = new Set(gone);
   const orphanedBreaks = acceptedBreaks
     .map((accepted) => accepted.pattern)
     .filter((pattern) => goneKeys.has(pattern));
-  for (const key of orphanedBreaks) failedKeys.add(key);
-  const compileMsByKey = new Map(
-    timings.map((timing) => [timing.key, timing.ms]),
-  );
-  const unexpectedKeys = new Set(
-    evaluationErrors
-      .filter((failure) => !unevaluable.has(failure.pattern))
-      .map((failure) => failure.pattern),
-  );
-  // One gate-kind record per pattern, appended the moment its verdict is
-  // known so a killed run keeps every finished pattern's record.
-  const appendRecord = (key: string) =>
-    input.records?.append({
-      line: "record",
-      test: { k: "gate", s: "repo", n: `pattern-compat ${key}` },
-      outcome: failedKeys.has(key) || unexpectedKeys.has(key) ? "fail" : "pass",
-      durationMs: Math.round(
-        (compileMsByKey.get(key) ?? 0) + (checkMsByKey.get(key) ?? 0),
-      ),
-    });
-  for (const key of keys) {
+
+  // Each pattern is compiled and then checked before the next one starts, in
+  // key order, under a counted line naming it, so the last line of a run that
+  // stops making progress names the pattern it stopped on. Its gate-kind
+  // record, named "pattern-compat <key>", is appended the moment its verdict is
+  // known, so a killed run keeps every finished pattern's record.
+  const judged = items
+    .map((item) => ({ item, key: patternKey(item) }))
+    .sort((a, b) => a.key < b.key ? -1 : a.key > b.key ? 1 : 0);
+  for (const [index, { item, key }] of judged.entries()) {
+    input.say(`[${index + 1}/${judged.length}] ${key}`);
+    let compileMs = 0;
+    let newlyUnevaluable = false;
+    if (present.has(item)) {
+      const started = performance.now();
+      try {
+        const exports = await input.evaluate(item);
+        const pattern = (exports as Record<string, unknown>)?.default as
+          | PatternContract
+          | undefined;
+        if (
+          pattern?.argumentSchema === undefined ||
+          pattern?.resultSchema === undefined
+        ) {
+          unavailable.set(key, "no pattern default export");
+        } else {
+          contracts.set(key, {
+            argumentSchema: pattern.argumentSchema,
+            resultSchema: pattern.resultSchema,
+          });
+        }
+      } catch (error) {
+        const reason = describeFailure(error);
+        unavailable.set(key, reason);
+        evaluationErrors.push({ pattern: key, error: reason });
+        newlyUnevaluable = !unevaluable.has(key);
+      }
+      compileMs = performance.now() - started;
+      timings.push({ key, ms: compileMs });
+    }
+
+    // A file with no contract goes through the same check, so a file that
+    // USED to export a pattern, or is gone, has its baselines reported.
     const current = contracts.get(key);
-    const baselines = await readBaselines(input.baselinesDir, key);
+    const baselines = await readBaselines(
+      input.baselinesDir,
+      key,
+      recordedUnder.get(key) ?? [key],
+    );
     const checkStarted = performance.now();
-    const allFindings = checkPattern(key, current, baselines);
+    const allFindings = [
+      ...checkPattern(key, current, baselines),
+      ...checkRunsAlone(
+        key,
+        item.startsWith(`${PATTERNS_DIR}/`) && basename(item) === "main.tsx",
+        current,
+      ),
+    ];
     const checkMs = performance.now() - checkStarted;
-    checkMsByKey.set(key, checkMs);
     const ms = Math.round(checkMs);
-    // A slow check means a contract CHANGED and its proof is expensive — the
-    // schema machinery blows up combinatorially on some shapes.
+    // A slow check means validating an unrecorded contract, or proving the
+    // contract against one of the baselines, is expensive — the schema
+    // machinery blows up combinatorially on some shapes.
     if (input.slowCheckMs !== undefined && ms > input.slowCheckMs) {
       input.say(`  check ${ms}ms  ${key}`);
     }
@@ -261,6 +253,7 @@ export async function judgeCompatibility(
     );
     for (const forgivenBreak of forgiven) forgivenBreaks.push(forgivenBreak);
 
+    let standing = patternFindings;
     if (input.update && current !== undefined) {
       if (shouldRecord(patternFindings)) {
         const name = await writeBaseline(
@@ -273,16 +266,26 @@ export async function judgeCompatibility(
       }
       // A recorded contract still has to survive the incompatibility check
       // below — `--update` adds evidence, it never clears a finding.
-      const kept = patternFindings.filter((f) => f.kind !== "missing-baseline");
-      if (kept.length > 0) failedKeys.add(key);
-      for (const finding of kept) findings.push(finding);
-      appendRecord(key);
-      continue;
+      standing = patternFindings.filter((f) => f.kind !== "missing-baseline");
     }
+    for (const finding of standing) findings.push(finding);
 
-    if (patternFindings.length > 0) failedKeys.add(key);
-    for (const finding of patternFindings) findings.push(finding);
-    appendRecord(key);
+    const failed = standing.length > 0 || newlyUnevaluable ||
+      orphanedBreaks.includes(key);
+    input.records?.append({
+      line: "record",
+      test: { k: "gate", s: "repo", n: `pattern-compat ${key}` },
+      outcome: failed ? "fail" : "pass",
+      durationMs: Math.round(compileMs + checkMs),
+    });
+  }
+  if (input.slowCheckMs !== undefined) {
+    input.say("\nSlowest compiles:");
+    for (
+      const timing of [...timings].sort((a, b) => b.ms - a.ms).slice(0, 10)
+    ) {
+      input.say(`  ${Math.round(timing.ms)}ms  ${timing.key}`);
+    }
   }
 
   if (recorded.length > 0) {
@@ -321,7 +324,7 @@ export async function judgeCompatibility(
   // own, and the run given that item reports it.
   const { pairs: staleBreaks, paths: stalePaths } = unusedAcceptances(
     acceptedBreaks,
-    new Set(compiled),
+    new Set([...contracts.keys(), ...unavailable.keys()]),
     forgivenBreaks,
   );
 
@@ -345,9 +348,7 @@ export async function judgeCompatibility(
   }
   // A listed pattern that evaluates again must leave the list, or its exemption
   // outlives the breakage it was granted for.
-  const recovered = files
-    .map((file) => patternKey(file))
-    .filter((key) => unevaluable.has(key) && contracts.has(key));
+  const recovered = [...contracts.keys()].filter((key) => unevaluable.has(key));
 
   if (findings.length > 0) {
     err.push("\nPattern update compatibility failures:");
@@ -372,6 +373,15 @@ export async function judgeCompatibility(
         err.push(
           `\n${finding.pattern}\n  contract ${finding.hash} is not recorded.` +
             `\n  Run: deno task pattern-compat --update`,
+        );
+      } else if (finding.kind === "not-standalone") {
+        err.push(
+          `\n${finding.pattern}\n  is a main.tsx entry, which is offered as ` +
+            `standalone, but requires ${finding.inputs.join(", ")} with no ` +
+            `default, so it cannot run alone.` +
+            `\n  Give each a default (an input a host fills in is optional), ` +
+            `or rename the file: main.tsx is kept for a pattern that stands ` +
+            `alone.`,
         );
       } else if (finding.kind === "invalid-schema") {
         err.push(

@@ -12,11 +12,11 @@
  * no source map needed.
  *
  * Everything here is best-effort and isolated: construction is cheap (the heavy
- * program is built lazily on the first query), every query is wrapped so a
- * failure degrades to `null`, and when the blob cannot be resolved (piped from
- * outside a repo, partial output) the pager simply shows no semantic info. The
- * pure parser remains the authoritative, dependency-free path for everything
- * else.
+ * program is built lazily on the first query, or in a worker once the service
+ * prewarms), every query is wrapped so a failure degrades to `null`, and when
+ * the blob cannot be resolved (piped from outside a repo, partial output) the
+ * pager simply shows no semantic info. The pure parser remains the
+ * authoritative, dependency-free path for everything else.
  */
 
 import { parse as parseJsonc } from "@std/jsonc";
@@ -37,8 +37,15 @@ import {
   languageForFile,
   readOnlyReasonFor,
 } from "../language.ts";
+import {
+  type DefinitionSite,
+  type LocalProgram,
+  type ProgramQueries,
+  type WorkerProgram,
+  workerProgram,
+} from "./programchannel.ts";
 
-interface SectionFile {
+export interface SectionFile {
   /** Virtual file name (the section header path, or `fileName`). */
   name: string;
 
@@ -52,7 +59,8 @@ interface SectionFile {
 /**
  * Build a semantic service over `text`. Returns a service whose queries are
  * always safe to call; returns `undefined` only when even the lightweight setup
- * is impossible. The TypeScript program is not built until the first query.
+ * is impossible. The TypeScript program is not built until the first query,
+ * or until `prewarm` starts building it in a worker.
  */
 export function createSemantics(
   text: string,
@@ -67,15 +75,13 @@ export function createSemantics(
 
   const { importMap, root } = safe(() => discoverConfig(options.cwd)) ??
     { importMap: {}, root: options.cwd };
-  const libDir = safe(() => defaultLibDir());
-
-  // The program is built lazily and cached (see lazyProgram). The
-  // LanguageService it creates stays reachable here for definition lookups.
-  let service: ts.LanguageService | undefined;
-  const { build, prewarm } = lazyProgram(() => {
-    const host = makeHost(sections, importMap, libDir, options.cwd, root);
-    service = ts.createLanguageService(host, ts.createDocumentRegistry());
-    return service.getProgram();
+  const program = programBackend({
+    sections,
+    importMap,
+    libDir: safe(() => defaultLibDir()),
+    cwd: options.cwd,
+    root,
+    realRoots: [],
   });
 
   const sectionAt = (offset: number): SectionFile | undefined =>
@@ -97,9 +103,10 @@ export function createSemantics(
   };
 
   return {
-    prewarm,
+    prewarm: program.prewarm,
+    dispose: program.dispose,
     typeAt(offset: number): string | null {
-      return typeQuery(build, (o) => {
+      return typeQuery(program, (o) => {
         const section = sectionAt(o);
         return section
           ? { path: section.name, offset: o - section.start }
@@ -111,140 +118,29 @@ export function createSemantics(
       if (cached) return cached;
       let out: DefTarget[] = [];
       try {
-        const program = build();
-        if (program && service) {
-          const section = sectionAt(offset);
-          if (section) {
-            const local = offset - section.start;
-            const defs = definitionsAtPosition(
-              service,
-              program,
-              section.name,
-              local,
-            );
-            for (const d of defs) {
-              const sec = sectionByVfile.get(d.fileName);
-              if (sec) {
-                const blobOffset = sec.start + d.textSpan.start;
-                const { line, col, preview } = lineAndPreview(text, blobOffset);
-                out.push({ name: d.name, blobOffset, line, col, preview });
-              } else {
-                // A real file. Skip libs / anything outside the workspace —
-                // jumping into lib.d.ts for `Set` is noise, not a definition.
-                const content = readReal(d.fileName);
-                if (content === undefined) continue;
-                const at = lineAndPreview(content, d.textSpan.start);
-                out.push({
-                  name: d.name,
-                  filePath: d.fileName,
-                  fileOffset: d.textSpan.start,
-                  line: at.line,
-                  col: at.col,
-                  preview: at.preview,
-                });
-              }
-            }
-          }
-        }
-      } catch {
-        out = [];
-      }
-      defCache.set(offset, out);
-      return out;
-    },
-    fileLines(filePath: string): readonly Line[] | null {
-      try {
-        const content = readReal(filePath);
-        if (content === undefined) return null;
-        return languageForFile(filePath).parseDocument(content, filePath).lines;
-      } catch {
-        return null;
-      }
-    },
-  };
-}
-
-/**
- * Build a semantic service for a DIFF view: the program's root files are the
- * real, current workspace files whose hunks the diff shows, and every query
- * translates diff-text offsets to file offsets (and back) through
- * {@link DiffMaps}. So "what type is this?" and "where is this defined?" are
- * answered against the workspace as it is now — not the old side of the diff.
- */
-export function createDiffSemantics(
-  diffText: string,
-  maps: DiffMaps,
-  options: Options,
-): Semantics | undefined {
-  const { importMap, root } = safe(() => discoverConfig(options.cwd)) ??
-    { importMap: {}, root: options.cwd };
-  const libDir = safe(() => defaultLibDir());
-  const rootFiles = [...maps.rootFiles.keys()].filter((p) => within(p, root));
-  if (rootFiles.length === 0) return undefined;
-
-  let service: ts.LanguageService | undefined;
-  const { build, prewarm } = lazyProgram(() => {
-    const host = makeHost([], importMap, libDir, options.cwd, root, rootFiles);
-    service = ts.createLanguageService(host, ts.createDocumentRegistry());
-    return service.getProgram();
-  });
-
-  const defCache = new Map<number, DefTarget[]>();
-  const realFiles = new Map<string, string | undefined>();
-  const readReal = (path: string): string | undefined => {
-    if (realFiles.has(path)) return realFiles.get(path);
-    const content = within(path, root)
-      ? safe(() => readSourceFile(path))
-      : undefined;
-    realFiles.set(path, content);
-    return content;
-  };
-
-  return {
-    prewarm,
-    typeAt(offset: number): string | null {
-      return typeQuery(build, maps.toFile, offset);
-    },
-    definitionOf(offset: number): DefTarget[] {
-      const cached = defCache.get(offset);
-      if (cached) return cached;
-      let out: DefTarget[] = [];
-      try {
-        const program = build();
-        if (program && service) {
-          const at = maps.toFile(offset);
-          if (at) {
-            const defs = definitionsAtPosition(
-              service,
-              program,
-              at.path,
-              at.offset,
-            );
-            for (const d of defs) {
-              // A definition on a line the diff shows maps back into the diff;
-              // anything else within the workspace opens as an external file.
-              const inDiff = maps.fromFile(d.fileName, d.textSpan.start);
-              if (inDiff !== null) {
-                const { line, col, preview } = lineAndPreview(diffText, inDiff);
-                out.push({
-                  name: d.name,
-                  blobOffset: inDiff,
-                  line,
-                  col,
-                  preview,
-                });
-                continue;
-              }
+        const section = sectionAt(offset);
+        if (section) {
+          const local = offset - section.start;
+          const defs = program.definitionsAt(section.name, local);
+          for (const d of defs) {
+            const sec = sectionByVfile.get(d.fileName);
+            if (sec) {
+              const blobOffset = sec.start + d.textSpan.start;
+              const { line, col, preview } = lineAndPreview(text, blobOffset);
+              out.push({ name: d.name, blobOffset, line, col, preview });
+            } else {
+              // A real file. Skip libs / anything outside the workspace —
+              // jumping into lib.d.ts for `Set` is noise, not a definition.
               const content = readReal(d.fileName);
               if (content === undefined) continue;
-              const atDef = lineAndPreview(content, d.textSpan.start);
+              const at = lineAndPreview(content, d.textSpan.start);
               out.push({
                 name: d.name,
                 filePath: d.fileName,
                 fileOffset: d.textSpan.start,
-                line: atDef.line,
-                col: atDef.col,
-                preview: atDef.preview,
+                line: at.line,
+                col: at.col,
+                preview: at.preview,
               });
             }
           }
@@ -267,10 +163,101 @@ export function createDiffSemantics(
   };
 }
 
-interface DefinitionSite {
-  readonly name: string;
-  readonly fileName: string;
-  readonly textSpan: ts.TextSpan;
+/**
+ * Build a semantic service for a DIFF view: each query is answered from the
+ * real, current workspace file whose hunk holds the offset, and what that file
+ * imports, and every query translates diff-text offsets to file offsets (and
+ * back) through {@link DiffMaps}. So "what type is this?" and "where is this
+ * defined?" are answered against the workspace as it is now — not the old side
+ * of the diff.
+ */
+export function createDiffSemantics(
+  diffText: string,
+  maps: DiffMaps,
+  options: Options,
+): Semantics | undefined {
+  const { importMap, root } = safe(() => discoverConfig(options.cwd)) ??
+    { importMap: {}, root: options.cwd };
+  const diffFiles = [...maps.rootFiles.keys()].filter((p) => within(p, root));
+  if (diffFiles.length === 0) return undefined;
+  const program = programBackend({
+    sections: [],
+    importMap,
+    libDir: safe(() => defaultLibDir()),
+    cwd: options.cwd,
+    root,
+    realRoots: diffFiles,
+  });
+
+  const defCache = new Map<number, DefTarget[]>();
+  const realFiles = new Map<string, string | undefined>();
+  const readReal = (path: string): string | undefined => {
+    if (realFiles.has(path)) return realFiles.get(path);
+    const content = within(path, root)
+      ? safe(() => readSourceFile(path))
+      : undefined;
+    realFiles.set(path, content);
+    return content;
+  };
+
+  return {
+    prewarm: program.prewarm,
+    dispose: program.dispose,
+    typeAt(offset: number): string | null {
+      return typeQuery(program, maps.toFile, offset);
+    },
+    definitionOf(offset: number): DefTarget[] {
+      const cached = defCache.get(offset);
+      if (cached) return cached;
+      let out: DefTarget[] = [];
+      try {
+        const at = maps.toFile(offset);
+        if (at) {
+          const defs = program.definitionsAt(at.path, at.offset);
+          for (const d of defs) {
+            // A definition on a line the diff shows maps back into the diff;
+            // anything else within the workspace opens as an external file.
+            const inDiff = maps.fromFile(d.fileName, d.textSpan.start);
+            if (inDiff !== null) {
+              const { line, col, preview } = lineAndPreview(diffText, inDiff);
+              out.push({
+                name: d.name,
+                blobOffset: inDiff,
+                line,
+                col,
+                preview,
+              });
+              continue;
+            }
+            const content = readReal(d.fileName);
+            if (content === undefined) continue;
+            const atDef = lineAndPreview(content, d.textSpan.start);
+            out.push({
+              name: d.name,
+              filePath: d.fileName,
+              fileOffset: d.textSpan.start,
+              line: atDef.line,
+              col: atDef.col,
+              preview: atDef.preview,
+            });
+          }
+        }
+      } catch {
+        out = [];
+      }
+      defCache.set(offset, out);
+      return out;
+    },
+    fileLines(filePath: string): readonly Line[] | null {
+      try {
+        const content = readReal(filePath);
+        if (content === undefined) return null;
+        return languageForFile(filePath).parseDocument(content, filePath).lines;
+      } catch {
+        return null;
+      }
+    },
+  };
 }
 
 function definitionsAtPosition(
@@ -437,13 +424,14 @@ function uniqueName(
 //
 
 function makeHost(
-  sections: SectionFile[],
-  importMap: Record<string, string>,
+  sections: readonly SectionFile[],
+  importMap: Readonly<Record<string, string>>,
   libDir: string | undefined,
   cwd: string,
   readRoot: string,
-  /** Real on-disk files to include as program roots (the diff mode's files). */
-  extraRoots: readonly string[] = [],
+  /** The real on-disk file that is a program root besides the sections, if
+   * any, asked for each time the service brings its program up to date. */
+  realRoot: () => string | undefined = () => undefined,
 ): ts.LanguageServiceHost {
   const sectionPaths = new Set(sections.map((s) => s.name));
   const sectionByName = new Map(sections.map((s) => [s.name, s] as const));
@@ -507,7 +495,11 @@ function makeHost(
   };
 
   return {
-    getScriptFileNames: () => [...sections.map((s) => s.name), ...extraRoots],
+    getScriptFileNames: () => {
+      const names = sections.map((s) => s.name);
+      const real = realRoot();
+      return real === undefined ? names : [...names, real];
+    },
     getScriptVersion: () => "1",
     getScriptSnapshot: (name) => {
       const t = getText(name);
@@ -578,7 +570,7 @@ function extensionOf(path: string): ts.Extension {
  */
 function mapSpecifier(
   spec: string,
-  importMap: Record<string, string>,
+  importMap: Readonly<Record<string, string>>,
 ): string | undefined {
   const exact = importMap[spec];
   if (exact !== undefined) return resolveRelative(exact);
@@ -733,17 +725,17 @@ function safe<T>(fn: () => T): T | undefined {
 }
 
 /**
- * A TypeScript program built lazily from `make` and cached. A `make` that throws
- * or yields no program latches `failed`, so a broken setup is not retried on
- * every keystroke. `prewarm` builds eagerly (and silently, since `build`
- * already swallows its own failure). Shared by the blob and diff factories.
+ * A TypeScript program, or a language service holding one, built lazily from
+ * `make` and cached. A `make` that throws or yields nothing latches `failed`,
+ * so a broken setup is not retried on every keystroke. `prewarm` builds
+ * eagerly (and silently, since `build` already swallows its own failure).
  */
-function lazyProgram(
-  make: () => ts.Program | undefined,
-): { build: () => ts.Program | undefined; prewarm: () => void } {
-  let program: ts.Program | undefined;
+function lazyProgram<T>(
+  make: () => T | undefined,
+): { build: () => T | undefined; prewarm: () => void } {
+  let program: T | undefined;
   let failed = false;
-  const build = (): ts.Program | undefined => {
+  const build = (): T | undefined => {
     if (program) return program;
     if (failed) return undefined;
     try {
@@ -758,29 +750,186 @@ function lazyProgram(
   return { build, prewarm: () => void build() };
 }
 
-/** Read the type string at `offset`: build the program, map `offset` to a
- * (file, offset) with `locate`, and ask the program there. Null when the
- * program is unavailable, the offset does not map, or any step throws. Shared
- * by the blob and diff factories' typeAt. */
+/** Read the type string at `offset`: map `offset` to a (file, offset) with
+ * `locate`, and ask the program there. Null when the program is unavailable,
+ * the offset does not map, or any step throws. Shared by the blob and diff
+ * factories' typeAt. */
 function typeQuery(
-  build: () => ts.Program | undefined,
+  program: ProgramQueries,
   locate: (offset: number) => { path: string; offset: number } | null,
   offset: number,
 ): string | null {
   try {
-    const prog = build();
-    if (!prog) return null;
     const at = locate(offset);
-    if (!at) return null;
-    return typeStringAt(prog, at.path, at.offset);
+    return at ? program.typeAt(at.path, at.offset) : null;
   } catch {
     return null;
   }
+}
+
+/** The module a program worker runs. */
+export const PROGRAM_WORKER = new URL("./programworker.ts", import.meta.url);
+
+/** What a program is built from: plain data, so that a worker can receive it. */
+export interface ProgramSpec {
+  readonly sections: readonly SectionFile[];
+  readonly importMap: Readonly<Record<string, string>>;
+  readonly libDir: string | undefined;
+  readonly cwd: string;
+
+  /** The directory real-file reads stay within. */
+  readonly root: string;
+
+  /**
+   * Real files the program can be rooted at. Its root is the one the latest
+   * query named, or the first of them before any query. So a query about one
+   * of them is answered from that file and what it imports, as Deno checks a
+   * module, and the program parses only the files it has been rooted at and
+   * what those import.
+   */
+  readonly realRoots: readonly string[];
+}
+
+/** How many moves of a program's root each file stays parsed for after the
+ * program stops reaching it, so that going back to a file the viewer asked
+ * about recently parses nothing again. */
+const KEPT_ROOT_MOVES = 16;
+
+/** The program `spec` describes, built on this thread when first queried, or
+ * at once by `prewarm`, with its parsed files kept in `registry`. Every query
+ * degrades to null or empty. */
+export function localProgram(
+  spec: ProgramSpec,
+  registry: ts.DocumentRegistry = ts.createDocumentRegistry(),
+): LocalProgram {
+  const realRoots = new Set(spec.realRoots);
+  let realRoot = spec.realRoots.at(0);
+  // The service's releases of the files the program stopped reaching, by the
+  // move of the root after which it made them, held back until
+  // KEPT_ROOT_MOVES more moves.
+  const heldReleases: (() => void)[][] = [[]];
+  const { build, prewarm } = lazyProgram(() => {
+    const host = makeHost(
+      spec.sections,
+      spec.importMap,
+      spec.libDir,
+      spec.cwd,
+      spec.root,
+      () => realRoot,
+    );
+    const service = ts.createLanguageService(host, {
+      ...registry,
+      releaseDocumentWithKey: (
+        path: ts.Path,
+        key: ts.DocumentRegistryBucketKey,
+        scriptKind: ts.ScriptKind,
+        impliedNodeFormat?: ts.ResolutionMode,
+      ) => {
+        heldReleases[heldReleases.length - 1].push(() =>
+          registry.releaseDocumentWithKey(
+            path,
+            key,
+            scriptKind,
+            impliedNodeFormat,
+          )
+        );
+      },
+    });
+    service.getProgram();
+    return service;
+  });
+  // The service, with its program rooted at `fileName` when that is one of
+  // the real roots. The releases held back longest are made once the program
+  // has taken back what it still reaches.
+  const serviceFor = (fileName: string) => {
+    if (realRoots.has(fileName) && fileName !== realRoot) {
+      realRoot = fileName;
+      heldReleases.push([]);
+    }
+    const service = build();
+    service?.getProgram();
+    if (heldReleases.length > KEPT_ROOT_MOVES) {
+      for (const release of heldReleases.shift() ?? []) release();
+    }
+    return service;
+  };
+  return {
+    prewarm,
+    typeAt(fileName, offset) {
+      try {
+        const program = serviceFor(fileName)?.getProgram();
+        return program ? typeStringAt(program, fileName, offset) : null;
+      } catch {
+        return null;
+      }
+    },
+    definitionsAt(fileName, offset) {
+      try {
+        const service = serviceFor(fileName);
+        const program = service?.getProgram();
+        if (!service || !program) return [];
+        // Copy each site to plain data, which a worker can send.
+        return definitionsAtPosition(service, program, fileName, offset)
+          .map(({ name, fileName, textSpan: { start, length } }) => ({
+            name,
+            fileName,
+            textSpan: { start, length },
+          }));
+      } catch {
+        return [];
+      }
+    },
+  };
+}
+
+/**
+ * The program behind a semantic service. A query that comes before `prewarm`
+ * builds it on this thread. `prewarm` builds it in a worker instead, which
+ * then answers every query, so that this thread stays free while it builds.
+ * A query the worker does not answer, because it has failed or has not yet
+ * started serving, ends the worker and builds the program on this thread, as
+ * does every query once `dispose` has ended it.
+ */
+function programBackend(
+  spec: ProgramSpec,
+  startWorker: () => Worker = () =>
+    new Worker(PROGRAM_WORKER, { type: "module" }),
+): ProgramQueries & { prewarm(): void; dispose(): void } {
+  let local: ProgramQueries | undefined;
+  let remote: WorkerProgram | undefined;
+  const fallback = (): ProgramQueries => {
+    remote?.dispose();
+    remote = undefined;
+    return local ??= localProgram(spec);
+  };
+  return {
+    prewarm() {
+      if (!local && !remote) remote = workerProgram(spec, startWorker);
+    },
+    dispose() {
+      fallback();
+    },
+    typeAt(fileName, offset) {
+      const answer = remote?.ask({ question: "typeAt", fileName, offset });
+      return answer ? answer.type : fallback().typeAt(fileName, offset);
+    },
+    definitionsAt(fileName, offset) {
+      const answer = remote?.ask({
+        question: "definitionsAt",
+        fileName,
+        offset,
+      });
+      return answer
+        ? answer.definitions
+        : fallback().definitionsAt(fileName, offset);
+    },
+  };
 }
 
 /** Internals exposed for tests only. */
 export const _internal = {
   lazyProgram,
   makeHost,
+  programBackend,
   signedNumericElementDefinitions,
 };

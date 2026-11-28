@@ -6,6 +6,7 @@ import { StateEffect } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 
 import { CFCodeEditor } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const MARKDOWN = [
   "# Lunch",
@@ -21,7 +22,7 @@ for (
     ["dark", "rgb(245, 245, 247)", "rgb(45, 45, 48)"],
   ]
 ) {
-  Deno.test(`prose table uses ${mode} theme colors`, async () => {
+  test(`prose table uses ${mode} theme colors`, async () => {
     const editor = new CFCodeEditor();
     editor.mode = "prose";
     editor.value = MARKDOWN;
@@ -41,7 +42,7 @@ for (
   });
 }
 
-Deno.test("prose table draws formulas and line breaks inside their cells", async () => {
+test("prose table draws formulas and line breaks inside their cells", async () => {
   const markdown = [
     "| Rule | Certification |",
     "| --- | --- |",
@@ -89,7 +90,7 @@ Deno.test("prose table draws formulas and line breaks inside their cells", async
   }
 });
 
-Deno.test("prose table aligns columns and reveals source for editing", async () => {
+test("prose table aligns columns and reveals source for editing", async () => {
   const editor = new CFCodeEditor();
   editor.mode = "prose";
   editor.value = MARKDOWN;

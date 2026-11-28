@@ -4,7 +4,7 @@ import type {
   MutableJSONSchemaObj,
 } from "@commonfabric/api";
 import type { GenerationContext, TypeFormatter } from "../interface.ts";
-import type { TypeWithInternals } from "../type-utils.ts";
+import { primitiveLiteralValue } from "../type-utils.ts";
 
 /**
  * Formatter for primitive TypeScript types
@@ -68,7 +68,7 @@ export class PrimitiveFormatter implements TypeFormatter {
       }
       return {
         type: "boolean",
-        enum: [(type as TypeWithInternals).intrinsicName === "true"],
+        enum: [primitiveLiteralValue(type, context.typeChecker) === true],
       };
     }
     if (flags & ts.TypeFlags.BigIntLiteral) {

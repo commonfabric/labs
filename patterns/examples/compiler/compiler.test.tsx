@@ -7,7 +7,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Compiler from "./compiler.tsx";
+import Compiler from "./main.tsx";
 
 const VALID = `import { NAME, pattern, UI } from "commonfabric";
 

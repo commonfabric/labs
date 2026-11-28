@@ -174,7 +174,18 @@ DOM). A host embeds by listening for:
   tab"). A host that calls `preventDefault()` owns the new tab and can
   apply its own URL scheme. Left uncancelled, the default builds a
   fabric URL and calls `globalThis.open`, which on a non-shell origin is
-  a 404 tab — so a host that mounts these components binds this one. The
+  a 404 tab — so a host that mounts these components binds this one.
+  A labelled `cf-cell-link` resolves its target when clicked, so the event
+  can come after the click. By default it comes once the target lands, with
+  no tab opened in advance, which suits a host that takes the event itself:
+  Loom's pattern panes navigate in place. A host whose new tabs open through
+  the default path turns reserving on with `setNewTabReservation(true)`; the
+  shell's `Navigation` does. Then a target that takes longer than
+  `NEW_TAB_RESERVE_AFTER_MS` (one second) gets a tab reserved while the
+  gesture still allows one, and the event carries `claimReservedTab()`. A
+  host that cancels it and wants a tab calls `claimReservedTab()` and points
+  the tab at its own URL, since the gesture was spent on the reservation; a
+  host that cancels without claiming leaves the tab to be closed. The
   conceptual browser form is described by
   [Common Fabric URLs](../specs/fabric-urls.md). No deployment is planned; the
   current event behavior remains authoritative.

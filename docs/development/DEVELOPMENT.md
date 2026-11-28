@@ -50,7 +50,7 @@ about one aspect of the runtime, are indexed in
 - Collate a package's imports. Every specifier naming the same top-level
   package, or the same namespace-and-package pair, sits in one contiguous run:
   `@commonfabric/bytes/base64url` next to `@commonfabric/bytes/buffers`,
-  `@std/testing/bdd` next to `@std/testing/time`. A package that appears in two
+  `@std/testing/mock` next to `@std/testing/time`. A package that appears in two
   places in the list reads as two dependencies, and the second appearance hides
   from anyone scanning for what the file rests on.
 - Alpha-sorting each run is strongly suggested. Sorting is what makes a list
@@ -1068,6 +1068,38 @@ collection whose size the code fixes from one that grows with data. A spread
 that has to stay, such as one in a test that shows the overflow, sits under a
 `deno-lint-ignore` comment that says why.
 
+### `using` on a path that runs often
+
+V8 runs a function that declares `using` far slower than one with a `try`
+block: entering and leaving one `using` scope costs dozens of times as much as
+the same function written with `try` and `finally`. That is nothing for a
+function that opens a file, and a measurable share of the runner's time for one
+on its per-element read paths. In a function that runs per read, per element,
+or per call of another hot function, restore state in a `finally` block
+instead:
+
+```ts
+// Shown at module scope.
+
+let current: string | undefined;
+
+/** Runs `fn` with `scope` current, and restores the previous scope. */
+function withScope<T>(scope: string, fn: () => T): T {
+  const previous = current;
+  current = scope;
+  try {
+    return fn();
+  } finally {
+    current = previous;
+  }
+}
+```
+
+A scope that has to outlive the call that enters it, such as one a suspended
+traversal holds, is a `Disposable` its caller disposes. Make that an instance of
+a small class, which V8 creates several times faster than an object literal
+whose `[Symbol.dispose]` is an arrow function.
+
 ### Turning a file URL into a path
 
 Turn a file URL into a path with `fromFileUrl` from `@std/path`, as in
@@ -1113,9 +1145,9 @@ space and an emoji, which catches what the rule misses.
   which name the pattern has to match. A bare
   `deno test --no-check path/to/test.ts` drops the `--preload` and
   permissions that the package's `deno-test` task passes. In
-  `runtime/runner`, for example, the preload installs the global fake
-  `clock`, and without it a test that calls `clock.settle()` fails with
-  `ReferenceError: clock is not defined`.
+  `runtime/runner`, for example, the preload installs the fake clock, and
+  without it a test that calls `clock.settle()` fails with "clock is only
+  available inside a test running under the fake clock".
 - To test a specific package, `cd` into the package directory and run
   `deno task test`.
 
@@ -1142,7 +1174,7 @@ suite will break.
    the package's `"deno-test"` task, which runs the tests themselves — a
    `deno test` for most packages, or a runner of the package's own; see
    [TESTING.md](TESTING.md) for why. The `--allow-env` names the two variables
-   the test-records preload reads, as `docs/development/test-records.md`
+   the test module `@commonfabric/test-support/test` reads, as `docs/development/test-records.md`
    explains. A package without tests yet uses `"echo 'No tests defined.'"`.
 
 3. **Minimal `deno.jsonc` example:**

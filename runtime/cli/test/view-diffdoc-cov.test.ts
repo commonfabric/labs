@@ -1,7 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import type { DiffLine, DiffModel } from "../lib/view/diff.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import {
@@ -9,8 +8,9 @@ import {
   buildDiffDocument,
   type DiffWorkspace,
   realWorkspace,
-  type WorkspaceCache,
+  WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /** A workspace stub over a prepared root directory. */
 function stubWs(root: string): DiffWorkspace {
@@ -32,7 +32,7 @@ const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 // realWorkspace: read() error branch
 //
 
-Deno.test("realWorkspace: read of a bounded directory returns null (catch branch)", () => {
+test("realWorkspace: read of a bounded directory returns null (catch branch)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -181,7 +181,7 @@ describe("decoded workspace input", () => {
   });
 });
 
-Deno.test("realWorkspace: resolve of a bounded directory falls through to null", () => {
+test("realWorkspace: resolve of a bounded directory falls through to null", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.mkdirSync(join(root, ".git"));
@@ -203,7 +203,7 @@ Deno.test("realWorkspace: resolve of a bounded directory falls through to null",
 // findRepoRoot: no .git ancestor walks to the filesystem root
 //
 
-Deno.test("realWorkspace: a cwd with no .git ancestor leaves only the cwd base", () => {
+test("realWorkspace: a cwd with no .git ancestor leaves only the cwd base", () => {
   // A temp dir with no `.git` anywhere up to `/` exercises the walk that ends
   // with `parent === dir` returning null, so the only base is the cwd itself.
   const root = Deno.makeTempDirSync();
@@ -224,7 +224,7 @@ Deno.test("realWorkspace: a cwd with no .git ancestor leaves only the cwd base",
 // loadFile: cache hit short-circuits
 //
 
-Deno.test("buildDiffDocument: a shared cache is reused across builds (cache hit)", () => {
+test("buildDiffDocument: a shared cache is reused across builds (cache hit)", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -240,13 +240,17 @@ Deno.test("buildDiffDocument: a shared cache is reused across builds (cache hit)
 +export const b = a;
 `;
     const model = parseDiff(diff)!;
-    const cache: WorkspaceCache = new Map();
+    const cache = new WorkspaceCache();
     const ws = stubWs(root);
     // First build populates the cache for the resolved abs path.
     const first = buildDiffDocument(diff, model, ws, cache);
     assert(first.maps.rootFiles.size === 1, "first build resolved the file");
     const [absPath] = first.maps.rootFiles.keys();
-    assert(cache.has(absPath), "cache populated after the first build");
+    assertEquals(
+      cache.file(absPath)?.fileText,
+      "export const a = 1;\nexport const b = a;\n",
+      "cache holds the file the first build read",
+    );
     // Make read() throw if called again; the cache hit must avoid re-reading.
     const throwingWs: DiffWorkspace = {
       resolve: (p) => join(root, p),
@@ -274,7 +278,7 @@ Deno.test("buildDiffDocument: a shared cache is reused across builds (cache hit)
 // file header lines: an empty meta header line is skipped
 //
 
-Deno.test("buildDiffDocument: an empty header line is left untouched", () => {
+test("buildDiffDocument: an empty header line is left untouched", () => {
   // A blank line sits among the file's header lines (between `index` and `---`).
   // It is classified `other` (not meta), so the header loop's meta filter skips
   // it; either way an empty line gets no spans.
@@ -306,7 +310,7 @@ index 1111111..2222222 100644
 // hunk body: meta line inside the hunk gets diffMeta spans
 //
 
-Deno.test("buildDiffDocument: a `\\ No newline` line in the hunk body is diffMeta", () => {
+test("buildDiffDocument: a `\\ No newline` line in the hunk body is diffMeta", () => {
   // The `\ No newline at end of file` marker lands inside the hunk body range,
   // classified `meta`; with text it gets a diffMeta span.
   const diff = `diff --git a/m.ts b/m.ts
@@ -339,7 +343,7 @@ Deno.test("buildDiffDocument: a `\\ No newline` line in the hunk body is diffMet
 // hunk body: an empty trailing line is left without spans
 //
 
-Deno.test("buildDiffDocument: a trailing empty line outside the hunk gets no spans", () => {
+test("buildDiffDocument: a trailing empty line outside the hunk gets no spans", () => {
   // The text ends with a newline, so the split yields a final empty entry. It
   // is not part of any hunk; the body loop never assigns it spans.
   const diff = `diff --git a/m.ts b/m.ts
@@ -362,7 +366,7 @@ Deno.test("buildDiffDocument: a trailing empty line outside the hunk gets no spa
 // Markdown hunk with a workspace file: shown headings drive the tree
 //
 
-Deno.test("buildDiffDocument: a Markdown hunk shows its heading as a section", () => {
+test("buildDiffDocument: a Markdown hunk shows its heading as a section", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -404,7 +408,7 @@ Deno.test("buildDiffDocument: a Markdown hunk shows its heading as a section", (
 // Markdown hunk where no heading line is shown -> empty heading tree
 //
 
-Deno.test("buildDiffDocument: a Markdown hunk showing only body has no sections", () => {
+test("buildDiffDocument: a Markdown hunk showing only body has no sections", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -447,7 +451,7 @@ Deno.test("buildDiffDocument: a Markdown hunk showing only body has no sections"
 // Markdown hunk with NO workspace file: fragment heading tree
 //
 
-Deno.test("buildDiffDocument: a Markdown hunk with no workspace file builds heading sections from the fragment", () => {
+test("buildDiffDocument: a Markdown hunk with no workspace file builds heading sections from the fragment", () => {
   // No workspace file: ctx.fileDoc is null, so the heading tree comes from the
   // fragment parse of the new side, via the markdown fragment branch.
   const diff = `diff --git a/doc.md b/doc.md
@@ -479,7 +483,7 @@ Deno.test("buildDiffDocument: a Markdown hunk with no workspace file builds head
 // fileLineText: a hunk claiming a new-side line past EOF stays unverified -
 //
 
-Deno.test("buildDiffDocument: a hunk naming new-side lines past the workspace EOF cannot verify", () => {
+test("buildDiffDocument: a hunk naming new-side lines past the workspace EOF cannot verify", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -520,7 +524,7 @@ Deno.test("buildDiffDocument: a hunk naming new-side lines past the workspace EO
 // buildMaps.fromFile: a file offset on a hidden line maps to nothing
 //
 
-Deno.test("buildDiffDocument: fromFile returns null for a file line the diff hides", () => {
+test("buildDiffDocument: fromFile returns null for a file line the diff hides", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(join(root, "deno.json"), "{}");
@@ -561,7 +565,7 @@ Deno.test("buildDiffDocument: fromFile returns null for a file line the diff hid
 // lineEndOffset: a file section whose last line is the final text line
 //
 
-Deno.test("buildDiffDocument: the file section end offset reaches the end of the text", () => {
+test("buildDiffDocument: the file section end offset reaches the end of the text", () => {
   // The diff has no trailing newline, so the file's endLine IS the last line of
   // the whole text; lineEndOffset returns text.length for that section.
   const diff =
@@ -580,7 +584,7 @@ Deno.test("buildDiffDocument: the file section end offset reaches the end of the
 // findRepoRoot: the 64-deep walk cap
 //
 
-Deno.test("realWorkspace: a path nested past the walk depth cap finds no repo root", () => {
+test("realWorkspace: a path nested past the walk depth cap finds no repo root", () => {
   // findRepoRoot walks up at most 64 ancestors. A path nested deeper than that,
   // with no `.git` anywhere, exhausts the cap and returns null (so only the cwd
   // is a base). The temp root is the `.git`-free top.
@@ -635,7 +639,7 @@ function craftedModel(
   };
 }
 
-Deno.test("buildDiffDocument: an empty meta header line is skipped", () => {
+test("buildDiffDocument: an empty meta header line is skipped", () => {
   // A model that classifies an EMPTY header line as `meta`. The header loop sees
   // kind === "meta" but t.length === 0, so it skips the line without spanning.
   const text =
@@ -660,7 +664,7 @@ Deno.test("buildDiffDocument: an empty meta header line is skipped", () => {
   );
 });
 
-Deno.test("buildDiffDocument: a missing model entry inside the hunk body is skipped", () => {
+test("buildDiffDocument: a missing model entry inside the hunk body is skipped", () => {
   // A model whose `lines` array is shorter than the hunk's body range leaves an
   // in-range body line with an undefined entry; the builder skips it.
   const text =
@@ -683,7 +687,7 @@ Deno.test("buildDiffDocument: a missing model entry inside the hunk body is skip
   );
 });
 
-Deno.test("buildDiffDocument: a non-content body kind is skipped", () => {
+test("buildDiffDocument: a non-content body kind is skipped", () => {
   // A model that classifies an in-body line as `other` (not meta/ctx/add/del).
   // The body loop's content-kind guard skips it.
   const text =

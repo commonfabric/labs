@@ -5,11 +5,16 @@
  * write, and the refusals it makes instead of one.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
-import { Runtime } from "@commonfabric/runner";
+import { Runtime, sourceDocKey } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { resolveLocalSourceProgram } from "../../src/ops/bulk-local.deno.ts";
 import {
@@ -464,6 +469,51 @@ describe("piece-restore", () => {
       // The other writer's change stands.
       const after = await pieces.get(id, false);
       expect(await after.result.get(["version"])).toBe("three");
+    });
+
+    it("refuses a revision whose source is no longer retained, writing nothing", async () => {
+      const { id, v1 } = await movedPiece();
+      const controller = await pieces.get(id, false);
+      const before = await readRestorableSource(pieces, controller);
+      const oldest = before.revisions[0];
+      // The first generation's entry source document is erased, so nothing
+      // can load the bytes that revision names.
+      const erase = runtime.edit();
+      runtime.getCell(
+        pieces.getSpace(),
+        sourceDocKey(oldest.patternIdentity),
+        undefined,
+        erase,
+      ).setRawUntyped(undefined);
+      expect((await erase.commit().settled).ok).toBeDefined();
+      await pieces.synced();
+
+      const outcome = await restorePiece(pieces, id, {
+        revisionId: v1,
+        apply: true,
+      });
+      expect(outcome.revisions.map((entry) => entry.retained)).toEqual([
+        false,
+        true,
+      ]);
+      expect(outcome.selected).toEqual(outcome.revisions[0]);
+      expect(outcome.restored).toBe(false);
+      expect(outcome.problem).toBe(
+        `The source behind ${oldest.patternIdentity}#default is not ` +
+          `retained in this space, so revision ${v1} cannot be restored.`,
+      );
+      // Nothing written: the piece still runs the second generation.
+      const after = await pieces.get(id, false);
+      expect(await after.result.get(["version"])).toBe("two");
+      expect(
+        (await readRestorableSource(pieces, controller)).revisions.length,
+      ).toBe(before.revisions.length);
+
+      // The retained revision alongside it is still a restore target.
+      const head = await restorePiece(pieces, id, {
+        revisionId: before.revisions[1].revisionId,
+      });
+      expect(head.problem).toBeUndefined();
     });
 
     it("names every revision it does hold for an id it does not", async () => {

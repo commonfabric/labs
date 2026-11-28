@@ -1,7 +1,10 @@
 import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { classifyCallbackBoundary } from "../../src/policy/callback-boundary.ts";
+import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 function createProgramWithFiles(
   files: Record<string, string>,
@@ -87,7 +90,7 @@ export type SqliteTableFunction = <T>(
 export declare const table: SqliteTableFunction;
 `;
 
-Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned supported boundary", () => {
+test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned supported boundary", () => {
   const { sourceFile, checker } = createProgramWithFiles({
     "/commonfabric.d.ts": SQLITE_TYPINGS,
     "/test.tsx": `
@@ -111,7 +114,7 @@ Deno.test("classifyCallbackBoundary: a SQLite table row rule is a compute-owned 
   });
 });
 
-Deno.test("classifyCallbackBoundary: a user-defined table alias does not match the SQLite rule", () => {
+test("classifyCallbackBoundary: a user-defined table alias does not match the SQLite rule", () => {
   // A local alias must not match, whether its name resembles the framework's
   // alias or belongs to an unrelated API.
   for (const alias of ["SqliteTableFunction", "UserTableFunction"]) {
@@ -137,4 +140,108 @@ Deno.test("classifyCallbackBoundary: a user-defined table alias does not match t
       true,
     );
   }
+});
+
+describe("classifyCallbackBoundary()", () => {
+  describe("a callback in an applied `lift`", () => {
+    // `lift(fn)(input)` applies the lifted function to its input. A callback
+    // passed as that input is a compute-owned boundary of its own; the
+    // callback `lift` lifts is a lift builder's.
+
+    function liftCallbacks(): {
+      lifted: ts.ArrowFunction;
+      input: ts.ArrowFunction;
+      checker: ts.TypeChecker;
+    } {
+      const { sourceFile, checker } = createProgramWithFiles({
+        "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+        "/test.tsx": `
+          import { lift } from "commonfabric";
+          const result = lift((f: () => number) => f())(() => 1);
+        `,
+      });
+      const arrows: ts.ArrowFunction[] = [];
+      const visit = (node: ts.Node): void => {
+        if (ts.isArrowFunction(node)) arrows.push(node);
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      const [lifted, input] = arrows;
+      if (!lifted || !input) throw new Error("Expected two callbacks");
+      return { lifted, input, checker };
+    }
+
+    it("returns a compute-owned `lift-applied` boundary for the input callback", () => {
+      const { input, checker } = liftCallbacks();
+      expect(classifyCallbackBoundary(input, checker)).toEqual({
+        kind: "supported",
+        boundaryKind: "lift-applied",
+        bodyContext: {
+          strategy: "explicit",
+          kind: "compute",
+          owner: "lift-applied",
+        },
+      });
+    });
+
+    it("returns a `lift-builder` boundary for the lifted callback", () => {
+      const { lifted, checker } = liftCallbacks();
+      expect(classifyCallbackBoundary(lifted, checker)).toEqual({
+        kind: "supported",
+        boundaryKind: "lift-builder",
+        bodyContext: { strategy: "explicit", kind: "compute", owner: "lift" },
+      });
+    });
+  });
+
+  describe("a callback passed to `render()`", () => {
+    function renderCallback(source: string): {
+      callback: ts.ArrowFunction;
+      checker: ts.TypeChecker;
+    } {
+      const { sourceFile, checker } = createProgramWithFiles({
+        "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+        "/test.tsx": source,
+      });
+      let callback: ts.ArrowFunction | undefined;
+      const visit = (node: ts.Node): void => {
+        if (!callback && ts.isArrowFunction(node)) callback = node;
+        ts.forEachChild(node, visit);
+      };
+      visit(sourceFile);
+      if (!callback) throw new Error("Expected a callback");
+      return { callback, checker };
+    }
+
+    it("returns a pattern-owned `render-builder` boundary when `render` comes from commonfabric", () => {
+      const { callback, checker } = renderCallback(`
+        import { render } from "commonfabric";
+        const view = render(() => 1);
+      `);
+      expect(classifyCallbackBoundary(callback, checker)).toEqual({
+        kind: "supported",
+        boundaryKind: "render-builder",
+        bodyContext: {
+          strategy: "explicit",
+          kind: "pattern",
+          owner: "render",
+        },
+      });
+    });
+
+    it("returns an unsupported container for a local function named `render`", () => {
+      const { callback, checker } = renderCallback(`
+        function render(build: () => number): number {
+          return build();
+        }
+        const view = render(() => 1);
+      `);
+      expect(classifyCallbackBoundary(callback, checker)).toEqual({
+        kind: "unsupported",
+        boundaryKind: "unsupported-container",
+        boundaryDiagnostic: "function-creation",
+        bodyContext: { strategy: "inherit-parent" },
+      });
+    });
+  });
 });

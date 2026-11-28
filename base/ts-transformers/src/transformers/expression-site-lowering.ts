@@ -28,7 +28,7 @@ import {
 } from "./expression-rewrite/rewrite-helpers.ts";
 import type { AnalyzeFn } from "./expression-rewrite/types.ts";
 import type { ExpressionContainerKind } from "./expression-site-types.ts";
-import { createLiftAppliedCall } from "./builtins/lift-applied.ts";
+import { getCalleeReceiver } from "./call-root-support.ts";
 import { classifyOpaquePathTerminalCall } from "./opaque-roots.ts";
 
 interface RewriteExpressionSiteParams {
@@ -131,27 +131,6 @@ function markSyntheticReactiveCollectionDeclarationIfNeeded(
   context.markSyntheticReactiveCollectionDeclaration(rewritten);
 }
 
-function getTerminalGetReceiver(
-  expression: ts.Expression,
-): ts.Expression | undefined {
-  if (
-    !ts.isCallExpression(expression) ||
-    classifyOpaquePathTerminalCall(expression) !== "get"
-  ) {
-    return undefined;
-  }
-
-  const callee = expression.expression;
-  if (
-    !ts.isPropertyAccessExpression(callee) &&
-    !ts.isElementAccessExpression(callee)
-  ) {
-    return undefined;
-  }
-
-  return callee.expression;
-}
-
 function getEnclosingZeroArgInlineIifeCall(
   node: ts.Node,
 ): ts.CallExpression | undefined {
@@ -201,14 +180,18 @@ function rewriteDirectCellGetInitializer(
     return undefined;
   }
 
-  const receiver = getTerminalGetReceiver(expression);
-  if (!receiver) {
+  if (
+    !ts.isCallExpression(expression) ||
+    classifyOpaquePathTerminalCall(expression) !== "get"
+  ) {
     return undefined;
   }
 
+  // A `.get()` on a receiver that is not reactive, such as a `Map`, has no
+  // data flow to lift over and stays a plain call.
   const analysis = analyze(expression);
   const relevantDataFlows = context.getRelevantDataFlowsFromAnalysis(analysis);
-  const wrapped = createReactiveWrapperForExpression(
+  return createReactiveWrapperForExpression(
     expression,
     relevantDataFlows,
     context,
@@ -217,16 +200,6 @@ function rewriteDirectCellGetInitializer(
       preferInputBoundWrapper: true,
     },
   );
-  if (wrapped) {
-    return wrapped;
-  }
-
-  return createLiftAppliedCall(expression, [receiver], {
-    factory: context.factory,
-    tsContext: context.tsContext,
-    cfHelpers: context.cfHelpers,
-    context,
-  });
 }
 
 function rewriteLateArrayMethodCallbackCall(
@@ -299,7 +272,6 @@ export function rewriteExpressionSite(
     context,
     analyze,
     reactiveContextKind: contextInfo.kind,
-    inSafeContext: contextInfo.kind === "compute",
     containerKind,
     preferInputBoundWrappers,
   });
@@ -352,13 +324,8 @@ export function rewriteOwnedPreClosureJsxExpressionSite(
   } = params;
 
   const contextInfo = context.getReactiveContext(expression);
-  const inSafeContext = contextInfo.kind === "compute";
   const analysis = analyze(expression);
   const hasLogicalOps = containsLogicalBinaryOperator(expression);
-
-  if (inSafeContext) {
-    return undefined;
-  }
 
   if (!analysis.requiresRewrite && !hasLogicalOps) {
     return undefined;
@@ -386,7 +353,6 @@ export function rewriteOwnedPreClosureJsxExpressionSite(
     context,
     analyze,
     reactiveContextKind: contextInfo.kind,
-    inSafeContext,
     containerKind: "jsx-expression",
     preferInputBoundWrappers,
   });
@@ -477,7 +443,6 @@ export function rewriteHelperOwnedExpressionSites<T extends ts.Node>(
           context,
           analyze,
           reactiveContextKind: "pattern",
-          inSafeContext: false,
           containerKind,
           preferInputBoundWrappers: true,
         });
@@ -641,7 +606,8 @@ export function rewritePatternOwnedExpressionSites<T extends ts.Node>(
 
 /**
  * Find the leftmost identifier in a dataflow expression — the "root" of a
- * `foo`, `foo.bar`, `foo.bar.baz`, or `foo.key("bar")` chain.
+ * `foo`, `foo.bar`, `foo.bar.baz`, `foo.key("bar")`, or `foo["key"]("bar")`
+ * chain.
  */
 function getDataFlowRootIdentifier(
   expression: ts.Expression,
@@ -652,12 +618,12 @@ function getDataFlowRootIdentifier(
       current = current.expression;
       continue;
     }
-    if (
-      ts.isCallExpression(current) &&
-      ts.isPropertyAccessExpression(current.expression) &&
-      current.expression.name.text === "key"
-    ) {
-      current = current.expression.expression;
+    const keyReceiver = ts.isCallExpression(current) &&
+        classifyOpaquePathTerminalCall(current) === "key"
+      ? getCalleeReceiver(current)
+      : undefined;
+    if (keyReceiver) {
+      current = keyReceiver;
       continue;
     }
     break;
@@ -667,19 +633,17 @@ function getDataFlowRootIdentifier(
 
 /**
  * True when every relevant dataflow is rooted at an array-method element
- * binding (no captures of outer reactive values like `labelPrefix`).
+ * binding (no captures of outer reactive values like `labelPrefix`). With no
+ * dataflows there is nothing to lift, so this is true.
  */
 function allDataFlowsAreElementBindingRoots(
   context: TransformationContext,
   dataFlows: readonly { readonly expression: ts.Expression }[],
 ): boolean {
-  if (dataFlows.length === 0) return false;
-  for (const dataFlow of dataFlows) {
+  return dataFlows.every((dataFlow) => {
     const root = getDataFlowRootIdentifier(dataFlow.expression);
-    if (!root) return false;
-    if (!context.isArrayMethodElementBindingReference(root)) return false;
-  }
-  return true;
+    return !!root && context.isArrayMethodElementBindingReference(root);
+  });
 }
 
 /**
@@ -734,6 +698,7 @@ export function rewriteArrayMethodCallbackExpressionSites(
 
   const rewriteArrayMethodOwnedReceiverMethodExpressionSite = (
     expression: ts.Expression,
+    containerKind: ExpressionContainerKind,
   ): ts.Expression | undefined => {
     const lowerableSite = findLowerableExpressionSite(
       expression,
@@ -741,13 +706,6 @@ export function rewriteArrayMethodCallbackExpressionSites(
       analyze,
     );
     if (lowerableSite && lowerableSite.expression !== expression) {
-      return undefined;
-    }
-
-    const containerKind = expression === body
-      ? "return-expression"
-      : getExpressionContainerKind(expression);
-    if (!containerKind || containerKind === "jsx-expression") {
       return undefined;
     }
 
@@ -765,19 +723,12 @@ export function rewriteArrayMethodCallbackExpressionSites(
       return undefined;
     }
 
+    // The owner is a call or a value computation, never a passthrough
+    // container, so there is no late in-place lowering to defer to.
     const analysis = analyze(expression);
     const relevantDataFlows = context.getRelevantDataFlowsFromAnalysis(
       analysis,
     );
-    if (relevantDataFlows.length === 0) {
-      return undefined;
-    }
-    if (
-      shouldDeferToLateInPlaceLowering(context, expression, relevantDataFlows)
-    ) {
-      return undefined;
-    }
-
     return createReactiveWrapperForExpression(
       expression,
       relevantDataFlows,
@@ -800,9 +751,6 @@ export function rewriteArrayMethodCallbackExpressionSites(
       const relevantDataFlows = context.getRelevantDataFlowsFromAnalysis(
         analysis,
       );
-      if (relevantDataFlows.length === 0) {
-        return undefined;
-      }
       if (
         shouldDeferToLateInPlaceLowering(context, expression, relevantDataFlows)
       ) {
@@ -951,7 +899,10 @@ export function rewriteArrayMethodCallbackExpressionSites(
         : getExpressionContainerKind(node);
       if (containerKind && containerKind !== "jsx-expression") {
         const callbackOwnedReceiverRewrite =
-          rewriteArrayMethodOwnedReceiverMethodExpressionSite(node);
+          rewriteArrayMethodOwnedReceiverMethodExpressionSite(
+            node,
+            containerKind,
+          );
         if (callbackOwnedReceiverRewrite) {
           return callbackOwnedReceiverRewrite;
         }

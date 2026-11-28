@@ -21,7 +21,6 @@
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Database } from "@db/sqlite";
 import {
   applyCommit,
@@ -57,6 +56,13 @@ import {
   setServerExecutionConfig,
   toDocumentPath,
 } from "../v2.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-wave-test-space";
 const SERVICE = `service:${SPACE}`;
@@ -118,7 +124,7 @@ const withLiveLease = (engine: Engine): string => {
   return holder;
 };
 
-Deno.test("wave carriage: a derived commit stores annotations and consequenceOf; scoped ops key by the annotated scope_key", async () => {
+test("wave carriage: a derived commit stores annotations and consequenceOf; scoped ops key by the annotated scope_key", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -166,7 +172,7 @@ Deno.test("wave carriage: a derived commit stores annotations and consequenceOf;
   }
 });
 
-Deno.test("wave admission: a derived commit under a session other than the holder's own service session is refused (protocol.md §2, RULED 2026-08-05)", async () => {
+test("wave admission: a derived commit under a session other than the holder's own service session is refused (protocol.md §2, RULED 2026-08-05)", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -221,7 +227,7 @@ Deno.test("wave admission: a derived commit under a session other than the holde
   }
 });
 
-Deno.test("wave carriage: derivedThrough is stored on derived commits and refused on other classes (protocol.md §4, §7)", async () => {
+test("wave carriage: derivedThrough is stored on derived commits and refused on other classes (protocol.md §4, §7)", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -262,7 +268,7 @@ Deno.test("wave carriage: derivedThrough is stored on derived commits and refuse
   }
 });
 
-Deno.test("delegated admission: the engine refuses delegated carriage on derived and system classes, and partial carriage on authored (protocol.md §2's delegated row)", async () => {
+test("delegated admission: the engine refuses delegated carriage on derived and system classes, and partial carriage on authored (protocol.md §2's delegated row)", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -405,7 +411,7 @@ Deno.test("delegated admission: the engine refuses delegated carriage on derived
   }
 });
 
-Deno.test("wave carriage: a scoped write with no explicit scope_key is rejected, never defaulted (the silent-empty-instance trap)", async () => {
+test("wave carriage: a scoped write with no explicit scope_key is rejected, never defaulted (the silent-empty-instance trap)", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -429,7 +435,7 @@ Deno.test("wave carriage: a scoped write with no explicit scope_key is rejected,
   }
 });
 
-Deno.test("wave carriage: an annotated scope_key must match the write's declared scope", async () => {
+test("wave carriage: an annotated scope_key must match the write's declared scope", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -453,7 +459,7 @@ Deno.test("wave carriage: an annotated scope_key must match the write's declared
   }
 });
 
-Deno.test("wave carriage: a scope_key annotation targeting a space-scoped write is refused (addressing is one per SCOPED write)", async () => {
+test("wave carriage: a scope_key annotation targeting a space-scoped write is refused (addressing is one per SCOPED write)", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -500,7 +506,7 @@ Deno.test("wave carriage: a scope_key annotation targeting a space-scoped write 
   }
 });
 
-Deno.test("wave carriage: a non-canonical annotated scope_key is refused at ADMISSION — raw delimiters and malformed escapes never key a row", async () => {
+test("wave carriage: a non-canonical annotated scope_key is refused at ADMISSION — raw delimiters and malformed escapes never key a row", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -565,7 +571,7 @@ Deno.test("wave carriage: a non-canonical annotated scope_key is refused at ADMI
   }
 });
 
-Deno.test("wave commit: basis-instance keys must be canonical scope keys — a corrupt action or entity instance is refused, and nothing is applied", async () => {
+test("wave commit: basis-instance keys must be canonical scope keys — a corrupt action or entity instance is refused, and nothing is applied", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -645,7 +651,7 @@ Deno.test("wave commit: basis-instance keys must be canonical scope keys — a c
   }
 });
 
-Deno.test("wave carriage: annotations and consequenceOf are refused on non-derived classes (closed metadata list)", async () => {
+test("wave carriage: annotations and consequenceOf are refused on non-derived classes (closed metadata list)", async () => {
   const { engine } = await createEngine();
   try {
     assertThrows(
@@ -675,7 +681,7 @@ Deno.test("wave carriage: annotations and consequenceOf are refused on non-deriv
   }
 });
 
-Deno.test("wave commit: re-verification throws NAMING docs whose head passed the basis, and applies nothing", async () => {
+test("wave commit: re-verification throws NAMING docs whose head passed the basis, and applies nothing", async () => {
   const { engine, path } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -719,7 +725,37 @@ Deno.test("wave commit: re-verification throws NAMING docs whose head passed the
   }
 });
 
-Deno.test("wave commit: a rebased doc re-verifies against the exact head its merge decision observed", async () => {
+test("wave commit: a doc the batch writes twice is named once when its head passed the basis", async () => {
+  const { engine } = await createEngine();
+  setServerExecutionConfig(true);
+  try {
+    const holder = withLiveLease(engine);
+    applyCommit(engine, {
+      sessionId: "rival-session",
+      principal: "user:rival",
+      commit: setCommit(1, [{ id: "of:x", n: 99 }]),
+    });
+    const error = assertThrows(
+      () =>
+        applyWaveCommit(engine, {
+          sessionId: holder,
+          space: SPACE,
+          commit: setCommit(1, [{ id: "of:x", n: 1 }, { id: "of:x", n: 2 }]),
+          commitClass: "derived",
+          holder,
+          waveBasis: { basisSeq: 0, rebasedHeads: [] },
+        }),
+      WaveCommitConflictError,
+    );
+    assertEquals(error.conflictedDocs, ["of:x space"]);
+    assertEquals(selectDocHead(engine, { id: "of:x", scopeKey: "space" }), 1);
+  } finally {
+    resetServerExecutionConfig();
+    close(engine);
+  }
+});
+
+test("wave commit: a rebased doc re-verifies against the exact head its merge decision observed", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -774,7 +810,7 @@ Deno.test("wave commit: a rebased doc re-verifies against the exact head its mer
   }
 });
 
-Deno.test("wave commit: a served handler's read a commit staled is named BY CONTRIBUTION, and nothing is applied", async () => {
+test("wave commit: a served handler's read a commit staled is named BY CONTRIBUTION, and nothing is applied", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -833,7 +869,7 @@ Deno.test("wave commit: a served handler's read a commit staled is named BY CONT
   }
 });
 
-Deno.test("wave commit: precondition failures are named BY INDEX, and nothing is applied", async () => {
+test("wave commit: precondition failures are named BY INDEX, and nothing is applied", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -871,7 +907,7 @@ Deno.test("wave commit: precondition failures are named BY INDEX, and nothing is
   }
 });
 
-Deno.test("wave commit: a failed value pin is named BY INDEX, and nothing is applied", async () => {
+test("wave commit: a failed value pin is named BY INDEX, and nothing is applied", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -919,7 +955,7 @@ Deno.test("wave commit: a failed value pin is named BY INDEX, and nothing is app
   }
 });
 
-Deno.test("wave commit: basis rows land in the same transaction; in-wave reads share the wave's commit seq; a later run REPLACES the instance's rows", async () => {
+test("wave commit: basis rows land in the same transaction; in-wave reads share the wave's commit seq; a later run REPLACES the instance's rows", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -1004,7 +1040,7 @@ Deno.test("wave commit: basis rows land in the same transaction; in-wave reads s
   }
 });
 
-Deno.test("wave rebase input: selectWritePathsSince reports whole-doc rewrites as the root path and patches as their pointer paths", async () => {
+test("wave rebase input: selectWritePathsSince reports whole-doc rewrites as the root path and patches as their pointer paths", async () => {
   const { engine } = await createEngine();
   try {
     applyCommit(engine, {
@@ -1046,7 +1082,7 @@ Deno.test("wave rebase input: selectWritePathsSince reports whole-doc rewrites a
   }
 });
 
-Deno.test("delegated carriage: a sessionless delegated batch carrying a session-scoped SQLITE op is refused at admission (scopes.md §5 — the entity-write refusal's sqlite twin)", async () => {
+test("delegated carriage: a sessionless delegated batch carrying a session-scoped SQLITE op is refused at admission (scopes.md §5 — the entity-write refusal's sqlite twin)", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {
@@ -1082,7 +1118,7 @@ Deno.test("delegated carriage: a sessionless delegated batch carrying a session-
   }
 });
 
-Deno.test("wave replay does not re-insert durable outbox rows: the stored result returns with replayed=true and FP1 carriage is skipped (stage-G round-2 thread 5)", async () => {
+test("wave replay does not re-insert durable outbox rows: the stored result returns with replayed=true and FP1 carriage is skipped (stage-G round-2 thread 5)", async () => {
   const { engine } = await createEngine();
   setServerExecutionConfig(true);
   try {

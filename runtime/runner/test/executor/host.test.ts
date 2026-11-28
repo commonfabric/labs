@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -9,15 +8,18 @@ import type {
   ServerExecutionObserver,
 } from "@commonfabric/memory/v2/server";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   ExecutorHost,
   type ExecutorHostOptions,
   type HostOccupancy,
   type LifecycleVerb,
 } from "../../src/executor/host.ts";
+import { runEventKey } from "../../src/executor/run-beacon.ts";
 import { inServingContext } from "../../src/executor/serving-context.ts";
 import { servingRuntimeFactory } from "../../src/executor/serving-runtime.ts";
 import { SpaceServer } from "../../src/executor/space-server.ts";
+import { getServingLoopStats } from "../../src/executor/stats.ts";
 import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { DelegationStore } from "../../src/storage/delegation-store.ts";
@@ -277,6 +279,18 @@ describe("ExecutorHost", () => {
         await close();
       }
     });
+
+    it("is what the process's serving-loop counters read while the host is open, and nothing is once it has closed", async () => {
+      const { host, close } = newHost();
+      try {
+        expect(getServingLoopStats()?.activeSpaces).toBe(0);
+        await host.runLifecycleVerb(space, probeVerb("served", []));
+        expect(getServingLoopStats()?.activeSpaces).toBe(1);
+      } finally {
+        await close();
+      }
+      expect(getServingLoopStats()).toBeUndefined();
+    });
   });
 
   describe("runLifecycleVerb()", () => {
@@ -337,6 +351,56 @@ describe("ExecutorHost", () => {
         expect(ranOn[1]).toBe(ranOn[0]);
         expect(ranOn[2]).not.toBe(ranOn[0]);
         expect(host.spaceServer(space)).not.toBe(first);
+      } finally {
+        await close();
+      }
+    });
+  });
+
+  describe("failEvent()", () => {
+    /** The stream entry a served handler's run in these cases handled. */
+    const event = { sidecarId: "of:sidecar", eventId: "evt-held", seq: 2 };
+
+    it("keeps an event failed for a space with no tenure through a tenure that does not find it", async () => {
+      const { host, close } = newHost();
+      try {
+        host.failEvent(space, event, "ended");
+        await host.runLifecycleVerb(space, probeVerb("activate", []));
+        await host.spaceServer(space)!.park("test-park");
+
+        expect([...host.accessForTestingOnly.failedEvents.get(space)!.keys()])
+          .toEqual([runEventKey(event)]);
+      } finally {
+        await close();
+      }
+    });
+
+    it("records an event failed for a space while the host is open, and none once it has closed", async () => {
+      const { host, close } = newHost();
+      const other = (await Identity.generate()).did() as MemorySpace;
+      try {
+        host.failEvent(space, event, "ended");
+        await host.close();
+        host.failEvent(other, event, "ended");
+
+        const { failedEvents } = host.accessForTestingOnly;
+        expect([...failedEvents.get(space)!.keys()]).toEqual([
+          runEventKey(event),
+        ]);
+        expect(failedEvents.has(other)).toBe(false);
+      } finally {
+        await close();
+      }
+    });
+
+    it("keeps no map of a space's failed events once a tenure that holds an empty one ends", async () => {
+      const { host, close } = newHost();
+      try {
+        await host.runLifecycleVerb(space, probeVerb("activate", []));
+        expect(host.accessForTestingOnly.failedEvents.get(space)?.size).toBe(0);
+
+        await host.spaceServer(space)!.park("test-park");
+        expect(host.accessForTestingOnly.failedEvents.has(space)).toBe(false);
       } finally {
         await close();
       }

@@ -1,138 +1,91 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
+import { join } from "@std/path";
 
-import { parseJUnit, recordedCases } from "@commonfabric/test-support/records";
-import {
-  mergeJUnitReports,
-  mergeWrittenReports,
-  runMemberBatches,
-  runTestBatches,
-} from "./run-test-batches.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runMemberBatches, runTestBatches } from "./run-test-batches.ts";
 
-/** A directory holding the files a case describes, by name and source. */
+/**
+ * A directory holding the files a case describes, by name and source. Its
+ * path is the real one, since a test run from inside it is named by that
+ * path, and a permission granted under another spelling does not reach it.
+ */
 async function fixture(files: Record<string, string>): Promise<string> {
-  const dir = await Deno.makeTempDir({ prefix: "batches-fixture-" });
+  const dir = await Deno.realPath(
+    await Deno.makeTempDir({ prefix: "batches-fixture-" }),
+  );
   for (const [name, source] of Object.entries(files)) {
     await Deno.writeTextFile(`${dir}/${name}`, source);
   }
   return dir;
 }
 
-/** The names and outcomes of the cases the report at `file` holds. */
-async function outcomes(file: string): Promise<Map<string, string>> {
-  return new Map(
-    recordedCases(parseJUnit(await Deno.readTextFile(file)))
-      .map((leaf) => [leaf.name, leaf.outcome]),
-  );
+/**
+ * A test file whose one test, `name`, leaves a file `<name>.ran` beside it,
+ * which is what tells a case that the test ran.
+ */
+function marking(name: string): string {
+  return `Deno.test(${JSON.stringify(name)}, () => {\n` +
+    `  Deno.writeTextFileSync(new URL(${
+      JSON.stringify(`${name}.ran`)
+    }, import.meta.url), "");\n` +
+    "});\n";
+}
+
+const ROOT = join(import.meta.dirname!, "..");
+
+/**
+ * Runs `run-test-batches.ts` as its own program from `dir`, as a member's
+ * `test` task does, and returns the code it exits with.
+ */
+async function runScript(dir: string): Promise<number> {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: ROOT,
+    cwd: dir,
+    args: (lockPath) => [
+      "run",
+      "--config",
+      join(ROOT, "deno.jsonc"),
+      "--lock",
+      lockPath,
+      "--allow-read",
+      "--allow-write",
+      "--allow-run",
+      join(ROOT, "tasks/run-test-batches.ts"),
+      ".",
+      "--",
+      "--no-config",
+      "--no-check",
+      `--allow-write=${dir}`,
+    ],
+  });
+  return output.code;
+}
+
+/** The tests in `dir` that left their mark, by name. */
+async function ran(dir: string): Promise<string[]> {
+  return (await Array.fromAsync(Deno.readDir(dir)))
+    .map((entry) => entry.name)
+    .filter((name) => name.endsWith(".ran"))
+    .map((name) => name.slice(0, -".ran".length))
+    .sort();
 }
 
 describe("run-test-batches", () => {
-  describe("mergeJUnitReports()", () => {
-    const report = (tests: number, failures: number, body: string) =>
-      '<?xml version="1.0" encoding="UTF-8"?>\n' +
-      `<testsuites name="deno test" tests="${tests}" failures="${failures}" ` +
-      `errors="0" time="0.500">\n${body}</testsuites>\n`;
-
-    it("holds every suite of each report, and sums the root's counts", () => {
-      const merged = mergeJUnitReports([
-        report(
-          1,
-          0,
-          '<testsuite name="./a.test.ts"><testcase name="a"/></testsuite>\n',
-        ),
-        report(
-          2,
-          1,
-          '<testsuite name="./b.test.ts"><testcase name="b"/><testcase name="c"><failure/></testcase></testsuite>\n',
-        ),
-      ]);
-      expect(recordedCases(parseJUnit(merged)).map((leaf) => leaf.name))
-        .toEqual(["a", "b", "c"]);
-      expect(merged).toContain(
-        '<testsuites name="deno test" tests="3" failures="1" errors="0" ' +
-          'time="1.000">',
-      );
-    });
-
-    it("throws on a report with no root element", () => {
-      expect(() => mergeJUnitReports(["<testsuite/>"])).toThrow(
-        "Not a JUnit report",
-      );
-    });
-  });
-
-  describe("mergeWrittenReports()", () => {
-    const report = (name: string) =>
-      `<testsuites tests="1"><testsuite name="./${name}.test.ts">` +
-      `<testcase name="${name}"/></testsuite></testsuites>`;
-
-    it("merges the reports that were written, skipping one that was not, and removes them", async () => {
-      const dir = await fixture({ "r.0": report("a"), "r.2": report("c") });
-      try {
-        await mergeWrittenReports(`${dir}/r`, [
-          `${dir}/r.0`,
-          `${dir}/r.1`,
-          `${dir}/r.2`,
-        ]);
-        expect([...(await outcomes(`${dir}/r`)).keys()]).toEqual(["a", "c"]);
-        expect([...Deno.readDirSync(dir)].map((entry) => entry.name))
-          .toEqual(["r"]);
-      } finally {
-        await Deno.remove(dir, { recursive: true });
-      }
-    });
-
-    it("writes nothing where no report was written", async () => {
-      const dir = await fixture({});
-      try {
-        await mergeWrittenReports(`${dir}/r`, [`${dir}/r.0`]);
-        expect([...Deno.readDirSync(dir)]).toEqual([]);
-      } finally {
-        await Deno.remove(dir, { recursive: true });
-      }
-    });
-
-    it("throws where a report is there and cannot be read", async () => {
-      const dir = await fixture({ "r.1": report("b") });
-      try {
-        await Deno.mkdir(`${dir}/r.0`);
-        await expect(
-          mergeWrittenReports(`${dir}/r`, [`${dir}/r.0`, `${dir}/r.1`]),
-        ).rejects.toThrow();
-        // Nothing was merged, and the readable report is still there.
-        expect([...Deno.readDirSync(dir)].map((entry) => entry.name).sort())
-          .toEqual(["r.0", "r.1"]);
-      } finally {
-        await Deno.remove(dir, { recursive: true });
-      }
-    });
-  });
-
   describe("runTestBatches()", () => {
-    it("leaves one report holding every batch's tests", async () => {
+    it("runs every batch's tests", async () => {
       const dir = await fixture({
-        "a.test.ts": 'Deno.test("rises", () => {});\n',
-        "b.test.ts": 'Deno.test("sets", () => {});\n',
+        "a.test.ts": marking("rises"),
+        "b.test.ts": marking("sets"),
       });
       try {
-        const junit = `--junit-path=${dir}/report.xml`;
+        const flags = ["--no-config", "--no-check", `--allow-write=${dir}`];
         const code = await runTestBatches([
-          {
-            flags: ["--no-config", "--no-check", junit],
-            files: [`${dir}/a.test.ts`],
-          },
-          {
-            flags: ["--no-config", "--no-check", junit],
-            files: [`${dir}/b.test.ts`],
-          },
+          { flags, files: [`${dir}/a.test.ts`] },
+          { flags, files: [`${dir}/b.test.ts`] },
         ]);
         expect(code).toBe(0);
-        expect(await outcomes(`${dir}/report.xml`)).toEqual(
-          new Map([["rises", "pass"], ["sets", "pass"]]),
-        );
-        expect(
-          (await Array.fromAsync(Deno.readDir(dir))).map((e) => e.name).sort(),
-        ).toEqual(["a.test.ts", "b.test.ts", "report.xml"]);
+        expect(await ran(dir)).toEqual(["rises", "sets"]);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
@@ -143,72 +96,33 @@ describe("run-test-batches", () => {
         "a.test.ts": 'Deno.test("fails on purpose", () => {\n' +
           '  throw new Error("a fixture of runTestBatches() failing");\n' +
           "});\n",
-        "b.test.ts": 'Deno.test("sets", () => {});\n',
+        "b.test.ts": marking("sets"),
       });
       try {
-        const junit = `--junit-path=${dir}/report.xml`;
+        const flags = ["--no-config", "--no-check", `--allow-write=${dir}`];
         const code = await runTestBatches([
-          {
-            flags: ["--no-config", "--no-check", junit],
-            files: [`${dir}/a.test.ts`],
-          },
-          {
-            flags: ["--no-config", "--no-check", junit],
-            files: [`${dir}/b.test.ts`],
-          },
+          { flags, files: [`${dir}/a.test.ts`] },
+          { flags, files: [`${dir}/b.test.ts`] },
         ]);
         expect(code).not.toBe(0);
-        expect(await outcomes(`${dir}/report.xml`)).toEqual(
-          new Map([["fails on purpose", "fail"], ["sets", "pass"]]),
-        );
+        expect(await ran(dir)).toEqual(["sets"]);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
     });
 
-    it("merges the reports where the path is written as two words", async () => {
+    it("runs only the files each batch names", async () => {
       const dir = await fixture({
-        "a.test.ts": 'Deno.test("rises", () => {});\n',
-        "b.test.ts": 'Deno.test("sets", () => {});\n',
-      });
-      try {
-        const junit = ["--junit-path", `${dir}/report.xml`];
-        const code = await runTestBatches([
-          {
-            flags: ["--no-config", "--no-check", ...junit],
-            files: [`${dir}/a.test.ts`],
-          },
-          {
-            flags: ["--no-config", "--no-check", ...junit],
-            files: [`${dir}/b.test.ts`],
-          },
-        ]);
-        expect(code).toBe(0);
-        expect(await outcomes(`${dir}/report.xml`)).toEqual(
-          new Map([["rises", "pass"], ["sets", "pass"]]),
-        );
-      } finally {
-        await Deno.remove(dir, { recursive: true });
-      }
-    });
-
-    it("hands a lone batch the report path as it stands", async () => {
-      const dir = await fixture({
-        "a.test.ts": 'Deno.test("rises", () => {});\n',
+        "a.test.ts": marking("rises"),
+        "b.test.ts": marking("sets"),
       });
       try {
         const code = await runTestBatches([{
-          flags: [
-            "--no-config",
-            "--no-check",
-            `--junit-path=${dir}/report.xml`,
-          ],
+          flags: ["--no-config", "--no-check", `--allow-write=${dir}`],
           files: [`${dir}/a.test.ts`],
         }]);
         expect(code).toBe(0);
-        expect(await outcomes(`${dir}/report.xml`)).toEqual(
-          new Map([["rises", "pass"]]),
-        );
+        expect(await ran(dir)).toEqual(["rises"]);
       } finally {
         await Deno.remove(dir, { recursive: true });
       }
@@ -217,13 +131,12 @@ describe("run-test-batches", () => {
 
   describe("runMemberBatches()", () => {
     const FILES = {
-      "rise.test.ts": 'Deno.test("rises", () => {});\n',
-      "proof.serial.test.ts": 'Deno.test("proofs", () => {});\n',
+      "rise.test.ts": marking("rises"),
+      "proof.serial.test.ts": marking("proofs"),
     };
 
-    it("runs every file in its group, and leaves one report", async () => {
+    it("runs every file in its group", async () => {
       const dir = await fixture(FILES);
-      const report = await Deno.makeTempFile({ suffix: ".xml" });
       try {
         const code = await runMemberBatches(
           [
@@ -233,17 +146,14 @@ describe("run-test-batches", () => {
             "--no-config",
             "--no-check",
             "--parallel",
-            `--junit-path=${report}`,
+            `--allow-write=${dir}`,
           ],
           dir,
         );
         expect(code).toBe(0);
-        expect(await outcomes(report)).toEqual(
-          new Map([["rises", "pass"], ["proofs", "pass"]]),
-        );
+        expect(await ran(dir)).toEqual(["proofs", "rises"]);
       } finally {
         await Deno.remove(dir, { recursive: true });
-        await Deno.remove(report);
       }
     });
 
@@ -276,6 +186,33 @@ describe("run-test-batches", () => {
       await expect(runMemberBatches(["."], ".")).rejects.toThrow(
         "Usage: run-test-batches.ts",
       );
+    });
+  });
+
+  describe("as a program", () => {
+    it("runs the member in its directory and exits zero", async () => {
+      const dir = await fixture({ "rise.test.ts": marking("rises") });
+      try {
+        expect(await runScript(dir)).toBe(0);
+        expect(await ran(dir)).toEqual(["rises"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("exits with the code of a failing test run", async () => {
+      const dir = await fixture({
+        "fail.test.ts": 'Deno.test("fails on purpose", () => {\n' +
+          '  throw new Error("a fixture of run-test-batches.ts failing");\n' +
+          "});\n",
+        "rise.test.ts": marking("rises"),
+      });
+      try {
+        expect(await runScript(dir)).toBe(1);
+        expect(await ran(dir)).toEqual(["rises"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 });

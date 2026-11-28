@@ -379,18 +379,21 @@ export class Keeper {
 }
 
 /**
- * The program that opens an address in a web browser, and the one that
- * puts text on the clipboard, on the operating system `os`.
+ * The program that opens an address in a web browser, given the address
+ * after its own arguments, and the one that puts the text on its standard
+ * input on the clipboard.
  */
-export function systemPrograms(os: typeof Deno.build.os): {
-  open: string[];
-  copy: string[];
-} {
-  return os === "darwin"
-    ? { open: ["open"], copy: ["pbcopy"] }
-    : os === "windows"
-    ? { open: ["explorer"], copy: ["clip"] }
-    : { open: ["xdg-open"], copy: ["xclip", "-selection", "clipboard"] };
+export interface Programs {
+  open: readonly string[];
+  copy: readonly string[];
+}
+
+/** Opens addresses and fills the clipboard by running `programs` quietly. */
+export function programHost(programs: Programs): Pick<Host, "open" | "copy"> {
+  return {
+    open: (url) => runQuietly([...programs.open, url]),
+    copy: (text) => runQuietly(programs.copy, text),
+  };
 }
 
 /**

@@ -62,6 +62,20 @@ export const OFFER_TITLE_MAX_LENGTH = 200;
 export const OFFER_ADDRESS_MAX_LENGTH = 256;
 
 /**
+ * The most kinds of change a notice's `changes` keeps; the first this many it
+ * names that the inbox keeps at all are kept.
+ */
+export const OFFER_CHANGES_MAX_KEYS = 8;
+
+/**
+ * Whether `kind` is a kind of change a notice's `changes` keeps: a camelCase
+ * identifier of at most 32 characters, opening with a lowercase letter.
+ */
+function isChangeKind(kind: string): boolean {
+  return /^[a-z][A-Za-z0-9]{0,31}$/.test(kind);
+}
+
+/**
  * The longest refusal code Home records; a longer one is cut to this length.
  */
 export const REFUSAL_REASON_MAX_LENGTH = 64;
@@ -137,6 +151,14 @@ export interface OfferEvent {
    * (`keptRecipient()`).
    */
   toProfile?: JSONValue;
+
+  /**
+   * The kinds of thing that changed, for a notice that the offered thing
+   * changed, such as `{ title: true }`; absent or `null` for an offer. It is
+   * taken as the sender sent it, and `receive` keeps what it can read of it
+   * (`keptChanges()`).
+   */
+  changes?: JSONValue;
 }
 
 /** An offer as the inbox holds it: every field of the envelope, and more. */
@@ -194,6 +216,15 @@ export interface Offer {
    * received it.
    */
   toProfile?: { space: string } | null;
+
+  /**
+   * The kinds of thing that changed, each set to `true`, when the row is a
+   * notice that the offered thing changed rather than an offer of it. A
+   * notice carries none of the thing's data: a reader that acts on one reads
+   * what changed from the thing itself. Like `from`, it is the sender's
+   * claim.
+   */
+  changes?: Record<string, true>;
 }
 
 /** The inbox's offers, oldest first. */
@@ -374,7 +405,8 @@ function trimmedText(value: unknown, max: number): string {
  * with no positive `sharedAt` as shared at `now`, and an `ownerOrigin` that is
  * not an origin is kept empty. A `toProfile` naming a well-formed DID as its
  * `space` is kept as `{ space }`, one naming no profile (`keptRecipient()`)
- * as `null`, and any other is left out.
+ * as `null`, and any other is left out. A `changes` is kept as
+ * `keptChanges()` says.
  */
 function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
   const space = trimmedText(event?.space, OFFER_ADDRESS_MAX_LENGTH);
@@ -401,7 +433,28 @@ function admissibleOffer(event: OfferEvent, now: number): Offer | undefined {
     sharedAt,
     receivedAt: Math.floor(now),
     ...keptRecipient(event?.toProfile),
+    ...keptChanges(event?.changes),
   };
+}
+
+/**
+ * The `changes` the inbox keeps for an envelope naming `named`: none for one
+ * not named, which is `named` absent or `null`; for a record, the first
+ * {@link OFFER_CHANGES_MAX_KEYS} of its keys that are kinds of change
+ * (`isChangeKind()`) set to `true`; and for anything else a record naming no
+ * change, so that a notice the inbox cannot read stays a notice rather than
+ * becoming an offer.
+ */
+function keptChanges(
+  named: JSONValue | undefined,
+): { changes?: Record<string, true> } {
+  if (named === undefined || named === null) return {};
+  if (typeof named !== "object" || Array.isArray(named)) return { changes: {} };
+  const kinds = Object.entries(named)
+    .filter(([kind, value]) => isChangeKind(kind) && value === true)
+    .slice(0, OFFER_CHANGES_MAX_KEYS)
+    .map(([kind]) => [kind, true] as const);
+  return { changes: Object.fromEntries(kinds) };
 }
 
 /**
@@ -431,8 +484,11 @@ function keptRecipient(
  * Nothing is appended for a refused event, for one whose `from` is not the
  * event's actor, or for one whose sender already has an offer in the inbox
  * under its `id`. Keying on the sender too means no writer can take another
- * sender's `id` first. Nothing is appended either while `offers` holds
- * something other than a list, which is left as it is.
+ * sender's `id` first. A notice, an event carrying `changes`, whose sender
+ * has a row in the inbox under its `id` replaces that row where it stands,
+ * whatever the `sharedAt` of each, so the inbox holds one row per sender and
+ * `id` and its latest notice. Nothing is appended either while `offers`
+ * holds something other than a list, which is left as it is.
  */
 const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
   (event, { offers }) => {
@@ -441,11 +497,11 @@ const receive = handler<OfferEvent, { offers: Writable<Offers> }>(
     // The explicit read keeps the append in the conflict set, so two
     // deliveries of one offer racing to append conflict, and the second sees
     // the first.
-    if (
-      (offers.get() ?? []).some((held) =>
-        held?.from === offer.from && held?.id === offer.id
-      )
-    ) {
+    const held = (offers.get() ?? []).findIndex((each) =>
+      each?.from === offer.from && each?.id === offer.id
+    );
+    if (held !== -1) {
+      if (offer.changes !== undefined) offers.key(held).set(offer);
       return;
     }
     // A writer bypassing `receive` can replace `offers` with something other
@@ -1240,10 +1296,10 @@ export const replaceRefusedPrivateInbox = handler<
     privateInbox.set({ piece: own });
   }
   privateInboxRefusal.set({});
-  // TODO(danfuzz): With server execution off, a runtime of the owner's started
-  // after the refused inbox's space revoked the owner's `READ` can't commit
-  // this typed link to the refused inbox, so CFC refuses the replacement and
-  // nothing changes. Record the replaced inbox without the typed link.
+  // TODO(served-inbox): With server execution off, a runtime of the owner's
+  // started after the refused inbox's space revoked the owner's `READ` can't
+  // commit this typed link to the refused inbox, so CFC refuses the replacement
+  // and nothing changes. Record the replaced inbox without the typed link.
   privateInboxReplacement.set({
     replacement: {
       inbox: refusal.inbox,

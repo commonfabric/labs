@@ -3623,6 +3623,14 @@ interface CFFileDownloadAttributes<T> extends CFHTMLAttributes<T> {
 interface CFIframeAttributes<T> extends CFHTMLAttributes<T> {
   "src": string;
   "script"?: string;
+
+  /**
+   * Static assets, from a name matching `[A-Za-z0-9_-]+` to a base64 `data:`
+   * URL. The guest's document refers to one as `cf-asset:<name>`, and its
+   * script reads one with `fabric.asset(name)`.
+   */
+  "assets"?: Readonly<Record<string, string>>;
+
   "bridge"?: {
     readonly resources: Readonly<Record<string, object>>;
   };
@@ -3935,8 +3943,6 @@ interface CFCheckboxAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean;
   "disabled"?: boolean;
   "indeterminate"?: boolean;
-  "name"?: string;
-  "value"?: string;
   "oncf-change"?: EventHandler<any>;
 }
 
@@ -4133,6 +4139,13 @@ interface CFCodeEditorAttributes<T> extends CFHTMLAttributes<T> {
   "autofocus"?: boolean;
   "cursorPosition"?: "start" | "end";
   "oncf-change"?: any;
+
+  /**
+   * An edit the viewer made, with the whole document after it. Unlike
+   * `oncf-change`, never another collaborator's edit, a value the bound cell
+   * pushed, or a rewrite the editor made itself.
+   */
+  "oncf-edit"?: EventHandler<{ value: string }>;
   "oncf-focus"?: any;
   "oncf-blur"?: any;
   "oncf-file-paste"?: any;
@@ -4267,8 +4280,6 @@ interface CFSwitchAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean | CellLike<boolean>;
   "$checked"?: CellLike<boolean>;
   "disabled"?: boolean | CellLike<boolean>;
-  "name"?: string | CellLike<string>;
-  "value"?: string | CellLike<string>;
   "oncf-change"?: EventHandler<{ checked: boolean }>;
 }
 
@@ -4302,7 +4313,6 @@ interface CFRadioAttributes<T> extends CFHTMLAttributes<T> {
   "checked"?: boolean | CellLike<boolean>;
   "disabled"?: boolean | CellLike<boolean>;
   "value"?: string | CellLike<string>;
-  "name"?: string | CellLike<string>;
   "oncf-change"?: EventHandler<{ checked: boolean; value: string }>;
 }
 
@@ -4393,6 +4403,11 @@ interface CFBadgeAttributes<T> extends CFHTMLAttributes<T> {
 interface CFAvatarAttributes<T> extends CFHTMLAttributes<T> {
   /** The bytes of a raster image, such as a profile's picture. */
   "bytes"?: FabricBytes | CellLike<FabricBytes | undefined>;
+  /** A blob holding the image, by its space and id, where there are no
+   * `bytes`. */
+  "blob"?:
+    | { space: string; id: string }
+    | CellLike<{ space: string; id: string } | undefined>;
   "src"?: string | CellLike<string>;
   "name"?: string | CellLike<string>;
   "alt"?: string | CellLike<string>;
@@ -4402,8 +4417,12 @@ interface CFAvatarAttributes<T> extends CFHTMLAttributes<T> {
 
 interface CFAvatarInputAttributes<T> extends CFHTMLAttributes<T> {
   "disabled"?: boolean | CellLike<boolean>;
-  /** Fired with the picked image, scaled down to avatar size. */
-  "oncf-change"?: EventHandler<{ bytes: FabricBytes }>;
+  /** Fired with the picked image, scaled down to avatar size: its bytes, and
+   * the blob they are stored in, in the blob store of the space it is shown
+   * in. */
+  "oncf-change"?: EventHandler<
+    { bytes: FabricBytes; blob: { space: string; id: string } }
+  >;
   "oncf-error"?: EventHandler<{ message: string }>;
 }
 

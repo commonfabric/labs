@@ -32,6 +32,7 @@ import {
   AGENT_CONNECTOR_WRITER_ID,
   agentOwnerSchema,
   agentPrincipalSchema,
+  cellHasOwnerConfidentiality,
   cellHasOwnerProtection,
   pushStableCellGraph,
   readStableCellGraphValue,
@@ -57,6 +58,7 @@ import {
   setCfcImplementationIdentity,
   setCfcTrustSnapshot,
 } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../../../../runtime/runner/src/storage/commit-receipt.ts";
 
 async function publishedManifestCell(
@@ -83,7 +85,7 @@ async function publishedManifestCell(
   );
 }
 
-Deno.test("Fabric target validates a discovered checkout", async () => {
+test("Fabric target validates a discovered checkout", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector checkout validation test",
   );
@@ -204,7 +206,7 @@ async function assertOwnerProtectedGraph(
   return seen.size;
 }
 
-Deno.test("Fabric target publishes sessions and command receipts", async () => {
+test("Fabric target publishes sessions and command receipts", async () => {
   const signer = await Identity.fromPassphrase("agent connector target test");
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
@@ -989,7 +991,7 @@ Deno.test("Fabric target publishes sessions and command receipts", async () => {
   }
 });
 
-Deno.test("Fabric target releases graph storage after every session", async () => {
+test("Fabric target releases graph storage after every session", async () => {
   const server = newLoopbackServer();
   const identity = await Identity.fromPassphrase(
     "agent graph storage release test",
@@ -1132,7 +1134,7 @@ Deno.test("Fabric target releases graph storage after every session", async () =
   }
 });
 
-Deno.test("Fabric target data is owner-scoped and owner-confidential", async () => {
+test("Fabric target data is owner-scoped and owner-confidential", async () => {
   const owner = await Identity.fromPassphrase("agent connector data owner");
   const otherOwner = await Identity.fromPassphrase(
     "agent connector other data owner",
@@ -1175,21 +1177,14 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
       localWorkspace: "/private/owner/worktree",
     });
     const healthLink = target.cells.health.getAsNormalizedFullLink();
-    const inspect = runtime.edit();
-    const stored = inspect.readOrThrow({
-      space: healthLink.space,
-      id: healthLink.id,
-      path: [],
-      ...(healthLink.scope !== undefined && { scope: healthLink.scope }),
-    }) as { cfc?: { labelMap?: { entries?: unknown[] } } };
     assertEquals(
-      stored.cfc?.labelMap?.entries?.some((entry) =>
-        JSON.stringify(entry).includes("confidentiality") &&
-        JSON.stringify(entry).includes(owner.did())
+      cellHasOwnerConfidentiality(
+        runtime.readTx(),
+        target.cells.health,
+        owner.did(),
       ),
       true,
     );
-    inspect.abort();
 
     const attack = runtime.edit();
     setCfcTrustSnapshot(attack, {
@@ -1212,7 +1207,7 @@ Deno.test("Fabric target data is owner-scoped and owner-confidential", async () 
   }
 });
 
-Deno.test("shared-space agent discovery and commands are owner-isolated", async () => {
+test("shared-space agent discovery and commands are owner-isolated", async () => {
   const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("shared agent graph owner");
   const otherOwner = await Identity.fromPassphrase(
@@ -1362,7 +1357,7 @@ Deno.test("shared-space agent discovery and commands are owner-isolated", async 
   }
 });
 
-Deno.test("stable graph checks remote children before adoption", async () => {
+test("stable graph checks remote children before adoption", async () => {
   const server = newLoopbackServer();
   const owner = await Identity.fromPassphrase("stable graph remote owner");
   const otherOwner = await Identity.fromPassphrase(
@@ -1436,7 +1431,7 @@ Deno.test("stable graph checks remote children before adoption", async () => {
   }
 });
 
-Deno.test("Fabric target can defer its storage claim", async () => {
+test("Fabric target can defer its storage claim", async () => {
   const owner = await Identity.fromPassphrase(
     "agent connector deferred claim owner",
   );
@@ -1601,7 +1596,7 @@ Deno.test("Fabric target can defer its storage claim", async () => {
   }
 });
 
-Deno.test("Fabric target refuses an unprotected owner root", async () => {
+test("Fabric target refuses an unprotected owner root", async () => {
   const owner = await Identity.fromPassphrase("agent connector root owner");
   const storageManager = StorageManager.emulate({ as: owner });
   const runtime = new Runtime({
@@ -1646,7 +1641,7 @@ Deno.test("Fabric target refuses an unprotected owner root", async () => {
   }
 });
 
-Deno.test("Fabric target refuses an owner root with another writer", async () => {
+test("Fabric target refuses an owner root with another writer", async () => {
   const owner = await Identity.fromPassphrase(
     "agent connector wrong writer owner",
   );
@@ -1701,7 +1696,7 @@ Deno.test("Fabric target refuses an owner root with another writer", async () =>
   }
 });
 
-Deno.test("Fabric target binds only an empty owner command queue", async () => {
+test("Fabric target binds only an empty owner command queue", async () => {
   const owner = await Identity.fromPassphrase("command queue binding owner");
   const storageManager = StorageManager.emulate({ as: owner });
   const runtime = new Runtime({
@@ -1829,7 +1824,7 @@ Deno.test("Fabric target binds only an empty owner command queue", async () => {
   }
 });
 
-Deno.test("checkout publication preserves partial-refresh inventory", async () => {
+test("checkout publication preserves partial-refresh inventory", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector checkout publication test",
   );
@@ -2045,7 +2040,7 @@ Deno.test("checkout publication preserves partial-refresh inventory", async () =
   }
 });
 
-Deno.test("publication finishes after its first graph commit", async () => {
+test("publication finishes after its first graph commit", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector publication commit boundary test",
   );
@@ -2165,7 +2160,7 @@ Deno.test("publication finishes after its first graph commit", async () => {
   }
 });
 
-Deno.test("an interrupted publication leaves the prior session graph intact", async () => {
+test("an interrupted publication leaves the prior session graph intact", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector interrupted graph test",
   );
@@ -2357,7 +2352,7 @@ Deno.test("an interrupted publication leaves the prior session graph intact", as
   }
 });
 
-Deno.test("session publication captures native values once", async () => {
+test("session publication captures native values once", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector native value capture test",
   );
@@ -2441,7 +2436,7 @@ Deno.test("session publication captures native values once", async () => {
   }
 });
 
-Deno.test("session publication captures its snapshot before the first commit", async () => {
+test("session publication captures its snapshot before the first commit", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector incremental session publication test",
   );
@@ -2519,7 +2514,7 @@ Deno.test("session publication captures its snapshot before the first commit", a
   }
 });
 
-Deno.test("newer session refresh wins over an older full collection", async () => {
+test("newer session refresh wins over an older full collection", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector observation ordering test",
   );
@@ -2658,7 +2653,7 @@ Deno.test("newer session refresh wins over an older full collection", async () =
   }
 });
 
-Deno.test("newer session refresh wins over an older retained inventory", async () => {
+test("newer session refresh wins over an older retained inventory", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector retained observation ordering test",
   );
@@ -2790,7 +2785,7 @@ Deno.test("newer session refresh wins over an older retained inventory", async (
   }
 });
 
-Deno.test("a published pairing with a desktop start survives a driver that no longer knows it", async () => {
+test("a published pairing with a desktop start survives a driver that no longer knows it", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector desktop pairing persistence test",
   );
@@ -2891,7 +2886,7 @@ Deno.test("a published pairing with a desktop start survives a driver that no lo
   }
 });
 
-Deno.test("publication refuses a stored index whose source surfaces are malformed", async () => {
+test("publication refuses a stored index whose source surfaces are malformed", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector malformed surfaces test",
   );
@@ -2949,7 +2944,7 @@ Deno.test("publication refuses a stored index whose source surfaces are malforme
   }
 });
 
-Deno.test("publication refuses a stored index whose source capabilities are malformed", async () => {
+test("publication refuses a stored index whose source capabilities are malformed", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector malformed capabilities test",
   );
@@ -3018,7 +3013,7 @@ function writerAuthorizationFor(path: string) {
   };
 }
 
-Deno.test("Fabric target binds producer queues and reads commands from every bound queue", async () => {
+test("Fabric target binds producer queues and reads commands from every bound queue", async () => {
   const owner = await Identity.fromPassphrase("producer queue binding owner");
   const storageManager = StorageManager.emulate({ as: owner });
   const runtime = new Runtime({
@@ -3133,7 +3128,7 @@ Deno.test("Fabric target binds producer queues and reads commands from every bou
   }
 });
 
-Deno.test("a session read this publication is not also retained", async () => {
+test("a session read this publication is not also retained", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector read wins over retention test",
   );
@@ -3211,7 +3206,7 @@ Deno.test("a session read this publication is not also retained", async () => {
   }
 });
 
-Deno.test("a retained session's row carries the checkout's current Git context", async () => {
+test("a retained session's row carries the checkout's current Git context", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector retained git context test",
   );
@@ -3357,7 +3352,7 @@ Deno.test("a retained session's row carries the checkout's current Git context",
   }
 });
 
-Deno.test("a subscription that fails on a later queue leaves no queue subscribed", async () => {
+test("a subscription that fails on a later queue leaves no queue subscribed", async () => {
   const owner = await Identity.fromPassphrase(
     "producer subscription failure owner",
   );
@@ -3419,7 +3414,7 @@ Deno.test("a subscription that fails on a later queue leaves no queue subscribed
   }
 });
 
-Deno.test("receipts from different queues share a command ID without colliding", async () => {
+test("receipts from different queues share a command ID without colliding", async () => {
   const owner = await Identity.fromPassphrase(
     "producer receipt identity owner",
   );
@@ -3490,7 +3485,7 @@ Deno.test("receipts from different queues share a command ID without colliding",
   }
 });
 
-Deno.test("publication keeps an older retained session and vouches only for complete copies", async () => {
+test("publication keeps an older retained session and vouches only for complete copies", async () => {
   const signer = await Identity.fromPassphrase(
     "agent connector retained session test",
   );

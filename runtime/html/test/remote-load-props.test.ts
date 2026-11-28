@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 
 import { REMOTE_LOAD_PROPS } from "../src/worker/reconciler.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The reconciler decides a remote load by a hand-kept table of the props that
 // load one (`REMOTE_LOAD_PROPS`). A component that loads what a prop names, or
@@ -17,11 +18,8 @@ const LOADS =
 
 /** Components that show a sign of loading but load nothing a value chooses. */
 const LOADS_NOTHING_A_VALUE_CHOOSES: Readonly<Record<string, string>> = {
-  "cf-avatar":
-    "renders bytes through `cf-image` and only `data:` URIs as an image source",
   "cf-button": "its stylesheet's background-image is `none`",
   "cf-file-input": "previews files the user chose, from its own state",
-  "cf-image": "renders an object URL it makes from bytes",
   "cf-image-input": "previews files the user chose, from its own state",
   "cf-piece-menu": "its stylesheet's background-images are gradients",
   "cf-plaid-link": "loads a fixed script and posts to fixed endpoints",
@@ -50,7 +48,7 @@ async function componentSources(): Promise<Map<string, string>> {
   return sources;
 }
 
-Deno.test("every component that can load is in the remote-load table or says why not", async () => {
+test("every component that can load is in the remote-load table or says why not", async () => {
   const sources = await componentSources();
   const unclassified = [...sources]
     .filter(([tag, text]) =>
@@ -62,7 +60,7 @@ Deno.test("every component that can load is in the remote-load table or says why
   assertEquals(unclassified, []);
 });
 
-Deno.test("the table and the reasons name components that exist, once", async () => {
+test("the table and the reasons name components that exist, once", async () => {
   const sources = await componentSources();
   const tableTags = [...REMOTE_LOAD_PROPS.keys()].filter((tag) =>
     tag.startsWith("cf-")

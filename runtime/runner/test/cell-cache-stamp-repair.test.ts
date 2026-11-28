@@ -1,8 +1,17 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
+import {
+  type FabricPlainObject,
+  type FabricValue,
+  taggedHashStringOf,
+} from "@commonfabric/data-model";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
@@ -23,6 +32,7 @@ import {
 } from "../src/compilation-cache/cell-cache.ts";
 import { COMPILE_CACHE_REPAIR_WRITER } from "../src/compilation-cache/writer-identity.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
+import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import type { URI } from "../src/sigil-types.ts";
 import {
@@ -38,6 +48,7 @@ await ensureCompilerStack();
 const signer = await Identity.fromPassphrase("cell-cache stamp repair");
 const space = signer.did();
 const RUNTIME_VERSION = "rt-stamp-repair";
+const CEILINGED_SINK = "fetchJson";
 
 const PROGRAM: RuntimeProgram = {
   main: "/main.tsx",
@@ -177,6 +188,9 @@ describe("cell-cache", () => {
         storageManager,
         cfcEnforcementMode: "enforce-strict",
         cfcFlowLabels: "persist",
+        // A ceiling on one sink, so that a transaction recording a request to
+        // it is prepared when it commits.
+        cfcSinkMaxConfidentiality: { [CEILINGED_SINK]: [] },
       });
     });
 
@@ -968,6 +982,61 @@ describe("cell-cache", () => {
       ).toHaveLength(2);
     });
 
+    for (
+      const [what, generations, outcome] of [
+        ["two modules of one filename", 2, "unverified"],
+        ["one module of that filename", 1, "refused"],
+      ] as const
+    ) {
+      it(`returns \`${outcome}\`, and leaves the stamp, where a stamped entry's own view holds ${what}`, async () => {
+        // Each generation of the ambient file linked by an edge of the entry's
+        // own view is in that view, and two make it attributable to no
+        // emission. With one, the closure verifies, and the rewrite, which
+        // drops the edge the code does not import, is refused for leaving
+        // that module unreached.
+
+        const one = await writeProgram({
+          main: "/one.ts",
+          files: [{ name: "/one.ts", contents: `export const one = 1;` }, {
+            name: "/ambient.ts",
+            contents: `export const generation = 1;`,
+          }],
+        });
+        const two = await writeProgram({
+          main: "/two.ts",
+          files: [{ name: "/two.ts", contents: `export const two = 2;` }, {
+            name: "/ambient.ts",
+            contents: `export const generation = 2;`,
+          }],
+        });
+        const viewEdge = (identity: string, specifier: string) => ({
+          specifier,
+          link: runtime.getCell(space, sourceDocKey(identity))
+            .getAsLink() as unknown as FabricValue,
+        });
+        const entryId = idOf(sourceDocKey(one.entryIdentity));
+        await replaceStored(entryId, (current) => ({
+          value: {
+            ...current.value!,
+            imports: [one, two].slice(0, generations).map((program, index) =>
+              viewEdge(
+                program.modules.find((m) => m.filename === "/ambient.ts")!
+                  .identity,
+                `./ambient-${index}.ts`,
+              )
+            ),
+          },
+          entries: [
+            ...(current.cfc?.labelMap.entries ?? []),
+            ...rootPairStamp(space),
+          ],
+        }));
+
+        expect(await repair(one.entryIdentity)).toBe(outcome);
+        expect(atomsOn(entryId)).toEqual([space, space]);
+      });
+    }
+
     it("rewrites one record and erases another's compiled record in one commit, keeping the rewritten record's attestation", async () => {
       // The erase is guarded by the unstamped source record beside it,
       // which the commit pins without consuming its label.
@@ -1051,10 +1120,28 @@ describe("cell-cache", () => {
           "holds a field the cache writer does not write",
           (value: FabricPlainObject) => ({ ...value, extra: "chosen" }),
         ],
+        [
+          "is of a kind other than a source record",
+          (value: FabricPlainObject) => ({ ...value, kind: "compiled" }),
+        ],
+        [
+          "stores no import list",
+          ({ imports: _imports, ...value }: FabricPlainObject) => value,
+        ],
+        [
+          "stores an import the loader cannot follow",
+          (value: FabricPlainObject) => ({
+            ...value,
+            imports: [
+              ...(value.imports as FabricValue[]),
+              { specifier: "./absent.ts", link: "not a link" },
+            ],
+          }),
+        ],
       ] as const
     ) {
       it(`refuses, and leaves the stamp, where a stamped source record ${what}`, async () => {
-        const program = await writeProgram(PROGRAM);
+        const program = await writeProgram(PROGRAM_X);
         const id = idOf(sourceDocKey(program.entryIdentity));
         await replaceStored(id, (current) => ({
           value: edit(current.value!) as FabricPlainObject,
@@ -1176,6 +1263,280 @@ describe("cell-cache", () => {
 
       expect(outcome).toBe("conflicted");
       expect(atomsOn(id)).toContain(space);
+    });
+
+    it("returns `unverified`, and leaves the stamp, where a stamped record's code is not what its identity hashes", async () => {
+      const program = await writeProgram(PROGRAM_X);
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await replaceStored(id, (current) => ({
+        value: { ...current.value!, code: `export const x = 3;` },
+        entries: [
+          ...(current.cfc?.labelMap.entries ?? []),
+          ...rootPairStamp(space),
+        ],
+      }));
+
+      expect(await repair(program.entryIdentity)).toBe("unverified");
+      expect(atomsOn(id)).toEqual([space, space]);
+    });
+
+    it("finds no stamp in the closure of an entry no source record holds, and the one planted on a record of a closure", async () => {
+      const program = await writeProgram(PROGRAM_X);
+      const holdsStamp = async (entryIdentity: string) => {
+        const tx = runtime.edit();
+        try {
+          return await compileCacheClosureHoldsStamp(
+            runtime,
+            space,
+            entryIdentity,
+            undefined,
+            tx,
+          );
+        } finally {
+          tx.abort();
+        }
+      };
+      await plant(idOf(sourceDocKey(program.entryIdentity)), [
+        ...rootPairStamp(space),
+      ]);
+
+      expect(await holdsStamp(program.entryIdentity)).toBe(true);
+      expect(await holdsStamp(toModules(PROGRAM).entryIdentity)).toBe(false);
+    });
+
+    it("refuses, and writes nothing, where committing the repair's transaction would prepare it", async () => {
+      // A request to a sink with a ceiling makes the transaction CFC-relevant
+      // only once it is committed, and the preparation that follows would
+      // derive labels the repair did not compute.
+
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, rootPairStamp(space));
+      const repairRequesting = (sink: string) =>
+        repairCompileCacheStamps(
+          runtime,
+          space,
+          program.entryIdentity,
+          RUNTIME_VERSION,
+          (tx) =>
+            tx.recordCfcWritePolicyInput({
+              kind: "sink-request",
+              effectId: `${sink}:effect`,
+              sink,
+              request: { url: "https://example.com" },
+            }),
+        );
+
+      expect(await repairRequesting(CEILINGED_SINK)).toBe("refused");
+      expect(atomsOn(id)).toEqual([space, space]);
+      expect(await repairRequesting("unceilinged")).toBe("repaired");
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    it("rethrows what its stamp throws, with its transaction aborted and nothing written", async () => {
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, rootPairStamp(space));
+      const failure = new Error("stamp failed");
+      let stamped: IExtendedStorageTransaction | undefined;
+
+      await expect(
+        repairCompileCacheStamps(
+          runtime,
+          space,
+          program.entryIdentity,
+          RUNTIME_VERSION,
+          (tx) => {
+            stamped = tx;
+            throw failure;
+          },
+        ),
+      ).rejects.toBe(failure);
+      expect(stamped?.status().status).not.toBe("ready");
+      expect(atomsOn(id)).toEqual([space, space]);
+    });
+
+    it("rewrites a stamped record that stores its code inline to store it in the code document the repair writes", async () => {
+      const contents = `export const inline = 4;`;
+      const program = toModules({
+        main: "/inline.ts",
+        files: [{ name: "/inline.ts", contents }],
+      });
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      const codeId = `cid:${taggedHashStringOf(contents)}` as URI;
+      await replaceStored(id, () => ({
+        value: {
+          kind: "source",
+          identity: program.entryIdentity,
+          code: contents,
+          filename: "/inline.ts",
+          imports: [],
+        },
+        entries: rootPairStamp(space),
+      }));
+      expect(stored(codeId)).toEqual({});
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(codeId).value).toBe(contents);
+      expect(typeof stored(id).value?.code).not.toBe("string");
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    for (
+      const [what, atOwnKey] of [
+        ["holds nothing", false],
+        ["holds that module's record", true],
+      ] as const
+    ) {
+      it(`refuses a closure whose entry's key holds the record of the module importing it, where that module's own key ${what}`, async () => {
+        // The loader keys each record by the identity it states, so the
+        // record at the entry's key enters the closure as the importing
+        // module, and a copy of the entry's record it links to as the entry:
+        // a closure that verifies, assembled from records off their keys.
+
+        const program = await writeProgram(PROGRAM_IMPORTING_SHARED);
+        const shared = program.modules.find((m) => m.filename === "/u.ts")!;
+        const sharedId = idOf(sourceDocKey(shared.identity));
+        const mainId = idOf(sourceDocKey(program.entryIdentity));
+        expect(await repair(shared.identity)).toBe("clean");
+
+        const elsewhere = runtime.getCell(space, "stamp-repair-elsewhere");
+        const main = stored(mainId);
+        const tx = runtime.edit();
+        seedStoredEnvelope(
+          tx,
+          address(elsewhere.getAsNormalizedFullLink().id as URI),
+          stored(sharedId),
+        );
+        seedStoredEnvelope(tx, address(sharedId), {
+          ...main,
+          value: {
+            ...main.value!,
+            imports: [{
+              specifier: "./u.ts",
+              link: elsewhere.getAsLink() as unknown as FabricValue,
+            }],
+          },
+        });
+        if (!atOwnKey) seedStoredEnvelope(tx, address(mainId), {});
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        expect(await repair(shared.identity)).toBe("refused");
+      });
+    }
+
+    it("refuses, and erases nothing, where a stamped compiled record's label also holds a clause no stamp placed", async () => {
+      const program = await writeDelegatingProgram();
+      const compiled = idOf(
+        compiledDocKey(RUNTIME_VERSION, program.entryIdentity),
+      );
+      await plant(compiled, [
+        ...rootPairStamp(space),
+        {
+          path: [],
+          origin: "declared",
+          label: { confidentiality: [space] },
+        } as unknown as FabricValue,
+      ]);
+
+      expect(await repair(program.entryIdentity)).toBe("refused");
+      expect(stored(compiled).value).toBeDefined();
+      expect(atomsOn(compiled)).toEqual([space, space, space]);
+    });
+
+    it("repairs, where its stamp reads a content-addressed document", async () => {
+      // Such a document cannot change, so a read of it conditions nothing.
+
+      const program = await writeDelegatingProgram();
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, rootPairStamp(space));
+      const entry = program.modules.find((m) =>
+        m.identity === program.entryIdentity
+      )!;
+      const codeId = `cid:${taggedHashStringOf(entry.source)}` as URI;
+      let read: unknown;
+
+      const outcome = await repairCompileCacheStamps(
+        runtime,
+        space,
+        program.entryIdentity,
+        RUNTIME_VERSION,
+        (tx) => {
+          read = tx.readOrThrow(address(codeId));
+        },
+      );
+
+      expect(read).toEqual({ value: entry.source });
+      expect(outcome).toBe("repaired");
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    it("rewrites a stamped entry whose imports reach one module along two paths", async () => {
+      const program = await writeProgram({
+        main: "/main.ts",
+        files: [
+          {
+            name: "/main.ts",
+            contents: [
+              `import { a } from "./a.ts";`,
+              `import { b } from "./b.ts";`,
+              `export const m = a + b;`,
+            ].join("\n"),
+          },
+          {
+            name: "/a.ts",
+            contents: `import { c } from "./c.ts";\nexport const a = c;`,
+          },
+          {
+            name: "/b.ts",
+            contents: `import { c } from "./c.ts";\nexport const b = c;`,
+          },
+          { name: "/c.ts", contents: `export const c = 1;` },
+        ],
+      });
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      const before = stored(id).value;
+      await plant(id, rootPairStamp(space));
+
+      expect(await repair(program.entryIdentity)).toBe("repaired");
+      expect(stored(id).value).toEqual(before);
+      expect(atomsOn(id)).toEqual([]);
+    });
+
+    it("refuses, and leaves the stamp, where a stamped source record's label holds an attestation the repair does not keep", async () => {
+      const program = await writeProgram(PROGRAM_X);
+      const id = idOf(sourceDocKey(program.entryIdentity));
+      await plant(id, [
+        ...rootPairStamp(space),
+        {
+          path: ["filename"],
+          origin: "declared",
+          label: { integrity: [COMPILED_INTEGRITY_ATOM] },
+        } as unknown as FabricValue,
+      ]);
+
+      expect(await repair(program.entryIdentity)).toBe("refused");
+      expect(atomsOn(id)).toEqual([space, space]);
+    });
+
+    it("refuses, and erases nothing, where the list that would grant an erase holds something other than an identity", async () => {
+      const program = await writeDelegatingProgram();
+      const source = idOf(sourceDocKey(program.entryIdentity));
+      const compiled = idOf(
+        compiledDocKey(RUNTIME_VERSION, program.entryIdentity),
+      );
+      await plant(compiled, rootPairStamp(space));
+      await replaceStored(source, (current) => ({
+        value: {
+          ...current.value!,
+          delegatedModuleIdentities: ["predecessor", 7],
+        },
+        entries: current.cfc!.labelMap.entries,
+      }));
+
+      expect(await repair(program.entryIdentity)).toBe("refused");
+      expect(stored(compiled).value).toBeDefined();
+      expect(atomsOn(compiled)).toEqual([space, space]);
     });
 
     it("throws on a repair write made under any identity but the repair's", () => {

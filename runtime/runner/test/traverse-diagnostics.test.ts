@@ -5,7 +5,6 @@
  * and states the result the traversal returned alongside what it logged.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { SchemaPathSelector } from "@commonfabric/api";
@@ -18,6 +17,12 @@ import type {
   State,
   URI,
 } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import type { NormalizedFullLink, StoredValuePath } from "../src/link-types.ts";
@@ -372,6 +377,42 @@ describe("traverse-diagnostics", () => {
 
       expect(selector).toEqual({ path: ["value"], schema: { type: "object" } });
       expect(wasLogged("traverse", "Mismatched paths")).toBe(false);
+    });
+
+    describe("a session-scoped link in a walk that counts unresolved link scopes", () => {
+      /** Follows a session-scoped link to `MISSING` as `identity`. */
+      const follow = (identity: { principal: string; sessionId?: string }) => {
+        let unresolved = 0;
+        const traversal = createDefaultTraversalContext(identity);
+        traversal.onUnresolvedLinkScope = () => unresolved++;
+        const link = {
+          "/": { [LINK_V1_TAG]: { id: MISSING, path: [], scope: "session" } },
+        };
+        const [found] = getAtPath(
+          txOverTarget(),
+          docAt(link),
+          [],
+          traversal,
+        );
+        return { value: found.value, unresolved };
+      };
+
+      it("logs and counts the link, and leaves it unfollowed, for a principal with no session", () => {
+        expect(follow({ principal: "did:test:alice" })).toEqual({
+          value: undefined,
+          unresolved: 1,
+        });
+        expect(wasLogged("traverse", "session-scoped link not followed"))
+          .toBe(true);
+      });
+
+      it("follows the link, logging and counting nothing, for a principal with a session", () => {
+        expect(
+          follow({ principal: "did:test:alice", sessionId: "session-1" }),
+        ).toEqual({ value: { x: 1 }, unresolved: 0 });
+        expect(wasLogged("traverse", "session-scoped link not followed"))
+          .toBe(false);
+      });
     });
 
     describe("a missing link target", () => {

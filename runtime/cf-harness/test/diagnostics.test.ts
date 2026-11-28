@@ -1,7 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { CfcEnforcementMode } from "@commonfabric/runner/cfc";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
 import {
   CAPABILITY_PROBE_SENTINEL,
@@ -116,7 +116,7 @@ class FakeFabricSandboxRuntime extends FakeSandboxRuntime {
   }
 }
 
-Deno.test("collectHarnessCapabilitySnapshot captures fixed sandbox capabilities", async () => {
+test("collectHarnessCapabilitySnapshot captures fixed sandbox capabilities", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeSandboxRuntime(),
     "/workspace",
@@ -195,7 +195,7 @@ Deno.test("collectHarnessCapabilitySnapshot captures fixed sandbox capabilities"
   });
 });
 
-Deno.test("collectHarnessCapabilitySnapshot reports configured Fabric mounts", async () => {
+test("collectHarnessCapabilitySnapshot reports configured Fabric mounts", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeFabricSandboxRuntime(),
     "/workspace",
@@ -261,7 +261,7 @@ class FakeHostBindSandboxRuntime extends FakeSandboxRuntime {
   }
 }
 
-Deno.test("collectHarnessCapabilitySnapshot reports configured host bind mounts", async () => {
+test("collectHarnessCapabilitySnapshot reports configured host bind mounts", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeHostBindSandboxRuntime(),
     "/workspace",
@@ -290,7 +290,7 @@ Deno.test("collectHarnessCapabilitySnapshot reports configured host bind mounts"
   ]);
 });
 
-Deno.test("collectHarnessCapabilitySnapshot records strict CFC attestation for writable Fabric mounts", async () => {
+test("collectHarnessCapabilitySnapshot records strict CFC attestation for writable Fabric mounts", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeFabricSandboxRuntime(
       JSON.stringify({ cfc: { mode: "enforce-strict" } }),
@@ -308,7 +308,7 @@ Deno.test("collectHarnessCapabilitySnapshot records strict CFC attestation for w
   });
 });
 
-Deno.test("collectHarnessCapabilitySnapshot records strict writable Fabric mounts without attestation", async () => {
+test("collectHarnessCapabilitySnapshot records strict writable Fabric mounts without attestation", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeFabricSandboxRuntime(),
     "/workspace",
@@ -323,7 +323,7 @@ Deno.test("collectHarnessCapabilitySnapshot records strict writable Fabric mount
   });
 });
 
-Deno.test("classifyHarnessPolicyEventFailure records denied tool usage", () => {
+test("classifyHarnessPolicyEventFailure records denied tool usage", () => {
   const failure = classifyHarnessPolicyEventFailure(
     createHarnessPolicyEvent({
       severity: "denied",
@@ -346,7 +346,7 @@ Deno.test("classifyHarnessPolicyEventFailure records denied tool usage", () => {
   });
 });
 
-Deno.test("classifyHarnessPolicyEventFailure records no failure for an event that denied nothing", () => {
+test("classifyHarnessPolicyEventFailure records no failure for an event that denied nothing", () => {
   const failure = classifyHarnessPolicyEventFailure(
     createHarnessPolicyEvent({
       severity: "warning",
@@ -360,7 +360,7 @@ Deno.test("classifyHarnessPolicyEventFailure records no failure for an event tha
   assertEquals(failure, undefined);
 });
 
-Deno.test("classifyBashToolFailure uses the capability snapshot to explain missing python", async () => {
+test("classifyBashToolFailure uses the capability snapshot to explain missing python", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeSandboxRuntime(),
     "/workspace",
@@ -394,7 +394,7 @@ Deno.test("classifyBashToolFailure uses the capability snapshot to explain missi
   });
 });
 
-Deno.test("classifyBashToolFailure prefers the missing subcommand from shell output", async () => {
+test("classifyBashToolFailure prefers the missing subcommand from shell output", async () => {
   const snapshot = await collectHarnessCapabilitySnapshot(
     new FakeSandboxRuntime(),
     "/workspace",
@@ -428,7 +428,7 @@ Deno.test("classifyBashToolFailure prefers the missing subcommand from shell out
   });
 });
 
-Deno.test("classifyBuiltinToolFailure records invalid browser actions as not allowed", () => {
+test("classifyBuiltinToolFailure records invalid browser actions as not allowed", () => {
   const failure = classifyBuiltinToolFailure(
     "browser",
     { action: "eval" },
@@ -452,7 +452,7 @@ Deno.test("classifyBuiltinToolFailure records invalid browser actions as not all
   });
 });
 
-Deno.test("classifyBuiltinToolFailure records a browser run without its lease as a harness error", () => {
+test("classifyBuiltinToolFailure records a browser run without its lease as a harness error", () => {
   const failure = classifyBuiltinToolFailure(
     "browser",
     { action: "snapshot" },
@@ -476,7 +476,7 @@ Deno.test("classifyBuiltinToolFailure records a browser run without its lease as
   });
 });
 
-Deno.test("classifyBuiltinToolFailure leaves browser page-level failures to the model", () => {
+test("classifyBuiltinToolFailure leaves browser page-level failures to the model", () => {
   const failure = classifyBuiltinToolFailure(
     "browser",
     { action: "click", ref: "@e5" },
@@ -493,7 +493,7 @@ Deno.test("classifyBuiltinToolFailure leaves browser page-level failures to the 
   assertEquals(failure, undefined);
 });
 
-Deno.test("classifyBuiltinToolFailure records blocked web_fetch URLs", () => {
+test("classifyBuiltinToolFailure records blocked web_fetch URLs", () => {
   const failure = classifyBuiltinToolFailure(
     "web_fetch",
     { url: "http://localhost:8000/private" },
@@ -519,7 +519,7 @@ Deno.test("classifyBuiltinToolFailure records blocked web_fetch URLs", () => {
   });
 });
 
-Deno.test("classifyBuiltinToolFailure handles delegate_task outputs defensively", () => {
+test("classifyBuiltinToolFailure handles delegate_task outputs defensively", () => {
   assertEquals(
     classifyBuiltinToolFailure(
       "delegate_task",
@@ -598,7 +598,7 @@ Deno.test("classifyBuiltinToolFailure handles delegate_task outputs defensively"
   );
 });
 
-Deno.test("classifyHarnessRunError maps timeouts and path escapes deterministically", () => {
+test("classifyHarnessRunError maps timeouts and path escapes deterministically", () => {
   assertEquals(
     classifyHarnessRunError(
       new ProcessTimeoutError("runsc run ...", 5000),
@@ -656,7 +656,7 @@ Deno.test("classifyHarnessRunError maps timeouts and path escapes deterministica
   );
 });
 
-Deno.test("selectPrimaryHarnessFailure prefers the highest-signal failure kind", () => {
+test("selectPrimaryHarnessFailure prefers the highest-signal failure kind", () => {
   const primary = selectPrimaryHarnessFailure([
     createHarnessFailureRecord({
       kind: "unknown",
@@ -683,7 +683,7 @@ Deno.test("selectPrimaryHarnessFailure prefers the highest-signal failure kind",
   assertEquals(primary?.kind, "tool_not_allowed");
 });
 
-Deno.test("selectPrimaryHarnessFailure never selects a refused subagent profile", () => {
+test("selectPrimaryHarnessFailure never selects a refused subagent profile", () => {
   const refusal = createHarnessFailureRecord({
     kind: "subagent_profile_not_allowed",
     source: "policy_event",

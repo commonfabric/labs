@@ -13,7 +13,6 @@
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
@@ -24,6 +23,7 @@ import type { Key } from "../lib/view/keys.ts";
 import type { Document } from "../lib/view/model.ts";
 import { Session } from "../lib/view/session.ts";
 import { parseDocument, SAMPLE } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function press(s: Session, ...names: string[]): void {
   for (const name of names) {

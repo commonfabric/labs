@@ -43,7 +43,6 @@ export const emitBinaryExpression: Emitter = ({
   context,
   analyze,
   rewriteSubexpression,
-  inSafeContext,
   reactiveContextKind,
   containerKind,
   preferInputBoundWrappers,
@@ -75,10 +74,6 @@ export const emitBinaryExpression: Emitter = ({
   }
 
   if (operator === ts.SyntaxKind.AmpersandAmpersandToken) {
-    if (!shouldLowerByContextPolicy) {
-      if (inSafeContext) return undefined;
-    }
-
     const leftDataFlows = selectDataFlowsReferencedIn(
       dataFlows,
       expression.left,
@@ -123,10 +118,6 @@ export const emitBinaryExpression: Emitter = ({
   }
 
   if (operator === ts.SyntaxKind.BarBarToken) {
-    if (!shouldLowerByContextPolicy) {
-      if (inSafeContext) return undefined;
-    }
-
     const leftDataFlows = selectDataFlowsReferencedIn(
       dataFlows,
       expression.left,
@@ -168,10 +159,6 @@ export const emitBinaryExpression: Emitter = ({
 
       return unlessCall;
     }
-  }
-
-  if (inSafeContext) {
-    return undefined;
   }
 
   if (dataFlows.length === 0) return undefined;

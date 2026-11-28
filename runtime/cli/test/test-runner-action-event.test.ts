@@ -10,10 +10,10 @@
  * satisfy that policy unless the link is typed as the handler's event declares.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolve } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/action-event");
 

@@ -3,9 +3,11 @@
  * route; explicit membership choices compare the revision the user observed,
  * and so does a removal, and a deletion mark, which records that a space is
  * gone for everyone. A retitle refreshes an entry's display title and
- * nothing else. Registration also records which of the person's profiles
- * acts in the space, once, beside the catalog. Handler results describe the
- * action, while the catalog and those records carry membership.
+ * nothing else, and a notice mark records which notice that a space changed
+ * the person's host last acted on. Registration also records which of the
+ * person's profiles acts in the space, once, beside the catalog. Handler
+ * results describe the action, while the catalog and those records carry
+ * membership.
  */
 
 import {
@@ -66,10 +68,30 @@ export interface SharedSpaceOfferReceipt {
 /** Why a registration did not record the profile it named. */
 export type SharedSpaceProfileConflict = "profile" | "unknown-profile";
 
-/** A collection keyed by space DID and receipts keyed by sender and offer ID. */
+/**
+ * A collection keyed by space DID, receipts keyed by sender and offer ID,
+ * and notice marks keyed the same way.
+ */
 export interface SharedSpaceCatalog {
   entries: Record<string, SharedSpaceEntry>;
   offers: Record<string, SharedSpaceOfferReceipt>;
+
+  /**
+   * The `sharedAt` of the notice from each sender and `id` that a space
+   * changed which the person's host last acted on, absent until one is
+   * marked.
+   */
+  notices?: Record<string, number>;
+}
+
+/**
+ * A notice that a space changed, as the share inbox held it, which
+ * {@link markSharedSpaceNoticeIn} marks as acted on.
+ */
+export interface SharedSpaceNoticeMark {
+  from: string;
+  id: string;
+  sharedAt: number;
 }
 
 /**
@@ -265,6 +287,13 @@ export function isSharedSpaceCatalog(
       (entry.since === undefined || admissionTime(entry.since))
     )
   ) return false;
+  if (
+    value.notices !== undefined &&
+    !(plainObject(value.notices) &&
+      Object.entries(value.notices).every(([key, sharedAt]) =>
+        isNoticeKey(key) && admissionTime(sharedAt)
+      ))
+  ) return false;
   const entries = value.entries;
   return Object.entries(value.offers).every(([key, receipt]) => {
     if (
@@ -327,6 +356,23 @@ function plainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" &&
     (Object.getPrototypeOf(value) === Object.prototype ||
       Object.getPrototypeOf(value) === null);
+}
+
+/**
+ * Whether `key` is the key a notice mark is filed under: the one
+ * {@link sharedSpaceOfferKey} makes of a sender DID and an `id` an offer may
+ * carry.
+ */
+function isNoticeKey(key: string): boolean {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(key);
+  } catch {
+    return false;
+  }
+  return Array.isArray(parsed) && parsed.length === 2 &&
+    isWellFormedDID(parsed[0]) && boundedString(parsed[1], 320) &&
+    JSON.stringify(parsed) === key;
 }
 
 /** Whether a text value fits its wire contract. */
@@ -714,13 +760,15 @@ export const changeSharedSpaceMembership = handler<
  * says the space is deleted (`spaceDeleted()`), so a mark naming a space that
  * is not deleted, forged or mistaken, changes nothing. Returns `conflict`
  * without writing when the space has no entry, the observed revision is not
- * the current one, the entry is in another state, the server does not say the
- * space is deleted, or the next revision would not fit. The entry keeps its
- * title, sender, admission time and every offer receipt naming the space, and
- * `deleted` is terminal: no later command restores or saves the entry. Call
- * it only from a handler, since a new revision names the handler's event and
- * the deletion is asked of the server there. On a runtime that has not opened
- * the space, the handler is run again once the server has answered for it.
+ * the current one, the entry is in another state, the next revision would not
+ * fit, or the server does not say the space is deleted, checking in that
+ * order, so the server is asked only about a mark that could be recorded. The
+ * entry keeps its title, sender, admission time and every offer receipt naming
+ * the space, and `deleted` is terminal: no later command restores or saves the
+ * entry. Call it only from a handler, since a new revision names the
+ * handler's event and the deletion is asked of the server there. On a runtime
+ * that has not opened the space, the handler is run again once the server has
+ * answered for it.
  *
  * @throws When `mark` names no well-formed space or revision, or `catalog`
  *   holds something other than a valid catalog.
@@ -743,12 +791,12 @@ export function markSharedSpaceDeletedIn(
   if (!membership(current.state)) {
     return { status: "conflict", reason: "unsupported-state" };
   }
-  if (spaceDeleted(mark.space) !== true) {
-    return { status: "conflict", reason: "not-deleted" };
-  }
   const revision = nextRevision(current.revision);
   if (revision === undefined) {
     return { status: "conflict", reason: "unsupported-revision" };
+  }
+  if (spaceDeleted(mark.space) !== true) {
+    return { status: "conflict", reason: "not-deleted" };
   }
   catalog.key("entries", mark.space, "state").set("deleted");
   catalog.key("entries", mark.space, "revision").set(revision);
@@ -798,6 +846,39 @@ export function retitleSharedSpaceIn(
   }
   catalog.key("entries", retitle.space, "title").set(retitle.title);
   return { status: "retitled", space: retitle.space };
+}
+
+/**
+ * Whether `value` is a notice mark {@link markSharedSpaceNoticeIn} takes: a
+ * sender DID, an `id` an offer may carry, and a `sharedAt` that is a
+ * nonnegative integer.
+ */
+export function isSharedSpaceNoticeMark(
+  value: unknown,
+): value is SharedSpaceNoticeMark {
+  return plainObject(value) && isWellFormedDID(value.from) &&
+    boundedString(value.id, 320) && admissionTime(value.sharedAt);
+}
+
+/**
+ * Marks the notice `mark` names as acted on, under its sender and `id`,
+ * replacing the `sharedAt` an earlier one from them left there. The catalog
+ * is written only where the mark it holds differs, and nothing else in it is
+ * written.
+ *
+ * @throws When `mark` is not a notice mark, as {@link isSharedSpaceNoticeMark}
+ *   reads one, or the catalog is unavailable or malformed.
+ */
+export function markSharedSpaceNoticeIn(
+  catalog: Writable<SharedSpaceCatalogStorage>,
+  mark: SharedSpaceNoticeMark,
+): void {
+  if (!isSharedSpaceNoticeMark(mark)) {
+    throw new TypeError("Invalid shared-space notice mark.");
+  }
+  const key = sharedSpaceOfferKey(mark.from, mark.id);
+  if (readSharedSpaceCatalog(catalog).notices?.[key] === mark.sharedAt) return;
+  catalog.key("notices", key).set(mark.sharedAt);
 }
 
 /**

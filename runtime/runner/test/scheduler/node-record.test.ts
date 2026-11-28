@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { NodeRegistry } from "../../src/scheduler/node-record.ts";
 import type { Action } from "../../src/scheduler/types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("NodeRegistry", () => {
   describe("instance members", () => {
@@ -395,6 +395,13 @@ describe("NodeRegistry", () => {
               step,
               asked,
               walk(nodes, asked),
+            ]);
+          }
+          for (const root of roots) {
+            expect([step, root, nodes.hasNodesUnderDemandRoot(root)]).toEqual([
+              step,
+              root,
+              walk(nodes, [root]).length > 0,
             ]);
           }
         }

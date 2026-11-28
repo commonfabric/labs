@@ -9,6 +9,7 @@ import { Database } from "@db/sqlite";
 
 import { openSpace } from "../db.ts";
 import { scopeOverlay } from "../scopes.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -36,7 +37,7 @@ function deepValue(leaf: unknown) {
   return { value: v };
 }
 
-Deno.test("scopeOverlay detects divergence below the annotate depth cap", async () => {
+test("scopeOverlay detects divergence below the annotate depth cap", async () => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-div-" });
   const dbPath = `${dir}/space.sqlite`;
   try {

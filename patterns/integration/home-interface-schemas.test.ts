@@ -2,7 +2,6 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   sharedSpaceCollectionViewSchema,
@@ -21,6 +20,7 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Collects field paths, requiredness and literal choices without producer metadata. */
 function declaredFields(schema: JSONSchema): string[] {

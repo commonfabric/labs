@@ -87,6 +87,7 @@ import {
   type Unplaced,
   vanished,
 } from "./test-selection/build.ts";
+import type { ObservationSpool } from "./test-selection/observation-spool.ts";
 import {
   capabilitiesBySuite,
   loadTopology,
@@ -720,6 +721,9 @@ export interface PublishDeps {
 
   /** The alias file, which joins a renamed test to its own history. */
   aliases?: () => Promise<AliasResolver>;
+
+  /** Gives the spool each batch of the fold is read aside into. */
+  observationSpool?: () => ObservationSpool;
 }
 
 export async function publish(
@@ -730,6 +734,7 @@ export async function publish(
     topology = () => loadTopology(),
     previousManifest = livePrevious,
     aliases = loadAliasResolver,
+    observationSpool,
   }: PublishDeps = {},
 ): Promise<number> {
   const options = parseArgs(args);
@@ -796,7 +801,7 @@ export async function publish(
     );
   }
   const resolver = await aliases();
-  const fold = new Fold(aggregate, resolver, today);
+  const fold = new Fold(aggregate, resolver, today, observationSpool);
   if (fold.resolved > 0) {
     console.log(
       `test selection: moved the history of ${fold.resolved} identities ` +

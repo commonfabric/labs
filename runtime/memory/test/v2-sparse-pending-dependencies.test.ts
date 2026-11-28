@@ -16,9 +16,9 @@
 
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { type EntityDocument, toDocumentPath } from "../v2.ts";
 import {

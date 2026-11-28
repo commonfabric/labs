@@ -5,8 +5,9 @@
  * and without ever running a save command.
  *
  * A deploy never shares. Drafts land many times an hour; the index shares a
- * version once it settles, when its owner opens it in a loom, and only
- * while their sharing setting says to. The deploy's line says which.
+ * version once it settles, when its owner has used it in a loom for a day
+ * with no newer version and it passes the privacy check, and only while
+ * their sharing setting says to. The deploy's line says which.
  * `cf pattern share` shares one at once.
  *
  * The index is never in the deploy's way. The version is recorded after the
@@ -42,7 +43,15 @@ import {
   patternDocMetadata,
   publishRequestFor,
 } from "@commonfabric/pattern-index/publish";
-import type { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
+import {
+  openPatternIndexClient,
+  resolvePatternIndexUrl,
+} from "@commonfabric/pattern-index/access";
+import { loadIdentity } from "./identity.ts";
 
 /** The git checkout a file is in: its top directory and `origin` remote. */
 export interface GitCheckout {
@@ -50,7 +59,10 @@ export interface GitCheckout {
   remote: string;
 }
 
-/** The checkout `dir` is in, or `undefined` outside one or without `origin`. */
+/**
+ * The checkout `dir` is in, or `undefined` outside one or without `origin`.
+ * Throws when `git` cannot be started at all.
+ */
 export async function gitCheckoutOf(
   dir: string,
 ): Promise<GitCheckout | undefined> {
@@ -59,7 +71,7 @@ export async function gitCheckoutOf(
       args: ["-C", dir, ...args],
       stdout: "piped",
       stderr: "null",
-    }).output().catch(() => ({ code: 1, stdout: new Uint8Array() }));
+    }).output();
     return code === 0 ? new TextDecoder().decode(stdout).trim() : undefined;
   };
   const root = await git("rev-parse", "--show-toplevel");
@@ -181,6 +193,36 @@ export interface DeployedSource {
    * repository pattern, which is not the person's own work.
    */
   origin?: string;
+
+  /**
+   * Keep the version private whatever the person's sharing setting says, so
+   * only an explicit `cf pattern share` hands it to anyone.
+   */
+  keepPrivate?: boolean;
+
+  /**
+   * Who wrote the deployed source: absent for the person, `agent` for an
+   * agent deploying on their behalf (a service building a pattern for one of
+   * their pieces). An agent's version is recorded with the index's `agent`
+   * origin, so the person's sharing setting treats it as agent work, and its
+   * history follows the piece it was deployed to, as an agent run's does,
+   * rather than the entry file, which for such a deploy is a staged copy.
+   */
+  versionOrigin?: "agent";
+
+  /**
+   * What the version says the pattern does, in place of the entry's doc
+   * comment: a deploy that knows better than its source's header says so.
+   */
+  description?: string;
+
+  /**
+   * The pattern the deployed source was built from, as `cf piece getsrc`
+   * notes for a file it writes: credited as a remix when it is someone
+   * else's, and the version skipped when the source is that pattern
+   * unchanged. Without it, the note `getsrc` left for the entry is used.
+   */
+  builtFrom?: string;
 }
 
 /** What recording a deploy as a version came to. */
@@ -224,7 +266,8 @@ export interface VersionDeps {
 
 /**
  * Records `deployed` as a private version of the person's lineage for its
- * entry file. Never throws: every way it can fail is an outcome.
+ * entry file, or for its piece when an agent made it. Never throws: every
+ * way it can fail is an outcome.
  */
 export async function recordDeployedVersion(
   deployed: DeployedSource,
@@ -261,10 +304,17 @@ export async function recordDeployedVersion(
       pathKey: () => deps.store.slotKey(),
       ...(deps.checkoutOf === undefined ? {} : { checkoutOf: deps.checkoutOf }),
     };
-    const slot = await entrySlot(entry, sources);
+    const deployedTo = deployedPieceRef(
+      deployed.piece.space,
+      deployed.piece.id,
+    );
+    const slot = deployed.versionOrigin === "agent"
+      ? deployedTo
+      : await entrySlot(entry, sources);
     // Source fetched from someone else's pattern and deployed unchanged is
     // still theirs; once edited it is the person's own remix.
-    const fetchedFrom = await deps.store.sourceOf(entry);
+    const fetchedFrom = deployed.builtFrom ??
+      await deps.store.sourceOf(entry);
     let remixedFrom: string | undefined;
     if (fetchedFrom !== undefined) {
       const source = await client.getPattern({ patternId: fetchedFrom })
@@ -284,7 +334,20 @@ export async function recordDeployedVersion(
         if (!started) remixedFrom = fetchedFrom;
       }
     }
-    const doc = patternDocMetadata(await deps.readTextFile(entry));
+    // An agent's entry is a staged copy, which a deploy that does not wait on
+    // its version (the share sidecar) may already have removed: its doc
+    // comment is read from the program the deploy committed.
+    const source = deployed.versionOrigin === "agent"
+      ? deployed.program.files.find((file) =>
+        file.name === deployed.program.main
+      )?.contents ?? ""
+      : await deps.readTextFile(entry);
+    const doc = {
+      ...patternDocMetadata(source),
+      ...(deployed.description === undefined
+        ? {}
+        : { description: deployed.description }),
+    };
     const response = await client.publishPattern({
       ...publishRequestFor({
         patternId,
@@ -297,16 +360,46 @@ export async function recordDeployedVersion(
         ...(remixedFrom === undefined ? {} : { remixedFrom }),
       }),
       slot,
-      origin: "self",
-      deployedTo: deployedPieceRef(
-        deployed.piece.space,
-        deployed.piece.id,
-      ),
+      origin: deployed.versionOrigin ?? "self",
+      deployedTo,
+      ...(deployed.keepPrivate === true ? { keepPrivate: true } : {}),
     });
     return { status: "recorded", created: response.created, response };
   } catch (error) {
     return { status: "failed", reason: failureReason(error) };
   }
+}
+
+/**
+ * Keeps a deploy of the person's own source as a private version in the
+ * pattern index `CF_PATTERN_INDEX_URL` names, else the default index,
+ * signing as `identity` (a key file's path) and keeping this machine's
+ * index state where `cf` keeps it, so the lineage is the one `cf` deploys
+ * continue. Never throws: the deploy it follows has committed, and an index
+ * that is misconfigured or unreachable must not turn that into a failure.
+ */
+export async function recordVersionInIndex(
+  identity: string,
+  deployed: DeployedSource,
+): Promise<VersionOutcome> {
+  let baseUrl: string;
+  let store: PatternIndexStore;
+  try {
+    baseUrl = resolvePatternIndexUrl(undefined);
+    store = new PatternIndexStore(patternIndexStoreDir(baseUrl));
+  } catch (error) {
+    return { status: "failed", reason: describeFailure(error) };
+  }
+  return await recordDeployedVersion(deployed, {
+    store,
+    openClient: async () =>
+      openPatternIndexClient({
+        baseUrl,
+        signer: await loadIdentity(identity),
+        store,
+      }),
+    readTextFile: (path) => Deno.readTextFile(path),
+  });
 }
 
 /**
@@ -365,7 +458,7 @@ export function versionLine(outcome: VersionOutcome): string | undefined {
         }; cf pattern history lists them.`
         : "No new version: your newest one already has this source.";
       return response.autoShare === "when_used"
-        ? `${kept} Your sharing setting shares it anonymously once you open it in a loom.`
+        ? `${kept} Your sharing setting shares it anonymously once you have used it in a loom for a day with no newer version.`
         : kept;
     }
   }

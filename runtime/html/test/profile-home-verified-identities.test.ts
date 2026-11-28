@@ -18,6 +18,8 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import type { VDomOp } from "../src/vdom-ops.ts";
 import { WorkerReconciler } from "../src/worker/reconciler.ts";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 const INTEGRITY = CFC_LOOM_VERIFIED_EXTERNAL_IDENTITY_ATOM;
 const signer = await Identity.fromPassphrase(
@@ -48,9 +50,7 @@ const labeledAssertionSchema: JSONSchema = {
   ifc: { addIntegrity: [INTEGRITY] },
 };
 
-// Plain `Deno.test`, as the other reconciler tests here are written, because
-// the package's clock preload attaches `t.settle()` to its context.
-Deno.test("profile-home shows every fresh verified identity with a badge bound to its labeled value", async (t) => {
+test("profile-home shows every fresh verified identity with a badge bound to its labeled value", async () => {
   const storageManager = StorageManager.emulate({ as: signer });
   const runtime = new Runtime({
     apiUrl: new URL(import.meta.url),
@@ -151,7 +151,7 @@ Deno.test("profile-home shows every fresh verified identity with a badge bound t
     );
     try {
       await runtime.idle();
-      await t.settle();
+      await clock.settle();
 
       const texts = ops.flatMap((op) =>
         op.op === "create-text" || op.op === "update-text" ? [op.text] : []

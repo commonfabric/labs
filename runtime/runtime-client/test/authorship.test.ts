@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import type { CfcLabelView } from "@commonfabric/runner/cfc";
 import type { JSONSchema } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   AUTHOR_CLAIM_SCHEMA,
@@ -131,6 +131,46 @@ const unloadedCell = (id?: string) => {
       for (const onRefused of [...refusals]) {
         onRefused({ refusedBy: "display-ceiling" });
       }
+    },
+  };
+};
+
+/**
+ * An unloaded resolved cell named `id` whose deliveries were already under way
+ * when a subscriber cancelled: `update()` and `refuse()` reach every
+ * subscriber it has had, cancelled or not.
+ */
+const lingeringCell = (id: string) => {
+  const subscriptions: {
+    callback: (value: unknown, cfcLabel?: unknown) => void;
+    onRefused: (refusal: unknown) => void;
+  }[] = [];
+  return {
+    ref: () => ({ space: "did:example:space", id, path: [] }),
+    getCfcLabel: () => Promise.resolve(undefined),
+    subscribe(
+      callback: (value: unknown, cfcLabel?: unknown) => void,
+      options: { onRefused: (refusal: unknown) => void },
+    ) {
+      subscriptions.push({ callback, onRefused: options.onRefused });
+      callback(undefined, undefined);
+      return () => {};
+    },
+
+    /** Delivers a value with `label`, and settles the reads it starts. */
+    async update(label: unknown) {
+      for (const { callback } of subscriptions) {
+        callback({ loaded: true }, label);
+      }
+      await settle();
+    },
+
+    /** Refuses the cell's read, and settles the reads it starts. */
+    async refuse() {
+      for (const { onRefused } of subscriptions) {
+        onRefused({ refusedBy: "display-ceiling" });
+      }
+      await settle();
     },
   };
 };
@@ -1630,6 +1670,184 @@ describe("authorship", () => {
         await settle();
 
         expect(observation.states()).toEqual(["unverified"]);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reports again when the author changes after an earlier read of the value's label fails behind a later one", async () => {
+      const pendingReads: {
+        resolve: (label: unknown) => void;
+        reject: (error: unknown) => void;
+      }[] = [];
+      let notify: (() => void) | undefined;
+      let author = { id: "alice" };
+      let notifyAuthor: ((value: unknown) => void) | undefined;
+      const observation = observe(
+        {
+          getCfcLabel: () =>
+            new Promise((resolve, reject) =>
+              pendingReads.push({ resolve, reject })
+            ),
+          subscribe(callback: () => void) {
+            notify = callback;
+            callback();
+            return () => {};
+          },
+        },
+        {
+          get: () => author,
+          sync: () => Promise.resolve(author),
+          subscribe: (callback: (value: unknown) => void) => {
+            notifyAuthor = callback;
+            callback(author);
+            return () => {};
+          },
+        },
+      );
+
+      try {
+        notify?.();
+        expect(pendingReads.length).toBe(2);
+        pendingReads[1].resolve(authoredByLabel("alice"));
+        await settle();
+        expect(observation.states()).toEqual(["verified"]);
+
+        pendingReads[0].reject(new Error("the connection closed"));
+        await settle();
+        author = { id: "bob" };
+        notifyAuthor?.(author);
+
+        expect(observation.states()).toEqual(["verified", "unverified"]);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("reports the author's latest claim, not an earlier one whose name finishes reading after it", async () => {
+      const heldNames: (() => void)[] = [];
+      const heldName = {
+        get: () => undefined,
+        sync: () =>
+          new Promise((resolve) => heldNames.push(() => resolve("Mallory"))),
+      };
+      let claim: unknown = { id: "mallory", name: heldName };
+      let deliver: DeliveryCallback | undefined;
+      const author = {
+        get: () => claim,
+        getCfcLabel: () => Promise.resolve(undefined),
+        subscribe(callback: DeliveryCallback) {
+          deliver = callback;
+          callback(claim, undefined, { cfcLabelCurrent: true });
+          return () => {
+            deliver = undefined;
+          };
+        },
+      };
+      const observation = observe(
+        { getCfcLabel: () => Promise.resolve(authoredByLabel("alice")) },
+        author,
+      );
+
+      try {
+        await settle();
+        expect(heldNames.length).toBe(1);
+        expect(observation.states()).toEqual([]);
+
+        claim = { id: "alice", name: "Alice" };
+        deliver?.(claim, undefined, { cfcLabelCurrent: true });
+        await settle();
+        expect(observation.states()).toEqual(["verified"]);
+
+        for (const answer of heldNames.splice(0)) answer();
+        await settle();
+
+        expect(observation.states()).toEqual(["verified"]);
+        expect(observation.authorClaim).toEqual({ id: "alice", name: "Alice" });
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("asks for no resolved cell's label once the observation is cancelled while the value resolves", async () => {
+      const resolutions: (() => void)[] = [];
+      const resolved = labelCountingCell(authoredByLabel("alice"));
+      const value = {
+        getCfcLabel: () => Promise.resolve(undefined),
+        resolveAsCell: () =>
+          new Promise((resolve) => resolutions.push(() => resolve(resolved))),
+      };
+      const cancelled = observe(value, "alice");
+      const open = observe(value, "alice");
+
+      try {
+        await settle();
+        expect(resolutions.length).toBe(2);
+
+        cancelled.cancel();
+        for (const answer of resolutions.splice(0)) answer();
+        await settle();
+
+        expect(resolved.reads()).toBe(1);
+        expect(open.states()).toEqual(["verified"]);
+        expect(cancelled.states()).toEqual([]);
+      } finally {
+        open.cancel();
+      }
+    });
+
+    it("starts no read on an update from a resolved cell the watch has moved off", async () => {
+      const first = lingeringCell("first");
+      const second = unloadedCell("second");
+      let resolved: unknown = first;
+      let resolutions = 0;
+      const value = valueCell(() => {
+        resolutions++;
+        return resolved;
+      });
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+        resolved = second;
+        await value.update();
+        expect(second.subscriberCount()).toBe(1);
+        expect(resolutions).toBe(2);
+
+        await first.update(authoredByLabel("alice"));
+
+        expect(resolutions).toBe(2);
+        expect(observation.states()).toEqual([]);
+
+        await second.load(authoredByLabel("alice"));
+
+        expect(resolutions).toBe(3);
+        expect(observation.states()).toEqual(["verified"]);
+      } finally {
+        observation.cancel();
+      }
+    });
+
+    it("keeps watching the cell the value resolves to when the cell it resolved to before refuses", async () => {
+      const first = lingeringCell("first");
+      const second = unloadedCell("second");
+      let resolved: unknown = first;
+      const value = valueCell(() => resolved);
+      const observation = observe(value, "alice");
+
+      try {
+        await settle();
+        resolved = second;
+        await value.update();
+
+        await first.refuse();
+
+        expect(second.subscriberCount()).toBe(1);
+        expect(observation.states()).toEqual([]);
+
+        await second.load(authoredByLabel("alice"));
+
+        expect(observation.states()).toEqual(["verified"]);
       } finally {
         observation.cancel();
       }

@@ -25,6 +25,7 @@ import {
   type RunCfHarnessCliDependencies,
   selectCfHarnessCliSandboxRuntime,
 } from "@commonfabric/cf-harness/cli";
+import type { HarnessModelProviderId } from "@commonfabric/cf-harness/config";
 import type { HarnessBrowserHost } from "@commonfabric/cf-harness/contracts/browser-host";
 import type { HarnessInlineImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import type { PromptSlotRole } from "@commonfabric/cf-harness/contracts/prompt-slot";
@@ -57,13 +58,36 @@ import type {
 } from "@commonfabric/cf-harness/task-classification";
 import {
   type AgentRunErrorCode,
+  CFC_REFUSED,
   INVALID_RESULT,
   LIMIT_REACHED,
   PROVIDER_FAILURE,
 } from "@commonfabric/runner/agent-run";
-import type { CfcObservationMaxConfidentiality } from "@commonfabric/runner/cfc";
+import {
+  type CfcObservationMaxConfidentiality,
+  CfcReadCeilingError,
+} from "@commonfabric/runner/cfc";
+import { describeFailure } from "@commonfabric/js-values/describe-failure";
 
 import type { AgentRunReport } from "./agent-runner.ts";
+
+/**
+ * Whether `error`, or an error it was thrown for (its `cause`, at any depth),
+ * is the read ceiling withholding a value: a run the information-flow rules
+ * stopped, rather than one that failed.
+ */
+const isReadCeilingRefusal = (error: unknown): boolean => {
+  const seen = new Set<unknown>();
+  for (
+    let current = error;
+    current instanceof Error && !seen.has(current);
+    current = current.cause
+  ) {
+    if (current instanceof CfcReadCeilingError) return true;
+    seen.add(current);
+  }
+  return false;
+};
 
 /** The host command endpoint a job's command tools call. */
 export interface HarnessJobCommands {
@@ -106,8 +130,11 @@ export interface HarnessJobFabric {
 
 /** One job, as plain data. */
 export interface HarnessJobSpec extends HarnessModelLimits {
-  /** The task text, given to the model as the prompt. */
+  /** The submitted task text. */
   task: string;
+
+  /** Gives the opening task to the model by file. Follow-ups keep their message inline. */
+  taskDelivery?: "file";
 
   /** The predecessor's run root, whose checkpoint seeds this follow-up. */
   continueFrom?: { runRoot: string };
@@ -144,6 +171,13 @@ export interface HarnessJobSpec extends HarnessModelLimits {
 
   /** Model name passed to `cf-harness`. */
   model?: string;
+
+  /**
+   * The model provider passed to `cf-harness`; absent, the harness resolves
+   * its own. A follow-up naming one other than its predecessor's recorded
+   * provider is refused before any model call.
+   */
+  modelProvider?: HarnessModelProviderId;
 
   /** The job's system prompt: framing the task's author supplies. */
   instructions?: string;
@@ -201,6 +235,16 @@ export interface HarnessJobSpec extends HarnessModelLimits {
   /** `"agent"`: the job is a person's own agent making patterns for them (`--pattern-index-origin`). */
   patternIndexOrigin?: "agent";
 }
+
+/**
+ * The gateway's settings in the runner's environment, which a job pinned to
+ * `openai-codex` runs without: the harness refuses a gateway URL or auth mode
+ * beside that provider.
+ */
+export const HARNESS_GATEWAY_ENV_KEYS = [
+  "CF_HARNESS_GATEWAY_BASE_URL",
+  "CF_HARNESS_GATEWAY_AUTH_MODE",
+] as const;
 
 /**
  * The harness settings a job never takes from its environment: each grants
@@ -307,12 +351,25 @@ export type HarnessJobResult =
 
       /**
        * Why, where the harness said: for `INVALID_RESULT`, that no result
-       * was submitted, or the field the schema refused and the reason.
+       * was submitted, or the field the schema refused and the reason; for a
+       * run that ended on a thrown error, that error described. That text
+       * is unlabelled and may carry host detail: it is for the job's owner
+       * and operator, never for a model or a share.
        */
       errorDetail?: string;
     }
     | { outcome: "cancelled" }
   );
+
+/** Helper for the job, which reports the tool calls and artifacts of a run. */
+const runStateReport = (
+  runState: HarnessPromptLoopResult["runState"],
+): AgentRunReport => ({
+  toolCalls: runState.toolOutputs.length,
+  ...(runState.artifactRoot !== undefined
+    ? { runRef: runState.artifactRoot }
+    : {}),
+});
 
 /** Helper for the job, which turns a loop result into a report. */
 const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
@@ -334,10 +391,7 @@ const reportOf = (result: HarnessPromptLoopResult): AgentRunReport => {
         modelAttributionComplete: result.modelAttributionComplete,
       }
       : {}),
-    toolCalls: result.runState.toolOutputs.length,
-    ...(result.runState.artifactRoot !== undefined
-      ? { runRef: result.runState.artifactRoot }
-      : {}),
+    ...runStateReport(result.runState),
   };
 };
 
@@ -456,6 +510,9 @@ const argvOf = (
     (profile) => ["--allow-subagent-profile", profile],
   ),
   ...(spec.model !== undefined ? ["--model", spec.model] : []),
+  ...(spec.modelProvider !== undefined
+    ? ["--model-provider", spec.modelProvider]
+    : []),
 ];
 
 /**
@@ -524,6 +581,15 @@ export const runHarnessJob = async (
       if (!(error instanceof Deno.errors.NotFound)) throw error;
     }
   }
+  let filePrompt: string | undefined;
+  if (spec.taskDelivery === "file" && spec.continueFrom === undefined) {
+    await Deno.writeTextFile(join(workspace, ".job-task"), spec.task, {
+      createNew: true,
+      mode: 0o400,
+    });
+    filePrompt =
+      "Your task is in .job-task in the workspace. Follow the job instructions to use it.";
+  }
   const argv = argvOf(
     spec,
     workspace,
@@ -572,6 +638,11 @@ export const runHarnessJob = async (
       new CfHarnessPromptLoop(loopOptions));
   const env = { ...(options.harnessDeps?.env ?? processCfHarnessCliEnv()) };
   for (const key of HARNESS_JOB_GRANT_ENV_KEYS) delete env[key];
+  if (spec.modelProvider === "openai-codex") {
+    // A runner serving gateway profiles too may carry the gateway's settings;
+    // the harness refuses them beside `--model-provider openai-codex`.
+    for (const key of HARNESS_GATEWAY_ENV_KEYS) delete env[key];
+  }
   const deps: RunCfHarnessCliDependencies = {
     ...options.harnessDeps,
     ...SANDBOX_SELECTION,
@@ -650,11 +721,18 @@ export const runHarnessJob = async (
       };
       return {
         runPrompt: (promptOptions) =>
-          run(promptOptions, (wrapped) => loop.runPrompt(wrapped)),
+          run(
+            promptOptions,
+            (wrapped) =>
+              loop.runPrompt(
+                filePrompt === undefined
+                  ? wrapped
+                  : { ...wrapped, prompt: filePrompt },
+              ),
+          ),
         runTranscript: (transcriptOptions) =>
           run(transcriptOptions, (wrapped) => loop.runTranscript(wrapped)),
-        // The harness classifies the task before it assembles the prompt; a
-        // wrapper without this seam runs every job with full orientation.
+        // The harness classifies the submitted task before it assembles the prompt.
         ...(loop.classifyTask !== undefined
           ? {
             classifyTask: (task: string) => loop.classifyTask!(task),
@@ -668,25 +746,21 @@ export const runHarnessJob = async (
   const failedTurns = promptLoopModelTurnsFromError(loopError);
   const failedState = readRunState?.();
   // These are partial measurements, not a completeness claim. A failed
-  // provider call may have spent tokens it never reported.
-  const failedReport: AgentRunReport | undefined =
-    failedTurns !== undefined || reportedUsage !== undefined
-      ? {
-        ...(reportedUsage !== undefined
-          ? {
-            usage: { ...reportedUsage },
-            usageCoverage: reportedUsageCoverage,
-          }
-          : {}),
-        ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
-        ...(failedState !== undefined
-          ? { toolCalls: failedState.toolOutputs.length }
-          : {}),
-        ...(failedState?.artifactRoot !== undefined
-          ? { runRef: failedState.artifactRoot }
-          : {}),
-      }
-      : undefined;
+  // provider call may have spent tokens it never reported. Only a loop the
+  // harness built counts turns and usage, and that loop has run state.
+  const failedReport: AgentRunReport | undefined = failedState !== undefined &&
+      (failedTurns !== undefined || reportedUsage !== undefined)
+    ? {
+      ...(reportedUsage !== undefined
+        ? {
+          usage: { ...reportedUsage },
+          usageCoverage: reportedUsageCoverage,
+        }
+        : {}),
+      ...(failedTurns !== undefined ? { modelTurns: failedTurns } : {}),
+      ...runStateReport(failedState),
+    }
+    : undefined;
   const runRef = loopResult?.runState.artifactRoot ?? failedState?.artifactRoot;
   const recordedRun = runRef !== undefined &&
     await canContinueRecordedRun(runRef);
@@ -702,15 +776,24 @@ export const runHarnessJob = async (
     };
   }
   if (loopResult === undefined) {
+    // A run that ended on a thrown error says which, so the job's owner can
+    // tell a model that failed from a read the runtime withheld.
     const limit = loopError instanceof Error &&
       loopError.message.includes("exceeded max model turns");
+    const errorDetail = loopError !== undefined
+      ? describeFailure(loopError)
+      : refusalDetail;
     return {
       outcome: "failed",
       recordedRun,
-      errorCode: limit ? LIMIT_REACHED : PROVIDER_FAILURE,
-      ...(loopError === undefined && refusalDetail !== undefined
-        ? { errorDetail: refusalDetail }
-        : {}),
+      // The ceiling's refusal is decided first: the turn limit is told
+      // apart by its message alone, which a wrapping error could repeat.
+      errorCode: isReadCeilingRefusal(loopError)
+        ? CFC_REFUSED
+        : limit
+        ? LIMIT_REACHED
+        : PROVIDER_FAILURE,
+      ...(errorDetail !== undefined ? { errorDetail } : {}),
       ...(report !== undefined ? { report } : {}),
     };
   }

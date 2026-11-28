@@ -18,13 +18,16 @@ import {
   resolve,
   SEPARATOR,
 } from "@std/path";
-import type {
-  PatternIndexClient,
-  PatternIndexLineage,
-  PatternIndexProgramFile,
-  PatternIndexPublishResponse,
-  PatternIndexVersionSummary,
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexLineage,
+  type PatternIndexLink,
+  type PatternIndexProgramFile,
+  type PatternIndexPublishResponse,
+  type PatternIndexVersionSummary,
 } from "@commonfabric/pattern-index/client";
+import { decodeDataFile, encodeDataFile } from "@commonfabric/text/data-file";
 import { lineageForEntry, type SlotSources } from "./pattern-versions.ts";
 import { shellWord } from "./shell-quote.ts";
 
@@ -44,6 +47,9 @@ export interface HistoryRow {
 
   /** The version number whose source a rollback restored. */
   rolledBackFrom?: number;
+
+  /** Its source's shared version number, and whether that is stable. */
+  shared?: { number: number; stable: boolean };
 }
 
 /** The versions kept for `entry`, newest first. */
@@ -71,12 +77,13 @@ export async function entryHistory(
         share: version.share,
         current: version.head,
         ...(from === undefined ? {} : { rolledBackFrom: from }),
+        ...(version.shared === undefined ? {} : { shared: version.shared }),
       };
     }),
   };
 }
 
-const requireLineage = async (
+export const requireLineage = async (
   client: Pick<PatternIndexClient, "listLineages">,
   entry: string,
   sources: SlotSources,
@@ -119,6 +126,12 @@ export const historyLines = (entry: string, rows: HistoryRow[]): string[] => [
       row.rolledBackFrom === undefined
         ? ""
         : `  restores v${row.rolledBackFrom}`
+    }${
+      row.shared === undefined
+        ? ""
+        : `  shared #${row.shared.number} (${
+          row.shared.stable ? "stable" : "beta"
+        })`
     }`
   ),
   `Restore one with: cf pattern rollback ${shellWord(entry)} <version>`,
@@ -172,8 +185,8 @@ export interface RollbackDeps {
     "listLineages" | "listVersions" | "getVersion" | "rollback"
   >;
   sources: SlotSources;
-  readTextFile: (path: string) => Promise<string>;
-  writeTextFile: (path: string, contents: string) => Promise<void>;
+  readFile: (path: string) => Promise<Uint8Array>;
+  writeFile: (path: string, bytes: Uint8Array) => Promise<void>;
 }
 
 /** What `cf pattern rollback` did. */
@@ -222,16 +235,26 @@ const diskPath = (root: string, name: string): string => {
 };
 
 /**
- * The contents of `path`, or `undefined` where there is no file. Any other
- * failure to read is thrown, so a file that could not be read is never
- * taken for one that is not there and written over.
+ * What `readIfThere` returns for a file whose bytes no source package can
+ * store: a text file that is not valid UTF-8. It equals no version's contents.
+ */
+const UNSTORABLE = Symbol("unstorable");
+
+/**
+ * The contents of `path` as a source package stores the file `name`, an image
+ * as its `data:` URL among them (`decodeDataFile`), `UNSTORABLE` for bytes no
+ * package can store, or `undefined` where there is no file. Any other failure
+ * to read is thrown, so a file that could not be read is never taken for one
+ * that is not there and written over.
  */
 const readIfThere = async (
-  read: (path: string) => Promise<string>,
+  read: (path: string) => Promise<Uint8Array>,
   path: string,
-): Promise<string | undefined> => {
+  name: string,
+): Promise<string | typeof UNSTORABLE | undefined> => {
+  let bytes: Uint8Array;
   try {
-    return await read(path);
+    bytes = await read(path);
   } catch (error) {
     if (error instanceof Deno.errors.NotFound) return undefined;
     throw new PatternHistoryError(
@@ -240,17 +263,23 @@ const readIfThere = async (
       }); nothing was restored.`,
     );
   }
+  try {
+    return decodeDataFile(bytes, name);
+  } catch {
+    // Decoding fails only for a text file that is not valid UTF-8.
+    return UNSTORABLE;
+  }
 };
 
 /** The files of `files` whose contents on disk under `root` differ. */
 const differing = async (
   files: readonly PatternIndexProgramFile[],
   root: string,
-  read: (path: string) => Promise<string>,
+  read: (path: string) => Promise<Uint8Array>,
 ): Promise<PatternIndexProgramFile[]> => {
   const out: PatternIndexProgramFile[] = [];
   for (const file of files) {
-    const now = await readIfThere(read, diskPath(root, file.name));
+    const now = await readIfThere(read, diskPath(root, file.name), file.name);
     if (now !== file.contents) out.push(file);
   }
   return out;
@@ -266,13 +295,13 @@ const unkept = async (
   current: readonly PatternIndexProgramFile[],
   writing: readonly PatternIndexProgramFile[],
   root: string,
-  read: (path: string) => Promise<string>,
+  read: (path: string) => Promise<Uint8Array>,
 ): Promise<string[]> => {
   const kept = new Map(current.map((file) => [file.name, file.contents]));
   const lost: string[] = [];
   for (const file of writing) {
     const path = diskPath(root, file.name);
-    const now = await readIfThere(read, path);
+    const now = await readIfThere(read, path, file.name);
     if (now !== undefined && now !== kept.get(file.name)) {
       lost.push(relative(Deno.cwd(), path));
     }
@@ -339,7 +368,7 @@ export async function rollbackEntry(
   const changed = await differing(
     restored.program.files,
     root,
-    deps.readTextFile,
+    deps.readFile,
   );
   if (target.head && changed.length === 0) {
     throw new PatternHistoryError(
@@ -363,7 +392,7 @@ export async function rollbackEntry(
       current.program.files,
       changed,
       root,
-      deps.readTextFile,
+      deps.readFile,
     );
     if (lost.length > 0) {
       throw new PatternHistoryError(
@@ -373,15 +402,28 @@ export async function rollbackEntry(
       );
     }
   }
+  // Every file is encoded before the first is written, so a version holding a
+  // binary file whose contents are not a `data:` URL writes nothing.
+  const bytes = changed.map((file) => {
+    try {
+      return encodeDataFile(file.contents, file.name);
+    } catch (error) {
+      throw new PatternHistoryError(
+        `This version's ${file.name} cannot be written as a file (${
+          error instanceof Error ? error.message : String(error)
+        }); nothing was restored.`,
+      );
+    }
+  });
   for (const file of changed) {
     const path = diskPath(root, file.name);
     await Deno.mkdir(dirname(path), { recursive: true });
     await requireInside(root, path);
   }
   const written: string[] = [];
-  for (const file of changed) {
+  for (const [i, file] of changed.entries()) {
     const path = diskPath(root, file.name);
-    await deps.writeTextFile(path, file.contents);
+    await deps.writeFile(path, bytes[i]);
     written.push(relative(Deno.cwd(), path));
   }
   const version = target.head ? undefined : await client.rollback({
@@ -411,3 +453,138 @@ export const rollbackLines = (
     shellWord(entry)
   } deploys it.`,
 ];
+
+/** What `cf pattern stable` did. */
+export type StableReport =
+  | { status: "stable"; number: number; changed: boolean }
+  | { status: "pending" };
+
+/**
+ * Makes the entry's newest shared version stable: what search and the
+ * catalog show. It passed the privacy check when it was shared, so nothing
+ * new is exposed. A share still being checked is made stable instead, so
+ * an older version never becomes the findable one by being newest so far.
+ * The numbers come from the lineage, as the index keeps them.
+ */
+export async function makeStable(
+  client: Pick<PatternIndexClient, "listVersions" | "shareVersion">,
+  lineage: PatternIndexLineage,
+  entry: string,
+): Promise<StableReport> {
+  if (lineage.withdrawn === true) {
+    throw new PatternHistoryError(
+      `${entry} is not shared: cf pattern share shares it again, on beta.`,
+    );
+  }
+  if (lineage.head.share === "pending") {
+    await shareStable(client, lineage.head.versionId, entry);
+    return { status: "pending" };
+  }
+  const latest = lineage.channels?.latest;
+  if (latest === undefined) {
+    throw new PatternHistoryError(
+      `Nothing of ${entry} is shared yet: cf pattern share shares it on beta first.`,
+    );
+  }
+  if (lineage.channels?.stable === latest) {
+    return { status: "stable", number: latest, changed: false };
+  }
+  const { versions } = await client.listVersions({
+    lineageId: lineage.lineageId,
+  });
+  const holder = versions.find((version) => version.shared?.number === latest);
+  if (holder === undefined) {
+    throw new PatternHistoryError(
+      `The version shared as #${latest} of ${entry} is no longer kept: cf pattern share shares the current one, then cf pattern stable.`,
+    );
+  }
+  await shareStable(client, holder.versionId, entry);
+  return { status: "stable", number: latest, changed: true };
+}
+
+const shareStable = async (
+  client: Pick<PatternIndexClient, "shareVersion">,
+  versionId: string,
+  entry: string,
+): Promise<void> => {
+  try {
+    await client.shareVersion({ versionId, channel: "stable" });
+  } catch (error) {
+    if (error instanceof PatternIndexError && error.status === 409) {
+      throw new PatternHistoryError(
+        `A newer version of ${entry} was shared since this looked; run cf pattern stable again.`,
+      );
+    }
+    throw error;
+  }
+};
+
+/** `cf pattern stable`'s answer as a line. */
+export const stableLine = (entry: string, report: StableReport): string =>
+  report.status === "pending"
+    ? `${entry} is still being checked; once it passes it is stable, and search and the catalog show it.`
+    : report.changed
+    ? `Shared version #${report.number} of ${entry} is stable: search and the catalog show it.`
+    : `Shared version #${report.number} of ${entry} is stable already.`;
+
+/** Which shared version a link names. */
+export type LinkChannel = "stable" | "beta" | number;
+
+/** What `cf pattern link` found. */
+export interface LinkReport {
+  /** The link: the lineage's pseudonym, with `@beta` or `@<n>`. */
+  ref: string;
+
+  /** What it names now. */
+  link: PatternIndexLink;
+}
+
+/**
+ * A link to the lineage's shared version on `channel`, checked with the
+ * index (`getPattern {ref}`), so it is never one that opens nothing. Asked
+ * for stable when nothing is stable yet, it gives beta.
+ */
+export async function patternLink(
+  client: Pick<PatternIndexClient, "getPattern">,
+  lineage: PatternIndexLineage,
+  entry: string,
+  channel: LinkChannel,
+): Promise<LinkReport> {
+  const tried: readonly LinkChannel[] = channel === "stable"
+    ? ["stable", "beta"]
+    : [channel];
+  for (const each of tried) {
+    const ref = each === "stable"
+      ? lineage.pseudonym
+      : `${lineage.pseudonym}@${each}`;
+    try {
+      const { link } = await client.getPattern({ ref });
+      if (link !== undefined) return { ref, link };
+    } catch (error) {
+      if (!(error instanceof PatternIndexError && error.status === 404)) {
+        throw error;
+      }
+    }
+  }
+  throw new PatternHistoryError(
+    typeof channel === "number"
+      ? `${entry} has no shared version #${channel}.`
+      : `Nothing of ${entry} is shared yet, or its share is still being checked: cf pattern share shares it on beta.`,
+  );
+}
+
+/** The link as a line: what it names, and whose name it shows. */
+export const linkLine = (
+  entry: string,
+  lineage: Pick<PatternIndexLineage, "published">,
+  { ref, link }: LinkReport,
+): string =>
+  `${ref}: ${entry}, ${
+    link.channel === "number"
+      ? `exactly shared version #${link.number}`
+      : `${link.channel} (shared version #${link.number} now)`
+  }. ${
+    lineage.published === undefined
+      ? "It names the pattern, not you."
+      : "It shows your name, as the pattern is published under it."
+  }`;

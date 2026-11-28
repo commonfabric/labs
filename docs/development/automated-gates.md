@@ -153,7 +153,10 @@ Each of these gates fails CI on its own, and none of them run as part of
   rather than through `resolveLocalProgram`, which silently drops any data files
   the caller attached
 - `deno task check-baselines-append-only` — a pattern baseline that was deleted
-  rather than added to
+  rather than added to. Moving a baseline counts as deleting it, so a pattern
+  that moves leaves its baselines where they are: its move goes in
+  `runtime/runner/src/pattern-key-moves.ts`, and `deno task pattern-compat`
+  reads them under every key the pattern had
 - `deno task check-cause-assignments` — a change to how patterns are built
   that moves an anonymous cell of an in-tree pattern to a new
   `{ $generated: N }` number while the pattern's source stays the same. The runtime mints such a cell's id from
@@ -206,6 +209,17 @@ Each of these gates fails CI on its own, and none of them run as part of
   authority, and the marker is what stops the wrong example being copied by
   someone who never found the index. Membership is `tasks/pattern-tiers.ts`, and
   `deno task fix-pattern-tiers` applies or corrects a marker
+
+Three of these gates compare the tree with history:
+`check-baselines-append-only`, `check-cause-assignments`, and
+`check-test-aliases` each read the merge base of `HEAD` with a base revision,
+which an argument names. A pull request's lanes name the pull request's
+base. A run that names none, such as a run on the default branch or a local
+run, uses `upstream/main` where the checkout has it, which is where a fork's
+pull request is based, and `origin/main` otherwise. CI's checkouts have no
+`upstream`, so there it is `origin/main`. `defaultBase` in
+`tasks/repository-files.ts` makes that choice, for these gates, for
+`deno task test-gap`, and for `deno task refresh-fabrichat-rehearsal`.
 
 The detail behind each of these lives in `.claude/rules/`, one file per kind of
 file it governs. Claude Code loads the matching rule on its own when it reads a

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,12 +5,14 @@ import {
   FRAMEWORK_RESULT_KEYS,
   FS,
   NAME,
+  SUGGESTIONS,
   TESTS,
   TILE_UI,
   TYPE,
   UI,
   VIEWS,
 } from "../src/framework-result-keys.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("framework-result-keys", () => {
   it("spells each reserved key", () => {
@@ -19,7 +20,17 @@ describe("framework-result-keys", () => {
     // consumer outside this workspace holds the spelling as a literal — a host
     // probing `$VIEWS` on a result it was handed has no import to follow — so
     // the text is the contract, and a rename is a break for it.
-    expect([TYPE, NAME, UI, TILE_UI, CHIP_UI, FS, TESTS, VIEWS]).toEqual([
+    expect([
+      TYPE,
+      NAME,
+      UI,
+      TILE_UI,
+      CHIP_UI,
+      FS,
+      TESTS,
+      VIEWS,
+      SUGGESTIONS,
+    ]).toEqual([
       "$TYPE",
       "$NAME",
       "$UI",
@@ -28,6 +39,7 @@ describe("framework-result-keys", () => {
       "$FS",
       "$TESTS",
       "$VIEWS",
+      "$SUGGESTIONS",
     ]);
   });
 
@@ -44,6 +56,7 @@ describe("framework-result-keys", () => {
       "$FS",
       "$TESTS",
       "$VIEWS",
+      "$SUGGESTIONS",
     ]);
   });
 });

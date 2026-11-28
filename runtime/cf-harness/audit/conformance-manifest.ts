@@ -139,9 +139,10 @@ export const CFC_HARNESS_OBLIGATIONS: readonly ConformanceObligation[] = [
       "how direct-command evidence is kept unforgeable by application code, model output, sandboxed tools, and free-form documents",
     status: "mechanized",
     account:
-      "Four mechanisms, each of which breaks something if removed: the binding is never a field of a tool input schema, a skill's prompt role is pinned to `context` at the type level, what the invocation context records is a `PromptSlotInfluence` integrity atom rather than a `PromptSlotBound` one, and the runner strips a pattern-authored `PromptSlotBound` from a declared label. All four are held by the type system and by package tests, so no audit check reads them.",
+      "Five mechanisms, each of which breaks something if removed: the binding is never a field of a tool input schema, a skill's prompt role is limited at the type level to `context` and `quote`, neither of which carries action authority, a delegated child that holds handle-delivered skill text runs with its binding lowered to `quote` whatever the parent holds, what the invocation context records is a `PromptSlotInfluence` integrity atom rather than a `PromptSlotBound` one, and the runner strips a pattern-authored `PromptSlotBound` from a declared label. All five are held by the type system and by package tests, so no audit check reads them.",
     evidence: [
       "src/contracts/skill.ts",
+      "src/prompt-loop.ts",
       "src/contracts/cfc-invocation-context.ts",
       "../runner/src/cfc/prepare.ts",
     ],
@@ -180,7 +181,7 @@ export const CFC_HARNESS_OBLIGATIONS: readonly ConformanceObligation[] = [
       "how free-form tool documentation is kept separate from structured capability metadata",
     status: "partial",
     account:
-      "Separated for skills, mechanically: a skill's text is a labeled document read under the `context` prompt role with a registry digest, an observed digest and a match flag recorded beside it. Not separated for tools: a descriptor's `description` is a plain string inside the same record as its effect class and schema, with no `docRef` and no opaque-handle path.",
+      "Separated for skills, mechanically: a registry skill's text is a labeled document read under the `context` prompt role, with a registry digest, an observed digest and a match flag recorded beside it, and handle-delivered skill text is read under `quote`, with the handle token, the digest of the text and any acquisition recorded instead. Not separated for tools: a descriptor's `description` is a plain string inside the same record as its effect class and schema, with no `docRef` and no opaque-handle path.",
     evidence: ["src/contracts/skill.ts", "src/contracts/tool-descriptor.ts"],
     coveredBy: [],
     issue: "CT-2178",

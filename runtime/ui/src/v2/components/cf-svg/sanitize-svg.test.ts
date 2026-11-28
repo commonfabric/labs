@@ -10,9 +10,9 @@
 import "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { sanitizeSvg } from "./sanitize-svg.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The sanitized drawing, which each case here expects to exist. */
 function sanitized(svg: string): Element {

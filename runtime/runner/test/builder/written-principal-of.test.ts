@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
@@ -6,6 +5,12 @@ import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import { writtenPrincipalOf } from "../../src/builder/principal-of.ts";

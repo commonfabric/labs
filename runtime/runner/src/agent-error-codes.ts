@@ -26,6 +26,13 @@ export const CANCELLED = "CANCELLED";
 /** A result the boundary would not release; the reason is withheld. */
 export const REFUSED = "REFUSED";
 
+/**
+ * A run the runtime's information-flow rules stopped: a read the session's
+ * read ceiling withholds ended it. Not a provider's failure, and not
+ * `REFUSED`, which is a result the boundary would not release.
+ */
+export const CFC_REFUSED = "CFC_REFUSED";
+
 /** Every code, in the order the record schema enumerates them. */
 export const AGENT_RUN_ERROR_CODES = [
   INVALID_INPUT,
@@ -35,6 +42,7 @@ export const AGENT_RUN_ERROR_CODES = [
   RUNNER_LOST,
   CANCELLED,
   REFUSED,
+  CFC_REFUSED,
 ] as const;
 
 /** One of {@link AGENT_RUN_ERROR_CODES}. */

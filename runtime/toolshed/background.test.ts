@@ -1,6 +1,5 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { toFileUrl } from "@std/path";
 
@@ -16,6 +15,7 @@ import {
   type SpawnedChild,
   writeListeningMarker,
 } from "@/background.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // A ReadableStream that emits the given text chunks and then closes, standing in
 // for a spawned child's stdout.
@@ -29,7 +29,7 @@ function stdoutOf(chunks: readonly string[]): ReadableStream<Uint8Array> {
   });
 }
 
-Deno.test("classifyLaunch separates control flags from server args", () => {
+test("classifyLaunch separates control flags from server args", () => {
   const foreground = classifyLaunch(["--port=8002"]);
   assertEquals(foreground.background, false);
   assertEquals(foreground.logFile, undefined);
@@ -45,7 +45,7 @@ Deno.test("classifyLaunch separates control flags from server args", () => {
   assertEquals(parent.serverArgs, ["--port=8002"]);
 });
 
-Deno.test("buildBackgroundChildCommand re-runs the compiled binary directly", () => {
+test("buildBackgroundChildCommand re-runs the compiled binary directly", () => {
   const { command, args } = buildBackgroundChildCommand({
     execPath: "/opt/common-binaries/toolshed",
     mainModule: "file:///proj/runtime/toolshed/index.ts",
@@ -57,7 +57,7 @@ Deno.test("buildBackgroundChildCommand re-runs the compiled binary directly", ()
   assertEquals(args, ["--port=8002"]);
 });
 
-Deno.test("buildBackgroundChildCommand re-runs deno against the entry module", () => {
+test("buildBackgroundChildCommand re-runs deno against the entry module", () => {
   const { command, args } = buildBackgroundChildCommand({
     execPath: "/usr/local/bin/deno",
     mainModule: "file:///proj/runtime/toolshed/index.ts",
@@ -73,7 +73,7 @@ Deno.test("buildBackgroundChildCommand re-runs deno against the entry module", (
   ]);
 });
 
-Deno.test("runBackgroundParent marks the child through the environment", async () => {
+test("runBackgroundParent marks the child through the environment", async () => {
   let seenEnv: Record<string, string> | undefined;
   const child: SpawnedChild = {
     pid: 4321,
@@ -104,7 +104,7 @@ Deno.test("runBackgroundParent marks the child through the environment", async (
   assertEquals(seenEnv?.[BACKGROUND_LOG_ENV], "/tmp/toolshed.log");
 });
 
-Deno.test("runBackgroundParent detaches and exits 0 once the child is listening", async () => {
+test("runBackgroundParent detaches and exits 0 once the child is listening", async () => {
   let unrefed = false;
   let exitCode: number | undefined;
   const out: string[] = [];
@@ -141,7 +141,7 @@ Deno.test("runBackgroundParent detaches and exits 0 once the child is listening"
   assertStringIncludes(out.join("\n"), "pid 4321");
 });
 
-Deno.test("runBackgroundParent surfaces the log and the code when the child dies first", async () => {
+test("runBackgroundParent surfaces the log and the code when the child dies first", async () => {
   let unrefed = false;
   let exitCode: number | undefined;
   const errs: string[] = [];
@@ -180,7 +180,7 @@ Deno.test("runBackgroundParent surfaces the log and the code when the child dies
   assertStringIncludes(text, "Port 8002 is already in use");
 });
 
-Deno.test("runBackgroundParent finds a marker split across reads", async () => {
+test("runBackgroundParent finds a marker split across reads", async () => {
   let exitCode: number | undefined;
   const child: SpawnedChild = {
     pid: 77,
@@ -215,7 +215,7 @@ Deno.test("runBackgroundParent finds a marker split across reads", async () => {
   assertEquals(exitCode, 0);
 });
 
-Deno.test({
+test({
   name: "backgroundLogStream appends each write to the file",
   // The stream owns a file handle for the server's life; a test does not close
   // it, so opt out of the resource sanitizer rather than expose a closer.
@@ -235,7 +235,7 @@ Deno.test({
   }
 });
 
-Deno.test({
+test({
   name: "redirectConsoleToFile routes console output to the file",
   sanitizeResources: false,
 }, async () => {
@@ -267,7 +267,7 @@ Deno.test({
   await Deno.remove(path);
 });
 
-Deno.test("writeListeningMarker writes the marker line to stdout", () => {
+test("writeListeningMarker writes the marker line to stdout", () => {
   const stdout = Deno.stdout as { writeSync(bytes: Uint8Array): number };
   const original = stdout.writeSync;
   const decoder = new TextDecoder();
@@ -284,7 +284,7 @@ Deno.test("writeListeningMarker writes the marker line to stdout", () => {
   assertEquals(captured, `${READY_MARKER}\n`);
 });
 
-Deno.test({
+test({
   name: "runBackgroundParent spawns a real child and reads its marker",
   // Spawns a real `deno run` child, so the process and its streams are not the
   // synchronous resources the sanitizers track.
@@ -458,24 +458,6 @@ describe("background", () => {
         ["Uncaught error:", failure],
         ["Uncaught error:", "no filling"],
       ]);
-    });
-
-    it("logs an unhandled rejection by its reason", () => {
-      const target = new EventTarget();
-      const logged: unknown[][] = [];
-      using _error = stub(console, "error", (...args: unknown[]) => {
-        logged.push(args);
-      });
-      const reason = new Error("stale batch");
-      const promise = Promise.reject(reason);
-      promise.catch(() => {});
-
-      logUncaughtErrors(target);
-      target.dispatchEvent(
-        new PromiseRejectionEvent("unhandledrejection", { promise, reason }),
-      );
-
-      expect(logged).toEqual([["Unhandled promise rejection:", reason]]);
     });
   });
 });

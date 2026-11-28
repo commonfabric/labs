@@ -5,10 +5,10 @@
 // not bounds at all. Each assertion here states a behaviour a caller can
 // observe, so a later change to the traversal shows up as a failing test.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { linksWithPaths } from "../decode.ts";
 

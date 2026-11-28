@@ -10,9 +10,9 @@
  * any comparison that walks indices alone.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deepEqual } from "@commonfabric/js-values/deep-equal";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("deepEqual()", () => {
   describe("primitives", () => {

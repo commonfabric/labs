@@ -56,6 +56,7 @@ import {
   EventIntentOutcomeNotice,
   EventIntentOutcomeNotification,
   EventNeedsAttentionNotification,
+  type HistoryStep,
   InitializationData,
   type LoggerCountsData,
   type LoggerCountsResponse,
@@ -84,12 +85,14 @@ import {
   type SpaceAccessRestoredNotification,
   type SpaceAclCapability,
   type SpaceAclView,
+  type SpaceSeqAdvancedNotification,
   TelemetryNotification,
   type UploadBlobResponse,
 } from "./protocol/mod.ts";
 import { assertNoKeyMaterial } from "./shared/key-material.ts";
 import {
   type EveryFieldOf,
+  normalizeBranches,
   normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
@@ -193,6 +196,12 @@ export type RuntimeClientEvents = {
    */
   connectionrestored: [];
 
+  /**
+   * The newest seq of a space the runtime has learned of moved forward, for
+   * a space `watchSpaceHistory()` asked to follow.
+   */
+  spaceseqadvanced: [{ space: DID; seq: number }];
+
   telemetry: [RuntimeTelemetryMarkerResult];
   pendingwriteschange: [{ pending: boolean }];
   eventneedsattention: [EventAttentionNotice];
@@ -226,6 +235,7 @@ export function attachOptionsFrom(
     spaceHostMap: options.spaceHostMap,
     identity: options.identity.did(),
     spaceDid: options.spaceDid,
+    branches: options.branches,
     experimental: options.experimental,
     cfcEnforcementMode: options.cfcEnforcementMode,
     cfcFlowLabels: options.cfcFlowLabels,
@@ -460,6 +470,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     this.#conn.on("spaceaccesslost", this.#onSpaceAccessLost);
     this.#conn.on("spaceaccessrestored", this.#onSpaceAccessRestored);
     this.#conn.on("connectionrestored", this.#onConnectionRestored);
+    this.#conn.on("spaceseqadvanced", this.#onSpaceSeqAdvanced);
     this.#conn.on("eventintentoutcome", this.#onEventIntentOutcome);
     this.#conn.on("telemetry", this.#onTelemetry);
     this.#conn.on("pendingwriteschange", this.#onPendingWritesChange);
@@ -876,6 +887,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       ),
       spaceHostMap: normalizeSpaceHostMap(options.spaceHostMap),
       spaceDid: options.spaceDid,
+      branches: normalizeBranches(options.branches),
       experimental: options.experimental,
       cfcEnforcementMode: options.cfcEnforcementMode,
       cfcFlowLabels: options.cfcFlowLabels,
@@ -916,6 +928,7 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
       spaceHostMap: options.spaceHostMap,
       identity: options.identity.keyPair,
       spaceDid: options.spaceDid,
+      branches: options.branches,
       experimental: options.experimental,
       cfcEnforcementMode: options.cfcEnforcementMode,
       cfcFlowLabels: options.cfcFlowLabels,
@@ -1882,6 +1895,84 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     return response.url;
   }
 
+  /**
+   * Returns a stretch of the history of `options.space`, newest first: its
+   * steps that began below `options.before`, or its newest ones, and the
+   * seq to pass as `before` for the stretch older than this one.
+   */
+  async spaceHistory(
+    options: { space: DID; before?: number },
+  ): Promise<{ steps: HistoryStep[]; next?: number }> {
+    return await this.#conn.request<RequestType.SpaceHistoryList>({
+      type: RequestType.SpaceHistoryList,
+      space: options.space,
+      ...(options.before !== undefined ? { before: options.before } : {}),
+    });
+  }
+
+  /**
+   * Starts reporting `spaceseqadvanced` for `space`, each time the newest
+   * seq of it the runtime has learned of moves forward, or with `watch`
+   * false stops. The seq moves for a commit the runtime makes and for one
+   * to a document it watches, so a commit to a document it does not watch
+   * is not reported until one it does follows.
+   */
+  async watchSpaceHistory(space: DID, watch: boolean): Promise<void> {
+    await this.#conn.request<RequestType.SpaceHistoryWatch>({
+      type: RequestType.SpaceHistoryWatch,
+      space,
+      watch,
+    });
+  }
+
+  /**
+   * Forks the branch `options.name` of `options.space` from the point
+   * `options.forkSeq` of its history. A runtime client initialized with the
+   * branch in `RuntimeClientOptions.branches` runs the space as the branch
+   * holds it.
+   */
+  async createSpaceBranch(
+    options: { space: DID; name: string; forkSeq: number },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.SpaceBranchCreate>({
+      type: RequestType.SpaceBranchCreate,
+      space: options.space,
+      name: options.name,
+      forkSeq: options.forkSeq,
+    });
+  }
+
+  /**
+   * Deletes the branch `options.name` of `options.space`, which then takes
+   * no further commit. Its name stays taken.
+   */
+  async deleteSpaceBranch(
+    options: { space: DID; name: string },
+  ): Promise<void> {
+    await this.#conn.request<RequestType.SpaceBranchDelete>({
+      type: RequestType.SpaceBranchDelete,
+      space: options.space,
+      name: options.name,
+    });
+  }
+
+  /**
+   * Restores `options.space` to the state the point `options.seq` of its
+   * history held, as one new commit of the space's history. Only an owner
+   * of the space may. Returns the seq of that commit, or `undefined` when
+   * the space already held the state.
+   */
+  async restoreSpace(
+    options: { space: DID; seq?: number },
+  ): Promise<number | undefined> {
+    const response = await this.#conn.request<RequestType.SpaceRestore>({
+      type: RequestType.SpaceRestore,
+      space: options.space,
+      ...(options.seq !== undefined ? { seq: options.seq } : {}),
+    });
+    return response.seq;
+  }
+
   async detectNonIdempotent(
     durationMs?: number,
   ): Promise<SchedulerDiagnosisResult> {
@@ -1923,6 +2014,12 @@ export class RuntimeClient extends EventEmitter<RuntimeClientEvents> {
     { space, eventId, kind, reason }: EventIntentOutcomeNotification,
   ): void => {
     this.emit("eventintentoutcome", { space, eventId, kind, reason });
+  };
+
+  #onSpaceSeqAdvanced = (
+    { space, seq }: SpaceSeqAdvancedNotification,
+  ): void => {
+    this.emit("spaceseqadvanced", { space, seq });
   };
 
   #onSpaceAccessLost = (

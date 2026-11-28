@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PromptAttachment } from "./cf-prompt-input.ts";
 import {
@@ -6,6 +5,7 @@ import {
   isUploadIncomplete,
   toSendAttachment,
 } from "./send-attachments.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const att = (over: Partial<PromptAttachment>): PromptAttachment => ({
   id: "a1",

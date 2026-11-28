@@ -7,8 +7,9 @@ import {
   shellQuote,
   withGitShim,
 } from "./view-commitmsg-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("commitSubjects: the text after the hash of a compact header", () => {
+test("commitSubjects: the text after the hash of a compact header", () => {
   const full = "0123456789abcdef0123456789abcdef01234567";
   assertEquals(
     commitSubjects([`${full} Add the feature`, "diff --git a/f b/f"]).get(full),
@@ -16,7 +17,7 @@ Deno.test("commitSubjects: the text after the hash of a compact header", () => {
   );
 });
 
-Deno.test({
+test({
   name: "realGit: preserves a configured reference-transaction hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -49,7 +50,7 @@ cat >> ${shellQuote(journal)}`,
   },
 });
 
-Deno.test("realGit: labels edited commit messages as UTF-8", async () => {
+test("realGit: labels edited commit messages as UTF-8", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -80,7 +81,7 @@ Deno.test("realGit: labels edited commit messages as UTF-8", async () => {
   }
 });
 
-Deno.test({
+test({
   name: "realGit: journals nested commits from a reference-transaction hook",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -129,7 +130,7 @@ fi`,
   },
 });
 
-Deno.test({
+test({
   name: "realGit: keeps an in-repository symlink's lexical Git path",
   ignore: Deno.build.os === "windows",
   fn: async () => {
@@ -165,7 +166,7 @@ Deno.test({
   },
 });
 
-Deno.test("realGit: refuses a different branch at the same commit", async () => {
+test("realGit: refuses a different branch at the same commit", async () => {
   const root = await Deno.makeTempDir();
   try {
     await git(root, ["init", "-q"]);
@@ -195,7 +196,7 @@ Deno.test("realGit: refuses a different branch at the same commit", async () => 
   }
 });
 
-Deno.test("realGit: validates selected paths before reading commit contents", async () => {
+test("realGit: validates selected paths before reading commit contents", async () => {
   const root = await Deno.makeTempDir();
   const outside = await Deno.makeTempDir();
   try {
@@ -236,7 +237,7 @@ Deno.test("realGit: validates selected paths before reading commit contents", as
   }
 });
 
-Deno.test({
+test({
   name: "realGit: recovers amend ownership from file and reftable reflogs",
   ignore: Deno.build.os === "windows",
   async fn() {
@@ -281,7 +282,7 @@ fi`,
   },
 });
 
-Deno.test({
+test({
   name:
     "realGit: rolls back a nested commit found in a file reflog whose subject has a line separator",
   ignore: Deno.build.os === "windows",
@@ -325,7 +326,7 @@ fi`,
   },
 });
 
-Deno.test({
+test({
   name: "realGit: reports failures and malformed output from merge helpers",
   ignore: Deno.build.os === "windows",
   async fn() {

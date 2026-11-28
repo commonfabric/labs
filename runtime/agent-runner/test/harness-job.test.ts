@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
-import { basename, join } from "@std/path";
+import { basename, dirname, join } from "@std/path";
 
 import {
   CfHarnessPromptLoop,
@@ -11,8 +10,16 @@ import type { HarnessModelUsage } from "@commonfabric/cf-harness/model/client";
 import type { HarnessImageAttachment } from "@commonfabric/cf-harness/contracts/image";
 import { materializeImageAttachmentContentPart } from "@commonfabric/cf-harness/image-attachments";
 import type { HarnessTranscriptEvent } from "@commonfabric/cf-harness/contracts/transcript";
+import { FileHarnessProviderSettingsStore } from "@commonfabric/cf-harness/auth/provider-settings";
 import { HarnessControlError } from "@commonfabric/cf-harness/control-errors";
+import { CfcReadCeilingError } from "@commonfabric/runner/cfc";
 import { renderCellReference } from "@commonfabric/runner/shared";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   HARNESS_JOB_GRANT_ENV_KEYS,
@@ -57,6 +64,7 @@ const SCRIPTED_ENV = {
 interface Seen {
   loopOptions?: CreateHarnessPromptLoopOptions;
   prompt?: string;
+  openingResearchTask?: string;
   images?: readonly HarnessImageAttachment[];
   role?: string;
   systemPrompt?: string;
@@ -141,6 +149,7 @@ describe("runHarnessJob()", () => {
           return {
             runPrompt: (prompt) => {
               seen.prompt = prompt.prompt;
+              seen.openingResearchTask = prompt.openingResearchTask;
               seen.images = prompt.imageAttachments;
               seen.systemPrompt = prompt.systemPrompt;
               seen.maxModelTurns = prompt.maxModelTurns ??
@@ -185,6 +194,24 @@ describe("runHarnessJob()", () => {
       await Deno.writeTextFile(resultPath, JSON.stringify({ answer }));
       return loopResult(runRoot);
     };
+
+  it("delivers the opening task as workspace data before the first turn", async () => {
+    const task = '{"source":"café\\n"}';
+    const spec = plainSpec({ task, taskDelivery: "file" });
+    const path = join(runRoot, "workspace", ".job-task");
+    const { seen } = await runScripted(spec, async (context) => {
+      expect(await Deno.readTextFile(path)).toBe(task);
+      return await answering("Titan")(context);
+    });
+
+    expect(seen.prompt).toContain(".job-task");
+    expect(seen.prompt).not.toContain(task);
+    expect(seen.openingResearchTask).toBe(task);
+    expect(seen.role).toBe("direct-command");
+    await expect(runScripted(spec, answering("Titan"))).rejects.toThrow(
+      Deno.errors.AlreadyExists,
+    );
+  });
 
   it("throws before preparing a workspace when the spec asks for progress with nowhere to publish it", async () => {
     await expect(
@@ -537,18 +564,20 @@ describe("runHarnessJob()", () => {
       expect(seen.loopOptions?.model).toBe("scripted");
     });
 
-    it("records the task's classification in the job's run state and orients the prompt by it", async () => {
-      const { result, seen } = await runScripted(
-        plainSpec({ task: "what's on Thursday?" }),
-        answering("Nothing."),
-        { classify: true },
-      );
+    for (const taskDelivery of [undefined, "file"] as const) {
+      it(`orients the prompt by the submitted task with ${taskDelivery ?? "inline"} delivery`, async () => {
+        const { result, seen } = await runScripted(
+          plainSpec({ task: "what's on Thursday?", taskDelivery }),
+          answering("Nothing."),
+          { classify: true },
+        );
 
-      expect(result.outcome).toBe("completed");
-      expect(seen.loopOptions?.engine?.getRunState().taskClassification)
-        .toMatchObject({ tags: ["find"], path: "rule" });
-      expect(seen.systemPrompt).not.toContain("When you delegate");
-    });
+        expect(result.outcome).toBe("completed");
+        expect(seen.loopOptions?.engine?.getRunState().taskClassification)
+          .toMatchObject({ tags: ["find"], path: "rule" });
+        expect(seen.systemPrompt).not.toContain("When you delegate");
+      });
+    }
 
     it("passes no fabric session and no input cell", async () => {
       const { result, seen } = await runScripted(
@@ -631,6 +660,109 @@ describe("runHarnessJob()", () => {
       expect(seen.loopOptions?.reasoningEffort).toBe("low");
       expect(plain.seen.loopOptions?.depth).toBeUndefined();
       expect(plain.seen.loopOptions?.reasoningEffort).toBeUndefined();
+    });
+
+    for (
+      const [preference, pinned, provider] of [
+        [
+          "openai-codex",
+          "openai-compatible-gateway",
+          "openai-compatible-gateway",
+        ],
+        ["openai-compatible-gateway", "openai-codex", "openai-codex"],
+        ["openai-codex", undefined, "openai-codex"],
+      ] as const
+    ) {
+      it(
+        `runs on ${provider} where the machine prefers ${preference} and the spec names ${
+          pinned ?? "no provider"
+        }`,
+        async () => {
+          const settings = new FileHarnessProviderSettingsStore({
+            path: join(runRoot, "harness-home", "config.json"),
+          });
+          await settings.initialize(preference);
+          // No provider and no gateway setting from the environment: the
+          // machine's preference decides unless the spec names a provider, and
+          // a gateway setting would refuse `openai-codex`.
+          const {
+            CF_HARNESS_MODEL_PROVIDER: _provider,
+            CF_HARNESS_GATEWAY_AUTH_MODE: _authMode,
+            ...sandbox
+          } = SCRIPTED_ENV;
+          let ranOn: string | undefined;
+          const result = await runHarnessJob(
+            plainSpec({
+              resultSchema: undefined,
+              ...(pinned !== undefined ? { modelProvider: pinned } : {}),
+            }),
+            {
+              runRoot,
+              signal: new AbortController().signal,
+              harnessDeps: {
+                env: { ...sandbox, CF_HARNESS_API_KEY: "unused-test-key" },
+                providerSettingsStore: settings,
+                createModelClient: ({ provider }) => ({
+                  providerId: provider,
+                  complete: () => Promise.reject(new Error("no model call")),
+                }),
+                createPromptLoop: (loopOptions) => {
+                  ranOn = loopOptions.engine?.config.modelProvider;
+                  return {
+                    runPrompt: () => Promise.resolve(loopResult(runRoot)),
+                    runTranscript: () =>
+                      Promise.reject(new Error("not a resume")),
+                  };
+                },
+              },
+            },
+          );
+
+          expect(result.outcome).toBe("completed");
+          expect(ranOn).toBe(provider);
+        },
+      );
+    }
+
+    it("runs a job pinned to openai-codex on a runner whose environment names a gateway", async () => {
+      // A runner that also serves gateway profiles keeps the gateway's settings
+      // in its environment; the harness refuses them beside openai-codex.
+      const settings = new FileHarnessProviderSettingsStore({
+        path: join(runRoot, "harness-home", "config.json"),
+      });
+      await settings.initialize("openai-compatible-gateway");
+      const { CF_HARNESS_MODEL_PROVIDER: _provider, ...sandbox } = SCRIPTED_ENV;
+      let ranOn: string | undefined;
+      const result = await runHarnessJob(
+        plainSpec({ resultSchema: undefined, modelProvider: "openai-codex" }),
+        {
+          runRoot,
+          signal: new AbortController().signal,
+          harnessDeps: {
+            env: {
+              ...sandbox,
+              CF_HARNESS_API_KEY: "unused-test-key",
+              CF_HARNESS_GATEWAY_BASE_URL: "https://gateway.example.test",
+              CF_HARNESS_GATEWAY_AUTH_MODE: "bearer",
+            },
+            providerSettingsStore: settings,
+            createModelClient: ({ provider }) => ({
+              providerId: provider,
+              complete: () => Promise.reject(new Error("no model call")),
+            }),
+            createPromptLoop: (loopOptions) => {
+              ranOn = loopOptions.engine?.config.modelProvider;
+              return {
+                runPrompt: () => Promise.resolve(loopResult(runRoot)),
+                runTranscript: () => Promise.reject(new Error("not a resume")),
+              };
+            },
+          },
+        },
+      );
+
+      expect(result.outcome).toBe("completed");
+      expect(ranOn).toBe("openai-codex");
     });
 
     it("leaves usage out of the report when the loop reports none", async () => {
@@ -891,6 +1023,9 @@ describe("runHarnessJob()", () => {
           usageCoverage: "including-descendants",
           toolCalls: 0,
         });
+        expect(dirname(result.report!.runRef!)).toBe(
+          join(runRoot, "artifacts"),
+        );
         expect(result.report).not.toHaveProperty("modelTurns");
       });
     }
@@ -917,11 +1052,12 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "LIMIT_REACHED",
+        errorDetail: "exceeded max model turns (8)",
         recordedRun: false,
       });
     });
 
-    it("ends `failed` as `PROVIDER_FAILURE` when the loop failed any other way", async () => {
+    it("ends `failed` as `PROVIDER_FAILURE`, saying why, when the loop failed any other way", async () => {
       const { result } = await runScripted(
         plainSpec(),
         () => Promise.reject(new Error("the provider answered 500")),
@@ -930,7 +1066,41 @@ describe("runHarnessJob()", () => {
       expect(result).toEqual({
         outcome: "failed",
         errorCode: "PROVIDER_FAILURE",
+        errorDetail: "the provider answered 500",
         recordedRun: false,
+      });
+    });
+
+    it("ends `failed` as `CFC_REFUSED`, saying why, when a read the session's read ceiling withholds ended the loop", async () => {
+      // Not a provider's failure, and not `REFUSED`: a job in the `refused`
+      // state is one its owner's bookkeeping does not count as ended.
+      const { result } = await runScripted(
+        plainSpec(),
+        () => Promise.reject(new CfcReadCeilingError()),
+      );
+
+      expect(result).toEqual({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
+        errorDetail: "the runtime read ceiling withholds this value",
+        recordedRun: false,
+      });
+    });
+
+    it("ends `failed` as `CFC_REFUSED` when the read ceiling's refusal is the cause of the error that ended the loop", async () => {
+      const { result } = await runScripted(
+        plainSpec(),
+        () =>
+          Promise.reject(
+            new Error("exceeded max model turns while sealing", {
+              cause: new CfcReadCeilingError(),
+            }),
+          ),
+      );
+
+      expect(result).toMatchObject({
+        outcome: "failed",
+        errorCode: "CFC_REFUSED",
       });
     });
 

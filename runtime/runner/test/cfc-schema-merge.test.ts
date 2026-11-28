@@ -1,11 +1,13 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { CfcAtom } from "@commonfabric/api/cfc";
 import type { JSONSchema, JSONSchemaObj } from "../src/builder/types.ts";
 import {
   cfcSchemaMergeIssue,
   cfcSchemaPoliciesEqual,
+  ifcDiffersOnlyByReleaseAppend,
   mergeCfcSchemaEnvelopes,
+  writePolicyAlternativeAdmissible,
+  type WritePolicyRelease,
 } from "../src/cfc/schema-merge.ts";
 import {
   canonicalizeCfcSchemaDocument,
@@ -23,6 +25,7 @@ import {
 } from "../src/schema-registry.ts";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("mergeCfcSchemaEnvelopes", () => {
   describe("a recursion meeting itself", () => {
@@ -2999,5 +3002,178 @@ describe("mergeCfcSchemaEnvelopes with definitions that refer to each other", ()
     expect(Object.keys(root.$defs ?? {}).toSorted()).toEqual(["A", "B", "C"]);
     expect(JSON.stringify(merged).includes("__cfc_hoisted")).toBe(false);
     expect(sizes[5] - sizes[2]).toBeLessThan(40);
+  });
+});
+
+describe("merging a claim both sides must declare alike", () => {
+  const sited = (ifc: Record<string, unknown>): JSONSchemaObj =>
+    ({ type: "string", ifc }) as unknown as JSONSchemaObj;
+
+  for (
+    const [key, value, other] of [
+      ["uiContract", { action: "Send" }, { action: "Edit" }],
+      ["flowPrecisionClaim", { pointwise: true }, { pointwise: false }],
+    ] as const
+  ) {
+    it(`returns the ${key} both sides declare`, () => {
+      const merged = mergeCfcSchemaEnvelopes(
+        sited({ [key]: value }),
+        sited({ [key]: { ...value } }),
+      ) as JSONSchemaObj;
+      expect((merged.ifc as Record<string, unknown>)[key]).toEqual(value);
+    });
+
+    it(`throws where the two sides declare different ${key} claims`, () => {
+      expect(() =>
+        mergeCfcSchemaEnvelopes(
+          sited({ [key]: value }),
+          sited({ [key]: other }),
+        )
+      ).toThrow(`${key} must remain stable at /`);
+    });
+  }
+});
+
+describe("write-policy alternatives", () => {
+  // The stored alternatives are stamped with the module `old`, which the
+  // release succeeds with `new`, the module it installs.
+
+  const RELEASE: WritePolicyRelease = {
+    installs: (module) => module === "new",
+    succeeds: (successor, predecessor) =>
+      successor === "new" && predecessor === "old",
+  };
+
+  /** An alternative admitting `writer`, stamped with `module` if given. */
+  const alternative = (writer: string, module?: string) => ({
+    writeAuthorizedBy: {
+      __ctWriterIdentityOf: {
+        file: "/records.tsx",
+        path: [writer],
+        ...(module === undefined ? {} : { moduleIdentity: module }),
+      },
+    },
+  });
+  const stored = alternative("send", "old");
+  const appended = alternative("reply", "new");
+
+  describe("merging", () => {
+    const sited = (writePolicyAnyOf: unknown): JSONSchemaObj =>
+      ({
+        type: "string",
+        ifc: { writePolicyAnyOf },
+      }) as unknown as JSONSchemaObj;
+
+    it("returns the alternatives both sides list", () => {
+      const merged = mergeCfcSchemaEnvelopes(
+        sited([stored]),
+        sited([stored]),
+      ) as JSONSchemaObj;
+      expect(merged.ifc?.writePolicyAnyOf).toEqual([stored]);
+    });
+
+    it("throws where either side spells the policy as one alternative rather than a list", () => {
+      for (
+        const [existing, candidate] of [
+          [sited([stored]), sited(stored)],
+          [sited(stored), sited([stored])],
+        ]
+      ) {
+        expect(() => mergeCfcSchemaEnvelopes(existing, candidate)).toThrow(
+          "writePolicyAnyOf must remain stable at /: one side is not a list " +
+            "of alternatives",
+        );
+      }
+    });
+  });
+
+  describe("writePolicyAlternativeAdmissible", () => {
+    it("admits an alternative of the installed successor beside a stored alternative stamped with its predecessor", () => {
+      expect(writePolicyAlternativeAdmissible(appended, [stored], RELEASE))
+        .toBe(true);
+    });
+
+    it("refuses it where no stored alternative's writer carries a stamp", () => {
+      for (
+        const base of [
+          alternative("send"),
+          alternative("send", ""),
+          { writeAuthorizedBy: ["send"] },
+          { writeAuthorizedBy: { __ctWriterIdentityOf: "send" } },
+          "send",
+        ]
+      ) {
+        expect(writePolicyAlternativeAdmissible(appended, [base], RELEASE))
+          .toBe(false);
+      }
+    });
+
+    it("refuses an appended alternative whose writer carries no stamp", () => {
+      for (
+        const added of [
+          alternative("reply"),
+          { writeAuthorizedBy: ["reply"] },
+          "reply",
+        ]
+      ) {
+        expect(writePolicyAlternativeAdmissible(added, [stored], RELEASE))
+          .toBe(false);
+      }
+    });
+  });
+
+  describe("ifcDiffersOnlyByReleaseAppend", () => {
+    it("returns `true` for a position whose stored policy the merge appended to", () => {
+      expect(
+        ifcDiffersOnlyByReleaseAppend(
+          { writePolicyAnyOf: [stored] },
+          { writePolicyAnyOf: [stored, appended] },
+          RELEASE,
+        ),
+      ).toBe(true);
+      expect(ifcDiffersOnlyByReleaseAppend(undefined, undefined, RELEASE))
+        .toBe(true);
+    });
+
+    it("returns `false` for a position that gains or loses its whole policy", () => {
+      const policy = { writePolicyAnyOf: [stored, appended] };
+      expect(ifcDiffersOnlyByReleaseAppend(undefined, policy, RELEASE))
+        .toBe(false);
+      expect(ifcDiffersOnlyByReleaseAppend(policy, undefined, RELEASE))
+        .toBe(false);
+    });
+  });
+});
+
+describe("cfcSchemaPoliciesEqual given a policy comparison", () => {
+  const sited = (ifc?: unknown): JSONSchemaObj =>
+    ({
+      type: "object",
+      properties: { n: { type: "number", ifc } },
+    }) as unknown as JSONSchemaObj;
+  const always = () => true;
+
+  it("compares two documents that declare no policy equal, whatever their shapes", () => {
+    expect(
+      cfcSchemaPoliciesEqual(sited(), { type: "string" }, undefined, () => {
+        throw new Error("no position to compare");
+      }),
+    ).toBe(true);
+  });
+
+  it("tells a document that declares a policy apart from one that declares none", () => {
+    const claimed = sited({ writeAuthorizedBy: ["writer"] });
+    expect(
+      cfcSchemaPoliciesEqual(
+        claimed,
+        sited({ writeAuthorizedBy: ["other"] }),
+        undefined,
+        always,
+      ),
+    ).toBe(true);
+    expect(cfcSchemaPoliciesEqual(claimed, sited(), undefined, always))
+      .toBe(false);
+    expect(cfcSchemaPoliciesEqual(sited(), claimed, undefined, always))
+      .toBe(false);
   });
 });

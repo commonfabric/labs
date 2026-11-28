@@ -9,10 +9,7 @@ import { getCellWrapperInfo } from "@commonfabric/schema-generator/cell-brand";
 import ts from "typescript";
 import type { CrossStageState } from "../core/mod.ts";
 import { getCellKind, isBrandedCellType } from "../transformers/cell-type.ts";
-import {
-  getTypeAtLocationWithFallback,
-  isDefaultAliasSymbol,
-} from "./utils.ts";
+import { getTypeAtLocationWithFallback } from "./utils.ts";
 
 /**
  * Flags for printing a type as a type node. Without `AllowEmptyTuple` the
@@ -104,13 +101,7 @@ export function widenLiteralType(
     }
 
     // Otherwise create a new union from unique types
-    const getUnionType = (checker as ts.TypeChecker & {
-      getUnionType?: (types: readonly ts.Type[]) => ts.Type;
-    }).getUnionType;
-    if (getUnionType) {
-      return getUnionType(unique);
-    }
-    return type;
+    return getUnionType(checker, unique);
   }
 
   // Number literal → number
@@ -125,16 +116,7 @@ export function widenLiteralType(
 
   // Boolean literal (true/false) → boolean
   if (type.flags & ts.TypeFlags.BooleanLiteral) {
-    // TypeChecker doesn't have getBooleanType(), so we need to create it
-    // by getting the union of true | false
-    const trueType = checker.getTrueType?.() ?? type;
-    const falseType = checker.getFalseType?.() ?? type;
-    if (trueType && falseType) {
-      return (checker as ts.TypeChecker & {
-        getUnionType?: (types: readonly ts.Type[]) => ts.Type;
-      }).getUnionType?.([trueType, falseType]) ?? type;
-    }
-    return type;
+    return checker.getBooleanType();
   }
 
   // BigInt literal → bigint
@@ -260,27 +242,6 @@ export function typeToTypeNode(
   return printed;
 }
 
-/**
- * Extract the first type argument from a TypeReference or type alias
- * Used to unwrap generic types like Reactive<T> to get T
- */
-export function getTypeReferenceArgument(type: ts.Type): ts.Type | undefined {
-  if ("aliasTypeArguments" in type && type.aliasTypeArguments) {
-    const [arg] = type.aliasTypeArguments;
-    if (arg) return arg;
-  }
-  if (type.flags & ts.TypeFlags.Object) {
-    const objectType = type as ts.ObjectType;
-    if (objectType.objectFlags & ts.ObjectFlags.Reference) {
-      const ref = objectType as ts.TypeReference;
-      if (ref.typeArguments && ref.typeArguments.length > 0) {
-        return ref.typeArguments[0];
-      }
-    }
-  }
-  return undefined;
-}
-
 export function isCellLikeType(
   type: ts.Type | undefined,
   checker: ts.TypeChecker,
@@ -345,10 +306,7 @@ export function unwrapOpaqueLikeType(
     const unwrapped = type.types.map((candidate) =>
       unwrapOpaqueLikeType(candidate, checker, seen) ?? candidate
     );
-    const merged = (checker as ts.TypeChecker & {
-      getUnionType?: (types: readonly ts.Type[], node?: ts.Node) => ts.Type;
-    }).getUnionType?.(unwrapped) ?? type;
-    return merged;
+    return getUnionType(checker, unwrapped);
   }
 
   if (type.isIntersection()) {
@@ -362,16 +320,6 @@ export function unwrapOpaqueLikeType(
           return unwrapOpaqueLikeType(inner, checker, seen) ?? inner;
         }
       }
-    }
-    // No OpaqueCell found, try recursively unwrapping each part
-    const intersection = (checker as ts.TypeChecker & {
-      getIntersectionType?: (types: readonly ts.Type[]) => ts.Type;
-    }).getIntersectionType;
-    if (intersection) {
-      const parts = type.types.map((candidate) =>
-        unwrapOpaqueLikeType(candidate, checker, seen) ?? candidate
-      );
-      return intersection(parts);
     }
     return type;
   }
@@ -477,45 +425,36 @@ type InternalSymbolWithLinks = ts.Symbol & {
 // public checker APIs resolve as unresolved any/unknown. Do not spread this
 // pattern elsewhere in the pipeline.
 type InternalTypeChecker = ts.TypeChecker & {
-  createAnonymousType?: (
+  createAnonymousType: (
     symbol: ts.Symbol | undefined,
     members: ts.SymbolTable,
     callSignatures: readonly ts.Signature[],
     constructSignatures: readonly ts.Signature[],
     indexInfos: readonly ts.IndexInfo[],
   ) => ts.Type;
-  createArrayType?: (elementType: ts.Type, readonly?: boolean) => ts.Type;
-  createSymbol?: (
+  createArrayType: (elementType: ts.Type, readonly?: boolean) => ts.Type;
+  createSymbol: (
     flags: ts.SymbolFlags,
-    name: string,
+    name: ts.__String,
     checkFlags?: number,
   ) => InternalSymbolWithLinks;
-  getUnionType?: (types: readonly ts.Type[]) => ts.Type;
+  getUnionType: (types: readonly ts.Type[]) => ts.Type;
 };
 
-function createInternalSymbolName(name: string): string {
-  const escapeLeadingUnderscores = (ts as typeof ts & {
-    escapeLeadingUnderscores?: (text: string) => string;
-  }).escapeLeadingUnderscores;
-  return escapeLeadingUnderscores?.(name) ?? name;
+/** The union of `types`, which the checker builds but does not declare. */
+function getUnionType(
+  checker: ts.TypeChecker,
+  types: readonly ts.Type[],
+): ts.Type {
+  return (checker as InternalTypeChecker).getUnionType(types);
 }
 
 function createInternalSymbolTable(
   symbols: readonly ts.Symbol[],
 ): ts.SymbolTable {
-  const createSymbolTable = (ts as typeof ts & {
-    createSymbolTable?: (symbols: readonly ts.Symbol[]) => ts.SymbolTable;
-  }).createSymbolTable;
-  if (createSymbolTable) {
-    return createSymbolTable(symbols);
-  }
-
-  // Fallback for environments where the helper is not exposed at runtime.
-  const table = new Map<ts.__String, ts.Symbol>();
-  for (const symbol of symbols) {
-    table.set(symbol.escapedName as ts.__String, symbol);
-  }
-  return table as ts.SymbolTable;
+  return (ts as typeof ts & {
+    createSymbolTable: (symbols: readonly ts.Symbol[]) => ts.SymbolTable;
+  }).createSymbolTable(symbols);
 }
 
 function tryGetSyntheticPropertyName(
@@ -555,10 +494,8 @@ function tryGetTypeFromTypeNodeDirect(
 function ensureCompositeChildTypesRegistered(
   typeNode: ts.TypeNode,
   checker: ts.TypeChecker,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  typeRegistry: WeakMap<ts.Node, ts.Type>,
 ): void {
-  if (!typeRegistry) return;
-
   if (ts.isParenthesizedTypeNode(typeNode)) {
     ensureTypeNodeRegistered(typeNode.type, checker, typeRegistry);
     return;
@@ -595,20 +532,9 @@ function ensureCompositeChildTypesRegistered(
 function tryRegisterCompositeSyntheticType(
   typeNode: ts.TypeNode,
   checker: ts.TypeChecker,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
+  typeRegistry: WeakMap<ts.Node, ts.Type>,
 ): ts.Type | undefined {
-  if (!typeRegistry) return undefined;
-
-  const existing = typeRegistry.get(typeNode);
-  if (existing) return existing;
-
   ensureCompositeChildTypesRegistered(typeNode, checker, typeRegistry);
-
-  const retried = tryGetTypeFromTypeNodeDirect(typeNode, checker);
-  if (retried && !isAnyOrUnknownType(retried)) {
-    typeRegistry.set(typeNode, retried);
-    return retried;
-  }
 
   const internalChecker = checker as InternalTypeChecker;
 
@@ -622,10 +548,10 @@ function tryRegisterCompositeSyntheticType(
       typeRegistry.set(typeNode, inner);
       return inner;
     }
-    return retried;
+    return undefined;
   }
 
-  if (ts.isArrayTypeNode(typeNode) && internalChecker.createArrayType) {
+  if (ts.isArrayTypeNode(typeNode)) {
     const elementType = ensureTypeNodeRegistered(
       typeNode.elementType,
       checker,
@@ -636,10 +562,10 @@ function tryRegisterCompositeSyntheticType(
       typeRegistry.set(typeNode, arrayType);
       return arrayType;
     }
-    return retried;
+    return undefined;
   }
 
-  if (ts.isUnionTypeNode(typeNode) && internalChecker.getUnionType) {
+  if (ts.isUnionTypeNode(typeNode)) {
     const memberTypes = typeNode.types.map((member) =>
       ensureTypeNodeRegistered(member, checker, typeRegistry)
     ).filter((member): member is ts.Type => !!member);
@@ -651,24 +577,22 @@ function tryRegisterCompositeSyntheticType(
       typeRegistry.set(typeNode, unionType);
       return unionType;
     }
-    return retried;
+    return undefined;
   }
 
   if (
     ts.isTypeLiteralNode(typeNode) &&
-    typeNode.members.length > 0 &&
-    internalChecker.createAnonymousType &&
-    internalChecker.createSymbol
+    typeNode.members.length > 0
   ) {
     const membersList: ts.Symbol[] = [];
     for (const member of typeNode.members) {
       if (!ts.isPropertySignature(member) || !member.type || !member.name) {
-        return retried;
+        return undefined;
       }
 
       const propertyName = tryGetSyntheticPropertyName(member.name);
       if (!propertyName) {
-        return retried;
+        return undefined;
       }
 
       const propertyType = ensureTypeNodeRegistered(
@@ -677,13 +601,13 @@ function tryRegisterCompositeSyntheticType(
         typeRegistry,
       ) ?? tryGetTypeFromTypeNodeDirect(member.type, checker);
       if (!propertyType || isAnyOrUnknownType(propertyType)) {
-        return retried;
+        return undefined;
       }
 
       const symbol = internalChecker.createSymbol(
         ts.SymbolFlags.Property |
           (member.questionToken ? ts.SymbolFlags.Optional : 0),
-        createInternalSymbolName(propertyName),
+        ts.escapeLeadingUnderscores(propertyName),
       );
       symbol.links ??= {};
       symbol.links.type = propertyType;
@@ -692,7 +616,7 @@ function tryRegisterCompositeSyntheticType(
 
     const symbol = internalChecker.createSymbol(
       ts.SymbolFlags.TypeLiteral,
-      createInternalSymbolName("__type"),
+      ts.escapeLeadingUnderscores("__type"),
     );
     const members = createInternalSymbolTable(membersList);
     const anonymousType = internalChecker.createAnonymousType(
@@ -706,7 +630,7 @@ function tryRegisterCompositeSyntheticType(
     return anonymousType;
   }
 
-  return retried;
+  return undefined;
 }
 
 export function ensureTypeNodeRegistered(
@@ -869,15 +793,7 @@ function combineExtractedElementTypes(
     return unique[0];
   }
 
-  const getUnionType = (checker as ts.TypeChecker & {
-    getUnionType?: (types: readonly ts.Type[]) => ts.Type;
-  }).getUnionType;
-  if (getUnionType) {
-    return getUnionType(unique);
-  }
-  // Cannot construct union without internal API; signal failure so callers
-  // can fall back to alternative type extraction strategies.
-  return undefined;
+  return getUnionType(checker, unique);
 }
 
 /**
@@ -936,21 +852,6 @@ function extractElementFromArrayType(
         );
         if (extractedInner) {
           return extractedInner;
-        }
-
-        const innerAlias = innerType as {
-          aliasSymbol?: ts.Symbol;
-          aliasTypeArguments?: readonly ts.Type[];
-        };
-        if (
-          isDefaultAliasSymbol(innerAlias.aliasSymbol) &&
-          innerAlias.aliasTypeArguments?.[0]
-        ) {
-          return extractElementFromArrayType(
-            innerAlias.aliasTypeArguments[0],
-            checker,
-            seen,
-          );
         }
       }
     }
@@ -1052,18 +953,6 @@ export function inferArrayElementType(
       if (isListType(reference, checker)) {
         elementType = extractElementFromArrayType(reference, checker) ??
           innerType;
-      } else if (checker.isArrayType(innerType)) {
-        // It's T[], extract T
-        const extracted = extractElementFromArrayType(innerType, checker);
-        if (extracted) {
-          elementType = extracted;
-        } else {
-          return {
-            typeNode: factory.createKeywordTypeNode(
-              ts.SyntaxKind.UnknownKeyword,
-            ),
-          };
-        }
       } else {
         elementType = extractElementFromArrayType(innerType, checker) ??
           innerType;
@@ -1113,112 +1002,4 @@ export function inferContextualType(
     return contextualType;
   }
   return undefined;
-}
-
-/**
- * Check if a single union/intersection member represents an array-like type.
- *
- * Handles:
- * - Direct array/tuple types: T[]
- * - Intersection-with-brand: T[] & { [DEFAULT_MARKER]: T[] } (from Default<T[], V> expansion)
- * - Default<T[], V> alias (non-flattened form, retained aliasSymbol)
- */
-function isEffectiveArrayMember(
-  t: ts.Type,
-  checker: ts.TypeChecker,
-): boolean {
-  if (checker.isArrayType(t) || checker.isTupleType(t)) return true;
-  // Intersection like (T[] & brand): check if any member is an array
-  if (t.flags & ts.TypeFlags.Intersection) {
-    return (t as ts.IntersectionType).types.some(
-      (m) => checker.isArrayType(m) || checker.isTupleType(m),
-    );
-  }
-  // Non-flattened Default<T[], V> alias (aliasSymbol retained on the union type)
-  const alias = t as {
-    aliasSymbol?: ts.Symbol;
-    aliasTypeArguments?: readonly ts.Type[];
-  };
-  if (
-    isDefaultAliasSymbol(alias.aliasSymbol) && alias.aliasTypeArguments?.[0]
-  ) {
-    const baseT = alias.aliasTypeArguments[0];
-    return checker.isArrayType(baseT) || checker.isTupleType(baseT);
-  }
-  return false;
-}
-
-/**
- * Helper to check if a type's type argument is an array.
- * Handles unions and intersections recursively, similar to isBrandedCellType.
- */
-export function hasArrayTypeArgument(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): boolean {
-  // Handle unions - check if any member has an array type argument
-  if (type.flags & ts.TypeFlags.Union) {
-    return (type as ts.UnionType).types.some((t: ts.Type) =>
-      hasArrayTypeArgument(t, checker)
-    );
-  }
-
-  // Handle intersections - check if any member has an array type argument
-  if (type.flags & ts.TypeFlags.Intersection) {
-    return (type as ts.IntersectionType).types.some((t: ts.Type) =>
-      hasArrayTypeArgument(t, checker)
-    );
-  }
-
-  // Handle object types with type references (e.g., Reactive<T[]>)
-  if (type.flags & ts.TypeFlags.Object) {
-    const objectType = type as ts.ObjectType;
-    if (objectType.objectFlags & ts.ObjectFlags.Reference) {
-      const typeRef = objectType as ts.TypeReference;
-      if (typeRef.typeArguments && typeRef.typeArguments.length > 0) {
-        const innerType = typeRef.typeArguments[0];
-        if (!innerType) return false;
-        // Check if inner type is an array or tuple
-        if (checker.isArrayType(innerType) || checker.isTupleType(innerType)) {
-          return true;
-        }
-        // Handle Default<T[]> brand union: aliasSymbol is Default from @commonfabric/api and
-        // first aliasTypeArgument is T[]. typeToTypeNode expands Default<T[],V> to a
-        // branded union, but the type object retains aliasSymbol so we can detect it here.
-        const innerAlias = innerType as {
-          aliasSymbol?: ts.Symbol;
-          aliasTypeArguments?: readonly ts.Type[];
-        };
-        if (
-          isDefaultAliasSymbol(innerAlias.aliasSymbol) &&
-          innerAlias.aliasTypeArguments?.[0]
-        ) {
-          const baseT = innerAlias.aliasTypeArguments[0];
-          if (checker.isArrayType(baseT) || checker.isTupleType(baseT)) {
-            return true;
-          }
-        }
-        // Handle T[] | undefined and Default<T[]> | undefined.
-        //
-        // Default<T[], V> expands to a union (T[] & brand) | T[] at the TypeScript
-        // type level. Combined with WishState's `result: T | undefined`, TypeScript
-        // flattens the whole thing into a 3-member union:
-        //   (T[] & brand) | T[] | undefined
-        // After stripping undefined we get 2 members, so we cannot require
-        // nonUndefined.length === 1.  Instead, check if ANY non-undefined member
-        // is array-like (direct array, or intersection/alias wrapping an array).
-        if (innerType.flags & ts.TypeFlags.Union) {
-          const nonUndefined = (innerType as ts.UnionType).types.filter(
-            (t) => !(t.flags & ts.TypeFlags.Undefined),
-          );
-          if (nonUndefined.every((t) => isEffectiveArrayMember(t, checker))) {
-            return true;
-          }
-        }
-        return false;
-      }
-    }
-  }
-
-  return false;
 }

@@ -1,6 +1,10 @@
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
-import { transformSource } from "./utils.ts";
+import {
+  type TransformationDiagnostic,
+  transformCfDirective,
+} from "../src/mod.ts";
+import { transformFiles, transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import {
   collect,
@@ -8,14 +12,16 @@ import {
   parseModule,
   patternSchemas,
 } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * Drives the SchemaGeneratorTransformer end to end through the pipeline. Each
  * test pins the emitted `toSchema<T>()` -> `{...} as const satisfies
  * __cfHelpers.JSONSchema` literal for a shape that the existing schema tests do
  * not exercise: non-finite and negative numeric literals, the write-authorized
- * identity marker, the CFC UI-contract hint on boolean and object schemas, and
- * the option-object value evaluator.
+ * identity marker, the CFC UI-contract hint on boolean and object schemas, the
+ * option-object value evaluator, and where a diagnostic about a type declared
+ * in another module is reported.
  */
 
 /**
@@ -59,7 +65,7 @@ function propInitializer(
   return undefined;
 }
 
-Deno.test("numeric-literal types lower to NaN, Infinity, -Infinity and negatives", async () => {
+test("numeric-literal types lower to NaN, Infinity, -Infinity and negatives", async () => {
   // NaN has no numeric-literal form (emitted as the global NaN), positive and
   // negative infinity emit the Infinity identifier with an optional unary minus,
   // and a negative literal emits a unary-minus wrapper around a positive value.
@@ -105,7 +111,7 @@ export { s };
   assertEquals(propInitializer(schema, "maximum")!.getText(root), "NaN");
 });
 
-Deno.test("WriteAuthorizedBy attaches a writer-identity marker with file and path", async () => {
+test("WriteAuthorizedBy attaches a writer-identity marker with file and path", async () => {
   // The second type argument `typeof saver` is a simple identifier type-query,
   // so the schema gains an `ifc.writeAuthorizedBy.__ctWriterIdentityOf` marker
   // carrying the source file and the binding path.
@@ -120,7 +126,7 @@ export { s };
   assertEquals(marker.path, ["saver"]);
 });
 
-Deno.test("WriteAuthorizedBy with a qualified typeof binding attaches no marker", async () => {
+test("WriteAuthorizedBy with a qualified typeof binding attaches no marker", async () => {
   // A qualified `typeof container.save` is not a plain identifier type-query, so
   // the identity extraction bails and no writer-identity marker is emitted.
   const schema = await schemaValue(`/// <cts-enable />
@@ -133,7 +139,7 @@ export { s };
   assertEquals(schema.ifc, undefined);
 });
 
-Deno.test("UI-contract hint attaches to an object $UI property schema", async () => {
+test("UI-contract hint attaches to an object $UI property schema", async () => {
   // The `<UiAction>` in the UI slot records a hint that is grafted onto the
   // generated $UI property schema's `ifc.uiContract`.
   const out = await transformSource(
@@ -153,7 +159,7 @@ export default pattern<{ title: string }>((state) => ({
   assertEquals(contract.action, "SubmitDirectCommand");
 });
 
-Deno.test("UI-contract hint wraps a boolean-true $UI property as an ifc-only schema", async () => {
+test("UI-contract hint wraps a boolean-true $UI property as an ifc-only schema", async () => {
   // When the output type declares `[UI]: any`, the $UI property schema is the
   // boolean `true`; attaching the contract turns it into `{ ifc: { uiContract }}`.
   const out = await transformSource(
@@ -174,7 +180,7 @@ export default pattern<{ title: string }, Out>((state) => ({
   assertEquals((uiSchema.ifc as any).uiContract.action, "SubmitDirectCommand");
 });
 
-Deno.test("UI-contract hint on a whole boolean-true schema becomes an ifc-only schema", async () => {
+test("UI-contract hint on a whole boolean-true schema becomes an ifc-only schema", async () => {
   // An `any` output type makes the whole generated schema the boolean `true`,
   // so the contract is attached as `{ ifc: { uiContract } }` without a `not`.
   const out = await transformSource(
@@ -192,7 +198,7 @@ export default pattern<{ title: string }, any>((state) => ({
   assertEquals(output.not, undefined);
 });
 
-Deno.test("UI-contract hint on a whole boolean-false schema negates via not:true", async () => {
+test("UI-contract hint on a whole boolean-false schema negates via not:true", async () => {
   // A `never` output type makes the whole generated schema the boolean `false`,
   // so the contract is attached as `{ not: true, ifc: { uiContract } }`.
   const out = await transformSource(
@@ -210,7 +216,45 @@ export default pattern<{ title: string }, never>((state) => ({
   assertEquals((output.ifc as any).uiContract.action, "SubmitDirectCommand");
 });
 
-Deno.test("toSchema option object evaluates literals, arrays, nested objects and constants", async () => {
+/**
+ * The emitted result schema of a pattern given its input schema and a
+ * callback whose declared return type is `returns`, returning `body`.
+ */
+async function annotatedResultSchema(
+  returns: string,
+  body: string,
+): Promise<unknown> {
+  const out = await transformSource(
+    `/// <cts-enable />
+import { pattern, toSchema, UiAction } from "commonfabric";
+export default pattern(toSchema<{ title: string }>(), (state): ${returns} => ${body});
+`,
+    { types: COMMONFABRIC_TYPES },
+  );
+  return patternSchemas(parseModule(out)).output;
+}
+
+test("UI-contract hint carried by the result schema call turns a boolean result schema into an ifc-only schema", async () => {
+  // With an input schema already supplied, the returned `<UiAction>` hands its
+  // contract to the injected result `toSchema` call rather than to the declared
+  // return type, so the boolean schema `any` and `never` generate is replaced
+  // by one carrying the contract.
+  const uiContract = { helper: "UiAction", action: "Go" };
+  const action = `<UiAction action="Go">Go</UiAction>`;
+  assertEquals(await annotatedResultSchema("any", action), {
+    ifc: { uiContract },
+  });
+  assertEquals(await annotatedResultSchema("never", action), {
+    not: true,
+    ifc: { uiContract },
+  });
+
+  // Without a UI helper there is no contract, and the boolean stays as is.
+  assertEquals(await annotatedResultSchema("any", `<div>Go</div>`), true);
+  assertEquals(await annotatedResultSchema("never", `<div>Go</div>`), false);
+});
+
+test("toSchema option object evaluates literals, arrays, nested objects and constants", async () => {
   // The options bag is spread onto the emitted schema; booleans, null, arrays,
   // nested object literals and enum-constant references are all evaluated, while
   // an undefined-valued option is dropped.
@@ -247,4 +291,48 @@ export { s };
   assertEquals(schema.wrappedCast, "c");
   assertEquals(schema.wrappedSatisfies, "t");
   assertEquals(schema.wrappedNonNull, "n");
+});
+
+test("a diagnostic about a type declared in another module is reported at the schema's use", async () => {
+  // The symbol member lives in `/keyed.ts`, so the error points into this file
+  // instead: at an authored `toSchema` call itself, and for the schema a
+  // pattern's type argument injects, which has no position of its own, at the
+  // nearest enclosing authored node, the pattern call.
+  const keyed = "export interface Keyed { k: string | symbol }\n";
+  const reported = async (body: string, local = "") => {
+    const source = `/// <cts-enable />
+import { pattern, toSchema } from "commonfabric";
+import type { Keyed } from "./keyed.ts";
+${local}export default ${body};
+`;
+    const diagnostics: TransformationDiagnostic[] = [];
+    await transformFiles({ "/test.tsx": source, "/keyed.ts": keyed }, {
+      types: COMMONFABRIC_TYPES,
+      pipelineDiagnostics: diagnostics,
+    });
+    const text = transformCfDirective(source);
+    return diagnostics.map(({ type, fileName, start, length }) => ({
+      type,
+      fileName,
+      at: text.slice(start!, start! + length!),
+    }));
+  };
+
+  const authored = "toSchema<Keyed>()";
+  assertEquals(await reported(authored), [
+    { type: "schema-type:symbol", fileName: "/test.tsx", at: authored },
+  ]);
+  const injected = "pattern<Keyed>((input) => ({ k: input.k }))";
+  assertEquals(await reported(injected), [
+    { type: "schema-type:symbol", fileName: "/test.tsx", at: injected },
+  ]);
+
+  // A type declared in this file is reported at the member it cannot read.
+  assertEquals(
+    await reported(
+      "toSchema<Local>()",
+      "interface Local { k: string | symbol }\n",
+    ),
+    [{ type: "schema-type:symbol", fileName: "/test.tsx", at: "symbol" }],
+  );
 });

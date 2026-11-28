@@ -14,6 +14,7 @@ import {
 } from "../../src/ast/normalize.ts";
 import type { ReactiveContextLookup } from "../../src/ast/reactive-context.ts";
 import { getExpressionText } from "../../src/ast/utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const factory = ts.factory;
 
@@ -166,9 +167,10 @@ function print(node: ts.Node, sourceFile: ts.SourceFile): string {
 // A lookup that treats every arrow/function node as an array-method callback.
 const arrayMethodLookup: ReactiveContextLookup = {
   isArrayMethodCallback: () => true,
+  isSourceFileDefaultLibrary: () => false,
 };
 
-Deno.test("normalizeDataFlows unwraps a parenthesized reactive read to the bare property access", () => {
+test("normalizeDataFlows unwraps a parenthesized reactive read to the bare property access", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = (state.count);
@@ -183,7 +185,7 @@ Deno.test("normalizeDataFlows unwraps a parenthesized reactive read to the bare 
   assert(!ts.isParenthesizedExpression(normalized[0].expression));
 });
 
-Deno.test("normalizeDataFlows strips an `as` type assertion from a reactive read", () => {
+test("normalizeDataFlows strips an `as` type assertion from a reactive read", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.count as number;
@@ -197,7 +199,7 @@ Deno.test("normalizeDataFlows strips an `as` type assertion from a reactive read
   assert(!ts.isAsExpression(normalized[0].expression));
 });
 
-Deno.test("normalizeDataFlows strips an angle-bracket type assertion from a reactive read", () => {
+test("normalizeDataFlows strips an angle-bracket type assertion from a reactive read", () => {
   // Angle-bracket assertions are only valid in .ts, so use a non-jsx program.
   const source = `
     ${REACTIVE_PRELUDE}
@@ -237,7 +239,7 @@ Deno.test("normalizeDataFlows strips an angle-bracket type assertion from a reac
   assert(ts.isPropertyAccessExpression(normalized[0].expression));
 });
 
-Deno.test("normalizeDataFlows strips a non-null assertion from a reactive read", () => {
+test("normalizeDataFlows strips a non-null assertion from a reactive read", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.count!;
@@ -251,7 +253,7 @@ Deno.test("normalizeDataFlows strips a non-null assertion from a reactive read",
   assert(!ts.isNonNullExpression(normalized[0].expression));
 });
 
-Deno.test("normalizeDataFlows normalizes a property access used as a method callee back to its object", () => {
+test("normalizeDataFlows normalizes a property access used as a method callee back to its object", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.items.map((element) => element);
@@ -272,7 +274,7 @@ Deno.test("normalizeDataFlows normalizes a property access used as a method call
   );
 });
 
-Deno.test("normalizeDataFlows suppresses a parent read that has a more specific explicit child", () => {
+test("normalizeDataFlows suppresses a parent read that has a more specific explicit child", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.user.name;
@@ -294,7 +296,7 @@ Deno.test("normalizeDataFlows suppresses a parent read that has a more specific 
   );
 });
 
-Deno.test("normalizeDataFlows with requested dataFlows keeps parent reads unsuppressed", () => {
+test("normalizeDataFlows with requested dataFlows keeps parent reads unsuppressed", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.user.name;
@@ -310,7 +312,7 @@ Deno.test("normalizeDataFlows with requested dataFlows keeps parent reads unsupp
   assert(texts.size >= 1);
 });
 
-Deno.test("getRelevantDataFlows returns the reactive reads for a plain pattern body", () => {
+test("getRelevantDataFlows returns the reactive reads for a plain pattern body", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.count;
@@ -323,7 +325,7 @@ Deno.test("getRelevantDataFlows returns the reactive reads for a plain pattern b
   assert(texts.includes("state.count"));
 });
 
-Deno.test("getRelevantDataFlows drops reads rooted at a plain array-method callback parameter", () => {
+test("getRelevantDataFlows drops reads rooted at a plain array-method callback parameter", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.items.map((element, index, array) => element);
@@ -347,7 +349,7 @@ Deno.test("getRelevantDataFlows drops reads rooted at a plain array-method callb
   );
 });
 
-Deno.test("getRelevantDataFlows without a lookup keeps a property read off a synthetic map parameter", () => {
+test("getRelevantDataFlows without a lookup keeps a property read off a synthetic map parameter", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.items.map((element, index, array) => element.name);
@@ -370,7 +372,7 @@ Deno.test("getRelevantDataFlows without a lookup keeps a property read off a syn
   );
 });
 
-Deno.test("getRelevantDataFlows recurses through a property access to find the ignored parameter root", () => {
+test("getRelevantDataFlows recurses through a property access to find the ignored parameter root", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.items.map((element, index, array) => element.name);
@@ -389,7 +391,7 @@ Deno.test("getRelevantDataFlows recurses through a property access to find the i
   );
 });
 
-Deno.test("getRelevantDataFlows recurses through a call expression to find the ignored parameter root", () => {
+test("getRelevantDataFlows recurses through a call expression to find the ignored parameter root", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.items.map((element) => element.compute());
@@ -407,7 +409,7 @@ Deno.test("getRelevantDataFlows recurses through a call expression to find the i
   );
 });
 
-Deno.test("getRelevantDataFlows keeps a synthetic `index` parameter read when unmarked", () => {
+test("getRelevantDataFlows keeps a synthetic `index` parameter read when unmarked", () => {
   const { sourceFile, checker } = createTsxProgram(`
     ${REACTIVE_PRELUDE}
     const value = state.items.map((element, index) => index);
@@ -425,7 +427,7 @@ Deno.test("getRelevantDataFlows keeps a synthetic `index` parameter read when un
   );
 });
 
-Deno.test("normalizeDataFlows unwraps a synthetic parenthesized expression node", () => {
+test("normalizeDataFlows unwraps a synthetic parenthesized expression node", () => {
   // The full analyzer strips wrappers before recording a node, so the only way
   // to exercise the parenthesis-stripping branch is with a hand-built node.
   const inner = factory.createPropertyAccessExpression(
@@ -455,7 +457,7 @@ Deno.test("normalizeDataFlows unwraps a synthetic parenthesized expression node"
   );
 });
 
-Deno.test("normalizeDataFlows unwraps a synthetic `as` type assertion node", () => {
+test("normalizeDataFlows unwraps a synthetic `as` type assertion node", () => {
   const inner = factory.createPropertyAccessExpression(
     factory.createIdentifier("state"),
     "count",
@@ -473,7 +475,7 @@ Deno.test("normalizeDataFlows unwraps a synthetic `as` type assertion node", () 
   assert(ts.isPropertyAccessExpression(normalized[0].expression));
 });
 
-Deno.test("normalizeDataFlows unwraps a synthetic angle-bracket type assertion node", () => {
+test("normalizeDataFlows unwraps a synthetic angle-bracket type assertion node", () => {
   const inner = factory.createPropertyAccessExpression(
     factory.createIdentifier("state"),
     "count",
@@ -491,7 +493,7 @@ Deno.test("normalizeDataFlows unwraps a synthetic angle-bracket type assertion n
   assert(ts.isPropertyAccessExpression(normalized[0].expression));
 });
 
-Deno.test("normalizeDataFlows unwraps a synthetic non-null assertion node", () => {
+test("normalizeDataFlows unwraps a synthetic non-null assertion node", () => {
   const inner = factory.createPropertyAccessExpression(
     factory.createIdentifier("state"),
     "count",
@@ -505,7 +507,7 @@ Deno.test("normalizeDataFlows unwraps a synthetic non-null assertion node", () =
   assert(ts.isPropertyAccessExpression(normalized[0].expression));
 });
 
-Deno.test("getRelevantDataFlows falls back to non-synthetic reads when synthetic map params are present", () => {
+test("getRelevantDataFlows falls back to non-synthetic reads when synthetic map params are present", () => {
   // `element` is a factory identifier with no symbol, so its read counts as a
   // synthetic root matching a recognized map-parameter name. With a
   // non-synthetic `state.items` read available and no marked callback, the
@@ -542,7 +544,7 @@ Deno.test("getRelevantDataFlows falls back to non-synthetic reads when synthetic
   );
 });
 
-Deno.test("getRelevantDataFlows keeps every read when a synthetic map callback is marked", () => {
+test("getRelevantDataFlows keeps every read when a synthetic map callback is marked", () => {
   // The scope's first parameter declaration lives inside an arrow function that
   // the lookup reports as a marked array-method callback. That marks the whole
   // group as in-callback, so the recovery retains all reads (synthetic and not).
@@ -590,6 +592,7 @@ Deno.test("getRelevantDataFlows keeps every read when a synthetic map callback i
   );
   const markedLookup: ReactiveContextLookup = {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   };
   const relevant = getRelevantDataFlows(
     syntheticAnalysis(graph),
@@ -600,7 +603,7 @@ Deno.test("getRelevantDataFlows keeps every read when a synthetic map callback i
   assert(texts.includes("state.items"));
 });
 
-Deno.test("getRelevantDataFlows returns false for an ignored-parameter scope that does not exist", () => {
+test("getRelevantDataFlows returns false for an ignored-parameter scope that does not exist", () => {
   // A node whose scopeId has no matching scope hits the missing-scope guard in
   // the ignored-parameter check, which returns false so the read is retained.
   const checker = trivialChecker();
@@ -619,7 +622,7 @@ Deno.test("getRelevantDataFlows returns false for an ignored-parameter scope tha
   assert(texts.includes("ghost.value"));
 });
 
-Deno.test("getRelevantDataFlows drops an all-synthetic map read through the ignored-parameter walk", () => {
+test("getRelevantDataFlows drops an all-synthetic map read through the ignored-parameter walk", () => {
   // With only a synthetic `element.name` read and no non-synthetic sibling, the
   // recovery hands every read to the ignored-parameter filter. The read roots at
   // the symbol-less `element` identifier, which matches a scope parameter name,
@@ -658,11 +661,12 @@ Deno.test("getRelevantDataFlows drops an all-synthetic map read through the igno
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   });
   assertEquals(relevant.length, 0);
 });
 
-Deno.test("getRelevantDataFlows keeps a synthetic root whose name is not a recognized map parameter", () => {
+test("getRelevantDataFlows keeps a synthetic root whose name is not a recognized map parameter", () => {
   // The synthetic-root read exists, but its identifier is `custom`, which is not
   // one of element/index/array. The map-parameter recovery does not engage, so
   // the read falls through to the plain ignored-parameter filter and, matching
@@ -681,7 +685,7 @@ Deno.test("getRelevantDataFlows keeps a synthetic root whose name is not a recog
   assert(texts.includes("custom.value"));
 });
 
-Deno.test("getRelevantDataFlows treats a marked-callback probe with no first-parameter declaration as unmarked", () => {
+test("getRelevantDataFlows treats a marked-callback probe with no first-parameter declaration as unmarked", () => {
   // The scope's first parameter carries no declaration, so the marked-callback
   // probe short-circuits to unmarked; with a non-synthetic sibling present the
   // recovery keeps only the non-synthetic reads.
@@ -707,6 +711,7 @@ Deno.test("getRelevantDataFlows treats a marked-callback probe with no first-par
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: () => true,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   assert(texts.includes("state.items"));
@@ -716,7 +721,7 @@ Deno.test("getRelevantDataFlows treats a marked-callback probe with no first-par
   );
 });
 
-Deno.test("getRelevantDataFlows climbs the parent chain to the enclosing callback in the marked probe", () => {
+test("getRelevantDataFlows climbs the parent chain to the enclosing callback in the marked probe", () => {
   // The first parameter's declaration is nested (its immediate parent is not the
   // callback), so the marked-callback probe must climb several parent links
   // before reaching the arrow function it checks against the lookup.
@@ -768,12 +773,13 @@ Deno.test("getRelevantDataFlows climbs the parent chain to the enclosing callbac
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   assert(texts.includes("state.items"));
 });
 
-Deno.test("getRelevantDataFlows keeps a builder-callback parameter as an opaque (non-ignored) input", () => {
+test("getRelevantDataFlows keeps a builder-callback parameter as an opaque (non-ignored) input", () => {
   // The ignored-parameter walk finds the parameter's declaration, climbs an
   // intermediate block to the enclosing arrow, then to a builder call. A builder
   // callback parameter is opaque, so it is not treated as ignored and its read
@@ -823,6 +829,7 @@ Deno.test("getRelevantDataFlows keeps a builder-callback parameter as an opaque 
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: (node) => node === arrow,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   // The builder callback parameter is opaque, so `element.name` survives.
@@ -834,7 +841,7 @@ Deno.test("getRelevantDataFlows keeps a builder-callback parameter as an opaque 
   );
 });
 
-Deno.test("getRelevantDataFlows marked probe returns unmarked when no callback ancestor is found", () => {
+test("getRelevantDataFlows marked probe returns unmarked when no callback ancestor is found", () => {
   // The first parameter's declaration has a parent chain that never reaches an
   // arrow or function expression, so the marked-callback probe exhausts the walk
   // and reports the group as unmarked; the non-synthetic sibling is what remains.
@@ -876,6 +883,7 @@ Deno.test("getRelevantDataFlows marked probe returns unmarked when no callback a
   );
   const relevant = getRelevantDataFlows(syntheticAnalysis(graph), checker, {
     isArrayMethodCallback: () => true,
+    isSourceFileDefaultLibrary: () => false,
   });
   const texts = relevant.map((r) => getExpressionText(r.expression));
   assert(texts.includes("state.items"));

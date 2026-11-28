@@ -1069,7 +1069,10 @@ function readValueAtResolvedLink(
   // Read without telling the scheduler. Whatever materializes this value —
   // the traverser or a view — registers its own reads as it walks.
   const meta = {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   };
   const value = tx.readOrThrow(address, meta);
   if (value !== undefined || link.path.at(-1) !== "length") return value;
@@ -1107,9 +1110,8 @@ function readValueAtResolvedLink(
 function entrySelectorSchema(
   readerSchema: JSONSchema | undefined,
   travelingSchema: JSONSchema,
-  storedSchema: JSONSchema | undefined,
+  storedSchema: JSONSchema,
 ): JSONSchema {
-  if (storedSchema === undefined) return travelingSchema;
   const stored = resolveSchema(storedSchema);
   const isUnknown = (schema: JSONSchema | undefined) =>
     isObjectOrArray(schema) && schema.type === "unknown";
@@ -1473,6 +1475,9 @@ export function validateAndTransform(
     // will notify the scheduler for shallow reads as they occur.
     const value = readValueAtResolvedLink(tx, resolvedValueLink, address);
     doc = { address, value: value };
+    // Resolution carries a schema whenever the link it resolves carries one,
+    // and this read's link carries `effectiveSchema`.
+    const valueLinkSchema = resolvedValueLink.schema!;
     const valueSelectedSchema = isObjectOrArray(effectiveSchema)
       ? asCellCompoundSchemaForValue(effectiveSchema, value)
       : undefined;
@@ -1481,7 +1486,7 @@ export function validateAndTransform(
     // below, and a view combines the two its own way.
     selector = {
       path: doc.address.path,
-      schema: valueSelectedSchema ?? resolvedValueLink.schema ?? link.schema!,
+      schema: valueSelectedSchema ?? valueLinkSchema,
     };
     // The schema an eager read validates the value against where the value
     // selects no handle branch of its own.
@@ -1489,7 +1494,7 @@ export function validateAndTransform(
       entrySelectorSchema(
         resolvedSchema,
         link.schema!,
-        resolvedValueLink.schema,
+        valueLinkSchema,
       );
     // A record or an array read for its truthiness alone is truthy whatever it
     // holds, so only the eager read's checks at its root decide, and nothing
@@ -1649,7 +1654,7 @@ export function validateAndTransform(
     (missing, sourceSpace) => {
       unservedHop ??= missing;
       // Absent link targets get an async load kicked (cross-space always;
-      // same-space only when the replica has never seen the doc); the
+      // same-space only when `shouldPullDoc()` reserves the load); the
       // tracked read re-runs the reader on arrival. A served per-instance
       // run's absent target loads AS that run's instance (stage A — the
       // runner's explicit-instance read).

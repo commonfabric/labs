@@ -69,14 +69,18 @@ unchanged, keeps none. Nobody runs a save command. To undo a bad step,
 `cf pattern rollback <entry> <version>` restores one over the files (then
 `setsrc` to update the piece). Rollback refuses over edits never deployed.
 Deploys never share by themselves. When the person's sharing setting covers what
-they build, the index shares a version anonymously once they open it in a loom,
-and the deploy line says so (`version.autoShare: "when_used"` under `--json`).
-Run `cf pattern share` only when the person asks to share it sooner, or to share
-it with the setting off.
+they build, the index shares a version anonymously once they have used it in a
+loom for a day with no newer version and it passes the privacy check, and the
+deploy line says so (`version.autoShare: "when_used"` under `--json`); that
+share is findable unless the pattern was last shared on beta. `cf pattern share`
+shares on beta, by link only, and later automatic shares of that pattern stay on
+beta too until `cf pattern stable`; run it when the person asks for a link to
+try, or to share with the setting off. In a tight edit loop, pass
+`--no-index-version` so deploys do not wait on the index.
 
-**Sharing**, so others can find it, takes the same identity, API URL, space and
-packaging flags (`--test`, `--datafile`) it was deployed with, so the shared id
-is the deployed one:
+**Sharing** (on beta, reachable by its link; `cf pattern stable` then makes it
+findable) takes the same identity, API URL, space and packaging flags (`--test`,
+`--datafile`) it was deployed with, so the shared id is the deployed one:
 
 ```bash
 deno task cf pattern share patterns/[name]/main.tsx --test patterns/[name]/main.test.tsx --json --identity cf.key --api-url $CF_API_URL --space <space>
@@ -114,12 +118,15 @@ or the new revision will omit those test roots.
 A pattern reads a file that is not code — a fixture, a lookup table — with
 `dataFile(path)` from `commonfabric`, naming it relative to the module that
 reads it. That call is the declaration, so `new`, `setsrc`, `check` and `test`
-all attach the file without being told. Its bytes are stored verbatim and never
-parsed, compiled, or importable; it must be UTF-8 text inside the deployment
-root. Repeatable `--datafile <path>` remains for a file the source cannot name:
-one read by a computed path, or one that ships with a pattern that does not read
-it. The same complete-revision rule applies to those, so repeat every data-file
-flag on each update too.
+all attach the file without being told. It is never parsed, compiled, or
+importable, and `getsrc` returns it byte for byte. It must sit inside the
+deployment root, and be UTF-8 text, which `dataFile(path)` reads, or an image, a
+font, or a sound, which `dataFile.url(path)` reads as a `data:` URL
+(`dataFile.urls(directory)` reads a directory of them). Repeatable
+`--datafile <path>` remains for a file the source cannot name: one read by a
+computed path, or one that ships with a pattern that does not read it. The same
+complete-revision rule applies to those, so repeat every data-file flag on each
+update too.
 
 **Inspect piece state:**
 

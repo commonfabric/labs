@@ -22,6 +22,9 @@ export interface AppStateConfig {
   showShellPieceListView?: boolean;
   showDebuggerView?: boolean;
   showSidebar?: boolean;
+
+  /** Whether the panel listing the viewed space's history is open. */
+  showHistoryView?: boolean;
 }
 
 export type AppStateConfigKey = keyof AppStateConfig;
@@ -37,6 +40,7 @@ export function isAppStateConfigKey(
     case "showShellPieceListView":
     case "showDebuggerView":
     case "showSidebar":
+    case "showHistoryView":
       return true;
   }
   return false;

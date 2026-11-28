@@ -1,14 +1,22 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { FabricValue } from "@commonfabric/data-model";
 import { getLogger } from "@commonfabric/logger";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
-import { ensurePieceRunningVerdict } from "../src/ensure-piece-running.ts";
+import {
+  ensurePieceRunningVerdict,
+  startWithInputSources,
+} from "../src/ensure-piece-running.ts";
 import { getMetaCell } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { setResultCell } from "../src/result-utils.ts";
@@ -47,6 +55,8 @@ describe("ensure-piece-running", () => {
   });
 
   afterEach(async () => {
+    await runtime.idle();
+    await runtime.storageManager.synced();
     await runtime.dispose();
     await storageManager.close();
   });
@@ -279,6 +289,101 @@ describe("ensure-piece-running", () => {
         second.getAsNormalizedFullLink().id,
         first.getAsNormalizedFullLink().id,
       ]);
+    });
+  });
+
+  describe("starting the pieces that enclose an opened piece", () => {
+    /** How many input-source warnings opens have logged so far. */
+    const openWarnings = () =>
+      getLogger("ensure-piece-running.open").countsByKey["input-sources"]
+        ?.warn ?? 0;
+
+    /**
+     * Stages a document whose whole value is a link to `piece`'s root and
+     * which carries a `result` backlink to `holder`, as a nested node's
+     * output is recorded among the internal documents of the piece whose
+     * graph holds the node. With `recorded`, `holder`'s internal manifest
+     * lists it.
+     */
+    function nestedOutput(
+      tx: ReturnType<Runtime["edit"]>,
+      piece: Cell<unknown>,
+      holder: Cell<unknown>,
+      recorded: boolean,
+    ): Cell<unknown> {
+      const output = runtime.getCell<unknown>(
+        space,
+        `walk-output-${crypto.randomUUID()}`,
+        {},
+        tx,
+      );
+      output.setRaw(piece.getAsLink());
+      setResultCell(output, holder);
+      if (recorded) {
+        holder.withTx(tx).setMetaRaw(
+          "internal",
+          [{ link: output.getAsLink() }],
+          rawMetaWriteAuthorization,
+        );
+      }
+      return output;
+    }
+
+    it("starts the piece an opened piece's `result` backlink reaches, and names none, warning of nothing, where that chain comes back to the opened piece", async () => {
+      for (const cycles of [false, true]) {
+        const { result: opened } = await piece({});
+        const { result: builder } = await piece({});
+        await commit((tx) => {
+          setResultCell(opened.withTx(tx), builder);
+          if (cycles) setResultCell(builder.withTx(tx), opened);
+        });
+        const warned = openWarnings();
+
+        expect(await startWithInputSources(runtime, opened)).toBe(true);
+
+        expect(runtime.runner.isRunning(opened)).toBe(true);
+        expect(runtime.runner.isRunning(builder)).toBe(!cycles);
+        expect(openWarnings()).toBe(warned);
+      }
+    });
+
+    it("starts the piece that records the opened piece among its internal documents, and not one that records none", async () => {
+      for (const recorded of [true, false]) {
+        const { result: opened, argument } = await piece({});
+        const { result: holder } = await piece({});
+        await commit((tx) => {
+          const output = nestedOutput(tx, opened, holder, recorded);
+          argument.withTx(tx).setRaw({ input: output.getAsLink() });
+        });
+        const warned = openWarnings();
+
+        expect(await startWithInputSources(runtime, opened)).toBe(true);
+
+        expect(runtime.runner.isRunning(opened)).toBe(true);
+        expect(runtime.runner.isRunning(holder)).toBe(recorded);
+        expect(openWarnings()).toBe(warned);
+      }
+    });
+
+    it("starts the piece that encloses an opened piece whose argument first links into a document of its own that names it", async () => {
+      // The opened piece records a link to its own root among its internal
+      // documents, so it reads as enclosing itself; it is never a candidate
+      // for the piece enclosing it, which its argument links into after.
+      const { result: opened, argument } = await piece({});
+      const { result: holder } = await piece({});
+      await commit((tx) => {
+        const own = nestedOutput(tx, opened, opened, true);
+        const output = nestedOutput(tx, opened, holder, true);
+        argument.withTx(tx).setRaw({
+          own: own.getAsLink(),
+          input: output.getAsLink(),
+        });
+      });
+
+      expect(await startWithInputSources(runtime, opened)).toBe(true);
+
+      expect(runtime.runner.isRunning(opened)).toBe(true);
+      expect(runtime.runner.isRunning(holder)).toBe(true);
     });
   });
 });

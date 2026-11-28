@@ -4,10 +4,13 @@
 // store. What is pinned is the store's state, never the serving runtime's
 // own view of it.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
-import { streamEntriesDocId } from "@commonfabric/memory/v2";
+import {
+  streamEntriesDocId,
+  type StreamEventEntry,
+} from "@commonfabric/memory/v2";
 import type { DID, MemorySpace } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import {
@@ -29,6 +32,12 @@ import {
   startServingMemoryServer,
 } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { loadVerifiedSourceClosure } from "../../runner/src/compilation-cache/cell-cache.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 import {
@@ -43,6 +52,7 @@ import {
   confirmServedInstantiate,
   confirmServedRegistration,
   confirmServedSetSource,
+  eventFailedDurably,
   finishServedRegistration,
   prepareServedRegistration,
   readServedInstantiateReceipt,
@@ -923,6 +933,40 @@ export default pattern(() => {
       expect(refusal.code).toBe("pattern-not-found");
     });
 
+    it("throws the loader's failure, not a `pattern-not-found` refusal, when loading a held pattern throws", async () => {
+      const { ref } = await served(
+        "upload",
+        (pieces) => servedUploadPattern(pieces, BASE_PROGRAM),
+      );
+      const failure = await served("instantiate", async (pieces) => {
+        const patternManager = pieces.runtime.patternManager;
+        const load = patternManager.loadPatternByIdentity;
+        patternManager.loadPatternByIdentity = () =>
+          Promise.reject(new Error("the closure read failed"));
+        try {
+          return await servedInstantiatePiece(pieces, {
+            source: { pattern: ref },
+            actingUser: aliceSigner.did(),
+          });
+        } finally {
+          patternManager.loadPatternByIdentity = load;
+        }
+      }).then(() => {
+        throw new Error("expected the load to fail");
+      }, (error) => error);
+      // The wire names a refusal by this name; under any other, the client
+      // sees `internal`.
+      expect(failure).not.toBeInstanceOf(ServedLifecycleRefusal);
+      expect(failure.name).toBe("Error");
+      expect(failure.message).toBe("the closure read failed");
+
+      const refusal = await refusalOf(
+        instantiate({ pattern: { identity: ref.identity, symbol: "absent" } }),
+      );
+      expect(refusal.code).toBe("pattern-not-found");
+      expect((await instantiate({ pattern: ref })).pattern).toEqual(ref);
+    });
+
     it("claims the slug with the creation, refuses a taken name, and takes it under force", async () => {
       const first = await instantiate({ program: BASE_PROGRAM }, undefined, {
         slug: "named-piece",
@@ -971,11 +1015,284 @@ export default pattern(() => {
       expect(retried.pieceId).toBe(pending.pieceId);
     });
 
+    it("refuses, as `compile-failed`, a program whose default export is not a pattern", async () => {
+      const refusal = await refusalOf(served(
+        "upload",
+        (pieces) =>
+          servedUploadPattern(
+            pieces,
+            programOf("export default { label: 'not a pattern' };\n"),
+          ),
+      ));
+      expect(refusal.code).toBe("compile-failed");
+      expect(refusal.message).toBe(
+        "the compiled source has no pattern identity",
+      );
+      const { ref } = await served(
+        "upload",
+        (pieces) => servedUploadPattern(pieces, BASE_PROGRAM),
+      );
+      expect(ref.symbol).toBe("default");
+    });
+
+    it("refuses a pattern the space holds the closure of under another export", async () => {
+      const { ref } = await served(
+        "upload",
+        (pieces) => servedUploadPattern(pieces, BASE_PROGRAM),
+      );
+      const refusal = await refusalOf(
+        instantiate({ pattern: { identity: ref.identity, symbol: "absent" } }),
+      );
+      expect(refusal.code).toBe("pattern-not-found");
+      expect(refusal.message).toBe(
+        `pattern ${ref.identity}#absent is not held by the space`,
+      );
+      expect((await instantiate({ pattern: ref })).pattern).toEqual(ref);
+    });
+
+    it("refuses an argument setup cannot store, creating nothing under its request key", async () => {
+      // JSON can name `__proto__` as an ordinary key, which the runtime
+      // reserves.
+      const refusal = await refusalOf(
+        instantiate(
+          { program: BASE_PROGRAM },
+          JSON.parse('{ "__proto__": { "seed": "smuggled" } }'),
+          { requestKey: "unstorable-argument" },
+        ),
+      );
+      expect(refusal.code).toBe("setup-failed");
+      expect(refusal.message).toContain("`__proto__`");
+      const pieces = await clientPieces();
+      expect(
+        await readServedInstantiateReceipt(
+          pieces,
+          "unstorable-argument",
+          aliceSigner.did(),
+        ),
+      ).toBeUndefined();
+
+      const created = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "stored",
+      }, { requestKey: "unstorable-argument" });
+      const piece = await (await clientPieces()).get(created.pieceId, false);
+      expect(getPatternIdentityRef(piece.getCell())).toEqual(created.pattern);
+    });
+
+    it("returns one receipt to concurrent requests under one request key, whatever program each sent", async () => {
+      // Both requests read no receipt before either commits, so whichever
+      // commits second finds the first's receipt inside its transaction and
+      // sets nothing up.
+      const pieces = await clientPieces();
+      const request = (requestKey: string, program: RuntimeProgram) =>
+        servedInstantiatePiece(pieces, {
+          source: { program },
+          requestKey,
+          actingUser: aliceSigner.did(),
+        });
+
+      const [first, second] = await Promise.all([
+        request("concurrent-creation", BASE_PROGRAM),
+        request("concurrent-creation", programOf(RELEASED_SOURCE)),
+      ]);
+
+      expect(second).toEqual(first);
+      const reader = await clientPieces();
+      const piece = await reader.get(first.pieceId, false);
+      expect(getPatternIdentityRef(piece.getCell())).toEqual(first.pattern);
+      const other = await request("another-creation", BASE_PROGRAM);
+      expect(other.pieceId).not.toBe(first.pieceId);
+    });
+
+    it("retains a terminal failure when the root's handler throws on a client event", async () => {
+      const rootReceipt = await instantiate({
+        program: programOf(`
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
+  () => { throw new Error("Registration blocked"); },
+);
+export default pattern(() => {
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}) };
+});
+`),
+      });
+      const pieces = await clientPieces();
+      await pieces.linkDefaultPattern(
+        (await pieces.get(rootReceipt.pieceId)).getCell(),
+      );
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+
+      const failed = await completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+      );
+
+      expect(failed.registration).toMatchObject({
+        status: "failed",
+        attempt: 0,
+        terminal: true,
+      });
+      expect(failed.registration.error).toContain("Registration blocked");
+      await confirmServedRegistration(
+        pieces.runtime,
+        space,
+        failed,
+        aliceSigner.did(),
+      );
+      expect(await pieces.getRegisteredPieces()).toEqual([]);
+    });
+
+    it("returns the handled receipt, with no delivery, to a registration prepared from a stale pending one", async () => {
+      const rootReceipt = await instantiate({
+        program: programOf(`
+import { computed, handler, pattern, Writable } from "commonfabric";
+const addPiece = handler<{piece: Writable<unknown>}, {panels: Writable<Writable<unknown>[]>}>(
+  ({piece}, {panels}) => { panels.addUnique(piece); },
+);
+export default pattern(() => {
+  const panels = new Writable<Writable<unknown>[]>([]);
+  return { panels, pieceRegistry: computed(() => panels.get().map(piece => piece)), addPiece: addPiece({panels}) };
+});
+`),
+      });
+      const pieces = await clientPieces();
+      await pieces.linkDefaultPattern(
+        (await pieces.get(rootReceipt.pieceId)).getCell(),
+      );
+      const pending = await instantiate({ program: BASE_PROGRAM }, undefined, {
+        register: true,
+      });
+      const handled = await completeServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+      );
+      expect(handled.registration.status).toBe("handled");
+
+      const prepared = await prepareServedRegistration(
+        pieces,
+        pending,
+        aliceSigner.did(),
+      );
+
+      expect(prepared).toEqual({ receipt: handled });
+      expect(
+        await finishServedRegistration(pieces, prepared, aliceSigner.did(), {}),
+      ).toEqual(handled);
+      // The handled outcome retained supersedes the pending one asked about.
+      await confirmServedRegistration(
+        pieces.runtime,
+        space,
+        pending,
+        aliceSigner.did(),
+      );
+      expect((await pieces.getRegisteredPieces()).map((piece) => piece.id))
+        .toEqual([pending.pieceId]);
+    });
+
+    it("does not confirm a retained creation receipt whose piece holds no pattern", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const pieces = await clientPieces();
+      const runtime = pieces.runtime;
+      // The receipt a creation retains, for a piece setup never wrote.
+      const requestKey = "receipt-without-piece";
+      const orphan: ServedInstantiateReceipt = {
+        requestKey,
+        registration: { status: "skipped" },
+        pieceId: entityRefToString(
+          runtime.getCell(space, {
+            purpose: "piece-instantiation",
+            principal: aliceSigner.did(),
+            requestKey,
+          }).entityId,
+        ),
+        pattern: created.pattern,
+      };
+      const write = await runtime.editWithRetry((tx) =>
+        runtime.getCell(space, {
+          purpose: "piece-instantiation-receipt",
+          principal: aliceSigner.did(),
+          requestKey,
+        }).withTx(tx).set(orphan)
+      );
+      expect(write.error).toBeUndefined();
+
+      await expect(
+        confirmServedInstantiate(runtime, space, orphan, aliceSigner.did()),
+      ).rejects.toThrow(
+        `piece ${orphan.pieceId} has no pattern: the creation did not commit`,
+      );
+      await confirmServedInstantiate(
+        runtime,
+        space,
+        created,
+        aliceSigner.did(),
+      );
+    });
+
     it("refuses a program that does not compile, naming the failure", async () => {
       const refusal = await refusalOf(instantiate({ program: BROKEN_PROGRAM }));
       expect(refusal.code).toBe("compile-failed");
       expect(refusal.message).toContain("undefinedName");
       expect(host.stats().lifecycleVerbs).toEqual({ runs: 1, failures: 1 });
+    });
+  });
+
+  describe("eventFailedDurably()", () => {
+    const entry = (
+      eventId: string,
+      outcome: Partial<StreamEventEntry>,
+    ): StreamEventEntry => ({
+      eventId,
+      stream: { id: "of:stream", path: ["addPiece"] },
+      ...outcome,
+    });
+    const recording = (...entries: StreamEventEntry[]) => ({
+      pull: () => Promise.resolve({ entries }),
+    });
+
+    it("returns `true` for an event recorded dropped, needing attention, or in an error", async () => {
+      for (
+        const outcome of [
+          { status: "dropped" as const, reason: "expired" },
+          { status: "needs-attention" as const },
+          { error: "handler threw" },
+        ]
+      ) {
+        expect(
+          await eventFailedDurably(
+            recording(entry("other", {}), entry("delivered", outcome)),
+            "delivered",
+          ),
+        ).toBe(true);
+      }
+    });
+
+    it("returns `false` for a consequenced event, one not recorded, and one whose outcome cannot be read", async () => {
+      expect(
+        await eventFailedDurably(
+          recording(
+            entry("delivered", { consequenced: true }),
+            entry("other", { error: "handler threw" }),
+          ),
+          "delivered",
+        ),
+      ).toBe(false);
+      expect(
+        await eventFailedDurably(
+          { pull: () => Promise.resolve({}) },
+          "delivered",
+        ),
+      ).toBe(false);
+      expect(
+        await eventFailedDurably(
+          { pull: () => Promise.reject(new Error("session lost")) },
+          "delivered",
+        ),
+      ).toBe(false);
     });
   });
 
@@ -1447,6 +1764,8 @@ export default pattern(() => {
       "/api/patterns/followed.tsx": RELEASED_SOURCE,
       "/api/patterns/numeric.tsx": NUMERIC_SEED_PROGRAM.files[0].contents,
       "/api/patterns/broken.tsx": BROKEN_PROGRAM.files[0].contents,
+      "/api/patterns/not-a-pattern.tsx":
+        "export default { label: 'not a pattern' };\n",
     };
     let restoreFetch: () => void;
 
@@ -1674,6 +1993,102 @@ export default pattern(() => {
       expect(await stored(created.pieceId)).toMatchObject({
         pattern: created.pattern,
         origin: undefined,
+      });
+    });
+
+    it("refuses a candidate the piece's stored argument does not satisfy, under the dangerous override too", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM }, {
+        seed: "planted",
+      });
+      for (const dangerouslyAllowIncompatibleSchema of [false, true]) {
+        const refusal = await refusalOf(
+          prepare(created.pieceId, "system:numeric.tsx", {
+            dangerouslyAllowIncompatibleSchema,
+          }),
+        );
+        expect(refusal.code).toBe("setup-failed");
+        expect(refusal.message).toContain(
+          "updated arguments do not match the candidate schema",
+        );
+      }
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+    });
+
+    it("refuses, as `origin-unreachable`, a follow of an origin whose source exports no pattern", async () => {
+      const created = await instantiate({ program: BASE_PROGRAM });
+      const refusal = await refusalOf(
+        prepare(created.pieceId, "system:not-a-pattern.tsx"),
+      );
+      expect(refusal.code).toBe("origin-unreachable");
+      expect(refusal.message).toBe(
+        "the candidate source has no pattern identity",
+      );
+      expect(await stored(created.pieceId)).toMatchObject({
+        pattern: created.pattern,
+        origin: undefined,
+      });
+    });
+
+    describe("once the piece's argument changed after the review", () => {
+      /** Writes `seed` into the piece's argument from alice's runtime. */
+      const writeSeed = async (pieceId: string, seed: string | number) => {
+        const pieces = await clientPieces();
+        const piece = await pieces.get(pieceId, false);
+        const argument = pieces.getArgument<{ seed?: string | number }>(
+          piece.getCell(),
+        );
+        await argument.sync();
+        const write = await pieces.runtime.editWithRetry((tx) =>
+          argument.withTx(tx).key("seed").set(seed)
+        );
+        expect(write.error).toBeUndefined();
+      };
+
+      it("refuses a follow the review found compatible", async () => {
+        const created = await instantiate({ program: BASE_PROGRAM });
+        const preparation = await prepare(
+          created.pieceId,
+          "system:followed.tsx",
+        );
+        await writeSeed(created.pieceId, "changed");
+
+        const refusal = await refusalOf(apply(preparation));
+
+        expect(refusal.code).toBe("setup-failed");
+        expect(refusal.message).toBe(
+          "the retained piece input changed after compatibility was checked",
+        );
+        expect(await stored(created.pieceId)).toMatchObject({
+          pattern: created.pattern,
+          origin: undefined,
+        });
+      });
+
+      it("refuses as incompatible a follow whose incompatibility the request accepted", async () => {
+        // The number still satisfies the candidate, so what changed is the
+        // argument the acceptance was given over, not whether it fits.
+        const created = await instantiate({ program: BASE_PROGRAM });
+        const preparation = await prepare(
+          created.pieceId,
+          "system:numeric.tsx",
+          { dangerouslyAllowIncompatibleSchema: true },
+        );
+        expect(preparation.acceptedIncompatibility).toContain(
+          "not backward compatible",
+        );
+        await writeSeed(created.pieceId, 5);
+
+        const refusal = await refusalOf(apply(preparation));
+
+        expect(refusal.code).toBe("incompatible");
+        expect(refusal.message).toContain("not backward compatible");
+        expect(await stored(created.pieceId)).toMatchObject({
+          pattern: created.pattern,
+          origin: undefined,
+        });
       });
     });
 

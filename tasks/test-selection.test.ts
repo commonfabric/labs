@@ -1,5 +1,5 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl, join } from "@std/path";
 
 import {
   coverageLines,
@@ -15,6 +15,8 @@ import {
   verdictFor,
 } from "./test-selection.ts";
 import type { TestIdentity } from "@commonfabric/test-support/records";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { type LanePlan, lanePlan, manifestMoment } from "./ci-lane.ts";
 import {
   freeCalibration,
@@ -373,6 +375,51 @@ describe("test-selection", () => {
       });
       const text = planLines(await planned(manifest), undefined).join("\n");
       expect(text).toContain("unschedulable");
+    });
+  });
+
+  describe("as a program", () => {
+    /** Runs the module as the workflow steps do, in `mode`. */
+    async function run(
+      mode: string,
+    ): Promise<{ code: number; out: string; err: string }> {
+      const root = fromFileUrl(new URL("..", import.meta.url));
+      const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--no-prompt",
+          "--allow-env",
+          "--allow-read",
+          "--allow-run=git",
+          join(root, "tasks/test-selection.ts"),
+          mode,
+        ],
+      });
+      const decoder = new TextDecoder();
+      return {
+        code,
+        out: decoder.decode(stdout),
+        err: decoder.decode(stderr),
+      };
+    }
+
+    it("exits with the usage code and says why on a mode it does not have", async () => {
+      const result = await run("wat");
+      expect(result.code).toBe(2);
+      expect(result.err).toContain("unknown mode wat");
+      expect(result.out).toBe("");
+    });
+
+    it("exits 0 having printed the dials", async () => {
+      const result = await run("dials");
+      expect(result.code).toBe(0);
+      expect(result.out).toContain(DIALS[0]!.name);
+      expect(result.err).not.toContain("unknown mode");
     });
   });
 });

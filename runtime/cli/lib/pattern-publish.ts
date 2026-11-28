@@ -1,9 +1,10 @@
 /**
  * `cf pattern share`: compile a pattern on disk, ask the index's privacy
  * question about it locally, rewrite it into a generalized version when the
- * answer is no, record it in the index, and ask for it to be shared
- * anonymously (listed under its lineage's pseudonym). `cf pattern publish`
- * runs the same steps before naming its author.
+ * answer is no, record it in the index, and share it anonymously under its
+ * lineage's pseudonym: on beta, reachable by its link only, until
+ * `cf pattern stable` makes it findable. `cf pattern publish` runs the same
+ * steps on stable, findable once checked, before naming its author.
  *
  * The person rarely reads this output; their agent does. So every step says
  * what it did in a line, the `--json` report carries the same, and nothing
@@ -22,6 +23,7 @@ import { common, dirname, join, relative, resolve } from "@std/path";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
+  type PatternIndexChannel,
   type PatternIndexClient,
   PatternIndexError,
   type PatternIndexFinding,
@@ -78,6 +80,14 @@ export interface PublishOptions {
   remixedFrom?: string;
 
   /**
+   * Whether it is offered to a person choosing what to place (`true`) or
+   * only as a part (`false`). Absent leaves the index to decide: the version
+   * it follows keeps its answer, and a first version stands alone when its
+   * entry file is `main.tsx`.
+   */
+  standalone?: boolean;
+
+  /**
    * The lineage slot the entry's private versions are kept under
    * (`entrySlot`). With it, what is shared becomes a version of that
    * lineage, and a rewrite may go over files git cannot take back: the
@@ -85,6 +95,14 @@ export interface PublishOptions {
    * `cf pattern rollback` restores.
    */
   slot?: string;
+
+  /**
+   * The channel to share on: `beta` is reachable by link only, `stable` is
+   * findable once checked. Needs a version (a slot) to name. Without one,
+   * `beta` shares nothing and says so; `stable`, or no channel, asks for a
+   * listing, which is stable.
+   */
+  channel?: PatternIndexChannel;
 }
 
 /** What publishing reaches the world through, so a test can stand in for it. */
@@ -111,6 +129,7 @@ export interface PublishDeps {
     | "getGardenerPrompt"
     | "publishPattern"
     | "requestListing"
+    | "shareVersion"
     | "getPattern"
     | "whoami"
     | "listLineages"
@@ -170,7 +189,20 @@ export type LocalCheckReport =
 
 /** How the listing request went. */
 export type ListingReport =
-  | { status: "requested"; listing: PatternIndexListing }
+  | {
+    status: "requested";
+    /** Absent when the index answered none, as for one already shared. */
+    listing?: PatternIndexListing;
+
+    /** The channel it was shared on, when one was asked for. */
+    channel?: PatternIndexChannel;
+
+    /**
+     * False when the index moved nothing: the source was shared already on
+     * that channel or a later one, or by another of your patterns.
+     */
+    changed?: boolean;
+  }
   | { status: "capped"; resetsAt?: string }
   | { status: "failed"; reason: string };
 
@@ -199,6 +231,25 @@ export type PublishReport =
 
     priorPatternId?: string;
     remixedFrom?: string;
+
+    /**
+     * Whether the index stored it as standalone; absent from an index that
+     * does not say.
+     */
+    standalone?: boolean;
+
+    /**
+     * The required input with no default that keeps it from standing alone,
+     * when the index says that is why it is a part.
+     */
+    standaloneFloor?: string;
+
+    /**
+     * Set when `--standalone` or `--part` was given and the index recorded
+     * no answer: it predates the field.
+     */
+    standaloneNotRecorded?: true;
+
     localCheck: LocalCheckReport;
     listing: ListingReport;
 
@@ -318,6 +369,9 @@ export async function publishPatternFromDisk(
   let published = original;
   let publishedMeta = meta;
   const slot = options.slot;
+  const standalone = options.standalone === undefined
+    ? {}
+    : { standalone: options.standalone };
   const lineage = slot === undefined ? {} : { slot, origin: "self" as const };
   // The index takes a remix credit beside a slot only on the version that
   // starts the slot's lineage, so it is owed until one is sent.
@@ -346,6 +400,7 @@ export async function publishPatternFromDisk(
             ? { resultSchema: original.resultSchema }
             : {}),
           ...(credit === undefined ? {} : { remixedFrom: credit }),
+          ...standalone,
         }),
         ...lineage,
       });
@@ -402,6 +457,7 @@ export async function publishPatternFromDisk(
         : {}),
       ...(priorPatternId !== undefined ? { priorPatternId } : {}),
       ...(remixedFrom !== undefined ? { remixedFrom } : {}),
+      ...standalone,
     }),
     ...(slot === undefined ? {} : { slot, origin: "self" as const }),
   });
@@ -415,7 +471,32 @@ export async function publishPatternFromDisk(
     await deps.store.recordPublished(entry, response.patternId);
   }
   if (!response.created) priorPatternId = undefined;
-  const listing = await requestListing(deps, response.patternId);
+  const versionId = response.versionId;
+  const channel = options.channel;
+  const listing: ListingReport = channel !== undefined &&
+      versionId !== undefined
+    ? await requestShare(async () => {
+      const answer = await deps.client.shareVersion({ versionId, channel });
+      return {
+        status: "requested",
+        ...(answer.listing === undefined ? {} : { listing: answer.listing }),
+        channel,
+        changed: answer.changed,
+      };
+    })
+    // A listing request shares on stable, so a beta share never falls back
+    // to one: it says it shared nothing instead.
+    : channel === "beta"
+    ? {
+      status: "failed",
+      reason: "the index kept no version of it to share on beta",
+    }
+    : await requestShare(async () => ({
+      status: "requested",
+      listing: (await deps.client.requestListing({
+        patternId: response.patternId,
+      })).listing,
+    }));
   const handle = stored?.author?.pseudonym ?? stored?.handle;
   return {
     outcome: "shared",
@@ -430,10 +511,22 @@ export async function publishPatternFromDisk(
     ...((remixedFrom ?? creditSent) !== undefined
       ? { remixedFrom: remixedFrom ?? creditSent }
       : {}),
+    ...(response.standalone !== undefined
+      ? { standalone: response.standalone }
+      : {}),
+    ...(response.standalone === false &&
+        response.standaloneFloor !== undefined
+      ? { standaloneFloor: response.standaloneFloor }
+      : {}),
+    ...(options.standalone !== undefined &&
+        (response.standalone === undefined ||
+          response.ignored?.includes("standalone") === true)
+      ? { standaloneNotRecorded: true }
+      : {}),
     localCheck,
     listing,
     next: listing.status === "capped"
-      ? `Run cf pattern share ${options.entry} again once the limit resets to request the listing. Meanwhile ${
+      ? `Run the same command again once the limit resets to share it. Meanwhile ${
         tryIt(response.patternId)
       }`
       : tryIt(response.patternId),
@@ -669,14 +762,12 @@ async function checkLocally(
   };
 }
 
-/** Asks for the listing, reading the daily cap as what it is. */
-async function requestListing(
-  deps: PublishDeps,
-  patternId: string,
+/** Asks the index to share, reading the daily cap as what it is. */
+async function requestShare(
+  ask: () => Promise<ListingReport>,
 ): Promise<ListingReport> {
   try {
-    const answer = await deps.client.requestListing({ patternId });
-    return { status: "requested", listing: answer.listing };
+    return await ask();
   } catch (error) {
     if (error instanceof PatternIndexError && error.status === 429) {
       return {
@@ -688,9 +779,27 @@ async function requestListing(
   }
 }
 
-/** What a listing state means to the author, in a clause. */
-const listingMeaning = (listing: PatternIndexListing): string => {
+/** What a share to beta stands at, to the author, in a clause. */
+const betaMeaning = (listing: PatternIndexListing | undefined): string => {
   switch (listing) {
+    case "passed":
+      return "reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable";
+    case "held":
+      return "held: the index found something identifying; see cf pattern mine";
+    case "error":
+      return "error: the check failed to run and waits for an admin re-run";
+    default:
+      return "once the index's privacy check passes, it is reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable";
+  }
+};
+
+/** What a listing state means to the author, in a clause. */
+const listingMeaning = (
+  listing: PatternIndexListing | undefined,
+): string => {
+  switch (listing) {
+    case undefined:
+      return "shared";
     case "pending":
       return "checking: the index's privacy check is reading it";
     case "passed":
@@ -767,14 +876,32 @@ export const publishReportLines = (report: PublishReport): string[] => {
       report.remixedFrom !== undefined ? `, built on ${report.remixedFrom}` : ""
     }.`,
   );
+  if (report.standaloneFloor !== undefined) {
+    lines.push(
+      `Offered only as a part, not on its own: its input ${report.standaloneFloor} is required and has no default. Give it a default to offer the pattern on its own.`,
+    );
+  }
+  if (report.standaloneNotRecorded === true) {
+    lines.push(
+      "The index did not record whether it stands alone: it predates --standalone and --part.",
+    );
+  }
   const listing = report.listing;
   switch (listing.status) {
     case "requested":
-      lines.push(`Listing: ${listingMeaning(listing.listing)}.`);
+      lines.push(
+        listing.changed === false
+          ? listing.listing === "pending"
+            ? "Already being checked: where it goes did not change."
+            : "Already shared: where it is did not change (cf pattern link says where)."
+          : listing.channel === "beta"
+          ? `Beta: ${betaMeaning(listing.listing)}.`
+          : `Listing: ${listingMeaning(listing.listing)}.`,
+      );
       break;
     case "capped":
       lines.push(
-        `Listing not requested: you reached today's limit on listing requests${
+        `Not shared yet: you reached today's limit on shares${
           listing.resetsAt !== undefined
             ? `; it resets at ${listing.resetsAt}`
             : ""
@@ -782,7 +909,7 @@ export const publishReportLines = (report: PublishReport): string[] => {
       );
       break;
     case "failed":
-      lines.push(`Listing not requested: ${listing.reason}.`);
+      lines.push(`Not shared: ${listing.reason}.`);
       break;
   }
   lines.push(`Next: ${report.next}.`);

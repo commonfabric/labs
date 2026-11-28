@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ROUTED_QUEUE_LIMIT, ROUTED_RAW_LIMIT } from "../v2/routed-parser.ts";
 import {
@@ -22,6 +21,7 @@ import {
   routerRecords,
   RouterSender,
 } from "../v2/router-protocol.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("router-protocol", () => {
   const route = { type: "response", requestId: "r" };

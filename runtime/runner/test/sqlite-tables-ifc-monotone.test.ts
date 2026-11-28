@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { growOnlyMergeDbTables } from "../src/builtins/sqlite-builtins.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Audit S8: a db handle's per-column `ifc` lives in mutable handle-cell value
 // data, outside the schema-envelope monotonicity the labelMap enforces. A

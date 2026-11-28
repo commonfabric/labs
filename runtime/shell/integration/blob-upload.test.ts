@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import {
@@ -7,6 +6,7 @@ import {
   waitForCondition,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const { FRONTEND_URL } = env;
 
@@ -53,9 +53,9 @@ describe("shell blob upload", () => {
       if (!rt) {
         throw new Error("Runtime client was not exposed");
       }
-      // Blob authorization is deferred, but direct writes under ACL
-      // enforcement still need an existing space. The space was created
-      // before the page opened it, and its root has loaded.
+      // The upload commits on the page's own session, so the space's access
+      // list has to admit this identity's write. The space was created for
+      // it before the page opened it, and its root has loaded.
       const space = (document.querySelector("x-root-view") as
         | { space?: string }
         | null)?.space;

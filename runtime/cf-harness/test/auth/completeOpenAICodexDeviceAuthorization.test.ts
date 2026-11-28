@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { completeOpenAICodexDeviceAuthorization } from "../../src/auth/openai-codex.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("completeOpenAICodexDeviceAuthorization()", () => {
   for (const status of [403, 404]) {

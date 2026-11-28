@@ -13,7 +13,7 @@
  * and attaches what the call resolves to.
  */
 import { action, assert, pattern, TESTS, Writable } from "commonfabric";
-import PhoneticSpeller from "./phonetic-speller.tsx";
+import PhoneticSpeller from "./main.tsx";
 
 export default pattern(() => {
   const text = new Writable("Fabric");

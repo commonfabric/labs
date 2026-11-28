@@ -8,10 +8,11 @@ import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
+import { readStoredCfcMetadata } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
-import { describe, it } from "@std/testing/bdd";
 
 import { DEFAULT_SUBAGENT_PROFILE } from "../src/contracts/subagent.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
@@ -512,28 +513,22 @@ describe("prompt-loop external skill acquisition", () => {
       expect(JSON.stringify(activations)).not.toContain(CANARY);
       // The same acquisition also anchors an `ExternalIngest` mark on the cell
       // it wrote, so the provenance is on the value as well as in the record.
-      const replica = storageManager.open(pieces.getSpace())
-        .replica as unknown as {
-          getDocument(id: string): {
-            cfc?: {
-              labelMap?: {
-                entries: {
-                  origin?: string;
-                  label: { integrity?: { type: string }[] };
-                }[];
-              };
-            };
-          } | undefined;
-        };
-      const skillCellId = runtime.getCell(
+      // Read through the resolving reader: a stored envelope may hold a label
+      // by reference to its label document rather than inline.
+      const skillCell = runtime.getCell(
         pieces.getSpace(),
         `external-skill:${runId}:${runId}:acquire_skill:1`,
         {} as const,
-      ).getAsNormalizedFullLink().id;
-      const ingestAtoms =
-        (replica.getDocument(skillCellId)?.cfc?.labelMap?.entries ?? [])
-          .filter((entry) => entry.origin === "external-ingest")
-          .flatMap((entry) => entry.label.integrity ?? []);
+      );
+      const read = runtime.edit();
+      const entries = readStoredCfcMetadata(
+        read,
+        skillCell.getAsNormalizedFullLink(),
+      )?.labelMap.entries ?? [];
+      read.abort();
+      const ingestAtoms = entries
+        .filter((entry) => entry.origin === "external-ingest")
+        .flatMap((entry) => entry.label.integrity ?? []);
       expect(ingestAtoms).toHaveLength(1);
       expect(ingestAtoms[0]).toMatchObject({
         type: CFC_ATOM_TYPE.ExternalIngest,

@@ -5,7 +5,6 @@
  * else would say so: the engine's own tests reach past the barrel.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { REALM_CODEC } from "@/codec-common";
@@ -15,6 +14,7 @@ import {
   REALM_FORMAT_VERSION,
   RealmCodecEngine,
 } from "@/codec-realm";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("codec-realm/index", () => {
   it("exports the format descriptor, keyed by this format's codec symbol", () => {

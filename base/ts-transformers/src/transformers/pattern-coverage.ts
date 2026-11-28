@@ -58,13 +58,9 @@ export class PatternCoverageTransformer extends Transformer {
       const candidates = original === node ? [node] : [node, original];
       for (const candidate of candidates) {
         if (isSyntheticNode(candidate)) continue;
-        try {
-          const start = candidate.getStart(context.sourceFile);
-          const end = candidate.getEnd();
-          if (end > start) return { start, end };
-        } catch {
-          // Try the next source-linked candidate.
-        }
+        const start = candidate.getStart(context.sourceFile);
+        const end = candidate.getEnd();
+        if (end > start) return { start, end };
       }
 
       const sourceMapRange = ts.getSourceMapRange(node);
@@ -81,7 +77,6 @@ export class PatternCoverageTransformer extends Transformer {
       const sourceRange = sourceRangeForSpan(node);
       if (!sourceRange) return undefined;
       const { start, end } = sourceRange;
-      if (end <= start) return undefined;
       const startLoc = context.sourceFile.getLineAndCharacterOfPosition(start);
       const endLoc = context.sourceFile.getLineAndCharacterOfPosition(end - 1);
       const rawSpan: PatternCoverageSpan = {
@@ -127,12 +122,12 @@ export class PatternCoverageTransformer extends Transformer {
     const isErasedModuleDeclaration = (
       statement: ts.ModuleDeclaration,
     ): boolean => {
-      if (statement.body === undefined) return true;
-      if (ts.isModuleDeclaration(statement.body)) {
-        return isErasedModuleDeclaration(statement.body);
+      const { body } = statement;
+      if (body === undefined) return true;
+      if (ts.isModuleBlock(body)) {
+        return body.statements.every(isErasedNamespaceStatement);
       }
-      if (!ts.isModuleBlock(statement.body)) return true;
-      return statement.body.statements.every(isErasedNamespaceStatement);
+      return ts.isModuleDeclaration(body) && isErasedModuleDeclaration(body);
     };
 
     const shouldInstrumentStatement = (statement: ts.Statement): boolean => {
@@ -305,7 +300,16 @@ export class PatternCoverageTransformer extends Transformer {
       return context.factory.createBlock(statements, true);
     };
 
-    const visitFunctionLike = (node: ts.Node): ts.Node => {
+    const visitFunctionLike = (
+      node:
+        | ts.ArrowFunction
+        | ts.FunctionDeclaration
+        | ts.FunctionExpression
+        | ts.MethodDeclaration
+        | ts.ConstructorDeclaration
+        | ts.GetAccessorDeclaration
+        | ts.SetAccessorDeclaration,
+    ): ts.Node => {
       if (ts.isArrowFunction(node)) {
         return context.factory.updateArrowFunction(
           node,
@@ -372,16 +376,13 @@ export class PatternCoverageTransformer extends Transformer {
           node.body ? instrumentBlock(node.body, true) : node.body,
         );
       }
-      if (ts.isSetAccessorDeclaration(node)) {
-        return context.factory.updateSetAccessorDeclaration(
-          node,
-          node.modifiers,
-          node.name,
-          node.parameters,
-          node.body ? instrumentBlock(node.body, true) : node.body,
-        );
-      }
-      return node;
+      return context.factory.updateSetAccessorDeclaration(
+        node,
+        node.modifiers,
+        node.name,
+        node.parameters,
+        node.body ? instrumentBlock(node.body, true) : node.body,
+      );
     };
 
     const visit = (node: ts.Node): ts.Node => {

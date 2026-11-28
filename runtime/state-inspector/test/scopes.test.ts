@@ -16,6 +16,7 @@ import {
   spaceParticipants,
   valueAsIdentity,
 } from "../scopes.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -65,7 +66,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("scope awareness: enumerate, compose, diverge", async (t) => {
+test("scope awareness: enumerate, compose, diverge", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-scope-" });
   const dbPath = `${dir}/space.sqlite`;
   try {

@@ -4,12 +4,32 @@ A runtime holds a stored document because its memory session watches it. A
 watch names a root document and a selector (a path and a schema); the server
 keeps the session up to date with the root and with every document the schema
 reaches from it through links. The union of a session's watches is what the
-runtime's replica of the space holds, apart from a document the server retracted
-while something here still read it, which the replica keeps for that reader
-until the next release pass. This document describes how the runtime removes
-the watches nothing needs any more, and drops the documents they kept loaded, so
-that a long-lived runtime that opens and closes many pieces does not hold every
-document it ever loaded.
+runtime's replica of the space holds, apart from two kinds of document. One is a
+document the server retracted while something here still read it, which the
+replica keeps for that reader until the next release pass. The other is a
+document the runtime's own commit stored that no watch reaches, which the
+replica holds as that commit left it until a cell of its own loads it or a read
+reaches it through a link and starts that load
+(`IStorageManager.shouldPullDoc()`). A read through a link starts no load for
+three such documents: content stored under the id its hash gives, which cannot
+change; a session-scoped document of a runtime that keeps those to itself,
+which no server stores; and a document of a replica that reads the space's
+store directly, as a serving runtime's does, which learns of each write from
+the store. Nor does it start one for a document of the first kind, which stays
+unwatched for its reader. The load gives the document a watch, so
+from then on a release pass removes the watch and drops the document once
+nothing reads or holds it, as it does any other; a read through the link then
+finds no value and loads the document again. The replica cannot tell a
+document no watch reaches from two others: one a load reaches whose answer has
+not arrived, and one its commit created within the reach of a watch that
+already existed, which the refresh that follows the commit leaves out of the
+session's frame. The first read through a link loads the document in each of
+those cases, at most once for each document until the document is dropped or
+the load rejects. A load that completes carrying an error, such as a refusal or a
+transport failure, is not tried again. This document describes how the runtime
+removes the watches nothing needs any more, and drops the documents they kept
+loaded, so that a long-lived runtime that opens and closes many pieces does not
+hold every document it ever loaded.
 
 The implementation is `SpaceReplica.releaseUnread()` in
 `runtime/runner/src/storage/v2.ts`, driven by
@@ -65,14 +85,18 @@ released loads them again when its next event arrives.
 A release pass runs when something that read documents has gone: when a piece
 is stopped (`Runner.stop()`, which also runs when the runtime restarts a
 piece), when a serving runtime stops the pieces a handler's result started once
-the handler's transaction commits, which leaves running one a client demands
-at that moment (`#releaseServedHandlerResult` in
+the handler's transaction commits and the scheduler is idle after it, which
+leaves running one a client demands at that moment
+(`#releaseServedHandlerResult` in
 `runtime/runner/src/runner.ts`; "A piece a handler starts" in
 [`../specs/server-side-execution/serving-loop.md`](../specs/server-side-execution/serving-loop.md)),
 when a host's client cancels a cell subscription
 (`RuntimeProcessor.handleCellUnsubscribe()` in `runtime/runtime-client`),
 and when a host's client departs (`RuntimeProcessor.disposeClient()`). A host
-may also call `Runtime.releaseUnreadDocuments()` itself. A pass any of these
+may also call `Runtime.releaseUnreadDocuments()` itself, as the toolshed's
+indexed-collection host does each time a collection's maintenance has nothing
+left to re-read ("Which runtime maintains" in
+[`indexed-collections.md`](indexed-collections.md)). A pass any of these
 asks for is followed by another once the cells holding what it kept have been
 garbage collected, as below. The pass waits until the scheduler is idle. Passes
 run one after another, never two at once. Requests made before a pass begins
@@ -163,19 +187,22 @@ middle of reading it finishes with the value it had; the first release pass to
 find it held by nothing drops it, and a read after that loads it as it now
 stands. One nothing holds is emptied and dropped at once.
 
-The server attributes each document it tracks to what reached it: a watch's
-root to the watch, a document reached through a link to the document holding
-the link, a schema document to the document whose selector or `cfc` envelope
-names it, and the schema closure a delivered document's content refers to, to
-that document. A removal releases the removed watches' roots. A document whose
-last reaching watch, link, or schema reference lets go leaves the session,
-together with what only it reached, and the answer names each in `removes`. A
-document another watch or link still reaches stays. One that lost a record and
-keeps another is walked again under the records it keeps once the retirements
-have settled, so that what only the lost record's walk reached is released; a
-document that lost nothing is not walked. A watch whose root a permissive watch
-already covered was never walked; when that cover goes, the server walks the
-root on its own, so the documents it names stay delivered.
+The server attributes each document it tracks to what reached it: a watch's root
+to the watch, a document reached through a link to the record of the document
+holding the link whose walk followed it (one document under one selector), a
+schema document to the record whose selector or `cfc` envelope names it, and the
+schema closure a delivered document's content refers to, to that document. A
+link whose target a wider record of the target already holds attributes to that
+record, whose walk stands for its own; when that record goes, the server walks
+the target under the link's selector, as it does a covered root. A removal
+releases the removed watches' roots. A record whose last reaching watch, link,
+or schema reference lets go leaves the tracker, and what its walk reached is
+released with it, without walking anything; a document left with no record
+leaves the session, and the answer names each in `removes`. A document another
+watch or link still reaches stays, and so does what the records it keeps
+reached. A watch whose root a permissive watch already covered was never walked;
+when that cover goes, the server walks the root on its own, so the documents it
+names stay delivered.
 
 A write that edits a link away retracts in the same way: the refresh that
 re-walks the changed document releases what the walk no longer reaches, and the
@@ -188,6 +215,84 @@ only while something reaches it, not until the next full evaluation.
 A server that does not advertise `watchRemoveV1` could only be asked to remove
 a watch by replacing the whole watch set, which sends the whole union back.
 Against such a server the runtime keeps every watch.
+
+## Releasing a space's session
+
+A runtime opens a memory session in a space the first time something reads,
+writes, syncs or subscribes there, and keeps the space's replica in the
+storage manager's provider for that space. On a connection of its own, the
+session is that connection; under `sharedMemoryConnection`, it is one of the
+sessions mounted on the host's connection. Releasing documents empties a
+replica, but the session and the provider outlive it. So, after it has removed
+the watches it removes, a release pass also releases each space that nothing
+uses any more: it closes the space's session and drops its provider
+(`StorageManager.#releaseUnusedSpaces()` in `runtime/runner/src/storage/v2.ts`).
+
+A space is in use while any of these holds:
+
+- Its replica keeps a document, for any of the reasons in "What keeps a
+  document", or for a holder of one the server retracted, or still watches
+  one.
+- A hold token for one of its documents is still reachable
+  (`IStorageManager.holdDocument()`), whether or not the document is loaded.
+- A write to it is pending: a commit that has not settled, or an event append
+  not yet sent.
+- A load in it is pending: a sync, a pull of a link target, or a load a
+  frame's crossings kicked (`pendingCrossingLoadAddresses()`).
+- Something subscribes to it through the provider: a sink on the replica
+  (`SpaceReplica.sinkDocument()`), an operation subscription, or a presence
+  membership.
+- Its session's last answer was a refusal of access, or the session is being
+  opened and has not answered yet. A refused space stays open so that its
+  readers, and `unreachableSpaces()` and `retrySpaceAccess()`, go on finding
+  the refusal.
+- It was opened, or a hold token was taken for one of its documents, since the
+  pass began.
+
+The storage manager never releases its own spaces: the home space of the
+identity it acts as, and a serving manager's home space. Home's profile spaces
+need no such rule while Home runs, since Home's own actions read each profile,
+and an action's reads keep what it read
+(`runtime/piece/test/space-session-release-home.test.ts`).
+
+Two subscriptions the runtime makes for itself are not uses: the replica's
+watch of the space's access list (`SpaceReplica.#watchAccessList()`), and the
+client-effect channel's subscription to the space's effects document
+(`EffectsChannel`). Each exists because the space is open, so counting it
+would keep every opened space open. Releasing the space ends both.
+
+A pass releases no space while a commit spanning several spaces is still
+applying.
+
+Releasing a space closes its session: `session.close` on a shared connection,
+which leaves the connection to its other sessions, and the connection itself
+when the session has one of its own. The provider is dropped with what the
+storage manager kept for the space alone: its replica, its record of the
+space's kind, the loads it kicked there, and its routing state. Observers of
+`IStorageManager.subscribeSpacesReleased()` hear of each space released; the
+runtime forgets the loads it kicked there, and the effects channel forgets
+that it subscribed to the space.
+
+Nothing about a released space is remembered as a refusal or an absence. The
+next read, write, sync or subscription in it opens it again, as a first open
+does in every respect but the session: a new provider, a new replica that loads
+what that read reaches, and the first-open work, the effects channel's
+subscription included. Its documents come back as they now stand on the
+server, as a dropped document's do.
+
+The session is not a new one. The storage manager opens every space's session
+under one session id, which is also the instance its session-scoped documents
+resolve to, so the reopened space keeps that id. The memory server keeps a
+closed session resumable for a while, and while it does, it refuses an open of
+the same id that does not present the session's latest token. So the manager
+keeps what the closed session needs to be resumed: its token, the server
+sequence it had seen, and the local sequence its next commit takes: the
+server takes a commit under a local sequence the session has used already for
+a replay of the commit it stored there, and a new replica would otherwise
+start that sequence again. The next session opened in the
+space presents them, once the closing has finished. A server that no longer
+holds the session, because the resume window has run out or because it restarted,
+opens the id as a new session, and the reopened space works the same way.
 
 ## Reading a released document again
 

@@ -9,14 +9,13 @@
  * process boundary needs this one to agree with itself on both sides.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
-  decodeDataFile,
   utf8ByteLength,
   utf8Compare,
   utf8SortedKeysOf,
 } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("utf8Compare()", () => {
   it("returns `0` for two equal UTF-8 strings", () => {
@@ -27,7 +26,7 @@ describe("utf8Compare()", () => {
     expect(utf8Compare("abc", "def")).toBeLessThan(0);
   });
 
-  it("returns a positive number if `first > second`", () => {
+  it("returns a positive number if `first` sorts after `second`", () => {
     expect(utf8Compare("def", "abc")).toBeGreaterThan(0);
   });
 
@@ -56,7 +55,7 @@ describe("utf8Compare()", () => {
       expect(utf8Compare("😊", "😎")).toBeLessThan(0);
     });
 
-    it("returns a positive number if `first > second`", () => {
+    it("returns a positive number if `first` sorts after `second`", () => {
       expect(utf8Compare("😎", "😊")).toBeGreaterThan(0);
     });
 
@@ -69,7 +68,7 @@ describe("utf8Compare()", () => {
         .toBeLessThan(0);
     });
 
-    it("returns a positive number if `first > second` for multi-character strings with _same_ astral-plane characters", () => {
+    it("returns a positive number if `first` sorts after `second` for multi-character strings with _same_ astral-plane characters", () => {
       expect(utf8Compare("What 😊 is a muffin?", "What 😊 is a biscuit?"))
         .toBeGreaterThan(0);
     });
@@ -212,21 +211,5 @@ describe("utf8ByteLength()", () => {
     expect(utf8ByteLength("\ud83dx")).toBe(
       new TextEncoder().encode("\ud83dx").byteLength,
     );
-  });
-});
-
-describe("decodeDataFile()", () => {
-  it("returns the text of valid UTF-8, keeping a leading byte order mark", () => {
-    const bytes = new TextEncoder().encode("\ufeffcaf\u00e9 \u{1f369}");
-
-    expect(decodeDataFile(bytes, "menu.txt")).toBe("\ufeffcaf\u00e9 \u{1f369}");
-  });
-
-  it("throws naming the file for bytes that are not valid UTF-8", () => {
-    for (const bytes of [[0xff], [0x61, 0xc3], [0xed, 0xa0, 0x80]]) {
-      expect(() => decodeDataFile(new Uint8Array(bytes), "menu.txt")).toThrow(
-        "Data file `menu.txt` is not valid UTF-8 text.",
-      );
-    }
   });
 });

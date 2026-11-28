@@ -18,6 +18,13 @@ export interface LiveUpdateStream {
   lost(): void;
 
   /**
+   * Closes the stream because the page cannot follow it. Another is opened
+   * once the server has not been heard for `silenceMs`, as for a stream never
+   * heard on, so a failure that recurs costs one stream an interval.
+   */
+  abandon(): void;
+
+  /**
    * Opens the stream, replaces one that has stopped delivering, and reports
    * whether the page has a stream it is hearing the server on.
    */
@@ -39,7 +46,10 @@ export interface LiveUpdateStream {
  * interval, so a server that refuses or fails connections costs one request an
  * interval however long it is away. A server that accepts a connection and then
  * drops it arms the prompt reopen again each time, so the page follows a
- * flapping server as fast as it flaps.
+ * flapping server as fast as it flaps. A stream the page abandons, because it
+ * cannot follow what arrives on it, is the exception to the prompt reopen: it
+ * is reopened on the silence interval, as a stream never heard on is, so a
+ * failure that recurs on every stream costs one request an interval.
  *
  * Reopening the stream and reporting whether the page can hear the server are
  * separate questions with separate answers. Reopening is paced, because each
@@ -86,6 +96,11 @@ export function liveUpdateStream<S extends UpdateStream>(
     lost(): void {
       dropped = true;
     },
+    abandon(): void {
+      stream?.close();
+      dropped = true;
+      heardOnThisStream = false;
+    },
     check(now: number): boolean {
       let current = stream;
       if (!current) {
@@ -117,8 +132,9 @@ export interface UpdateSource extends UpdateStream {
  * Follows the stream `open` connects, through `liveUpdateStream`, which has to
  * be in scope under that name. Each handler in `on` takes the data of the
  * events it is named for. The page is repainted whenever the server is heard
- * from or the connection drops. Returns the watcher whose `check` `paint` asks
- * whether the page can hear the server.
+ * from or the connection drops. A handler that throws abandons the stream, so
+ * a later check opens another, which starts afresh. Returns the watcher whose
+ * `check` `paint` asks whether the page can hear the server.
  */
 export function followUpdates(
   open: () => UpdateSource,
@@ -132,8 +148,14 @@ export function followUpdates(
     // as it changes.
     const heard = (handle: (data: string) => void) => (event: { data: string }) => {
       updates.heard(Date.now());
-      handle(event.data);
-      paint();
+      try {
+        handle(event.data);
+      } catch (error) {
+        updates.abandon();
+        throw error;
+      } finally {
+        paint();
+      }
     };
     stream.addEventListener("open", heard(() => {}));
     stream.addEventListener("ping", heard(() => {}));

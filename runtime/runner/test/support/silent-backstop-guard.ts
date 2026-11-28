@@ -1,3 +1,5 @@
+import { wrapSuites } from "@commonfabric/test-support/test";
+
 // A production backstop is a timer that lets a wait give up: the caller
 // proceeds as if the event it waited for had arrived, and the only trace is a
 // counted log line the module's logger sits above (`storage.v2` logs at
@@ -5,8 +7,8 @@
 // clock such a backstop fires the moment nothing else is pending, so a test
 // whose awaited event never arrives still passes, riding a silent logical
 // jump instead of the event. This guard turns that ride into a failure: it
-// records every firing of a listed backstop and fails a test body across which
-// one fired, naming the backstop.
+// records every firing of a listed backstop and fails a suite across which one
+// fired, naming the backstop.
 
 /** One backstop the guard watches, identified by the log line it counts. */
 export interface SilentBackstop {
@@ -31,18 +33,17 @@ const countKey = (backstop: SilentBackstop): string =>
 // nothing a test does clears it. This is the difference from reading the
 // logger's own counters: a test may `resetCounts()` (or `resetAllLoggerCounts`)
 // mid-run — `scheduler-events.test.ts` and the resume-presync suite do — and
-// because the guard wraps a whole `describe` as one `Deno.test`, a reset in a
-// later `it` would erase a firing from an earlier one before the wrapper could
-// read it. A store the reset cannot reach closes that hole. Keyed by
+// because the guard wraps a whole suite, a reset in a later `it` would erase a
+// firing from an earlier one before the wrapper could read it. A store the reset cannot reach closes that hole. Keyed by
 // `logger\0key`.
 //
-// The store is process-global, and a per-test before/after difference reads
-// firings back correctly because guarded tests never overlap. The guard lives
-// in the same preload as the fake clock, whose per-test wrapper replaces the
-// global `setTimeout` and `Date.now` at the start of a test and restores them
-// in a `finally` — coherent only when one test runs at a time — and the
-// package task starts no parallel run. So exactly one test's before/after
-// window is ever open, and a firing during it is that test's.
+// The store is process-global, and a per-suite before/after difference reads
+// firings back correctly because guarded suites never overlap. The guard lives
+// in the same preload as the fake clock, whose per-suite wrapper replaces the
+// global `setTimeout` and `Date.now` at the start of a suite and restores them
+// in a `finally` — coherent only when one suite runs at a time — and the
+// package task starts no parallel run. So exactly one suite's before/after
+// window is ever open, and a firing during it is that suite's.
 const firedTotals = new Map<string, number>();
 const wrappedLoggers = new WeakSet<object>();
 
@@ -141,28 +142,23 @@ export function describeFiredBackstops(
 }
 
 /**
- * Wrap `Deno.test` so every test registered from here on fails when one of
- * `backstops` fires during its body. Install it after the fake clock, so the
- * check runs inside the clock's wrapper — right after the body and before
- * the clock's own post-body settle — where a firing is still this test's.
- * A body that fails on its own is checked too: a backstop that fired is the
- * likelier explanation of that failure than anything the body asserts, so
- * the guard's error leads and carries the body's as its cause.
+ * Fails every suite of the file when one of `backstops` fires
+ * while it runs. Install it after the fake clock, so the check runs inside
+ * the clock's wrapper — right after the suite and before the clock's own
+ * post-suite settle — where a firing is still this suite's. A suite that
+ * fails on its own is checked too: a backstop that fired is the likelier
+ * explanation of that failure than anything the suite asserts, so the
+ * guard's error leads and carries the suite's as its cause.
  */
 export function installSilentBackstopGuard(
   backstops: readonly SilentBackstop[],
 ): void {
   ensureWrapped(backstops);
-  const previousTest = Deno.test;
-
-  const guard = (
-    fn: (t: Deno.TestContext) => void | Promise<void>,
-  ): (t: Deno.TestContext) => Promise<void> =>
-  async (t: Deno.TestContext) => {
+  wrapSuites(async (run) => {
     const before = readBackstopFirings(backstops);
     let failure: { error: unknown } | undefined;
     try {
-      await fn(t);
+      await run();
     } catch (error) {
       failure = { error };
     }
@@ -174,29 +170,10 @@ export function installSilentBackstopGuard(
     if (fired.length > 0) {
       throw new Error(
         describeFiredBackstops(fired) +
-          (failure === undefined ? "" : "\nThe test body failed as well."),
+          (failure === undefined ? "" : "\nThe suite failed as well."),
         failure === undefined ? undefined : { cause: failure.error },
       );
     }
     if (failure !== undefined) throw failure.error;
-  };
-
-  function guardedTest(
-    nameOrDef: string | Deno.TestDefinition,
-    fn?: (t: Deno.TestContext) => void | Promise<void>,
-  ): void {
-    if (typeof nameOrDef === "string") {
-      previousTest(nameOrDef, guard(fn!));
-    } else {
-      previousTest({ ...nameOrDef, fn: guard(nameOrDef.fn) });
-    }
-  }
-
-  // A hook registers a function to run around the tests rather than a
-  // test, so it is the registrar's own.
-  for (const hook of HOOKS) Reflect.set(guardedTest, hook, previousTest[hook]);
-  Reflect.set(Deno, "test", guardedTest);
+  });
 }
-
-/** The lifecycle hooks `Deno.test` carries beside its overloads. */
-const HOOKS = ["beforeAll", "beforeEach", "afterEach", "afterAll"] as const;

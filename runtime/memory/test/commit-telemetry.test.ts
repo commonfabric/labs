@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { ClientCommit, Operation } from "../v2.ts";
 import { classifyCommitTelemetry } from "../v2/commit-telemetry.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const commit = (
   operations: Operation[] = [],

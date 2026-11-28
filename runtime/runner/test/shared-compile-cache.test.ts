@@ -1,16 +1,28 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
+import { getLogger } from "@commonfabric/logger";
+import { ProcessModuleByteCache } from "@commonfabric/test-support/compile-byte-cache";
 
 import {
+  DiskModuleByteCache,
   FileCompileClaims,
   openSharedCompileCache,
   SHARED_COMPILE_CACHE_RETENTION_MS,
   USE_MARK_INTERVAL_MS,
 } from "../src/compilation-cache/shared-compile-cache.deno.ts";
 import { CompileTurns } from "../src/harness/compile-interleave.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const VERSION = "test-runtime-version";
+
+/** How many times the cache has logged `key` as an error. */
+const errorsLogged = (key: string): number =>
+  getLogger("shared-compile-cache").countsByKey[key]?.error ?? 0;
 
 /** A module as a compile puts it. */
 const moduleNamed = (identity: string) => ({
@@ -197,12 +209,53 @@ describe("openSharedCompileCache()", () => {
       // A file where the version trees go, so no tree can be made.
       Deno.removeSync(join(dir, "modules"), { recursive: true });
       Deno.writeTextFileSync(join(dir, "modules"), "");
+      const writesFailed = errorsLogged("shared-compile-cache-write-failed");
+      const marksFailed = errorsLogged("shared-compile-cache-mark-failed");
 
       moduleByteCache.putAll(VERSION, [moduleNamed("a")]);
 
       expect(moduleByteCache.getCompleteSet(VERSION, ["a"])?.get("a")?.js)
         .toBe(moduleNamed("a").js);
+      expect(errorsLogged("shared-compile-cache-write-failed")).toBe(
+        writesFailed + 1,
+      );
+      // The tree cannot be marked, since its path runs through a file.
+      expect(errorsLogged("shared-compile-cache-mark-failed")).toBe(
+        marksFailed + 1,
+      );
       Deno.removeSync(join(dir, "modules"));
+    });
+
+    it("serves the modules it holds, marking nothing and logging nothing, once their version tree is removed", () => {
+      const { moduleByteCache } = openSharedCompileCache(dir);
+      moduleByteCache.putAll(VERSION, [moduleNamed("a")]);
+      // As another process's opening of the cache prunes it.
+      Deno.removeSync(onlyEntryOf(join(dir, "modules")), { recursive: true });
+      const marksFailed = errorsLogged("shared-compile-cache-mark-failed");
+
+      expect(moduleByteCache.getCompleteSet(VERSION, ["a"])?.get("a")?.js)
+        .toBe(moduleNamed("a").js);
+      expect([...Deno.readDirSync(join(dir, "modules"))]).toEqual([]);
+      expect(errorsLogged("shared-compile-cache-mark-failed")).toBe(
+        marksFailed,
+      );
+    });
+
+    it("writes no file for a module larger than its memory cache holds", () => {
+      const large = { identity: "large", js: "x".repeat(64) };
+      const small = { identity: "small", js: "y" };
+      const putting = new DiskModuleByteCache(dir, {
+        memory: new ProcessModuleByteCache(small.js.length),
+      });
+
+      putting.putAll(VERSION, [large, small]);
+
+      expect([...Deno.readDirSync(onlyEntryOf(join(dir, "modules")))])
+        .toHaveLength(1);
+      const reading = openSharedCompileCache(dir).moduleByteCache;
+      expect(reading.getCompleteSet(VERSION, ["small"])?.get("small")?.js)
+        .toBe(small.js);
+      expect(reading.getCompleteSet(VERSION, ["large"])).toBeUndefined();
     });
   });
 
@@ -275,6 +328,41 @@ describe("openSharedCompileCache()", () => {
       expect(isClaimHeld(path)).toBe(true);
       endTurn();
       expect(isClaimHeld(path)).toBe(false);
+    });
+
+    it("rejects a turn whose claim file cannot be opened, and ends the turn", async () => {
+      const { compileClaims } = openSharedCompileCache(dir);
+      // A file where the claim files go, so none can be opened.
+      Deno.removeSync(join(dir, "claims"), { recursive: true });
+      Deno.writeTextFileSync(join(dir, "claims"), "");
+
+      await expect(compileClaims.take("key")).rejects.toThrow(
+        Deno.errors.NotADirectory,
+      );
+
+      Deno.removeSync(join(dir, "claims"));
+      Deno.mkdirSync(join(dir, "claims"));
+      // A turn the rejected one left standing would hold this one back.
+      const endTurn = await compileClaims.take("key");
+      expect(isClaimHeld(onlyEntryOf(join(dir, "claims")))).toBe(true);
+      endTurn();
+    });
+
+    it("rejects a turn that cannot tell whether the file it locked is its claim file, releasing the lock", async () => {
+      const locked = join(dir, "locked.lock");
+      const claims = new FileCompileClaims(
+        dir,
+        (_path, options) => Deno.open(locked, options),
+      );
+      // A file where the claim files go, so no claim file can be looked up.
+      Deno.writeTextFileSync(join(dir, "claims"), "");
+
+      await expect(claims.take("key")).rejects.toThrow(
+        Deno.errors.NotADirectory,
+      );
+
+      expect(isClaimHeld(locked)).toBe(false);
+      Deno.removeSync(join(dir, "claims"));
     });
   });
 

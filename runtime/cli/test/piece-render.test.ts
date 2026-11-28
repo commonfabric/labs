@@ -8,7 +8,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsByKey } from "@commonfabric/logger";
@@ -27,6 +26,12 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { parsePieceOptions } from "../commands/piece.ts";
 import { renderPiece, renderVDomToHtml } from "../lib/piece-render.ts";

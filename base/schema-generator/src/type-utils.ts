@@ -1,7 +1,6 @@
 import ts from "typescript";
 
 import { type FabricValue, hashStringOf } from "@commonfabric/data-model";
-import type { MutableJSONSchema } from "@commonfabric/api";
 import type { GenerationContext } from "./interface.ts";
 import { NativeTypeFormatter } from "./formatters/native-type-formatter.ts";
 import { declaresFabricPrimitiveBrand } from "./typescript/fabric-primitive-brand.ts";
@@ -29,11 +28,11 @@ import {
  * Names that should be treated as Cell-like wrapper types.
  * "Writable" is an alias for "Cell" that better expresses semantic meaning.
  *
- * NB: this keys off raw type-node NAMES (hence `Writable` is listed and
- * `OpaqueCell` is split into `OPAQUE_WRAPPER_NAMES`). It is intentionally
- * distinct from `common-fabric-formatter.ts`'s `CELL_CAPABILITY_KIND_MAP`,
- * which keys off RESOLVED `CellWrapperKind` values (where `Writable` has already
- * normalized to `Cell` and `OpaqueCell` belongs with the rest).
+ * NB: this keys off raw type NAMES (hence `Writable` is listed and
+ * `OpaqueCell` is not). It is intentionally distinct from
+ * `common-fabric-formatter.ts`'s `CELL_CAPABILITY_KIND_MAP`, which keys off
+ * RESOLVED `CellWrapperKind` values (where `Writable` has already normalized
+ * to `Cell` and `OpaqueCell` belongs with the rest).
  */
 const CELL_LIKE_WRAPPER_NAMES = spellingsWhere({
   Cell: true,
@@ -41,7 +40,7 @@ const CELL_LIKE_WRAPPER_NAMES = spellingsWhere({
   ReadonlyCell: true,
   WriteonlyCell: true,
   ComparableCell: true,
-  OpaqueCell: false, // split into OPAQUE_WRAPPER_NAMES (see NB above)
+  OpaqueCell: false,
   Stream: false, // handled separately at each call site
   SqliteDb: false, // handled separately at each call site
   Reactive: false,
@@ -49,19 +48,6 @@ const CELL_LIKE_WRAPPER_NAMES = spellingsWhere({
   ScopedCellTypeConstructor: false,
 });
 
-const OPAQUE_WRAPPER_NAMES = spellingsWhere({
-  OpaqueCell: true,
-  Cell: false,
-  Writable: false,
-  ReadonlyCell: false,
-  WriteonlyCell: false,
-  ComparableCell: false,
-  Stream: false,
-  SqliteDb: false,
-  Reactive: false,
-  CellTypeConstructor: false,
-  ScopedCellTypeConstructor: false,
-});
 type NodeWrapperKind = "Default" | CellWrapperKind;
 
 function getEntityNameText(name: ts.EntityName): string {
@@ -97,70 +83,10 @@ function wrapperKindForName(name: string): NodeWrapperKind | undefined {
 export { getPropertyNameText };
 
 /**
- * Safe wrapper for TypeScript checker APIs that may throw in reduced environments
+ * Resolves the type of `prop` as a member of `parentType`, preferring its
+ * declared type where `parentType` adds no more than `undefined` to it.
  */
-export function safeGetTypeFromTypeNode(
-  checker: ts.TypeChecker,
-  node: ts.TypeNode,
-  context?: string,
-): ts.Type | undefined {
-  try {
-    return checker.getTypeFromTypeNode(node);
-  } catch (error) {
-    console.warn(
-      `Failed to get type from node${context ? ` in ${context}` : ""}:`,
-      error,
-    );
-    return undefined;
-  }
-}
-
-/**
- * Safe wrapper for getting type of symbol at location
- */
-export function safeGetTypeOfSymbolAtLocation(
-  checker: ts.TypeChecker,
-  symbol: ts.Symbol,
-  location: ts.Node,
-  context?: string,
-): ts.Type | undefined {
-  try {
-    return checker.getTypeOfSymbolAtLocation(symbol, location);
-  } catch (error) {
-    console.warn(
-      `Failed to get type of symbol at location${
-        context ? ` in ${context}` : ""
-      }:`,
-      error,
-    );
-    return undefined;
-  }
-}
-
-/**
- * Safe wrapper for getting index type
- */
-export function safeGetIndexTypeOfType(
-  checker: ts.TypeChecker,
-  type: ts.Type,
-  kind: ts.IndexKind,
-  context?: string,
-): ts.Type | undefined {
-  try {
-    return checker.getIndexTypeOfType(type, kind);
-  } catch (error) {
-    console.warn(
-      `Failed to get index type${context ? ` in ${context}` : ""}:`,
-      error,
-    );
-    return undefined;
-  }
-}
-
-/**
- * Safely resolve a property's type, preferring AST nodes to avoid deep checker recursion
- */
-export function safeGetPropertyType(
+export function resolvePropertyType(
   prop: ts.Symbol,
   parentType: ts.Type,
   checker: ts.TypeChecker,
@@ -179,40 +105,20 @@ export function safeGetPropertyType(
 
   // Get type from the resolved parent type (for generic instantiation and mapped types)
   // We'll use this to validate/override the declaration-based type if needed
-  let typeFromParent: ts.Type | undefined;
-  try {
-    const propName = prop.getName();
-    const propSymbol = checker.getPropertyOfType(parentType, propName);
-    if (propSymbol) {
-      typeFromParent = checker.getTypeOfSymbol(propSymbol);
-      const typeStr = typeFromParent
-        ? checker.typeToString(typeFromParent)
-        : undefined;
-      // If we got 'any', treat it as if we didn't get a type
-      if (typeStr === "any") {
-        typeFromParent = undefined;
-      }
-    }
-  } catch (error) {
-    // Type resolution can fail for some edge cases - fall back to declaration type
-    console.warn(
-      `Failed to resolve property type from parent for "${prop.getName()}":`,
-      error,
-    );
-  }
+  const propSymbol = checker.getPropertyOfType(parentType, prop.getName());
+  const readFromParent = propSymbol && checker.getTypeOfSymbol(propSymbol);
+  // A read of `any` says nothing about the property.
+  const typeFromParent =
+    readFromParent && checker.typeToString(readFromParent) !== "any"
+      ? readFromParent
+      : undefined;
 
   // Try to get type from declaration
   const declTypeNode = decl && ts.isPropertySignature(decl)
     ? decl.type
     : undefined;
-  let typeFromDecl: ts.Type | undefined;
-  if (declTypeNode) {
-    typeFromDecl = safeGetTypeFromTypeNode(
-      checker,
-      declTypeNode,
-      "property signature",
-    );
-  }
+  const typeFromDecl = declTypeNode &&
+    checker.getTypeFromTypeNode(declTypeNode);
 
   // If we have both, and they differ, prefer parent (handles generic instantiation)
   // Example: Box<number> where property is declared as `value: T` but should resolve to `number`
@@ -307,25 +213,10 @@ export function safeGetPropertyType(
   }
 
   // Fallback to provided node
-  if (fallbackNode) {
-    const typeFromFallback = safeGetTypeFromTypeNode(
-      checker,
-      fallbackNode,
-      "property fallback node",
-    );
-    if (typeFromFallback) return typeFromFallback;
-  }
+  if (fallbackNode) return checker.getTypeFromTypeNode(fallbackNode);
 
   // Try symbol location as last resort before giving up
-  if (decl) {
-    const typeFromSymbol = safeGetTypeOfSymbolAtLocation(
-      checker,
-      prop,
-      decl,
-      "property symbol location",
-    );
-    if (typeFromSymbol) return typeFromSymbol;
-  }
+  if (decl) return checker.getTypeOfSymbolAtLocation(prop, decl);
 
   // Absolute last resort - return 'any' type
   return checker.getAnyType();
@@ -406,122 +297,50 @@ export function instantiatedValueType(
 }
 
 /**
- * TypeScript internal API type extensions for safer casting
+ * Helper for `getArrayElementInfo()`, which throws where the symbol of the
+ * object type `type` names a `Map`, `WeakMap`, `Set` or `WeakSet`, none of
+ * which serializes to JSON, and returns normally otherwise.
  */
-export interface TypeWithInternals extends ts.Type {
-  aliasSymbol?: ts.Symbol;
-  aliasTypeArguments?: readonly ts.Type[];
-  resolvedTypeArguments?: readonly ts.Type[];
-  intrinsicName?: string;
-}
-
-/**
- * Resolve the most relevant symbol for a type, accounting for references,
- * aliases, and internal helper accessors exposed on some compiler objects.
- */
-export function getPrimarySymbol(type: ts.Type): ts.Symbol | undefined {
-  if (type.symbol) return type.symbol;
-  const ref = type as ts.TypeReference;
-  if (ref.target?.symbol) return ref.target.symbol;
-  const alias = (type as TypeWithInternals).aliasSymbol;
-  if (alias) return alias;
-  return undefined;
-}
-
-export function cloneSchemaDefinition<T extends MutableJSONSchema>(
-  schema: T,
-): T {
-  // TODO(danfuzz): `structuredClone()` mangles non-JSON `FabricValue`s —
-  // harmless while generated schemas are plain JSON, but a problem once
-  // schema-generator covers the full `FabricValue` spectrum. It then needs a
-  // FabricValue-aware clone; also revisit whether a freely-mutable result is
-  // required at all (callers just return it), since an immutable base plus
-  // `cloneForMutation()` for scoped edits is a safer pattern.
-  return (typeof schema === "boolean" ? schema : structuredClone(schema)) as T;
-}
-
-export function getNativeTypeSchema(
-  type: ts.Type,
-  checker: ts.TypeChecker,
-): MutableJSONSchema | undefined {
-  const visited = new Set<ts.Type>();
-
-  const resolve = (
-    current: ts.Type,
-  ): MutableJSONSchema | undefined => {
-    if (visited.has(current)) return undefined;
-    visited.add(current);
-
-    if ((current.flags & ts.TypeFlags.TypeParameter) !== 0) {
-      const base = checker.getBaseConstraintOfType(current);
-      if (base && base !== current) {
-        const resolved = resolve(base);
-        if (resolved !== undefined) return resolved;
-      }
-      const defaultConstraint = checker.getDefaultFromTypeParameter?.(current);
-      if (defaultConstraint && defaultConstraint !== current) {
-        const resolved = resolve(defaultConstraint);
-        if (resolved !== undefined) return resolved;
-      }
-      return undefined;
-    }
-
-    if ((current.flags & ts.TypeFlags.Intersection) !== 0) {
-      const intersection = current as ts.IntersectionType;
-      for (const part of intersection.types) {
-        const resolved = resolve(part);
-        if (resolved !== undefined) return resolved;
-      }
-    }
-
-    const symbol = getPrimarySymbol(current);
-    const name = symbol?.getName();
-
-    // Reject non-JSON-serializable collection types
-    // These types cannot be properly serialized to JSON and should not be used
-    // in pattern inputs/outputs
-    if (name === "Map" || name === "WeakMap") {
-      throw new Error(
-        `${name} cannot be used in pattern inputs/outputs because it is not JSON-serializable. ` +
-          `Use Record<string, V> for key-value data or Array<[K, V]> for ordered pairs instead.`,
-      );
-    }
-    if (name === "Set" || name === "WeakSet") {
-      throw new Error(
-        `${name} cannot be used in pattern inputs/outputs because it is not JSON-serializable. ` +
-          `Use Array<T> instead.`,
-      );
-    }
-    return undefined;
-  };
-
-  return resolve(type);
+function rejectNonSerializableCollection(type: ts.Type): void {
+  const name = type.symbol?.name;
+  if (name === "Map" || name === "WeakMap") {
+    throw new Error(
+      `${name} cannot be used in pattern inputs/outputs because it is not JSON-serializable. ` +
+        `Use Record<string, V> for key-value data or Array<[K, V]> for ordered pairs instead.`,
+    );
+  }
+  if (name === "Set" || name === "WeakSet") {
+    throw new Error(
+      `${name} cannot be used in pattern inputs/outputs because it is not JSON-serializable. ` +
+        `Use Array<T> instead.`,
+    );
+  }
 }
 
 /**
  * Return a public/stable named key for a type if and only if it has a useful
  * symbol name. Filters out anonymous ("__type") and wrapper/container names
- * that we do not want to promote into top-level definitions.
+ * that we do not want to promote into top-level definitions. A `typeNode`
+ * that names a wrapper (`wrapperKindOfReference()`) leaves the type unnamed,
+ * though the type is the wrapper's payload. A reference to a type of the
+ * module's own that shares a wrapper's name names no wrapper there, but the
+ * filters on the type's own name below still leave a type named `Default`,
+ * `Stream`, `SqliteDb` or a cell wrapper's name unnamed, whatever declares it.
  */
 export function getNamedTypeKey(
   type: ts.Type,
+  checker: ts.TypeChecker,
   typeNode?: ts.TypeNode,
 ): string | undefined {
-  // Check if the TypeNode indicates this is a wrapper type (Default/Cell/Stream/Reactive)
-  // Even if the type symbol says it's the inner type, if it's wrapped we shouldn't hoist it
-  if (typeNode && ts.isTypeReferenceNode(typeNode)) {
-    const nodeTypeName = getEntityNameText(typeNode.typeName);
-    if (
-      nodeTypeName === "Default" || CELL_LIKE_WRAPPER_NAMES.has(nodeTypeName) ||
-      nodeTypeName === "Stream" || nodeTypeName === "SqliteDb" ||
-      OPAQUE_WRAPPER_NAMES.has(nodeTypeName)
-    ) {
-      return undefined;
-    }
+  if (
+    typeNode && ts.isTypeReferenceNode(typeNode) &&
+    wrapperKindOfReference(typeNode, checker)
+  ) {
+    return undefined;
   }
 
   // Check if this is a Default/Cell/Stream/Reactive wrapper type via alias
-  const aliasName = (type as TypeWithInternals).aliasSymbol?.name;
+  const aliasName = type.aliasSymbol?.name;
   if (
     aliasName === "Default" || CELL_LIKE_WRAPPER_NAMES.has(aliasName ?? "") ||
     aliasName === "Stream" || aliasName === "SqliteDb" ||
@@ -530,14 +349,9 @@ export function getNamedTypeKey(
     return undefined;
   }
 
-  // Prefer direct symbol name; fall back to target symbol for TypeReference
+  // A type reference has its target's symbol, so the symbol names it.
   const symbol = type.symbol;
   let name = symbol?.name;
-  const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
-  if (!name && (objectFlags & ts.ObjectFlags.Reference)) {
-    const ref = type as unknown as ts.TypeReference;
-    name = ref.target?.symbol?.name ?? name;
-  }
   // Known compiler-internal anonymous type names
   // Using a minimal whitelist - only block the most common cases we know are problematic.
   // Fail open: if uncertain, let it through rather than break user code (like GraphQL __Schema types).
@@ -575,16 +389,6 @@ export function getNamedTypeKey(
   ) {
     return undefined;
   }
-  const decls = symbol?.declarations ?? [];
-  if (
-    decls.some((d) =>
-      ts.isPropertySignature(d) || ts.isMethodSignature(d) ||
-      ts.isPropertyDeclaration(d) || ts.isMethodDeclaration(d) ||
-      ts.isEnumMember(d)
-    )
-  ) {
-    return undefined;
-  }
   // Avoid promoting wrappers/containers into definitions
   if (name === "Array" || name === "ReadonlyArray") return undefined;
   if (
@@ -611,11 +415,7 @@ export function getNamedTypeKey(
   // These have aliasTypeArguments, meaning they're a generic type applied to specific type arguments
   // The name "Record" or "Box" is meaningless without the type parameters - what matters is the
   // resolved/instantiated type structure
-  const typeWithAlias = type as TypeWithInternals;
-  if (
-    typeWithAlias.aliasTypeArguments &&
-    typeWithAlias.aliasTypeArguments.length > 0
-  ) {
+  if (type.aliasTypeArguments && type.aliasTypeArguments.length > 0) {
     return undefined;
   }
 
@@ -628,6 +428,7 @@ export function getNamedTypeKey(
   // We only want to prevent hoisting for anonymous generic interface instantiations
   // where different instantiations (e.g., PatternToolResult<A> vs PatternToolResult<B>)
   // would incorrectly collide under the same base name.
+  const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
   if (objectFlags & ts.ObjectFlags.Reference && !aliasName) {
     const typeRef = type as ts.TypeReference;
     const target = typeRef.target as ts.InterfaceType | undefined;
@@ -650,22 +451,8 @@ export function getNamedTypeKey(
  * Determine if a type represents a callable/constructable function value.
  */
 export function isFunctionLike(type: ts.Type): boolean {
-  if (type.getCallSignatures().length > 0) return true;
-  if (type.getConstructSignatures().length > 0) return true;
-
-  const symbol = type.symbol;
-  if (!symbol) return false;
-
-  const flags = symbol.flags;
-  if (
-    (flags & ts.SymbolFlags.Function) !== 0 ||
-    (flags & ts.SymbolFlags.Method) !== 0 ||
-    (flags & ts.SymbolFlags.Signature) !== 0
-  ) {
-    return true;
-  }
-
-  return false;
+  return type.getCallSignatures().length > 0 ||
+    type.getConstructSignatures().length > 0;
 }
 
 /**
@@ -710,17 +497,10 @@ export function getArrayElementInfo(
           typeNode.typeArguments && typeNode.typeArguments.length > 0
         ) {
           const argNode = typeNode.typeArguments[0]!;
-          const elementType = safeGetTypeFromTypeNode(
-            checker,
-            argNode,
-            "Array<T> type argument",
-          );
-          if (elementType) {
-            return {
-              elementType,
-              elementNode: argNode,
-            };
-          }
+          return {
+            elementType: checker.getTypeFromTypeNode(argNode),
+            elementNode: argNode,
+          };
         }
         // Resolve alias: if this is a type alias referring to Array<T> or T[]
         const sym = checker.getSymbolAtLocation(tn);
@@ -728,17 +508,12 @@ export function getArrayElementInfo(
         if (decl && ts.isTypeAliasDeclaration(decl)) {
           const aliased = decl.type;
           if (ts.isArrayTypeNode(aliased)) {
-            const elementType = safeGetTypeFromTypeNode(
-              checker,
+            const elementType = checker.getTypeFromTypeNode(
               aliased.elementType,
-              "aliased array element type",
             );
             // If the element type is a type parameter (e.g., T from the alias declaration),
             // don't use it - fall through to extract from the actual type instead
-            if (
-              elementType &&
-              (elementType.flags & ts.TypeFlags.TypeParameter) === 0
-            ) {
+            if ((elementType.flags & ts.TypeFlags.TypeParameter) === 0) {
               return {
                 elementType,
                 elementNode: aliased.elementType,
@@ -753,17 +528,10 @@ export function getArrayElementInfo(
               aliased.typeArguments && aliased.typeArguments.length > 0
             ) {
               const argNode = aliased.typeArguments[0]!;
-              const elementType = safeGetTypeFromTypeNode(
-                checker,
-                argNode,
-                "aliased Array<T> type argument",
-              );
+              const elementType = checker.getTypeFromTypeNode(argNode);
               // If the element type is a type parameter (e.g., T from the alias declaration),
               // don't use it - fall through to extract from the actual type instead
-              if (
-                elementType &&
-                (elementType.flags & ts.TypeFlags.TypeParameter) === 0
-              ) {
+              if ((elementType.flags & ts.TypeFlags.TypeParameter) === 0) {
                 return {
                   elementType,
                   elementNode: argNode,
@@ -782,10 +550,10 @@ export function getArrayElementInfo(
     return undefined;
   }
 
-  const native = getNativeTypeSchema(type, checker);
-  if (native !== undefined) {
-    return undefined;
-  }
+  // Throws for a collection that does not serialize to JSON. The array
+  // formatter reads every object type here before the object formatter is
+  // offered it, so this check stands for the object formatter's too.
+  rejectNonSerializableCollection(type);
   // Check ObjectFlags.Reference for Array/ReadonlyArray
   const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
 
@@ -800,44 +568,17 @@ export function getArrayElementInfo(
     }
   }
 
-  // Check symbol name for Array
-  if (type.symbol?.name === "Array") {
-    const typeRef = type as ts.TypeReference;
-    const elementType = typeRef.typeArguments?.[0];
-    if (elementType) return { elementType };
-  }
-
-  // If the type also has a string index signature, prefer treating it as an
-  // object map (not an array). This avoids misclassifying dictionary types
-  // like `{ [k: string]: T; [n: number]: T }` as arrays.
-  const stringIndex = safeGetIndexTypeOfType(
-    checker,
-    type,
-    ts.IndexKind.String,
-    "array/map disambiguation string index",
-  );
-  const numberIndex = safeGetIndexTypeOfType(
-    checker,
-    type,
-    ts.IndexKind.Number,
-    "array/map disambiguation number index",
-  );
-  if (stringIndex && numberIndex) {
-    return undefined;
-  }
-
   // An object that declares a `length` beside its numeric index is array-like,
   // as a tuple, a type built on an array, and `ArrayLike<T>` are, and is read
-  // as an array of what that index holds. Any other object with a numeric
-  // index is a map from number-named keys, as a type literal writing it is
-  // read.
-  const elementType = safeGetIndexTypeOfType(
-    checker,
-    type,
-    ts.IndexKind.Number,
-    "array numeric index",
-  );
-  if (elementType && type.getProperty("length")) {
+  // as an array of what that index holds, unless it also has a string index,
+  // which makes it a dictionary such as `{ [k: string]: T; [n: number]: T }`.
+  // Any other object with a numeric index is a map from number-named keys, as
+  // a type literal writing it is read.
+  const elementType = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
+  if (
+    elementType && type.getProperty("length") &&
+    !checker.getIndexTypeOfType(type, ts.IndexKind.String)
+  ) {
     return { elementType };
   }
 
@@ -1020,63 +761,65 @@ function mentionsSymbol(
 }
 
 /**
- * Recognizes `{}` literals and propertyless records with only `never`-valued
- * indexes as empty defaults, including when reached through type aliases.
+ * Whether `type` is an empty object as a default's value: an object type, or
+ * an intersection of them, with no properties and no call or construct
+ * signatures, each index signature of which, if any, holds `never`, as `{}`,
+ * an empty interface, `{ [K in never]: X }` and `Record<string, never>` are.
  */
-export function isEmptyObjectDefaultType(
+function isEmptyObjectDefaultType(
   type: ts.Type,
   typeChecker: ts.TypeChecker,
 ): boolean {
-  if (
-    (type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) === 0 ||
-    type.isIntersection() &&
-      type.types.some((member) => (member.flags & ts.TypeFlags.Object) === 0) ||
-    typeChecker.getPropertiesOfType(type).length !== 0 ||
-    type.getCallSignatures().length !== 0 ||
-    type.getConstructSignatures().length !== 0
-  ) return false;
-
-  const indexes = typeChecker.getIndexInfosOfType(type);
-  if (indexes.length > 0) {
-    return indexes.every((index) =>
+  return (type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) !==
+      0 &&
+    !(type.isIntersection() &&
+      type.types.some((member) =>
+        (member.flags & ts.TypeFlags.Object) === 0
+      )) &&
+    typeChecker.getPropertiesOfType(type).length === 0 &&
+    type.getCallSignatures().length === 0 &&
+    type.getConstructSignatures().length === 0 &&
+    typeChecker.getIndexInfosOfType(type).every((index) =>
       (index.type.flags & ts.TypeFlags.Never) !== 0
     );
-  }
-  return type.getSymbol()?.declarations?.some((declaration) =>
-    ts.isTypeLiteralNode(declaration) && declaration.members.length === 0
-  ) ?? false;
 }
 
 /**
- * Convert a purely literal-shaped Type to its JSON value: string/number/
- * boolean literals, null, literal tuples, and object-literal types whose
- * members are themselves literal-shaped. Returns the value wrapped (so a
- * legitimate `null` is distinguishable from "not extractable") or undefined
- * when any part of the type is not a literal.
+ * The value of `type` where it is a string, number or boolean literal type,
+ * and `undefined` otherwise.
+ */
+export function primitiveLiteralValue(
+  type: ts.Type,
+  checker: ts.TypeChecker,
+): string | number | boolean | undefined {
+  if (type.isStringLiteral() || type.isNumberLiteral()) return type.value;
+  return (type.flags & ts.TypeFlags.BooleanLiteral) !== 0
+    ? checker.isTypeAssignableTo(type, checker.getTrueType())
+    : undefined;
+}
+
+/**
+ * The JSON value a literal-shaped type spells, read from the type alone: a
+ * string, number or boolean literal, `null`, an empty object
+ * (`isEmptyObjectDefaultType()`), a tuple of such types, or an object type
+ * with no index signature, call or construct signature, whose members are
+ * such types, which makes an object type with no members at all `{}`. The
+ * value is returned wrapped, so a legitimate `null` is distinguishable from
+ * a type with no value, and the whole type has none where any part of it has
+ * none.
  *
- * Used to read `Default<T, V>`'s V back out of the DEFAULT_MARKER brand
- * payload once the checker has resolved the alias away — the payload is the
- * only place V survives at the type level (see Default<> in
- * base/api/index.ts). Deliberately type-structural only: payloads that
- * resolve to non-literal types (e.g. a widened `typeof CONST`) bail to
- * undefined, and the caller falls back to existing behavior.
+ * It reads a default's value where no syntax spells it: `Default<T, V>`'s `V`
+ * reached by type in either formatter, and `V` read back out of the
+ * `DEFAULT_MARKER` brand payload once the checker has resolved the alias away
+ * (see `Default<>` in `base/api/index.ts`).
  */
 export function extractValueFromLiteralType(
   type: ts.Type,
   typeChecker: ts.TypeChecker,
 ): { value: FabricValue } | undefined {
-  if (type.flags & ts.TypeFlags.StringLiteral) {
-    return { value: (type as ts.StringLiteralType).value };
-  }
-  if (type.flags & ts.TypeFlags.NumberLiteral) {
-    return { value: (type as ts.NumberLiteralType).value };
-  }
-  if (type.flags & ts.TypeFlags.BooleanLiteral) {
-    return {
-      value: (type as unknown as { intrinsicName?: string }).intrinsicName ===
-        "true",
-    };
-  }
+  if (isEmptyObjectDefaultType(type, typeChecker)) return { value: {} };
+  const primitive = primitiveLiteralValue(type, typeChecker);
+  if (primitive !== undefined) return { value: primitive };
   if (type.flags & ts.TypeFlags.Null) {
     return { value: null };
   }
@@ -1096,13 +839,9 @@ export function extractValueFromLiteralType(
     (type.flags & ts.TypeFlags.Object) !== 0 &&
     !typeChecker.isArrayType(type) &&
     type.getCallSignatures().length === 0 &&
-    type.getConstructSignatures().length === 0
+    type.getConstructSignatures().length === 0 &&
+    typeChecker.getIndexInfosOfType(type).length === 0
   ) {
-    if (typeChecker.getIndexInfosOfType(type).length > 0) {
-      return isEmptyObjectDefaultType(type, typeChecker)
-        ? { value: {} }
-        : undefined;
-    }
     const props = typeChecker.getPropertiesOfType(type);
     const result: Record<string, FabricValue> = {};
     for (const prop of props) {
@@ -1110,7 +849,7 @@ export function extractValueFromLiteralType(
       // the escaped name tells the two apart: escaping gives a written name
       // that starts with `__` a third underscore, so the value is keyed by the
       // unescaped name instead.
-      if (String(prop.escapedName as string).startsWith("__@")) {
+      if (String(prop.escapedName).startsWith("__@")) {
         return undefined;
       }
       const propType = typeChecker.getTypeOfSymbol(prop);
@@ -1138,9 +877,7 @@ function extractPayloadFromBrandedMember(
 ): { value: FabricValue } | undefined {
   const payload = getDefaultMarkerPayload(member, typeChecker);
   if (!payload) return undefined;
-  const extracted = extractValueFromLiteralType(payload, typeChecker);
-  if (!extracted || extracted.value === undefined) return undefined;
-  return extracted;
+  return extractValueFromLiteralType(payload, typeChecker);
 }
 
 /**

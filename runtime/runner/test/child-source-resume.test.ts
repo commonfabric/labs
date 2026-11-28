@@ -3,11 +3,16 @@
  * The cold cases use a second runtime over the same durable store.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { stampWaveRunContext } from "../src/executor/wave.ts";
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   getPatternIdentityRef,
   getPatternSource,

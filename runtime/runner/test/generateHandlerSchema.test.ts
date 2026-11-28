@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { generateHandlerSchema } from "../src/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("generateHandlerSchema()", () => {
   it("returns undefined given neither schema", () => {

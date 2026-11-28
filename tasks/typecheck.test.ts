@@ -1,9 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { walk } from "@std/fs";
 import { dirname, extname, fromFileUrl, join, relative } from "@std/path";
 
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   changeReach,
@@ -872,6 +873,43 @@ describe("main()", () => {
       console.log = log;
       console.error = err;
     }
+  });
+
+  it("runs as a command-line program with the arguments it is given", async () => {
+    // The script's own entry point, run as a program.
+    // `--list` prints the checked paths instead of checking them, so the
+    // run stays fast; the named scope is the only one printed, and a scope
+    // no group covers makes the program exit unsuccessfully.
+    const run = (args: string[]) =>
+      runDenoCommandWithTemporaryLock({
+        root: REPO_ROOT,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(REPO_ROOT, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-env",
+          "--allow-run=git",
+          join(REPO_ROOT, "tasks/typecheck.ts"),
+          ...args,
+        ],
+      });
+    const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+    const listed = await run(["--list", "--scope=bytes"]);
+    expect(listed.code).toBe(0);
+    const lines = decode(listed.stdout).trim().split("\n");
+    expect(lines).toContain("bytes\tbase/bytes");
+    expect(lines.every((line) => line.startsWith("bytes\t"))).toBe(true);
+
+    const refused = await run(["--list", "--scope=nowhere"]);
+    expect(refused.code).not.toBe(0);
+    expect(refused.stdout.length).toBe(0);
+    expect(decode(refused.stderr)).toContain(
+      "no such type-check scope: nowhere",
+    );
   });
 });
 

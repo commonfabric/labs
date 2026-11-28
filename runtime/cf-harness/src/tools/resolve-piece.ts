@@ -124,7 +124,6 @@ export const resolvePieceTool: HarnessToolDefinition<
           case "not-piece":
           case "inside-piece":
           case "missing-member":
-          case "missing-piece-id":
             return error(
               "not-found",
               "That slug does not resolve to a usable piece in this session's space.",

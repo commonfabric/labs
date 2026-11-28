@@ -2,7 +2,6 @@
 // for the lines that read its members.
 import { assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { captureLogsForTestingOnly } from "@commonfabric/logger/for-testing-only";
 
@@ -22,6 +21,7 @@ import {
   linkRefFrom,
   linkRefPayloadFromString,
 } from "@commonfabric/runner/shared";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   $conn,
@@ -177,6 +177,36 @@ describe("cell-handle", () => {
       ]);
     });
 
+    it("logs a value callback that throws when a write publishes, and still delivers to the others", async () => {
+      const writing = {
+        [$conn]: () => ({
+          signal: new AbortController().signal,
+          request: () => Promise.resolve({}),
+          subscribe: () => Promise.resolve(),
+          peersOf: () => [],
+        }),
+      } as unknown as RuntimeClient;
+      const cell = new CellHandle<string>(writing, ref);
+      cell[$onCellUpdate]("held");
+      const heard: (string | undefined)[] = [];
+      using errors = stub(console, "error");
+      cell.subscribe(() => {
+        throw new Error("callback broke");
+      }, { onRefused: () => {} });
+      cell.subscribe((value) => {
+        heard.push(value);
+      }, { onRefused: () => {} });
+      const beforeWrite = errors.calls.length;
+
+      await cell.set("written");
+
+      expect(heard).toEqual(["held", "written"]);
+      expect(cell.get()).toBe("written");
+      expect(errors.calls.slice(beforeWrite).map((call) => call.args)).toEqual([
+        ["[CellHandle] Callback error:", new Error("callback broke")],
+      ]);
+    });
+
     it("hands the refusal to a read, on the error it throws", () => {
       const cell = new CellHandle<string>(runtime, ref);
       cell[$onCellRefused](refusal);
@@ -197,16 +227,25 @@ describe("cell-handle", () => {
     };
 
     it("returns true for a handle on the same cell", () => {
-      expect(new CellHandle(runtime, ref).equals(new CellHandle(runtime, ref)))
-        .toBe(true);
+      const cell = new CellHandle(runtime, ref);
+      expect(cell.equals(cell)).toBe(true);
+      expect(cell.equals(new CellHandle(runtime, ref))).toBe(true);
     });
 
     it("returns false for anything that is not a handle, or a handle on another cell", () => {
       const cell = new CellHandle(runtime, ref);
       expect(cell.equals(ref)).toBe(false);
       expect(cell.equals(undefined)).toBe(false);
-      expect(cell.equals(new CellHandle(runtime, { ...ref, path: ["b"] })))
-        .toBe(false);
+      for (
+        const other of [
+          { ...ref, path: ["b"] },
+          { ...ref, path: ["a", "b"] },
+          { ...ref, id: "of:other" as CellRef["id"] },
+          { ...ref, space: "did:key:other" as CellRef["space"] },
+        ]
+      ) {
+        expect(cell.equals(new CellHandle(runtime, other))).toBe(false);
+      }
     });
   });
 
@@ -1368,6 +1407,55 @@ describe("cell-handle", () => {
       expect(cell.refusal).toEqual(refusal);
     });
 
+    it("logs and sends nothing for a plain write queued before a refusal that runs after it", async () => {
+      let release: () => void = () => {};
+      const { runtime, requests } = answering(() =>
+        // The first write holds the queue until it is released.
+        requests.length === 1
+          ? new Promise<unknown>((resolve) => (release = () => resolve({})))
+          : Promise.resolve({})
+      );
+      const cell = new CellHandle<string>(runtime, ref);
+      cell[$onCellUpdate]("shown before the seal");
+      const first = cell.setStrict("first");
+      using errors = stub(console, "error");
+      const queued = cell.set("queued");
+
+      cell[$onCellRefused](refusal);
+      release();
+      await first;
+      await queued;
+
+      expect(requests).toEqual([
+        expect.objectContaining({ type: RequestType.CellSet, value: "first" }),
+      ]);
+      expect(errors.calls.map((call) => call.args)).toEqual([
+        ["[CellHandle] Write failed:", expect.any(CellReadRefusedError)],
+      ]);
+      expect(cell.refusal).toEqual(refusal);
+    });
+
+    it("keeps a refusal that reaches it while an update computes, and shows none of the update", async () => {
+      const { runtime } = recording();
+      const cell = new CellHandle<number>(runtime, ref);
+      cell[$onCellUpdate](1);
+      const shown: unknown[] = [];
+      const refused: unknown[] = [];
+      cell.subscribe((value) => {
+        shown.push(value);
+      }, { onRefused: (r) => refused.push(r) });
+
+      await cell.update((n) => {
+        cell[$onCellRefused](refusal);
+        return (n ?? 0) + 1;
+      });
+
+      expect(shown).toEqual([1]);
+      expect(refused).toEqual([refusal]);
+      expect(cell.refusal).toEqual(refusal);
+      expect(() => cell.get()).toThrow(CellReadRefusedError);
+    });
+
     it("writes again once an admitted update ends the refusal", async () => {
       const { runtime, requests } = recording();
       const cell = new CellHandle<string>(runtime, ref);
@@ -1747,6 +1835,71 @@ describe("cell-handle", () => {
       cell[$onCellUpdate]({ a: {} });
 
       expect(calls.length).toBe(after + 1);
+    });
+
+    it("notifies when an array replaces a record with the same entries, or one replaces it", () => {
+      // A walk over enumerable own properties finds `0` and `length` on both
+      // sides of each change, holding the same values.
+
+      const cell = new CellHandle<unknown>(makeRuntime(), ref);
+      const calls: unknown[] = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      }, { onRefused: () => {} });
+
+      cell[$onCellUpdate]({ 0: "x", length: 1 });
+      cell[$onCellUpdate](["x"]);
+      cell[$onCellUpdate]({ 0: "x" });
+      cell[$onCellUpdate]({ 0: "x" });
+
+      expect(calls).toEqual([
+        undefined,
+        { 0: "x", length: 1 },
+        ["x"],
+        { 0: "x" },
+      ]);
+    });
+
+    it("notifies when a record's key changes while what it holds does not", () => {
+      const cell = new CellHandle<Record<string, unknown>>(makeRuntime(), ref);
+      const calls: unknown[] = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      }, { onRefused: () => {} });
+
+      cell[$onCellUpdate]({ a: undefined });
+      cell[$onCellUpdate]({ b: undefined });
+      cell[$onCellUpdate]({ b: undefined });
+
+      expect(calls.map((value) => value && Object.keys(value))).toEqual([
+        undefined,
+        ["a"],
+        ["b"],
+      ]);
+    });
+
+    it("keeps the handle it holds for a delivered handle on the same cell", () => {
+      const runtime = makeRuntime();
+      const cell = new CellHandle<{ a: unknown }>(runtime, ref);
+      const calls: unknown[] = [];
+      cell.subscribe((value) => {
+        calls.push(value);
+      }, { onRefused: () => {} });
+      const target = { ...ref, id: "of:linked-cell" as CellRef["id"] };
+      const held = new CellHandle(runtime, target);
+
+      cell[$onCellUpdate]({ a: held });
+      cell[$onCellUpdate]({ a: new CellHandle(runtime, target) });
+      expect(cell.get()?.a).toBe(held);
+      expect(calls).toHaveLength(2);
+
+      const other = new CellHandle(runtime, {
+        ...target,
+        id: "of:another-cell" as CellRef["id"],
+      });
+      cell[$onCellUpdate]({ a: other });
+      expect(cell.get()?.a).toBe(other);
+      expect(calls).toHaveLength(3);
     });
 
     it("notifies on a 0 -> -0 change", () => {

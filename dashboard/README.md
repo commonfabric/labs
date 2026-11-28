@@ -52,13 +52,24 @@ dashboard/
   favicon-artwork.ts  build/test-only SVG source for those favicon copies
   version.ts    the browser/server compatibility version a page reloads on
   dashboard-message.ts  shared message storage and fade timing
+  dashboard-header.ts  the page header: identity, shared message, freshness indicator
   render.ts     renderTile(label, view) + the page shell/CSS
   detail-page.ts  the frame, navigation and type a drill-down page starts from
   live-page.ts  the frame of a live drill-down page, and the event streams that keep it current
   live-page-client.ts  the browser half: puts the changed parts of a fresh rendering on the page
+  sent-text.ts  markup sent down an event stream as the edits from what it sent before
   history-page-client.ts  the browser half of the two performance history pages: the window slider, chart loading, progress, and update checks
   ci-jobs-page.ts the page behind the ci tile, and its table sorting
+  offcuts-scan.ts the ci tile's search of every repository for references into the offcuts organization
   repo-page.ts  the page for each repository, and the index of them all
+  runners-page.ts  the runners page, and the script it hands the browser
+  runners-feed.ts  the jobs and runners the runners page shows, and its WebSocket
+  runner-jobs.ts   which jobs are queued and running, from deliveries and GitHub's API
+  runner-board.ts  the pools, boxes, and slots the runners page shows, and run colors
+  runner-layout.ts where everything on the runners page's board goes
+  runner-physics.ts the heaps and flights of the runners page's balls
+  runner-gl.ts     the WebGL drawing of the runners page's balls
+  runner-view.ts   the browser half of the runners page: drawing, motion, pointing, the socket
   server.ts     generic runtime: scheduler, SSE, route mounting, page assembly
   registry.ts   THE ONE REGISTRATION POINT — the array of tiles
   tiles/*.ts     one tile per file
@@ -86,12 +97,16 @@ its last-known value and shows a short reason (e.g. "source unreachable"), with
 the full error in the server log — so one unreachable source never blanks or
 breaks the board.
 
-The text field centered between the dashboard identity and freshness indicator
-is a shared message. Editing the field and leaving it saves the text for every
-connected dashboard and persists it in the dashboard cache. The message remains
-fully visible for two hours. It then fades linearly for four hours, after which
-the server replaces it with the empty string. A new edit starts the timing
-again.
+The text field filling the space between the dashboard identity and the
+freshness indicator is a shared message. On a screen narrower than 560 pixels
+it takes a row of its own below them. The badge is as wide as it is when it
+reads OFFLINE, and the freshness indicator as wide as it is for an age of four
+digits, so the field keeps its place as either changes. Only an age of five
+digits or more pushes it aside. Editing the field and leaving it saves the text
+for every connected dashboard and persists it in the dashboard cache. The
+message remains fully visible for two hours. It then fades linearly for four
+hours, after which the server replaces it with the empty string. A new edit
+starts the timing again.
 
 The trust, duration and recent-run tiles declare the workflow snapshots they
 read in `runSources`. A snapshot holds either a workflow's runs on main or its
@@ -101,7 +116,7 @@ from the same stored snapshot and publishes those tile updates together. Each
 snapshot can trigger a tile once per collection interval. A tile with several
 snapshots can update once for each snapshot as they arrive. This keeps a
 repository's trust and recent-run views, which both read its runs on main, in
-agreement when their intervals coincide. The ci tile reads the labs and loom
+agreement when their intervals coincide. The ci tile reads the labs and cfs
 main-branch snapshots for its two main-build rows, on the same interval as the
 trust tiles, so the scheduler publishes its verdict on a main build with the
 trust grid drawn from the same snapshot. It reads every other workflow in a
@@ -140,7 +155,7 @@ it has, and each tile reading it turns gray and names the problem, apart from
 the ci tile, which marks the affected build unreadable. The next fetch that
 succeeds clears the gray.
 
-The recent commits tile reads the labs, loom, and weaver main snapshots beside
+The recent commits tile reads the labs, cfs, and weaver main snapshots beside
 the commits it reads from every repository in the organization. It rebuilds
 and sorts its list whenever any of those snapshots arrives. If one snapshot
 has not arrived yet, it shows the list it can build in gray and names the
@@ -149,7 +164,7 @@ that source and shows the list in gray with the error.
 
 A repository can have a green branch: a branch its own CI moves to the newest
 commit of main whose tests passed. `GREEN_BRANCHES` in `config.ts` names it by
-repository; loom's is `main-green`. Each fetch of a repository's main snapshot
+repository; cfs's is `main-green`. Each fetch of a repository's main snapshot
 also reads the updates of its green branch from GitHub's activity record for the
 repository, which lists every update of a branch, the ones CI makes through the
 API included. The first fetch reads back as far as the snapshot's age cutoff,
@@ -166,23 +181,40 @@ the heading of the commit CI Gantt page. The star's tooltip names the branch and
 says whether it is or was at the commit.
 
 Each event connection receives the current tile snapshot before it waits for new
-collections. The browser matches each tile in that snapshot with the tile of the
-same label on the page, leaving unchanged elements, focus, and scroll positions
-in place. Inside a tile that changed, an element carrying a `data-focus-key`
-attribute is matched with the element carrying the same key in the new markup,
-which takes over its keyboard focus and scroll position; a tile puts that
-attribute on each element whose focus or scroll position should carry over from
-one update to the next. Routine data updates never navigate the page. The page
-shell — the styles and the client script — arrives only with a full page load,
-so the server hands the browser a compatibility version and the page reloads
-itself as soon as the server reports a different one. A deployed image uses the
-commit its publishing workflow checked out, which is fixed for the life of the
-image, so every display on that image agrees. A server started from a checkout
-reports the moment it started instead, because the code under it changes between
-one start and the next: a watched restart therefore pulls every open page onto
-the code that restart is serving, and the version in the page source says which
-start served it. An unattended display reloads when it reconnects to a server
-reporting a different version.
+collections. On that update and every later one, the browser matches each tile
+in the markup with the tile of the same label on the page, leaving unchanged
+elements, focus, and scroll positions in place. Inside a tile that changed, an
+element carrying a `data-focus-key` attribute is matched with the element
+carrying the same key in the new markup, which takes over its keyboard focus and
+scroll position; a tile puts that attribute on each element whose focus or
+scroll position should carry over from one update to the next.
+
+Only the first update on a connection carries the whole markup. Each later
+update carries the edits that turn the markup that connection was last sent into
+the new markup, and the browser applies them to the markup it holds before
+matching tiles (`sent-text.ts`). The edits split the markup into pieces, each
+piece after the first starting at a `<`, and drop and insert as few pieces as
+they can. An update that would drop and insert more than a thousand pieces
+carries the whole markup instead. A collection that changes one tile therefore
+sends that tile's changed tags, and one that changes no markup sends none, only
+the update's other fields: the freshness age, the version, the favicon's state,
+and the shared message. Each update's edits name the length of the markup they
+were made from. Edits made from markup of another length than the browser holds
+throw an error rather than being applied. The page then closes its stream, and
+opens another once the silence interval described below has passed, which starts
+with the whole markup.
+
+Routine data updates never navigate the page. The page shell — the styles and
+the client script — arrives only with a full page load, so the server hands the
+browser a compatibility version and the page reloads itself as soon as the
+server reports a different one. A deployed image uses the commit its publishing
+workflow checked out, which is fixed for the life of the image, so every display
+on that image agrees. A server started from a checkout reports the moment it
+started instead, because the code under it changes between one start and the
+next: a watched restart therefore pulls every open page onto the code that
+restart is serving, and the version in the page source says which start served
+it. An unattended display reloads when it reconnects to a server reporting a
+different version.
 
 Every response to a drill-down route also names the version that served it, in
 a `dashboard-version` header. A live page compares the version in each event it
@@ -209,7 +241,9 @@ A stream that was delivering and then closed is reopened immediately. One that
 has never delivered is reopened once per silence interval, so a server that
 refuses or fails connections costs one request an interval however long it is
 away, while one that accepts a connection and then drops it is followed as fast
-as it flaps. The silence interval is the fastest tile's collection interval
+as it flaps. A stream the page closes itself, because it cannot apply an update
+that arrived on it, is reopened once per silence interval too, so a failure
+that recurs on every stream costs one request an interval. The silence interval is the fastest tile's collection interval
 plus a serving tick plus ten seconds. That keeps it clear of the heartbeat
 period, which is one serving tick, by the whole of the fastest tile's interval.
 A heartbeat slower than the silence interval would replace a healthy stream on
@@ -242,8 +276,9 @@ the client script and keeps everything that changes inside its `<main>` element,
 apart from the tab's favicon.
 The page opens `/events?page=<its path and query>`. On every serving tick the
 server sends a heartbeat down that stream and renders the page again by calling
-the route's handler, and it sends the new markup when that differs from what it
-last sent. A page that connects is sent the current markup whether or not it
+the route's handler, and when the new markup differs from what it last sent, it
+sends the edits from the one to the other.
+A page that connects is sent the whole of the current markup whether or not it
 changed. The browser keeps every element whose tags, attributes, and text
 between its children match the new markup's, and whose children match in number,
 and compares those children the same way; any other element that differs is
@@ -347,8 +382,10 @@ keep `fabric-wall-run-lists-ci-history.json` and
 `fabric-wall-run-lists-ci-gantt.json`; and the commit CI Gantt's collector keeps
 `fabric-wall-run-lists-commit-ci-history.json` and
 `fabric-wall-run-lists-commit-ci-gantt.json`. A file holds, for each workflow,
-the runs of its head, whether they reach the end of the list, the oldest run
-each reader last read and when, and when the top of the list was last read. A
+the runs of its head, the oldest run each reader last read and when, and when
+the top of the list was last read. It records every head as not known to reach
+the end of the list, so a reading that needs runs past the last one held reads
+one page further down to see. A
 run keeps only the first line of its head commit's message, which is the only
 part any view shows, and a run taken from a file that holds more is cut to it. A
 `RunLists` takes a workflow's head from its file whenever it starts holding one,
@@ -391,7 +428,12 @@ their middle. A page that holds runs on both sides of the last run, but not the
 run itself, shows that run deleted, and it is dropped. The head remembers how
 far from its expected place the last run was found, which deleted runs still
 held above it make more than zero, and starts the next walk there. A page whose
-runs are not in order of falling id is rejected.
+runs are not in order of falling id is rejected. The list ends where the count
+of its runs that GitHub sends with each page says it does. GitHub sometimes
+answers with fewer runs than asked for from the middle of the list, so a page
+shorter than asked for that falls short of that count is rejected, as are a page
+holding runs past the count and a page without it. A reading rejected this way
+keeps the runs it held, and the next reading reads the page again.
 
 A run changes after it is listed: it finishes, or someone starts it again, which
 leaves it in its place in the list. The runs at the top of the list are read
@@ -486,6 +528,14 @@ The relay is used in these places:
   ends. Whether a failing job's workflow has changed since the failure is kept
   from one sweep to the next until a push to that repository's default branch
   is delivered, or the relay stops vouching for it.
+- **The offcuts scan.** A delivered push to a repository's default branch has
+  that repository fetched and searched again at once. Until a search reads the
+  commit the latest push named, it is searched again on each collection of the
+  ci tile but at most every fifteen seconds, and for five minutes at most,
+  because GitHub can show the commit before it for a moment. A search tells the
+  tile to collect again only when what the tile shows changed. Without a push, a
+  repository is searched again once its last search is four hours old, so a push
+  the relay did not deliver is found within four hours.
 - **The green branch.** The repository's activity record is read only when a
   push to the branch has been delivered since the last read, or the relay does
   not vouch for that read. A read that does not yet show the branch at the
@@ -505,6 +555,57 @@ The ci tile's inventory of repositories and workflows is read once an hour
 whatever the relay delivers, because enabling or disabling a workflow sends no
 delivery. The github spend tile reads GitHub's billing data, which no delivery
 describes.
+
+### The offcuts scan
+
+Nothing the product runs may come from the `commonfabric-offcuts`
+organization, where code that is no longer part of the product goes. The ci
+tile holds every repository of the organization to that with a job of its own,
+`offcuts references`, which no workflow in any repository runs, so no change
+to a repository's workflows can turn it off. `offcuts-scan.ts` keeps each
+repository's default branch, the branch its `HEAD` names, as a shallow Git
+repository under `offcuts-scan` in the cache directory, holding only its
+newest commit, and searches every file of that commit with `git grep`, binary
+files and lockfiles included. A search fetches only when the branch has moved,
+and the fetch transfers only what changed since the last one, though the
+search reads the whole tree. Git's automatic garbage collection, once enough
+has built up, removes what earlier fetches left behind. The copies of every
+repository take a few hundred megabytes. Processes sharing the cache directory
+take turns, by the lock file of the record described below, so that no two
+fetch into one copy at once. Git runs with none of the dashboard's environment
+beyond what it needs, so it never sees the dashboard's credentials, and with
+no configuration of the system's, the user's, or a repository the cache
+directory sits in. The token it fetches with is sent to GitHub alone. A
+default branch with no commits holds no references.
+
+A reference is one of two things. The first is a path to a repository of the
+offcuts organization, the organization's name followed by a slash and a
+repository name, as a URL, a Git remote, an Actions `uses:` line, or an npm
+dependency writes it, an npm scope of the same name included. The second is a
+path to a repository of this organization under the name of a repository that
+is now in the offcuts organization and not in this one, archived repositories
+included, or under a name `repository-names.ts` says such a repository had
+before it was renamed. GitHub redirects such a path, its `.wiki` included, to
+wherever the repository went. A name is matched whole, and not as a scoped
+package such as `@commonfabric/name`. The organization's name written alone,
+as prose writes it, is not a reference. The scan sees the offcuts
+organization's repositories that the dashboard's credential can see, which is
+all of them while they are public. Both organizations' repositories are listed
+again whenever any repository is due to be searched, and every repository is
+searched again when the list changes, so a repository transferred there turns
+the existing paths to it red.
+
+A red row counts the lines that reference the offcuts organization, and links
+to the first. It is dated from the first search that found references there,
+which `failing-since.json` beside the copies records, so its age says how long
+the repository has been failing, across restarts. A repository that cannot be
+fetched or searched is orange, unless this process found a reference in it
+before, which stays red. It is searched again once that attempt is five
+minutes old. When the failure came after its copy was touched, the copy is
+removed first, in case the failure left it locked or half written, and it is
+fetched afresh. When the directory itself cannot be used, every repository due
+to be searched is orange. Whenever every repository is searched again, the
+copies and records of repositories no longer listed are removed.
 
 ## Add a tile
 
@@ -624,9 +725,13 @@ longer is not a longer tile, it is a page.
 That page is an ordinary drill-down — a route the tile declares, reached through
 the tile's `href` and indicated by the top-right arrow. The tile's `hint` supplies
 the tooltip and accessible link description. `/bench` holds the histories behind
-the benchmark and duration tiles, and `/test-selection` holds the manifest behind
-the two test tiles. A page has the width to spell a test's whole name, so nothing
-on one has to be abbreviated.
+the benchmark and duration tiles, `/bench/tiles.json` and the routes beside it
+serve the benchmark numbers as JSON (see
+[Benchmark data as JSON](#benchmark-data-as-json)), `/test-selection` holds
+the manifest behind the two test tiles, and `/test-selection/flaky.json` serves
+the tests held back as flaky as JSON (see
+[Flaky tests as JSON](#flaky-tests-as-json)). A page has the width to spell a test's
+whole name, so nothing on one has to be abbreviated.
 
 ### Repository pages
 
@@ -680,7 +785,7 @@ window the same parts follow one another down the page.
   the bars, since the workflow's name in the heading links every run of it on
   GitHub. Under the chart, the three newest runs are listed: what each was for,
   what it concluded, how long it ran (linked to the commit's CI Gantt for labs
-  and loom), and when it started. A run on main is named by its commit, and a
+  and cfs), and when it started. A run on main is named by its commit, and a
   pull request's run by its title; either name links to the run, except that a
   pull request number in it, such as "(#1234)", links to that pull request. A
   snapshot that has not been read yet, or could not be brought up to date, says
@@ -717,6 +822,166 @@ otherwise the lane past its budget where there is one, and otherwise the count
 of tests no lane can hold. A stale manifest colors the tile too and competes for
 neither line, because its own figure is the age badge in the header.
 
+### The runners page
+
+The **Runners** button at the bottom of the dashboard opens `/runners`, which
+shows what every runner of the organization is doing, and what is waiting for
+one. Each job queued or running on any branch that the server has read from
+GitHub or been told of by the relay is a ball, colored by its run, so that the
+jobs of one workflow for two pull requests have two colors. Runs on the board at
+the same time have colors of their own while there are enough to go round:
+twelve strong ones, then a paler shade of each. A run keeps its color while it
+has jobs on the board. The legend beside the board lists each run in its color,
+alphabetically, with how many of its jobs show, each line a link to the run on
+GitHub. The board is laid out 780 pixels wide, and shown at that size beside the
+legend; on a window with no room for both, the legend goes under the board, and
+the board is scaled, with everything on it, to fill the window's width without
+growing taller than the window.
+
+The board is split into pools, each a set of runners that the same jobs can run
+on, as a band across the board. A pool's heading names it, says what its runners
+are, and says how many of its jobs are queued and running. Under the heading,
+its queue is on the left and its runners are on the right, in boxes:
+
+- A runner whose name is one of its labels, or one of its labels followed by a
+  dash and a word, as `ci-mac-01-3` is, and that has another label saying what
+  it is for, is on the machine the first label names. Each machine is a box with
+  a slot for each of its runners. An offline runner's slot is red and crossed
+  out. Machines that share a label other than their names form one pool.
+- Other self-hosted runners, such as virtual machines made for each job, are
+  pooled by their labels. A job that asks for a runner group rather than labels,
+  as `runs-on: group: labs` does, is pooled by that group, queued or running.
+- Each larger runner, such as `ubuntu-24.04-32-core`, is a pool of its own, with
+  a place for each job it can run at once when that is 64 or fewer; one that can
+  run more has places as many as it has needed, as a box of autoscaled runners
+  does.
+- GitHub's own runners are one pool, with a box for each set of labels jobs ask
+  for, such as `ubuntu-latest`.
+
+A box of runners that are not a machine's has numbered places. A job takes the
+first empty place and keeps it while it runs, so a running job never moves.
+Pools and boxes stay where they are, empty if their jobs have gone, until
+keeping them would make the balls smaller or leave a pool off the board. The
+balls are as big as lets every pool fit, from 16 pixels down to 6; pools that do
+not fit at 6 are left off and counted at the bottom.
+
+A queued job waits in the pool of the first online runner that has every label
+it asks for, or, when all those runners are offline, of the first of them.
+Failing that, it waits for the larger runner it names, or in the pool of runners
+with its labels, made for it if it asks for a self-hosted runner, so that a job
+that may never be taken can be seen. Any other job waits for GitHub's runners.
+
+A queue is a heap of balls under gravity, as tall as its pool. Jobs just queued
+are piled up out of sight far to the left of the heap, fall onto a slope at 45
+degrees that leads down to the heap's top left corner, and roll into the heap
+one after another. When a job leaves the queue, the balls above it fall into its
+place. The heap's balls are as big as lets them all fit, and half a pixel
+smaller again while any sticks out of the top. When a job starts running, its
+ball is drawn to its runner's place by a pull that comes on over a quarter of a
+second, so that a ball still falling goes on falling a moment and then curves
+round. When a job ends, its ball gains an outline and a mark: a green ✓ if it
+passed, a red ✕ if it failed, and a gray – if it was cancelled or skipped. One
+that passed is thrown up and off the board to the right. One that failed leaves
+a red ring behind, is thrown against the right side of the board, falls to the
+line along the bottom, and bounces along it to the left until it falls off the
+end. One that neither passed nor failed rises like a puff of smoke. A job that
+goes for any other reason simply goes. While the system asks for reduced motion,
+the board changes without moving anything.
+
+Pointing at a ball says what run and job it is, how long it has run and where,
+or how long it has waited and for what labels. Pointing at a slot names its
+runner and says what it is doing. Clicking a ball opens its job on GitHub.
+
+The server keeps which jobs are queued and running (`runner-jobs.ts`), from each
+`workflow_job` and `workflow_run` delivery of the GitHub webhook relay. A page's
+WebSocket, `/runners/socket`, opens with a snapshot of everything the server
+holds, and then carries what each such delivery says, one message per delivery,
+as it arrives. The page runs the same tracker on those messages, so it follows
+the same changes the server does. A delivery that arrives out of order, such as
+news that a job is queued after news that it runs, changes nothing.
+
+What the relay delivers is complete only from when a connection to it is first
+heard, and GitHub does not promise to make every delivery. So the server reads
+the jobs under way from GitHub's API whenever the relay does not vouch for the
+last read that succeeded (as described under [Following the GitHub webhook
+relay](#following-the-github-webhook-relay)), as after the relay falls silent or
+a new connection to it is heard: when a page opens, on a delivery, or on the
+server's tick while a page is open, but at most every five minutes, since a read
+costs a request for each repository and more. Every request is conditional on
+GitHub's last answer to it, through its ETag, and GitHub does not count a reply
+that nothing has changed against the token's rate limit, so a read of
+repositories, runs, and runners that have not changed costs almost nothing. A
+read covers the organization's repositories pushed to in the last week and those
+of the jobs held. For each, it reads, through `github-runs.ts`, the runs not
+completed among the newest hundred of its unfiltered list. On the first read
+under a relay connection, when that list goes on past them without reaching back
+past the oldest a run under way can be, it also reads the lists filtered to each
+status a run under way can have, page by page while the pages are full, and
+reads again by its id each run young enough that they name further down, since
+those lists can be behind, remembering those found completed; later reads under
+the connection need not, since every run started since the first was delivered.
+A run held that no list names is read again by its id. Then it reads the jobs of
+each run under way, starts afresh from what it read, takes in again what the
+relay delivered during the read, and sends every page a new snapshot. A held run
+found completed ends its jobs as it ended. A repository GitHub says does not
+exist has no runs. One the dashboard is forbidden to read keeps the jobs the
+relay told of, is named on the board, and does not keep the read from counting
+as current, since reading it again would be forbidden again. The jobs of a
+repository that could not be read for any other reason, or of a run whose jobs
+could not be read, are kept as they were, and the read does not count as
+current; a read that cannot list the repositories changes nothing. While no page
+is open, the server holds no jobs and takes in no deliveries, and the next page
+to open has them read afresh. A page tells the server whether a reader can see
+it, and the server reads GitHub, jobs and runners alike, only while one can: a
+page left open behind other tabs is still sent every delivery, which costs
+nothing, and what is not current is read when a reader looks at one again. When
+the relay falls silent for two minutes, or is heard again, open pages are told,
+and while it is silent the board says that jobs may have started or ended
+unseen. The organization's self-hosted and larger runners are read when a page
+opens, at most twice a minute, and on the server's tick every five minutes while
+a page is open, since no delivery says when a runner comes, goes, or loses its
+connection. A list that cannot be read is kept as it was, and named on the
+board. The larger runners are read group by group, so listing both takes one
+permission: a GitHub App or a fine-grained token needs read-only access to the
+organization's "Self-hosted runners", and a classic token needs `admin:org`.
+Without it, the jobs' runners are pooled by what the jobs say.
+
+The page moves its balls in the browser, every frame while any moves, by the
+time the frame took (`runner-physics.ts`), and stops drawing once everything is
+at rest. While the system asks for reduced motion, each heap's balls are set out
+in rows at once instead. A heap is simulated in steps short enough that no ball
+moves much further than its own width in one, sorting its balls by the squares
+of a grid each step so that each ball finds its neighbors among a few others. A
+heap at rest sleeps, and a change wakes only the balls it can move, such as
+those above a ball that leaves, so that a ball landing on a heap at rest moves
+only the balls it lands on. A step pushes overlapping balls apart row by row
+from the floor up, once for each eight rows of awake balls, between two and
+six times, so that the weight of a heap up to about fifty rows deep reaches its
+floor and its balls come to rest rather than go on jostling. The balls are
+drawn with WebGL in one draw call (`runner-gl.ts`), each heap's balls cut to its
+pool's rounded box in the shader, and the few balls leaving the board on a 2D
+canvas over it. A page shows what many deliveries
+change together once, with the next frame. In headless Chrome on an Apple M5
+Max, a board of 6,000 queued jobs with jobs starting and ending ten times a
+second draws at 120 frames a second, with about 5 milliseconds of script in a
+typical frame and at most 10 in nineteen of twenty.
+
+The socket needs a key that the server makes when it starts, which a page reads
+from `/runners/key` before it opens the socket. Only a page of the dashboard's
+own origin can read that response, so another site someone visits cannot open a
+socket and read the organization's jobs. The server closes the socket of a page
+that has left 64 MiB of messages unread, and refuses a socket while 64 are open.
+
+A page served by another version of the server reloads. Beside the page's name,
+the badge the dashboard's other live pages carry says LIVE while the page hears
+the server and OFFLINE otherwise. A page whose socket closes shows no jobs,
+since it no longer knows which are queued or running. It opens the socket again
+at once if the socket had carried anything, and otherwise looks again every
+fifteen seconds, as the main dashboard page looks at its stream. The server says
+it is still there on each tick, every fifteen seconds, so a page gives up on a
+socket that has carried nothing for forty-five, as one left open after the
+computer slept does, or that has not opened in that time, and opens another.
+
 ### The `TileView` a tile returns
 
 The header text is the tile's own `label`, which does not change from one view
@@ -741,26 +1006,26 @@ installation with the same permissions; see [Credentials](#credentials).
 
 | tile | source | needs |
 |---|---|---|
-| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `loom failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and loom main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions read across the organization, and check runs read in private repositories (see [Credentials](#credentials)) |
+| ci | every job the organization runs outside pull requests, in every repository the token can see that is not archived: for each active workflow, the newest run on that repository's own default branch that passed or failed, however many runs that judged nothing came after it, among the workflow's newest thousand runs of any branch. The headline is `passing` when every one of them passes, the repository's name when a single job is failing, as in `cfs failing`, and a count when more than one is, as in `3 failing`. The header carries how many jobs the headline speaks for and how many repositories they came from. The body lists every failing job with its conclusion and how long ago it ran; while the tile is not red it also lists the labs and cfs main builds, so the two builds the team watches stay visible, and a red tile lists only its failing jobs. A failure older than `CI_FAILURE_FRESH_HOURS` is orange rather than red: it is still failing and still counted, and it is no longer the thing that just broke. A failure made before the workflow's file last changed does not count at all, since that is what a job someone stopped rather than fixed looks like. A repository whose workflow listing cannot be read is listed too, and turns the tile orange rather than being passed over. Every repository also has an `offcuts references` job, which is the dashboard's own search of its default branch for references into the `commonfabric-offcuts` organization (see [The offcuts scan](#the-offcuts-scan)). It fails while any file names a repository of that organization, and stays red however old the failure is. The rows carry no links of their own, because the tile itself opens the page below | `GH_TOKEN` (or `GITHUB_TOKEN`) with Actions and Contents read across the organization, and check runs read in private repositories (see [Credentials](#credentials)) |
 | CI jobs → `/ci` | every job the ci tile read, at full width: the repository, linked to its page, and the workflow, what started the deciding run (`push`, `schedule`, `workflow_dispatch`, and the rest, as GitHub names them), what that run concluded, how long it took, when it started, and how long ago that was. Every column sorts, once up and once down, on the value behind the cell rather than on what the cell says, so durations and times order as the measurements they are; the page opens worst first and a column of equal values keeps that order beneath it. Workflows with no verdict are listed under the table rather than through it, each with why: no completed run on the default branch, which is what a workflow only a pull request triggers looks like; runs that all judged nothing; or a workflow changed since it failed. So are repositories whose workflow listing could not be read, each linked to its page and to its actions on GitHub. A workflow with a run in progress on its default branch carries a blue dot after its name, which links to that run, and the summary above the table counts them. Only a run in progress carries one: a queued run, or one waiting for approval, does not. It renders the tile's own last collection rather than asking GitHub again, so opening it costs no requests and shows exactly what the tile shows, running dots included: a run that starts or ends between collections shows at the next one. The page is live: an open copy shows each collection within a serving tick of the tile finishing it, without reloading, and in whatever order the reader sorted it | none |
 | labs ci trust, labs ci duration | GitHub Actions (`deno.yml` in `commonfabric/labs`), via the REST API. Trust reads the runs on main; duration reads the pull request runs. Each trust tile opens its repository's page, and each cell of its strip opens its run | `GH_TOKEN` (or `GITHUB_TOKEN`) |
-| loom ci trust, loom ci duration | the same two tiles for `commonfabric/loom` (`test-fast.yml`) | `GH_TOKEN` (read access to loom); optional `DASHBOARD_LOOM_REPO` |
-| weaver ci trust, weaver ci duration | the same two tiles for `commonfabric/commonfabric-weaver` (`ci.yml`). The duration tile is not a link, because the history views cover only labs and loom | `GH_TOKEN` (read access to weaver); optional `DASHBOARD_WEAVER_REPO` |
-| recent commits | the newest commits on the default branch of every repository the token can see that is not archived, interleaved newest first and each tagged with its repository: each commit that landed a pull request opened by an account GitHub does not mark as a bot, and each commit that the labs, loom, or weaver main CI workflow ran on after a push. The commit a pull request landed is the one GitHub merged it with: the squashed commit, the merge commit, or the last commit rebased onto the branch, so a pull request is one row. The rest are left out: a commit pushed without a pull request, and a bot's pull request, such as an automated deployment's, unless one of those workflows ran on it. So a repository used as a notebook adds no rows. A pull request counts only when it was merged into the repository's default branch. The tile lists the organization's repositories at most every thirty seconds, and while the GitHub webhook relay vouches for the last listing, not at all. When a repository's last push has changed since its commits were read, or a push to its default branch has been delivered, one GraphQL query reads its newest hundred commits again, each with the pull request that landed it; a delivered push has them read at once (see [Following the GitHub webhook relay](#following-the-github-webhook-relay)). A repository GitHub refuses to read, for want of permission for example, keeps the commits already read until its next push, and the tile's sub line counts such repositories. A repository whose read GitHub rate-limited, or that failed for any other reason, keeps them too, and is read again on the next refresh without being counted. That read runs in the background, and the tile is collected again when it finds new commits. A commit one of those workflows ran on carries the newest such run's result and duration, from the same main-run snapshots the ci trust tiles read, and its text links to that run; the text of any other commit links to the commit. A pull request number in a title, such as "(#1234)", links to that pull request, and the row's arrow links to the pull request that landed the commit, or to the commit when its title names none. A row whose commit the repository's green branch is or was at opens with a star, read from GitHub's activity record for the repository. The tile is red when the newest finished run of those workflows failed, and orange when one of the nine before it did | `GH_TOKEN` (Actions read on labs, loom, and weaver; Contents and Pull requests read across the organization) |
+| cfs ci trust, cfs ci duration | the same two tiles for `commonfabric/cfs` (`test-fast.yml`) | `GH_TOKEN` (read access to cfs); optional `DASHBOARD_CFS_REPO`, or `DASHBOARD_LOOM_REPO` when that is unset |
+| weaver ci trust, weaver ci duration | the same two tiles for `commonfabric/weaver` (`ci.yml`). The duration tile is not a link, because the history views cover only labs and cfs | `GH_TOKEN` (read access to weaver); optional `DASHBOARD_WEAVER_REPO` |
+| recent commits | the newest commits on the default branch of every repository the token can see that is not archived, interleaved newest first and each tagged with its repository: each commit that landed a pull request opened by an account GitHub does not mark as a bot, and each commit that the labs, cfs, or weaver main CI workflow ran on after a push. The commit a pull request landed is the one GitHub merged it with: the squashed commit, the merge commit, or the last commit rebased onto the branch, so a pull request is one row. The rest are left out: a commit pushed without a pull request, and a bot's pull request, such as an automated deployment's, unless one of those workflows ran on it. So a repository used as a notebook adds no rows. A pull request counts only when it was merged into the repository's default branch. The tile lists the organization's repositories at most every thirty seconds, and while the GitHub webhook relay vouches for the last listing, not at all. When a repository's last push has changed since its commits were read, or a push to its default branch has been delivered, one GraphQL query reads its newest hundred commits again, each with the pull request that landed it; a delivered push has them read at once (see [Following the GitHub webhook relay](#following-the-github-webhook-relay)). A repository GitHub refuses to read, for want of permission for example, keeps the commits already read until its next push, and the tile's sub line counts such repositories. A repository whose read GitHub rate-limited, or that failed for any other reason, keeps them too, and is read again on the next refresh without being counted. That read runs in the background, and the tile is collected again when it finds new commits. A commit one of those workflows ran on carries the newest such run's result and duration, from the same main-run snapshots the ci trust tiles read, and its text links to that run; the text of any other commit links to the commit. A pull request number in a title, such as "(#1234)", links to that pull request, and the row's arrow links to the pull request that landed the commit, or to the commit when its title names none. A row whose commit the repository's green branch is or was at opens with a star, read from GitHub's activity record for the repository. The tile is red when the newest finished run of those workflows failed, and orange when one of the nine before it did | `GH_TOKEN` (Actions read on labs, cfs, and weaver; Contents and Pull requests read across the organization) |
 | commit CI Gantt → `/ci-gantt` | job and step timing for every successful main workflow run attached to one commit, linked from run durations in recent commits; the commit wears the green branch's star when the branch is or was at it | `GH_TOKEN` |
-| CI duration history → `/bench?view=ci` | labs and loom job, shard-group, and end-to-end workflow duration trends. The labs and loom duration tiles open their repository's view, which charts runs on main rather than the pull request runs the tiles measure | `GH_TOKEN` |
-| CI run Gantt → `/bench?view=gantt` | detailed labs or loom job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |
-| flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it. Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
+| CI duration history → `/bench?view=ci` | labs and cfs job, shard-group, and end-to-end workflow duration trends. The labs and cfs duration tiles open their repository's view, which charts runs on main rather than the pull request runs the tiles measure | `GH_TOKEN` |
+| CI run Gantt → `/bench?view=gantt` | detailed labs or cfs job phases from `scripts/ci-gantt.ts`, backed by the CI history cache | `GH_TOKEN` |
+| flaky tests | how many tests the test-selection publisher measured disagreeing with themselves often enough to keep off pull requests, read from the newest selection manifest. The headline names what it counts, so it reads `25 flaky tests`, or `no flaky tests` when there are none. The line under it says what the count was drawn from: the span of history a flake share is measured over, which the manifest's `FLAKE_WINDOW_DAYS` dial names, and how long ago the publisher measured. The sparkline plots the count across every available manifest. Which tests they are is on the page behind it, and its tooltip names `/test-selection/flaky.json`, where they are served as JSON with the runs each disagreed across (see [Flaky tests as JSON](#flaky-tests-as-json)). Amber from one, red from ten. Gray with a dash when no manifest is available, the newest readable manifest has an empty corpus, or none of the manifests it looked at can be read, naming the shape it found in that last case. Readable history remains visible when the newest object cannot be read | optional `GH_TOKEN` for publisher activity |
 | test selection | two shares of the corpus the newest selection manifest would have a pull request run, read from the same manifest: the share of its tests and the share of its test time, as "3.8% tests · 0.5% time". In the share of tests each separately recorded test counts once, however long it takes and however many times a lane repeats it, so a test file that runs whole and is recorded as one test counts as one. In the share of test time each test counts once at the cost the manifest measured for one execution of it, so it does not move when tests are recorded more finely, and what a lane spends opening suites and repeating tests is in neither share. The lanes' budget is a number of seconds, so the share of test time falls as the corpus's test time grows, and how many tests fill the budget depends on what each costs. A corpus with no test time shows a dash for that share. The manifest's packing is built with nothing mandatory, so the shares are the ones a pull request touching no test would get; a real one re-packs against its own diff and spends part of the same budget on what that diff makes mandatory. Amber once that manifest is over eight hours old, because selection quality decays with it, and amber too while the corpus holds a test costing more on its own than a whole lane's budget, since no packing can place one and a pull request then runs it only where its own diff makes it mandatory. Red when a lane's projected work is past the budget the manifest was packed to, and red when the publisher found the cost model that manifest was packed by broken, in which case the tile links to the page's cost model section. Those three take the sub line off the counts of tests and test time, the broken model first and the overrun lane second. The sparkline plots the share of tests across every available manifest, using each manifest's own corpus size. Gray on the same conditions as the flaky tests tile, including an empty latest corpus. A manifest whose lanes name a test its corpus does not hold is read as a broken manifest | optional `GH_TOKEN` for publisher activity |
-| test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: each share beside the counts behind it, of tests and of test time, and the counts of lanes and flaky tests; then every lane against its budget and how many tests it holds, the cost model the lanes were packed by against what they spent (what the publisher found broken in it, how many lanes ran past their bound, and each suite's charges against the manifest before and against what its batches spent), every test held back as flaky with the rate it was measured at, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section. The page is live: an open copy shows a newly published manifest within about a minute, without reloading | none |
-| labs coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store, the newest of a day's that measured it in a run attempt that passed (`docs/development/COVERAGE.md`). A run attempt that failed measured through tests that failed or never ran, and reads high by as much as those tests would have covered, which can be thousands of lines; the store does not say whether a run passed, so the tile asks GitHub about each attempt it opens. A day on which no attempt passed has no measurement. A day the tile's cache file holds with a measurement that names no attempt is read from the store again when the store holds anything for that day, and otherwise is charted once GitHub says that run's latest attempt passed. The headline is the count; under it a signed rate gives the median day's move over the last three weeks, and the chart spans eight weeks with those days highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that median is a rise, which takes more than half the days in the window, so a day that added debt says nothing on its own. It never turns red, and it goes gray rather than stand on a stale number: when five days have passed with nothing measured, and until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads about a tenth of a percent low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday when none has happened; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | `GH_TOKEN` (or `GITHUB_TOKEN`) |
+| test selection detail → `/test-selection` | the manifest behind both test tiles, at full width: each share beside the counts behind it, of tests and of test time, and the counts of lanes and flaky tests; then every lane against its budget and how many tests it holds, the cost model the lanes were packed by against what they spent (what the publisher found broken in it, how many lanes ran past their bound, and each suite's charges against the manifest before and against what its batches spent), every test held back as flaky with the rate it was measured at, how many days ago it last failed on main or disagreed with itself and anything last ran it, and the newest run it disagreed across, linked to that attempt on GitHub where it ran in continuous integration, and every test no lane can hold. Both tiles link here, the flaky tests tile straight to its flaky section. The page closes by naming `/test-selection/flaky.json`. The page is live: an open copy shows a newly published manifest within about a minute, without reloading | none |
+| labs coverage debt | the repository's whole uncovered-line count and what a median day does to it, read from the coverage measurements each `main` run writes into the test-run record store (`docs/development/COVERAGE.md`). A day's figure is the mean over every run of that day that measured it in a run attempt that passed, and the tile opens a coverage object only once the run lists say its attempt passed. A run attempt that failed measured through tests that failed or never ran, and reads high by as much as those tests would have covered, which can be thousands of lines. The store does not say whether a run passed, so the tile reads that from the dashboard's shared lists of `deno.yml` runs, which carry each `main` run's latest attempt and how it concluded, or, for an attempt newer than the one those lists hold, from GitHub's record of that run. An attempt that a later attempt of its run replaced is passed over, and so is a re-run of a run created more than a day before the day it is filed under, since it measured an older commit. A day holding an attempt not yet known to have finished, or last read before it was two days old, is charted with what it has and read again on every refresh until neither is true. A day on which no attempt passed has no measurement. The headline is the count the newest qualifying run measured. Under it, a signed rate gives the median day's move over the last three weeks, and how long that pace takes to double the debt, or, for a fall, to clear it, as in `+12 per day, doubles in 9mo`. The chart plots each day's mean over eight weeks with the three weeks highlighted. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart. Amber means that pace doubles the debt within a year; a median rise takes more than half the days in the window, so a day that added debt says nothing on its own. Red means five days have passed with nothing measured: the measurement itself has stopped, and the tile does not stand on a stale number. It goes gray until the window holds a week of days to take a median over. A run whose pattern compile cache missed is passed over, because a cold run reaches branches a warm one does not and reads low. It looks for a landing every five minutes, which costs a listing of the store for each of today and yesterday, and a reading of the shared run lists, when none has happened. The tile's cache file keeps the figure of each object of a day that can still change, so a restart opens only objects that are new; with no usable history in the cache file, as when there is no file or its days are in another format, the first collection reads the shared run list back eight weeks and opens the coverage object of every passing `main` run in them; the figure itself cannot exist until the `main` run for a landed commit has finished and the relay has stored its coverage measurements | `GH_TOKEN` (or `GITHUB_TOKEN`) |
 | production | a direct synthetic HTTP check of the public commonfabric.com site, synthetic HTTP checks of `/_health` on estuary and rapids, plus a name or reachability check for all three and for the bastion, the production and staging shells, the LLM gateway, and the sandbox service. When every host is well the headline counts them up. When a host has nothing behind it at all, the headline names that host, as in `bastion down`, and counts them when there is more than one, as in `2 hosts down`. Otherwise it names the worst condition seen, such as a response time or an HTTP status. Estuary and rapids keep their response times in the body while the tile is green or orange. Commonfabric.com stays out of the body while it is good. Hosts without a health request stay out for as long as they answer, and a red tile drops all the green hosts. Red means the tile found nothing at the other end — a name with no A or AAAA record, a tailnet host the proxy cannot reach, or an HTTP request that never connected — and it also means a server health response other than 200, a health response over 1000 ms, or a commonfabric.com 5xx response. Orange means a health response over 500 ms, a commonfabric.com 4xx response or response over 2500 ms, or a resolver that failed, which leaves the tile unable to say either way. Hosts outside the tailnet are looked up by the dashboard itself. Tailnet hosts go through `PROD_PROXY`, because a dashboard that needs that proxy has no view of Tailscale's MagicDNS. Estuary and rapids are covered there by their health requests. The bastion has no health endpoint, so it gets a SOCKS5 connect that leaves the name for the proxy to resolve. The bastion records that connect in its own logs, so a bastion that answers is left alone for an hour and counts as reachable in between. One that does not answer is asked again on the next refresh, since a connect that reaches nothing leaves nothing behind. With no `PROD_PROXY` set, every host is looked up locally | optional `COMMON_FABRIC_URL`, `ESTUARY_URL`, `RAPIDS_URL`, `BASTION_HOST`, `PROD_PROXY`; `PROD_URL` remains an alias for `ESTUARY_URL` |
 | prod errors | SigNoz trace error rate for one service (errored spans / all spans): last-12h headline, with a per-hour sparkline over the retained trace history (~2 weeks) and the last-12h slice that feeds the headline highlighted. Scoped to `PROD_SERVICE` — the same SigNoz holds staging and one-off perf runs, whose rates are not production's. Gray (not red) when SigNoz is unreachable. Pops out to the SigNoz logs explorer | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` for the pop-out |
 | cloud spend | BigQuery billing export, after credits, projected to month-end from the available part of a 14-day daily-cost window early in the month. The header shows actual MTD spend. The highlighted part of the 45-day chart shows the days used for the estimate. Its vertical scale uses the highlighted days, so older extremes can extend outside the chart | `GCP_BILLING_TABLE` (+ Workload Identity, or `GCP_SA_KEY` locally), optional `GCP_DAILY_BUDGET` |
 | github spend | the selected organization's or enterprise's whole metered GitHub bill, projected to month-end in USD: every product its billing report carries, added into one figure. Enterprise collection includes usage without a cost center and usage assigned to every cost center. The 45-day chart labels the line with MTD spend, and the header shows the same total. When two or more days are behind the projection, the chart highlights them and its vertical scale uses those days alone, so older extremes can extend outside the chart. The report carries rows for days GitHub is still billing, today included, so the chart and the rate behind the projection stop two days back, once GitHub has had time to finish those days; a partial day at the end of the chart would read as spend falling away. A report that stopped being written more than four days ago is unavailable rather than a run of $0 days. A month whose report cannot be read breaks the line across those days rather than charting them as $0. "What the GitHub figure covers" below says which spend reaches the API | `GH_BILLING_TOKEN`, `GH_TOKEN`, or `GITHUB_TOKEN`; optional `GH_BILLING_ENTERPRISE`, `GH_BILLING_ORG` |
-| all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history | `GH_TOKEN` |
-| key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey` and `topic board scale/100`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
-| performance history → `/bench?view=runtime` | runtime benchmark trends, labs or loom CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines | `GH_TOKEN` |
+| all benchmarks | a scale-invariant index of benchmark performance on `benchmarks.yml` main runs, trended over ~45 days (each run vs the last, geometric mean of per-benchmark changes, so every benchmark weighs the same, divided by the same run's machine calibration so a busy host does not read as a code change): red when the most recent run failed or produced no valid data (the main signal), with a `failed (was <trend>)` headline when cached measurements are available and `failed` otherwise; orange only on a broad across-the-board rise from a CPU measured in the preceding twelve hours. Adding or removing a benchmark is a non-event. Drills through to the per-benchmark history, and its tooltip names `/bench/tiles.json`, where both benchmark tiles' readings and the processor indices behind them are served as JSON (see [Benchmark data as JSON](#benchmark-data-as-json)) | `GH_TOKEN` |
+| key benchmarks | the same index and status rules as all benchmarks, restricted to `topic board/journey`, `topic board scale/100`, `fabrichat setup/home cold`, `fabrichat setup/home warm`, and `fabrichat setup/room`. Machine calibration still uses the run's calibration measurements. Counts and data availability refer to the selected benchmarks. Opens the per-benchmark history with "key only" checked | `GH_TOKEN` |
+| performance history → `/bench?view=runtime` | runtime benchmark trends, labs or cfs CI duration history, and a detailed CI run Gantt. Historical views support windows from 1 through 45 days, date axes, and duration sorting. CI includes end-to-end workflow time, every job, and slowest-shard group lines. The runtime view closes by naming the JSON routes that serve its numbers (see [Benchmark data as JSON](#benchmark-data-as-json)) | `GH_TOKEN` |
 | model spend | OpenAI + Anthropic + OpenRouter usage APIs. Headline is the projected full-month spend (extrapolated from the recent daily rate, spilling into last month when this month is under two weeks old), summed across providers. OpenAI and Anthropic (which expose per-day cost) are charted as one line each over ~45 days, with a recent daily-rate slice highlighted and each line's MTD in the right gutter; OpenRouter (monthly total only, abbreviated "OR") is folded into the totals. The vertical scale uses the highlighted days, so older extremes can extend outside the chart. The subtitle is the bullet-separated key (`OpenAI • Anthropic • OR $0`); the combined MTD sits in the header (the `aside` slot); the span the chart covers is in its bottom-left corner (the `duration` slot). A provider we can't read shows `$???` and drops the tile to gray, but the rest still chart and total; a provider whose cost report stopped being written more than four days ago is one of those | any of `OPENAI_ADMIN_KEY`, the `ANTHROPIC_FEDERATION_*` settings (or `ANTHROPIC_ADMIN_KEY` locally), `OPENROUTER_KEY`; optional `MODEL_MONTHLY_BUDGET` |
 | discord online | Discord gateway presence, team vs visitors over time | `DISCORD_BOT_TOKEN`, `DISCORD_GUILD_ID` (Server Members + Presence intents) |
 | dau | distinct people active per UTC day on one named service, counted from the `enduser.id` attribute the memory server sets on the `memory.session.open`, `memory.transact` and `memory.subscriber.sync` spans in SigNoz. The headline is yesterday, the last day that ran to the end (today is still filling, and a part-day always reads as a drop); the sparkline is the retained history. Gray while the named service has sent no spans at all — which is the resting state until a deployment's tracing is switched on — and gray, naming the last day it sent any, when it sent none yesterday, so a deployment that stopped exporting does not show an old count as current. A day the service exported with nobody in it is a zero. Keys that nobody linked by delegation count as separate people; see [dau](#dau) below | `SIGNOZ_URL`, `SIGNOZ_API_KEY`; optional `PROD_SERVICE`, `SIGNOZ_UI_URL` |
@@ -860,7 +1125,7 @@ gray and says it is reading every repository. After that each collection shows
 the last sweep that finished while the next one runs. When a sweep ends, the
 tile asks the scheduler to collect it again straight away, so what the sweep
 found is on the board within moments rather than at the next snapshot. The
-labs and loom main builds are the exception. Their runs come from the
+labs and cfs main builds are the exception. Their runs come from the
 snapshots the ci trust tiles read, so the tile judges them again each time one
 of those snapshots arrives, which is every thirty seconds, and publishes the
 result with the trust tiles. The request that asks whether a failing job's
@@ -879,7 +1144,7 @@ failures, both are named and counted as failing, and both are listed; the color
 is about how much of a person's attention the failure has a claim on. A job
 that has been red for a week is not what just broke, and leaving it red leaves
 nothing for what did. A red tile shows only what is failing, so the labs and
-loom main builds stay in an orange tile's body beside an old failure, which is
+cfs main builds stay in an orange tile's body beside an old failure, which is
 where a reader can see that the build itself is fine.
 
 A failure counts only while the job, as it is configured now, would still
@@ -912,7 +1177,7 @@ the hundred newest default-branch runs to conclude that way came from
 of them, so ending a job's verdict at a skipped run would drop a conditional
 job's real failure the next time it skipped.
 
-The **labs ci trust**, **loom ci trust**, and **weaver ci trust** percentages
+The **labs ci trust**, **cfs ci trust**, and **weaver ci trust** percentages
 pass over each cancelled attempt in which every job a runner ran succeeded or
 was cancelled by a concurrency group. A run is first-try green when exactly one
 of its attempts is left and it succeeded. It is red when that attempt did not
@@ -931,7 +1196,7 @@ the tile gray, keeping its last value, until a later collection reads it. So
 does an earlier attempt without a conclusion that lists a job GitHub has not
 ended, until GitHub ends that job or the run leaves the window.
 
-The **labs ci duration**, **loom ci duration**, and **weaver ci duration** tiles
+The **labs ci duration**, **cfs ci duration**, and **weaver ci duration** tiles
 use pull request runs that succeeded on their first attempt. Each duration
 starts when GitHub creates the workflow run and ends when that run finishes, so
 it includes runner queueing. A run that passed only on a rerun is left out,
@@ -947,6 +1212,116 @@ running its selected tests, and the median follows the mix of the two. The
 duration tiles collect every five minutes rather than every thirty seconds,
 since each pull request snapshot costs its own requests and a median of runs
 that take several minutes moves slowly.
+
+### Benchmark data as JSON
+
+Three routes serve the numbers behind the all benchmarks and key benchmarks
+tiles and the runtime view of `/bench` as JSON, for an agent or a script
+tracking down a regression. They serve what the dashboard already holds: each
+tile's last reading, the artifacts it has cached, and the benchmarks.yml run
+list it last read. So a request costs no GitHub requests and never waits for
+one. Each response carries `generatedAt`, when it was assembled, and
+`refreshedAt`, when the artifact history was last brought up to date, or
+`null`. Times are ISO 8601 strings, and timings are nanoseconds. A run's
+`commit` is the commit it measured, from the last run list the dashboard read,
+and is `null` until it has read one since the server started.
+
+- **`/bench/tiles.json`** gives, under `tiles`, what each benchmark tile showed
+  at its last collection: its `label`, its `status`, its `headline` and `sub`
+  line as plain text, and whether a run is `running`. When the tile shows a
+  trend, `headlineProcessor` names the processor whose trend the headline
+  reads and `benchmarks` counts the tile's benchmarks in the newest measured
+  run; otherwise both are `null`. Under `processors`, each processor has:
+  - `processor`, its name, as `headlineProcessor` gives it;
+  - `trend`, as the tile computed it: `pct`, the change as a fraction, so
+    0.22 reads ▲22%, and its `label` and `status`;
+  - `headlineCandidate`, whether it was measured in the twelve hours before
+    now, or before the newest measured run when the newest run failed and
+    the run list could be read, which makes it eligible to set the headline;
+  - `window`, the runs its trend reads: how many (`runs`) and the time they
+    start `from`;
+  - `points`, its index, one run per four-hour bucket across the 45-day
+    window. A point names its run (`runId`, `runAttempt`, `at`, `commit`) and
+    gives the `index`, with the two figures the step from the previous point
+    divides: `productRatio`, the geometric mean change of the tile's
+    benchmarks, and `calibrationRatio`, that of the calibration benchmarks.
+    Either is `null` on the first point, or when the two runs share no such
+    benchmark. Where `productRatio` is `null` the index does not move, and
+    where only `calibrationRatio` is `null` it moves by `productRatio`;
+  - `steps`, the level changes in the whole index, found as `steps.json`
+    finds them, with the `ratio`, `before` and `after` described below. The
+    index has the calibration divided out already, so these carry no
+    `calibrationRatio`.
+
+  Before a tile's first collection, its entry is worked out from the cache
+  alone, with status `unknown` and `not collected yet` as its `sub` line.
+  Without a GitHub credential it reads `set GH_TOKEN`, as the tile does.
+- **`/bench/runs.json`** gives, under `runs`, every run attempt the tiles
+  sampled in the 45-day window, which keep the newest run of each 7.2
+  minutes, oldest first, including those whose artifact held no benchmarks.
+  Each has its `runId`, `runAttempt`, `at`, `commit`, `conclusion` (`null`
+  when the run list names a different attempt or does not name the run),
+  `url` on GitHub, `processor`
+  (`Unknown CPU` when its artifact held no readable report, and `null` for a
+  run cached before processors were recorded), `calibration` (the
+  geometric mean of its calibration benchmarks' 75th percentiles as `p75`, and
+  how many `benchmarks` that mean covers, or `null`), and `benchmarks`, which
+  maps the key of each benchmark the request names to its `min`, `avg`, `p75`,
+  `p99`, `p995`, `p999` and `max`.
+- **`/bench/steps.json`** gives, under `steps`, every level change in one
+  statistic of each benchmark the request names, on each processor, largest
+  first. `stat` picks the statistic, any of the seven, and is `p75` unless
+  given, which is the one the tiles' index compares. Each step names the
+  `benchmark` and `processor` and gives the `ratio` of the later level's
+  median to the earlier one's. `calibrationRatio` is the ratio of the median
+  calibration levels, as `runs.json` gives them, of the same two levels' runs,
+  whatever `stat` is, or `null` when either level has none. A step whose two
+  ratios match is the host moving, not the code. `before` is the last run of
+  the earlier level and `after` the first run of the later one, each with
+  `runId`, `runAttempt`, `at`, `commit`, and how many runs its level holds
+  (`levelRuns`). The commits that could have caused the step are those after
+  `before.commit` up to and including `after.commit`. It reads the runs
+  `runs.json` lists, so a run dispatched by hand to measure one commit
+  narrows the window.
+
+`runs.json` and `steps.json` read only the benchmarks a request names, and
+answer 400 to a request that names none. Each `match` parameter is part of a
+benchmark's key, `<file> > <group>/<name>`, and a benchmark is named when its
+key contains any of them, so `match=topic-board-navigation` names a whole file
+and `match=topic%20board/` a whole group. An empty `match=` names every
+benchmark, which makes `runs.json` tens of megabytes and `steps.json` take a
+few seconds, during which the dashboard serves nothing else. Calibration
+benchmarks are named on the same terms. `key=1` narrows the request to the key
+benchmarks.
+
+The level changes come from `levelChanges` in `trend.ts`. It measures the noise
+as the distance of the runs from the median of their neighbors, at the 90th
+percentile so that a few runs far out of line do not count, or the spread of the
+differences between runs six apart where that is larger. So a series that moves
+between two kinds of host reads as noise, and so does a step in it no larger
+than the gap between the hosts. It proposes a boundary where the six runs from a
+run on sit apart from the six before it, places each boundary on the run where
+the level changed, and keeps it only where the medians of its two whole levels
+sit apart by four standard errors, the rule the trend's change-point search
+applies. A level shorter than six runs that returns to the level before it, or
+that opens the series, is a burst of slow runs, not a step; a short level at the
+newest end is kept, since that is what a fresh regression looks like. It then
+searches again with the spread measured within each level, so a large step does
+not hide a smaller one. A series that a straight line in logs describes better,
+by a tenth, has no steps, but a drift that curves, or that noise hides, can
+still come out as a run of small steps. Noise that stays high or low for many
+runs in a row can read as level changes too, and their `calibrationRatio` says
+whether the host moved.
+
+A regression hunt starts from the tile. `tiles.json` names the processor that
+sets the headline. The steps in its index whose `before.at` falls on or after
+its `window.from` are the ones its trend reads; when there are none, the
+points' `productRatio` and `calibrationRatio` across the window show where it
+moved. `steps.json`, filtered to the tile's benchmarks (`key=1` for the key
+benchmarks tile) or to a whole file or group, then says which benchmarks
+moved, on which processors, and between which two commits. Each processor
+measures only some commits, so the narrowest window is where the windows of
+several processors overlap.
 
 ### Test selection history
 
@@ -995,6 +1370,57 @@ lookup and keep the last known badge while that lookup is pending. A failed
 lookup shows **activity unknown** alongside the available measurements. Public
 manifest reads work without GitHub credentials. Each refresh checks for newly
 published manifests; unchanged objects reuse the cached inventory or counts.
+
+### Flaky tests as JSON
+
+**`/test-selection/flaky.json`** serves the tests the flaky tests tile counts,
+for an agent or a script setting out to fix one. On the deployed dashboard it is
+`https://dashboard.<tailnet>.ts.net/test-selection/flaky.json` (see
+[Deploying](#deploying-stage-gke-tailnet-only)). It reads the newest manifest
+the tiles already hold, so a request costs no GitHub requests. The tile's tooltip
+names it and the test selection page links to it. The response carries `generatedAt`,
+when it was assembled, and `manifest`, which is `null` when the store holds no
+manifest. Otherwise `manifest` gives the `commit` the manifest was built at, its
+`generatedAt`, the `windowDays` a flake share is measured over, and the
+`exclusionRate` past which a test is held back.
+
+Under `tests`, each test held back as flaky has, worst share first:
+
+- `kind`, `member`, `name` and `variant` (`null` for the default
+  configuration), the four parts of its identity, as the page's table shows
+  them;
+- `suite`, the suite that runs it, and `unit`, the file or dispatch arm a
+  runner is pointed at to run it;
+- `flakeShare`, the share of its runs it was seen disagreeing with itself
+  over, as a fraction, so 0.42 reads 42.0%;
+- `flakes` and `runs`, the disagreements and the runs inside the window,
+  counted flat, so `flakeShare` is not their ratio;
+- `lastFailure`, the last day it failed on `main`, for whatever reason, or
+  was seen disagreeing with itself anywhere, which says how lately it failed
+  while its share is still falling. A failure on a pull request or a
+  workstation counts only as part of a disagreement, since on its own it may
+  be the change being worked on breaking the test. It is `null` where the
+  manifest does not carry it, which never means the test has not failed: a
+  test is held back only for disagreeing with itself;
+- `lastRun`, the last day anything ran it, which is long ago for a test the
+  tree no longer holds, or `null` where nothing the publisher still counts
+  has run it;
+- `disagreements`, the newest ten times it both passed and failed at one
+  commit in one order, newest first. Each gives the `day` of the failing run,
+  the `commit`, the `seed` the runs shuffled their tests by (`null` for
+  declared order), the `failed` run, and the first run that `passed` there.
+  A run gives its `place` (`main`, `pr` or `local`), and for a
+  continuous-integration run its `runId`, `runAttempt` and `job`, and the
+  `url` of that attempt on GitHub. A run on a workstation gives its place
+  alone, so all four are `null`, and so does a run the publisher folded
+  before it kept runs. `passed` is `null` where the passing run was folded
+  then.
+
+`unit`, `flakeShare`, `flakes`, `runs`, `lastFailure` and `lastRun` are `null`
+for a test the manifest holds back without holding it in its corpus. A manifest
+that cannot be read is answered with status 503 and an `error`, the same short
+account of the failure the test selection page gives, in place of `manifest`
+and `tests`.
 
 ### What the GitHub figure covers
 
@@ -1113,7 +1539,8 @@ requests an hour, where a personal access token is allowed 5,000.
    job was cancelled, which the **ci** and **ci trust** tiles read. **Pull
    requests** is for **recent commits**.
 3. **Organization permissions**: **Members** **Read-only** for **github
-   users**. GitHub refuses an app's tokens for an organization's billing
+   users**, and **Self-hosted runners** **Read-only** for the runners page's
+   self-hosted and larger runners. GitHub refuses an app's tokens for an organization's billing
    ("Resource not accessible by integration"), so **github spend** reads
    through the app only with `GH_BILLING_ENTERPRISE` set. For an
    organization's billing, set `GH_BILLING_TOKEN` as well.
@@ -1132,13 +1559,13 @@ requests an hour, where a personal access token is allowed 5,000.
 
 ### `GH_TOKEN` (or `GITHUB_TOKEN`)
 
-Powers **ci**, **labs ci trust**, **labs ci duration**, the **loom** and
+Powers **ci**, **labs ci trust**, **labs ci duration**, the **cfs** and
 **weaver** counterparts, **recent commits**, **github users**, and
 **github spend** when `GH_BILLING_TOKEN` is unset. It also powers the optional
 publisher-activity indicators on **flaky tests** and **test selection**; their
 public measurements need no token. Needs
-repo **Actions: read** on `commonfabric/labs`, `commonfabric/loom`, and
-`commonfabric/commonfabric-weaver`. The **ci** and **ci trust** tiles also read
+repo **Actions: read** on `commonfabric/labs`, `commonfabric/cfs`, and
+`commonfabric/weaver`. The **ci** and **ci trust** tiles also read
 the check run annotations that say why a job was cancelled, which in a private
 repository takes the `repo` scope of a classic token; GitHub offers
 fine-grained tokens no permission for check runs. With a fine-grained token,
@@ -1165,15 +1592,18 @@ organization member; other callers see only public memberships.
    personal account) — org ownership is what unlocks the billing permission.
 3. **Repository access** → **All repositories**, which is what lets the **ci**
    and **recent commits** tiles see the whole organization. **Only select
-   repositories** with `commonfabric/labs`, `commonfabric/loom`, and
-   `commonfabric/commonfabric-weaver` covers every other GitHub tile, and
+   repositories** with `commonfabric/labs`, `commonfabric/cfs`, and
+   `commonfabric/weaver` covers every other GitHub tile, and
    narrows **ci** and **recent commits** to those three.
 4. **Repository permissions**: set **Actions**, **Contents**, and **Pull
    requests** to **Read-only**. **Pull requests** is for **recent commits**.
+   **Contents** is what the **ci** tile's offcuts scan fetches each
+   repository with.
 5. **Organization permissions**: set **Members** to **Read-only** for GitHub
    users. Set **Administration** to **Read-only** for github spend. Only an org
-   owner or billing manager can grant the latter permission. Skip either
-   permission when its tile is not needed.
+   owner or billing manager can grant that permission. Set **Self-hosted
+   runners** to **Read-only** for the runners page's self-hosted and larger
+   runners. Skip any of these permissions whose tile or page is not needed.
 6. **Generate token** and copy it (`github_pat_…`, shown once).
 
 If you only need the labs CI tiles, keep `commonfabric` as the resource owner,
@@ -1388,7 +1818,8 @@ API. [Anthropic instructions](https://platform.claude.com/docs/en/manage-claude/
 
 3. Copy the rule ID, the service account ID, and the organization ID into the
    stage overlay's `dev-dashboard-anthropic-wif` ConfigMap in the infra
-   repository, land that change, and deploy it.
+   repository and land that change. Flux applies it, and the changed ConfigMap
+   restarts the pod.
 
 4. The wizard waits 15 minutes for a successful exchange. The tile exchanges on
    its first collection after the pod starts. If the wizard window has passed,
@@ -1674,8 +2105,10 @@ Notes:
     latest **duration** or **trend**. The mean selector was once labeled
     `p50`, and `?stat=p50` still opens it so that a saved link does not quietly
     fall back to the default column.
-    A "key only" checkbox limits the rows and CPU legend to `topic board/journey`
-    and `topic board scale/100`. The key benchmarks tile opens this view with
+    A "key only" checkbox limits the rows and CPU legend to the key benchmarks:
+    `topic board/journey`, `topic board scale/100`,
+    `fabrichat setup/home cold`, `fabrichat setup/home warm`, and
+    `fabrichat setup/room`. The key benchmarks tile opens this view with
     `key=1` in the URL. Metric, sort, and window changes preserve the filter.
     Clearing it restores the full list. A "hide green" checkbox drops the steady
     ones. A slider from 1
@@ -1709,7 +2142,7 @@ Notes:
     the board cannot start a run itself, and GitHub decides whether the viewer
     may start one.
   - The **CI duration history** view at `/bench?view=ci` selects either labs
-    `deno.yml` or loom `test-fast.yml`. It charts every job's start-to-finish
+    `deno.yml` or cfs `test-fast.yml`. It charts every job's start-to-finish
     duration on one calendar-time axis. An overall row measures the workflow
     from the first job
     start to the last job completion. Jobs that share the trailing-parenthesis
@@ -1791,6 +2224,18 @@ Notes:
     An attempt whose file is missing, or holds a layout this version cannot
     read, is collected from GitHub again, so a chart never draws a run with no
     timings and a damaged file repairs itself.
+    A repository GitHub has renamed keeps its runs under its new name, and
+    GitHub's listings and webhook deliveries name it by that name.
+    `repository-names.ts` lists the renames. The dashboard maps a name a
+    renamed repository had before to the name it has now in its
+    configuration, the `DASHBOARD_CFS_REPO`, `DASHBOARD_LOOM_REPO`, and
+    `DASHBOARD_WEAVER_REPO` settings, and in the files it stored itself: the
+    repository names the run index and the run-list files hold. The attempt
+    files are named after their repository, so an attempt is also read and
+    pruned under each name its repository had before. Everything else
+    compares names as they are, and what was stored before a rename stays
+    that repository's history. The history views' `repo=loom` parameter
+    names cfs, as `repo=cfs` does.
     A `fabric-wall-ci-job-history.json` file in the cache directory holds a
     layout the dashboard does not read, and reaches hundreds of megabytes. A
     process that finds one deletes it, along with its lock and any temporary
@@ -1918,7 +2363,14 @@ gray-out contract. These ordinary unit tests are hermetic and need only
 `--allow-env` for module-load configuration reads. The full `test` task also
 verifies that Resvg reproduces the embedded PNGs and runs the favicon
 behavior in the local browser test runner. The package tasks grant the additional
-permissions those two checks need. `tiles/prod-uptime.test.ts` exercises the
+permissions those two checks need. `test/runners-feed-socket.test.ts` opens the
+runners feed's WebSockets over TCP on this machine, the only way Deno upgrades
+a request, so the `deno-test` task runs it with every permission too.
+`test/offcuts-scan.test.ts` and the offcuts tests in `tiles/ci-health.test.ts`
+build Git repositories in a temporary directory and fetch them over `file:`
+URLs, so they need `git` on the `PATH`, which the `deno-test` task allows them
+to run. The dashboard itself runs `git` for the offcuts scan too.
+`tiles/prod-uptime.test.ts` exercises the
 production tile's public-site, health, DNS, and proxy checks with canned HTTP
 responses, an injected DNS resolver, an injected proxy client factory, and a
 fake SOCKS5 proxy, so its unit tests never reach the network. This is
@@ -1931,10 +2383,12 @@ The deploy artifacts follow the golink pattern. `dashboard/Dockerfile` (labs rep
 root) builds the image; the manifests, ExternalSecrets, and tofu secret
 containers live in the **infra** repo (`k8s/manifests/dev-dashboard/`,
 `k8s/overlays/stage/external-secrets/dashboard-secrets.yaml`,
-`tofu/gke/secrets.tf`), and it is wired into `make apply-dev-dashboard-stage` and
-`apply-all.sh`. Access is tailnet-only at `https://dashboard.<tailnet>.ts.net`
-via a userspace Tailscale sidecar (the one adaptation golink gets for free from
-its embedded tsnet).
+`tofu/gke/secrets.tf`). Flux, which applies infra `main` to the stage cluster,
+deploys the manifests and each new image. `make apply-dev-dashboard-stage`,
+which infra's `apply-all.sh` also runs, installs the dashboard the first time
+and applies its secrets. Access is tailnet-only at
+`https://dashboard.<tailnet>.ts.net` via a userspace Tailscale sidecar (the one
+adaptation golink gets for free from its embedded tsnet).
 
 **One-time setup (human steps):**
 
@@ -1972,16 +2426,18 @@ its embedded tsnet).
 
 `.github/workflows/dashboard-image.yml` publishes the image, and it publishes
 only from `main`. A push to `main` starts it when the dashboard image, the
-dashboard package, the Gantt drill-down, the Deno dependency metadata, or the
-workflow itself changes. You can also start it by hand from the repository's
-Actions tab, which is how to publish a `main` commit whose files fall outside
-that path list. A manual run can name any branch or tag, so the workflow's
-first step fails a run that is not on `main`: publishing moves the `latest` tag
-the stage deployment follows. That step runs before anything from the named ref
-is checked out.
+dashboard package, a package the dashboard imports, the Gantt drill-down, the
+Deno dependency metadata, or the workflow itself changes. Someone can also start
+it by hand from the repository's Actions tab. A manual run can name any branch
+or tag, so the workflow's first step fails a run that is not on `main`, before
+anything from the named ref is checked out. A manual run on `main` publishes an
+image, but stage never deploys it. The image pin roller described below takes
+only images that a push to `main` published, and infra's provenance check
+refuses any other image.
 
 The workflow runs the dashboard tests, then builds the amd64 image and pushes
-it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. The
+it under both the immutable `dev-dashboard:<full-sha>` tag and `latest`. Nothing
+deploys `latest`; stage runs the image whose digest infra pins. The
 image carries labels naming the repository, the ref, the event, the workflow,
 the run, and the commit it was built from. The infra repository's
 `k8s/scripts/verify-image-provenance.sh` reads those labels back and checks them
@@ -1995,7 +2451,7 @@ dashboard is a workspace package and CI's `Test` job runs each package's test
 task. The publish workflow runs them again rather than leaning on that. The two
 workflows are independent — neither waits for the other, and this one cannot
 read CI's verdict — so its own test job is the only thing standing between a
-dashboard that fails its tests and the `latest` tag. Leave it in place even
+dashboard that fails its tests and a published image. Leave it in place even
 though it looks redundant.
 
 What that test job does not do is record what it runs. CI records the same
@@ -2010,23 +2466,72 @@ The publish job authenticates with GitHub OIDC and GCP Workload Identity
 Federation. It emits the immutable `sha256:` image reference in the workflow
 summary; no service-account JSON key is used.
 
-The manual trigger publishes whatever `main` currently points at. Stage runs
-only an image this workflow published from `main`, because the infra
-repository deploys a first-party image only when its build metadata shows
-such a publish. A commit that has not landed on `main` therefore cannot be deployed
-there.
+Stage runs whatever image infra `main` pins. The infra stage overlay,
+`k8s/overlays/stage/dev-dashboard/kustomization.yaml`, names the image by its
+`sha256:` digest in `images[].digest`. Infra's image pin roller, a scheduled
+infra workflow (`.github/workflows/roll-image-pins.yml`, described in infra's
+`scripts/image-pins/README.md`), moves that pin forward each time this workflow
+publishes from a push to `main`. Nobody has to act:
 
-Copy the published digest from the workflow summary into the infra stage
-overlay's `images[].digest`, commit that immutable pin, then run
-`make apply-dev-dashboard-stage` from `infra/k8s`. The node then appears in the
-Tailscale console as `tag:dashboard`; open
-`https://dashboard.<tailnet>.ts.net/`. (The sidecar image is already pinned by
-`@sha256` digest in `03-deployment.yaml`, matching golink.)
+1. The roller runs at 7, 22, 37, and 52 minutes past each hour. When one of
+   those runs finds this workflow running on labs `main`, it watches that run
+   and starts the roller again within about a minute of the run finishing. A
+   run that starts and finishes between two scheduled roller runs waits for
+   the next one.
+2. The roller picks the newest run of this workflow that a push to `main`
+   started, whose commit is ahead of the commit pinned now, and whose latest
+   attempt succeeded. It never moves the pin back. It checks the image's labels against GitHub with
+   infra's `k8s/scripts/verify-image-provenance.sh --strict`, then opens an
+   infra pull request that changes only the digest. Its title is
+   `Pin dev-dashboard-stage at labs <commit>`, where `<commit>` is the first
+   twelve hex digits of the labs commit.
+3. When infra's Checks workflow passes on that pull request, the roller lands
+   it on infra `main`. If a newer image was published in the meantime, the
+   roller closes the pull request and proposes the newer image instead.
+4. Landing starts infra's "Publish Flux manifests" workflow, which publishes
+   the dashboard's manifests and overlay as a signed artifact. Flux, which
+   checks for a new artifact every minute, applies it: the Deployment replaces
+   the pod and Flux waits for the new pod to become ready.
+
+The stage dashboard usually changes 15 to 25 minutes after a labs pull request
+that touches it merges. Most of that time is the publish run, the wait for the
+next roller run, and infra's Checks on the pin pull request.
+
+To see that a deploy happened, or where one is held up:
+
+- The pin pull request, which the roller opens and lands as the
+  `common-tools-ci` GitHub App, is in the infra repository's pull requests. A
+  merged one has been deployed or is being deployed. An open one is waiting
+  for infra's Checks. One closed without merging was replaced by a pin of a
+  newer image.
+- The "Roll image pins" runs in infra's Actions tab say why the roller did
+  not propose an image, for example a failed provenance check.
+- Someone with access to the stage cluster can run
+  `kubectl -n flux-system get kustomization dev-dashboard-stage`, which reports
+  the artifact revision Flux last applied and whether the rollout finished.
+- The dashboard serves its labs commit as its compatibility version: it is in
+  the page source and in the `dashboard-version` header of each drill-down
+  response. An open page reloads itself when that commit changes.
+
+`make apply-dev-dashboard-stage`, run from `k8s/` in a clean checkout of infra
+`main`, does what the roll does not:
+
+- The first install. The target creates the dashboard's ExternalSecrets, the
+  objects that copy its provider credentials from Secret Manager into the
+  cluster, which Flux does not apply. The node then appears in the Tailscale
+  console as `tag:dashboard`; open `https://dashboard.<tailnet>.ts.net/`. (The
+  sidecar image is pinned by `@sha256` digest in `03-deployment.yaml`, matching
+  golink.)
+- Adding or rotating a provider secret. The pod reads its secrets as
+  environment variables, which do not change in a running pod, so the target
+  syncs the ExternalSecrets and restarts the pod.
+- Deploying by hand while the Flux sync is suspended.
 
 **Provider-gated tiles** stay gray until their credential or public configuration
 is wired: add the Secret Manager *value* (the container already exists from
-`tofu apply`), enable the matching ExternalSecret/env when needed, then re-run
-`make apply-dev-dashboard-stage`. Stage's Cloud Billing table is already wired;
+`tofu apply`), enable the matching ExternalSecret or environment variable in the
+infra manifests when needed, then run `make apply-dev-dashboard-stage` so that
+the pod restarts with the value. Stage's Cloud Billing table is already wired;
 during Google's initial export backfill it reports `no billing data yet` rather
 than a false zero.
 

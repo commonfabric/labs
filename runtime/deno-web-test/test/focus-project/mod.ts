@@ -1,3 +1,4 @@
+// deno-lint-ignore-file cf-test/registration -- a fixture testing the browser harness's own `Deno.test`
 /**
  * Registers the one test of the file numbered `file`, which fails unless the
  * page has focus.

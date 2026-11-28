@@ -34,7 +34,7 @@
  * failing and still listed, but it goes orange: it is no longer the thing that
  * just broke, and the red is left for a failure somebody can still act on.
  *
- * The labs and loom main builds stay in the body while the tile is not red, so
+ * The labs and cfs main builds stay in the body while the tile is not red, so
  * the two builds the team watches are visible even when there is nothing wrong.
  * A red tile shows only what is failing. Every job the collection read, and
  * what its deciding run concluded and took, is on the page behind the tile.
@@ -55,13 +55,18 @@
  * for each failing run. It is read again after the relay delivers a push to
  * the run's repository's default branch, or when the relay cannot vouch that
  * none has been delivered.
+ *
+ * Each repository the sweep lists also has a job of the dashboard's own, the
+ * scan for references into the offcuts organization (offcuts-scan.ts). It
+ * fails while the repository's default branch has any, and a failure of it
+ * does not fade to orange however long it lasts.
  */
 
 import {
   CI_FAILURE_FRESH_HOURS,
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   REPO,
 } from "../config.ts";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
@@ -101,6 +106,7 @@ import {
   workflowRunOf,
 } from "../github-webhooks.ts";
 import { dashboardCacheFile } from "../history-files.ts";
+import { OffcutsScan } from "../offcuts-scan.ts";
 import {
   type OrganizationRepo,
   organizationRepos,
@@ -127,7 +133,7 @@ export const SWEEP_TTL_MS = 300_000;
 // the ci trust tiles read as well.
 const PINNED = [
   runSource(REPO, CI_WORKFLOW, "main"),
-  runSource(LOOM_REPO, LOOM_CI_WORKFLOW, "main"),
+  runSource(CFS_REPO, CFS_CI_WORKFLOW, "main"),
 ];
 
 const FAILING_CONCLUSIONS = new Set([
@@ -433,7 +439,8 @@ function ciHealthView(collected: CiJobs, now = Date.now()): TileView {
   const repoCount = repos.length;
   const rows = ciJobRows(collected);
   // A job that is failing is counted as failing however old the failure is;
-  // its age decides the color, not whether it is named.
+  // its age decides the color, not whether it is named. An offcuts row stays
+  // red however old it is (offcuts-scan.ts).
   const failing = rows.filter((row) => row.failing);
   const blind = rows.filter((row) => row.status === "warn" && !row.failing);
   // A job the tile has no verdict for is not one it can call passing, so the
@@ -516,11 +523,14 @@ export interface CiHealthTile extends Tile {
 
 /**
  * Builds the ci tile, which reads every workflow's runs through `lists`, and
- * learns of their activity, and of pushes, from `webhooks`.
+ * learns of their activity, and of pushes, from `webhooks`. With `offcuts`,
+ * it scans every repository it lists for references into the offcuts
+ * organization, and shows those scans as jobs.
  */
 export function createCiHealth(
   lists: RunLists = new RunLists(),
   webhooks: GitHubWebhooks = githubWebhooks,
+  offcuts?: OffcutsScan,
 ): CiHealthTile {
   // The inventory is read on first use and shared until it goes stale. A read
   // that fails is not kept, so the next sweep tries again.
@@ -740,8 +750,13 @@ export function createCiHealth(
         return { status: "unknown", value: "—", sub: "reading every repository" };
       }
 
+      offcuts?.scan(swept.repos, credential, () => ctx.collectAgain?.());
       const jobs: CiJobs = {
-        jobs: [...await judgePinned(ctx, swept, credential), ...swept.jobs],
+        jobs: [
+          ...await judgePinned(ctx, swept, credential),
+          ...swept.jobs,
+          ...offcuts?.jobs(swept.repos) ?? [],
+        ],
         repos: swept.repos.map((repo) => shortName(repo.repo)),
         unreadableRepos: swept.repos
           .filter((repo) => repo.error !== undefined)
@@ -773,4 +788,6 @@ function logUnreadable(names: string[]): void {
 
 export const ciHealth = createCiHealth(
   new RunLists(dashboardCacheFile("fabric-wall-run-lists-ci.json")),
+  githubWebhooks,
+  new OffcutsScan({ webhooks: githubWebhooks }),
 );

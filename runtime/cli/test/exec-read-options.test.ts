@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
 import type { Cell } from "@commonfabric/runner";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   type ExecutedMountedCallableFile,
   executeMountedCallableFile,
@@ -11,6 +16,7 @@ import {
   exitExecFailure,
   parseExecSelection,
   renderExecOutcome,
+  runMountedCallableFile,
 } from "../commands/exec.ts";
 import { invocationPhaseReporter } from "../commands/piece.ts";
 import { writeMountState } from "../lib/fuse.ts";
@@ -331,6 +337,70 @@ describe("cf exec read options", () => {
     );
   });
 
+  it("writes a mounted tool's shaped result to stdout and its cell's address to stderr", async () => {
+    const filePath = await mountCallable("search.tool");
+    const { pieces, piece } = harness(toolCell(), "search");
+    const out: string[] = [];
+    const err: string[] = [];
+
+    await runMountedCallableFile(
+      filePath,
+      ["--query", "milk"],
+      { selection: await parseCellSelectionOptions({ select: "items" }) },
+      {
+        stateDir: join(tmpDir, "state"),
+        // deno-lint-ignore no-explicit-any
+        loadPieces: () => Promise.resolve(pieces as any),
+        // deno-lint-ignore no-explicit-any
+        loadPiece: () => Promise.resolve(piece as any),
+        deriveSelectedValue: () => Promise.resolve({ shaped: true }),
+        write: (text) => out.push(text),
+        writeError: (text) => err.push(text),
+      },
+    );
+
+    // The selected value, not the tool's raw result, is the one stdout line.
+    expect(out).toHaveLength(1);
+    expect(JSON.parse(out[0])).toEqual({ shaped: true });
+    expect(err).toEqual([
+      "Tool result cell: //did:key:test-home/of:tool-result-cell@user " +
+      "(read it back with " +
+      "`cf cell get //did:key:test-home/of:tool-result-cell@user`)",
+    ]);
+  });
+
+  it("writes a mounted handler's Invocation JSON to stdout and nothing to stderr", async () => {
+    const filePath = await mountCallable("add.handler");
+    const { pieces, piece } = harness(handlerCell(), "add");
+    const out: string[] = [];
+    const err: string[] = [];
+
+    await runMountedCallableFile(
+      filePath,
+      ["invoke"],
+      { invocation: { id: "inv-run", session: "sess-run" } },
+      {
+        sendEvent: sendThroughStandIn,
+        stateDir: join(tmpDir, "state"),
+        // deno-lint-ignore no-explicit-any
+        loadPieces: () => Promise.resolve(pieces as any),
+        // deno-lint-ignore no-explicit-any
+        loadPiece: () => Promise.resolve(piece as any),
+        isStdinTerminal: () => true,
+        write: (text) => out.push(text),
+        writeError: (text) => err.push(text),
+      },
+    );
+
+    // The caller's invocation names the envelope, and a handler has no
+    // result cell of its own to point at.
+    expect(out).toHaveLength(1);
+    const envelope = JSON.parse(out[0]);
+    expect(envelope.invocation).toBe("inv-run");
+    expect(envelope.status).toBe("settled");
+    expect(err).toEqual([]);
+  });
+
   it("writes a handler's outcome as the Invocation JSON on stdout", () => {
     const out: string[] = [];
     const err: string[] = [];
@@ -425,6 +495,24 @@ describe("cf exec read options", () => {
     // dispatched, and offering a retry key here would be offering one for a
     // call that was never made.
     expect(errs.join("\n")).not.toContain("phase:");
+  });
+
+  it("lets a failure that is not a selection error propagate rather than exit", async () => {
+    const codes: number[] = [];
+    // A predicate nested deeper than the parser's recursion can follow fails
+    // with the engine's own RangeError, which says nothing about the flags.
+    const depth = 100_000;
+    const filter = "(".repeat(depth) + "1" + ")".repeat(depth);
+
+    await expect(parseExecSelection({ filter }, {
+      printError: () => {},
+      exit: (code): never => {
+        codes.push(code);
+        throw new Error("exit-sentinel");
+      },
+    })).rejects.toThrow(RangeError);
+
+    expect(codes).toEqual([]);
   });
 
   it("passes a well-formed selection through untouched", async () => {

@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   ProblematicValue,
   UnknownValue,
 } from "@commonfabric/data-model/codec-common";
 import { FabricKeyPair } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { findKeyMaterial } from "@/shared/key-material.ts";
 

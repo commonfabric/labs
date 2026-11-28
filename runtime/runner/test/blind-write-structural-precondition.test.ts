@@ -1,6 +1,7 @@
 import { assert } from "@std/assert";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import {
   markUiInputBlindWriteTx,
@@ -21,7 +22,7 @@ const schema = {
   },
 } as const;
 
-Deno.test("a blind UI-input write threads a structural precondition at the cell's parent", async () => {
+test("a blind UI-input write threads a structural precondition at the cell's parent", async () => {
   // Runner-level coverage for the blind UI-input write path (the
   // runtime-client's handleCellSet / the multi-runtime worker mirror it, but
   // runner's own suite otherwise never marks a tx blind). Drives a blind nested

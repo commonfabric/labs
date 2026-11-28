@@ -13,8 +13,14 @@ import type {
 } from "@commonfabric/ts-transformers";
 import { getLogger } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  dataFileAssets,
+  dataFileUrl,
+  isStoredAsDataUrl,
+} from "@commonfabric/text/data-file";
 import type ts from "typescript";
 
+import type { DataFileStrings } from "../data-file-strings.ts";
 import { compilerStack } from "../harness/deferred-compiler-stack.ts";
 import {
   computeModuleHashes,
@@ -497,6 +503,12 @@ export interface CompileSourcesOptions {
    * Omitted, a source's name is its stored path.
    */
   storedNameFor?: (name: string) => string;
+
+  /**
+   * Where each module's `dataFile()` reader records the strings it returns,
+   * so that setup can store them by reference. Omitted, nothing is recorded.
+   */
+  dataFileStrings?: DataFileStrings;
 }
 
 export interface CompiledModuleGraph {
@@ -531,8 +543,9 @@ export interface CompiledModuleGraph {
   registrationApproved: Set<string>;
 
   /**
-   * Verbatim bytes of every attached data file in this graph, keyed by the
-   * data entry's authored path. These are carried alongside the records rather
+   * The stored text of every attached data file in this graph (a binary media
+   * file's base64 `data:` URL; see `decodeDataFile`), keyed by the data
+   * entry's authored path. These are carried alongside the records rather
    * than as records: a data file is never a module, so it has no specifier, no
    * exports, and nothing to execute. The graph carries them so the bytes a
    * pattern reads come from the same content-addressed closure its code came
@@ -737,6 +750,22 @@ export function computeFabricModuleIdentities(
   return result;
 }
 
+/**
+ * Returns the identity `identityByPath` holds for `path`, as
+ * {@link computeFabricModuleIdentities} computed it, and throws for a path
+ * outside the set the identities were computed over.
+ */
+export function requiredModuleIdentity(
+  identityByPath: ReadonlyMap<string, string>,
+  path: string,
+): string {
+  const identity = identityByPath.get(path);
+  if (identity === undefined) {
+    throw new Error(`No module identity computed for '${path}'`);
+  }
+  return identity;
+}
+
 function mountPrefix(mount: FabricMount): string {
   return `${FABRIC_MOUNT_ROOT}${mount.entryIdentity}/`;
 }
@@ -767,33 +796,79 @@ type NamespaceBinder = (
  * The read is a map lookup: the closure is fully loaded before any module
  * executes, so it needs no storage access and cannot be asynchronous.
  *
+ * The reader returns a text file's contents, and its `url` member any file's
+ * contents as a base64 `data:` URL, which is how a binary media file is read:
+ * the plain reader refuses one, whose stored contents are that URL already.
+ * Its `urls` member returns the URL of each asset attached in a directory, by
+ * asset name (see `dataFileAssets`). Each string any of the three returns is
+ * recorded in `dataFileStrings`, when one is given, so that setup can store it
+ * by reference.
+ *
  * A graph carrying no data files hands every namespace straight through, and a
  * read reaches the builder's placeholder, which reports that the load attached
  * nothing.
  */
 function dataFileBinding(
   dataByPath: ReadonlyMap<string, string>,
+  dataFileStrings: DataFileStrings | undefined,
 ): (moduleName: string) => NamespaceBinder {
   if (dataByPath.size === 0) {
     const passThrough: NamespaceBinder = (namespace) => namespace;
     return () => passThrough;
   }
   const attached = [...dataByPath.keys()].sort();
+  const contentsOf = (resolved: string): string => {
+    const contents = dataByPath.get(resolved);
+    if (contents !== undefined) return contents;
+    // The message states what is attached and stops there. How a caller
+    // attaches one differs by the surface driving the compile — a CLI flag, a
+    // scenario field, an argument to `resolveLocalProgram` — and the runtime
+    // knows none of that, so naming any single mechanism would misdirect
+    // every caller reaching it by another route.
+    throw new Error(
+      `No attached data file "${resolved}". ` +
+        `Attached: ${attached.join(", ")}.`,
+    );
+  };
+  // A URL built from a text file, by path, so that every read of one returns
+  // the same string and the string is built and recorded once.
+  const builtUrls = new Map<string, string>();
+  const urlOf = (resolved: string): string => {
+    let url = builtUrls.get(resolved);
+    if (url === undefined) {
+      url = dataFileUrl(contentsOf(resolved), resolved);
+      builtUrls.set(resolved, url);
+    }
+    dataFileStrings?.record(url);
+    return url;
+  };
   return (moduleName: string) => {
-    const read = freezeSandboxValue((path: string): string => {
+    const read = (path: string): string => {
       const resolved = resolveDataFilePath(path, moduleName);
-      const bytes = dataByPath.get(resolved);
-      if (bytes !== undefined) return bytes;
-      // The message states what is attached and stops there. How a caller
-      // attaches one differs by the surface driving the compile — a CLI flag, a
-      // scenario field, an argument to `resolveLocalProgram` — and the runtime
-      // knows none of that, so naming any single mechanism would misdirect
-      // every caller reaching it by another route.
-      throw new Error(
-        `No attached data file "${resolved}". ` +
-          `Attached: ${attached.join(", ")}.`,
-      );
-    });
+      const contents = contentsOf(resolved);
+      if (isStoredAsDataUrl(resolved)) {
+        throw new Error(
+          `Data file \`${resolved}\` is binary. Read it with ` +
+            "`dataFile.url()`.",
+        );
+      }
+      dataFileStrings?.record(contents);
+      return contents;
+    };
+    const url = (path: string): string =>
+      urlOf(resolveDataFilePath(path, moduleName));
+    const urls = (path: string): Readonly<Record<string, string>> => {
+      const directory = resolveDataFilePath(path, moduleName);
+      // `fromEntries()` defines each name as a property of the record, where
+      // an assignment of `__proto__` would reach the prototype instead.
+      return freezeSandboxValue(Object.fromEntries(
+        [...dataFileAssets(directory, attached)].map(([name, file]) => [
+          name,
+          urlOf(file),
+        ]),
+      ));
+    };
+    const reader = freezeSandboxValue(Object.assign(read, { url, urls }));
     const bound = new WeakMap<
       Record<string, unknown>,
       Record<string, unknown>
@@ -801,7 +876,7 @@ function dataFileBinding(
     return (namespace) => {
       const memo = bound.get(namespace);
       if (memo !== undefined) return memo;
-      const copy = Object.freeze({ ...namespace, [DATA_FILE_READER]: read });
+      const copy = Object.freeze({ ...namespace, [DATA_FILE_READER]: reader });
       bound.set(namespace, copy);
       return copy;
     };
@@ -814,7 +889,7 @@ export function compileSourcesToRecords(
 ): CompiledModuleGraph {
   const runtimeModules = options.runtimeModules ?? {};
   const dataByPath = new Map(options.dataFiles ?? []);
-  const bindDataFileFor = dataFileBinding(dataByPath);
+  const bindDataFileFor = dataFileBinding(dataByPath, options.dataFileStrings);
   const storedNameFor = options.storedNameFor ?? ((name: string) => name);
   // Identities are computed prefix-free (see computeModuleIdentities) so
   // `cf:module/<hash>` is entry-point independent and dedupes across programs.
@@ -1081,14 +1156,14 @@ export interface CachedCompiledModule {
   /** Normalized authored path (e.g. `/main.tsx`); used for the eval sourceURL. */
   filename: string;
 
-  /** Compiled CommonJS body, or the verbatim bytes of a data entry. */
+  /** Compiled CommonJS body, or the stored text of a data entry. */
   code: string;
 
   /** Internal import edges: require specifier → dependency module identity. */
   imports: { specifier: string; targetIdentity: string }[];
 
   /**
-   * This entry carries data rather than code, so `code` is its authored bytes.
+   * This entry carries data rather than code, so `code` is its stored text.
    * A data entry never becomes a module record and is never parsed as one.
    */
   isData?: boolean;
@@ -1170,7 +1245,10 @@ export function cachedModuleSourceNames(
  */
 export function buildRecordsFromCompiled(
   modules: readonly CachedCompiledModule[],
-  options: { runtimeModules?: Record<string, string[]> } = {},
+  options: {
+    runtimeModules?: Record<string, string[]>;
+    dataFileStrings?: DataFileStrings;
+  } = {},
 ): CompiledModuleGraph {
   const runtimeModules = options.runtimeModules ?? {};
   const specifierOf = (identity: string) => `cf:module/${identity}`;
@@ -1184,7 +1262,7 @@ export function buildRecordsFromCompiled(
   });
   const byIdentity = new Map(moduleEntries.map((m) => [m.identity, m]));
   const sourceNames = cachedModuleSourceNames(moduleEntries);
-  const bindDataFileFor = dataFileBinding(dataByPath);
+  const bindDataFileFor = dataFileBinding(dataByPath, options.dataFileStrings);
 
   // Fix B: use the record surface persisted on the compiled doc; parse the body
   // only when it wasn't precomputed. A module carries the full surface (a warm

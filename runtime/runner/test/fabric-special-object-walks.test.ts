@@ -30,7 +30,6 @@
  * at all, so they take part only in the walks that touch neither.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
@@ -55,6 +54,12 @@ import {
   type FabricValue,
   isFabricSpecialObject,
 } from "@commonfabric/data-model";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { mergeDefaults } from "../src/schema.ts";
 import { mergeAnyOfMatches } from "../src/traverse.ts";
@@ -497,6 +502,25 @@ describe("fabric special objects through the runner's walks", () => {
       const read = cell.get()[0] as object;
       expect(read.constructor.name).toBe("FabricError");
       expect(read instanceof FabricError).toBe(false);
+    });
+
+    it("hands a stored `FabricError` through `snapshotQueryResult()` whole when asked to", () => {
+      // The reclassified lift result copies its value with `keepInstances`,
+      // so an instance it keeps from a cell read is copied as the instance
+      // and not as the `{}` a rebuild by its keys gives.
+      const cell = runtime.getCell<unknown[]>(
+        space,
+        "walks-snapshot-keeps-error",
+        { type: "array" },
+        tx,
+      );
+      cell.set([FabricError.fromNativeError(new Error("boom"))] as never);
+
+      const kept = snapshotQueryResult(cell.get(), { keepInstances: true });
+
+      expect(kept[0] instanceof FabricError).toBe(true);
+      expect((kept[0] as FabricError).message).toBe("boom");
+      expect(snapshotQueryResult(cell.get())[0]).toEqual({});
     });
 
     it("hands a stored `FabricError` through `mergeSchemaDefaults()` whole", () => {

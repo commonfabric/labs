@@ -11,7 +11,6 @@
 
 import type { Browser as AstralBrowser } from "@astral/astral";
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import {
@@ -21,6 +20,7 @@ import {
   spawnBrowserProcess,
   stopBrowserProcess,
 } from "../browser-process.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 // What the tests below made, and what it takes to put each of it away. A test
 // that fails partway through returns through `afterEach` rather than through

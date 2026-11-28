@@ -1,12 +1,14 @@
 /**
- * Real-browser checks for `cf-avatar-input`: a picked image becomes the bytes
- * of a small square avatar, and a picked file that is not an image becomes an
- * error.
+ * Real-browser checks for `cf-avatar-input`: a picked image becomes a small
+ * square avatar, stored as a blob, and a picked file that is not an image
+ * becomes an error.
  */
 
 import { expect } from "@std/expect";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
-import { AVATAR_PIXELS, avatarBytesFromImage, CFAvatarInput } from "./index.ts";
+import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { test } from "@commonfabric/test-support/test";
+import { AVATAR_PIXELS, avatarFromImage, CFAvatarInput } from "./index.ts";
 
 const RED = [255, 0, 0];
 const GREEN = [0, 255, 0];
@@ -61,9 +63,12 @@ function next(element: CFAvatarInput, name: string): Promise<CustomEvent> {
   return promise;
 }
 
-Deno.test("avatarBytesFromImage returns the image's centered square, scaled to avatar size", async () => {
-  const bytes = await avatarBytesFromImage(await wideImage());
-  const { width, height, corners } = await decode(new Uint8Array(bytes));
+test("avatarFromImage returns the image's centered square, scaled to avatar size, as WebP", async () => {
+  const avatar = await avatarFromImage(await wideImage());
+  expect(avatar.type).toBe("image/webp");
+  const { width, height, corners } = await decode(
+    new Uint8Array(await avatar.arrayBuffer()),
+  );
   expect([width, height]).toEqual([AVATAR_PIXELS, AVATAR_PIXELS]);
   for (const corner of corners) {
     expect(near(corner, RED), `corner ${corner} is red`).toBe(true);
@@ -71,15 +76,29 @@ Deno.test("avatarBytesFromImage returns the image's centered square, scaled to a
   }
 });
 
-Deno.test("cf-avatar-input fires cf-change with avatar bytes for a picked image, and cf-error for a picked file that is not one", async () => {
-  const element = new CFAvatarInput();
+test("cf-avatar-input fires cf-change with avatar bytes and the blob it stored them in for a picked image, and cf-error for a picked file that is not one", async () => {
+  const stored: string[] = [];
+  const element = Object.assign(new CFAvatarInput(), {
+    runtime: {
+      uploadBlob: (options: { contentType: string }) => {
+        stored.push(options.contentType);
+        return Promise.resolve({ id: "fid1:stored", url: "blobs/stored" });
+      },
+    } as unknown as RuntimeClient,
+    space: "did:key:z6MkAvatarSpace",
+  });
   document.body.append(element);
   try {
     await element.updateComplete;
 
     const changed = next(element, "cf-change");
     pick(element, new File([await wideImage()], "wide.png"));
-    const { bytes } = (await changed).detail;
+    const { bytes, blob } = (await changed).detail;
+    expect(blob).toEqual({
+      space: "did:key:z6MkAvatarSpace",
+      id: "fid1:stored",
+    });
+    expect(stored).toEqual(["image/webp"]);
     expect(bytes).toBeInstanceOf(FabricBytes);
     const { width, corners } = await decode(bytes.slice());
     expect(width).toBe(AVATAR_PIXELS);

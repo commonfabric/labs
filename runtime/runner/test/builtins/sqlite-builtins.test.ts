@@ -1,7 +1,4 @@
-/// <reference path="../clock.d.ts" />
-
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { defer } from "@commonfabric/async/defer";
 import { fabricFromConvertibleJsValue } from "@commonfabric/data-model";
@@ -14,10 +11,19 @@ import type {
   SqliteParamsWire,
   SqliteQueryResult,
 } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { sqliteDatabase } from "../../src/builtins/sqlite-builtins.ts";
 import { SQLITE_ROW_SALT } from "../../src/builtins/sqlite/row-identity.ts";
 import { type Cell, hostValueOf } from "../../src/cell.ts";
+import { stripEntityUriScheme } from "../../src/entity-kind.ts";
+import { setResultCell } from "../../src/result-utils.ts";
 import { Runtime, type RuntimeOptions } from "../../src/runtime.ts";
 import {
   MAX_ENFORCEMENT_CFC_OPTIONS,
@@ -27,6 +33,7 @@ import { runtimeSecretId } from "../../src/runtime-secret.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import { createTransactionCommitReceipt } from "../../src/storage/commit-receipt.ts";
 import type { CommitError, Result, Unit } from "../../src/storage/interface.ts";
+import { isStaleReadConflict } from "../../src/storage/rejection.ts";
 import { getTransactionWriteAttempts } from "../../src/storage/transaction-inspection.ts";
 import { createTrustedBuilder } from "../support/trusted-builder.ts";
 
@@ -146,6 +153,196 @@ describe({
         rowLabel: { version: 1, confidentiality: null },
       };
       expect(await derive({ tables: { ruled: unresolved } })).toEqual(first);
+    });
+
+    describe("under a node cause with an output spot", () => {
+      // Each derivation runs on a fresh inputs document, as an update of the
+      // piece's source makes, at one output spot, which the node's result
+      // reaches as a link to its handle.
+
+      let spot: Cell<unknown>;
+
+      beforeEach(() => {
+        spot = runtime.getCell(space, "spot");
+      });
+
+      const deriveAtSpot = async (
+        options: { tables?: Record<string, unknown> },
+      ): Promise<SqliteDbRef> => {
+        const setup = runtime.edit();
+        const inputs = runtime.getCell(
+          space,
+          `inputs-${crypto.randomUUID()}`,
+          undefined,
+          setup,
+        );
+        inputs.setRawUntyped(fabricFromConvertibleJsValue(options));
+        expect((await setup.commit().settled).error).toBeUndefined();
+        let handle: Cell<SqliteDbRef> | undefined;
+        const builtin = sqliteDatabase(
+          inputs,
+          (tx, result) => {
+            handle = result;
+            spot.withTx(tx).setRawUntyped(result.getAsLink());
+          },
+          () => {},
+          nodeCause(inputs),
+          parent,
+          runtime,
+          { ...spot.getAsNormalizedFullLink(), scope: "space" },
+          false,
+          spot.getAsNormalizedFullLink(),
+        );
+        const tx = runtime.edit();
+        builtin.action(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        return hostValueOf(handle!.get()) as SqliteDbRef;
+      };
+
+      /** The cause the runner hands a node whose output reaches `spot`. */
+      const nodeCause = (inputs: Cell<unknown>) => ({
+        inputs,
+        parents: parent.entityId,
+        outputSpot: { space, id: spot.getAsNormalizedFullLink().id, path: [] },
+      });
+
+      /**
+       * Points `spot` at `handle`, after writing `value` into it and, given
+       * `owner`, a `result` back-link to `owner`.
+       */
+      const plant = async (
+        handle: Cell<unknown>,
+        value: Record<string, unknown> | undefined,
+        owner?: Cell<unknown>,
+      ): Promise<void> => {
+        const tx = runtime.edit();
+        if (value !== undefined) {
+          handle.withTx(tx).setRawUntyped(fabricFromConvertibleJsValue(value));
+        }
+        if (owner !== undefined) setResultCell(handle.withTx(tx), owner);
+        spot.withTx(tx).setRawUntyped(handle.getAsLink());
+        expect((await tx.commit().settled).error).toBeUndefined();
+      };
+
+      /** The database id a handle cell names when it names itself. */
+      const ownId = (handle: Cell<unknown>) =>
+        stripEntityUriScheme(handle.getAsNormalizedFullLink().id);
+
+      it("mints one handle whatever the inputs", async () => {
+        const first = await deriveAtSpot({ tables: { notes } });
+        const second = await deriveAtSpot({ tables: { notes, other: notes } });
+        expect(second.id).toBe(first.id);
+        expect(second.tables).toEqual({ notes, other: notes });
+      });
+
+      it("keeps the handle the output spot links to when the node's whole cause names it", async () => {
+        // The handle the node's whole cause, inputs document included, names
+        // for the inputs the derivation runs on. It holds no value: the cause
+        // alone shows the node minted it.
+
+        const setup = runtime.edit();
+        const inputs = runtime.getCell(space, "inputs-whole", undefined, setup);
+        inputs.setRawUntyped(
+          fabricFromConvertibleJsValue({ tables: { notes } }),
+        );
+        expect((await setup.commit().settled).error).toBeUndefined();
+        const whole = runtime.getCell(space, {
+          sqliteDatabase: { result: nodeCause(inputs) },
+        });
+        await plant(whole, undefined);
+
+        let handle: Cell<SqliteDbRef> | undefined;
+        const builtin = sqliteDatabase(
+          inputs,
+          (_tx, result) => handle = result,
+          () => {},
+          nodeCause(inputs),
+          parent,
+          runtime,
+          { ...spot.getAsNormalizedFullLink(), scope: "space" },
+          false,
+          spot.getAsNormalizedFullLink(),
+        );
+        const tx = runtime.edit();
+        builtin.action(tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+
+        expect((hostValueOf(handle!.get()) as SqliteDbRef).id).toBe(
+          ownId(whole),
+        );
+      });
+
+      it("keeps a handle of the piece's that the output spot links to", async () => {
+        const earlier = runtime.getCell(space, "earlier-handle");
+        await plant(
+          earlier,
+          { id: ownId(earlier), tables: { notes }, scope: "space", rev: 3 },
+          parent,
+        );
+
+        const handle = await deriveAtSpot({ tables: { other: notes } });
+
+        expect(handle).toEqual({
+          id: ownId(earlier),
+          tables: { notes, other: notes },
+          scope: "space",
+          rev: 3,
+        });
+      });
+
+      it("mints its own handle when the one the output spot links to is another piece's", async () => {
+        const otherPiece = runtime.getCell(space, "other-piece");
+        const earlier = runtime.getCell(space, "earlier-handle");
+        await plant(
+          earlier,
+          { id: ownId(earlier), tables: { notes }, scope: "space" },
+          otherPiece,
+        );
+
+        const handle = await deriveAtSpot({ tables: { notes } });
+
+        expect(handle.id).not.toBe(ownId(earlier));
+        expect(await deriveAtSpot({ tables: { notes } })).toEqual(handle);
+      });
+
+      it("mints its own handle when the one the output spot links to names another database", async () => {
+        const earlier = runtime.getCell(space, "earlier-handle");
+        await plant(
+          earlier,
+          { id: "fid1:another-database", tables: { notes }, scope: "space" },
+          parent,
+        );
+
+        const handle = await deriveAtSpot({ tables: { notes } });
+
+        expect(handle.id).not.toBe("fid1:another-database");
+        expect(handle.id).not.toBe(ownId(earlier));
+      });
+
+      it("mints its own handle when the one the output spot links to names a place inside the piece's result", async () => {
+        const earlier = runtime.getCell(space, "earlier-handle");
+        await plant(
+          earlier,
+          { id: ownId(earlier), tables: { notes }, scope: "space" },
+          parent.key("elsewhere" as never) as Cell<unknown>,
+        );
+
+        const handle = await deriveAtSpot({ tables: { notes } });
+
+        expect(handle.id).not.toBe(ownId(earlier));
+      });
+
+      it("runs on its own handle once that holds a value, whatever the output spot links to", async () => {
+        const first = await deriveAtSpot({ tables: { notes } });
+        const earlier = runtime.getCell(space, "earlier-handle");
+        await plant(
+          earlier,
+          { id: ownId(earlier), tables: { notes }, scope: "space" },
+          parent,
+        );
+
+        expect((await deriveAtSpot({ tables: { notes } })).id).toBe(first.id);
+      });
     });
   });
 
@@ -320,6 +517,75 @@ describe({
       expect(refused).toBe(1);
       expect(state.error).toBe(refusal.message);
       expect(state.result).toBeUndefined();
+    });
+
+    it("links its result into its output when the commit of its first run is refused as stale", async () => {
+      // A query's first run links the cell holding its result into the
+      // node's output. The commit of that run is refused here as the engine
+      // refuses a stale read, which the scheduler answers by running the
+      // query again, so only the second run can make that link.
+      start();
+      const db = newDb();
+      await seed(db, "INSERT INTO notes (body) VALUES (?)", ["hello"]);
+      const { commonfabric: cf } = createTrustedBuilder(runtime);
+      const p = cf.pattern(() =>
+        // deno-lint-ignore no-explicit-any
+        cf.sqliteQuery({ db, sql: "SELECT body FROM notes" } as any)
+      );
+      const setup = runtime.edit();
+      const result = runtime.run(
+        setup,
+        p,
+        {},
+        runtime.getCell(
+          space,
+          `query-${crypto.randomUUID()}`,
+          p.resultSchema,
+          setup,
+        ),
+      );
+      expect((await setup.commit().settled).error).toBeUndefined();
+      // The engine's stale-read refusal carries more fields than these two,
+      // and the scheduler decides from its name to run the action again.
+      const stale = {
+        name: "ConflictError",
+        message: "stale confirmed read: of:doc at seq 1 conflicted with seq 2",
+      } as CommitError;
+      expect(isStaleReadConflict(stale)).toBe(true);
+      // The query is the pattern's one node, so the first transaction a
+      // scheduled action commits is the query's first run.
+      const edit = runtime.edit.bind(runtime);
+      let refused = 0;
+      runtime.edit = (...args) => {
+        const opened = edit(...args);
+        const commit = opened.commit.bind(opened);
+        opened.commit = (options) => {
+          if (refused === 0 && opened.tx.sourceAction !== undefined) {
+            refused++;
+            opened.abort(stale);
+            return createTransactionCommitReceipt(
+              Promise.resolve<Result<Unit, CommitError>>({ error: stale }),
+            );
+          }
+          return commit(options);
+        };
+        return opened;
+      };
+      const cancel = result.sink(() => {});
+      try {
+        await runtime.settled();
+      } finally {
+        cancel();
+        runtime.edit = edit;
+      }
+
+      expect(refused).toBe(1);
+      const state = result.get() as QueryState | undefined;
+      expect(state?.pending).toBe(false);
+      expect(state?.error).toBeUndefined();
+      expect(state?.result?.map((row) => ({ ...row }))).toEqual([
+        { body: "hello" },
+      ]);
     });
 
     it("leaves a running query's claim alone when the next query is refused", async () => {

@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { FILE_MODE_RX, SYMLINK_MODE } from "../platform.ts";
 import { nodeMode, nodeSize } from "../stat.ts";
 import type { FsNode } from "../types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("stat", () => {
   describe("nodeMode()", () => {

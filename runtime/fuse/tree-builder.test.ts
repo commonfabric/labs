@@ -1,9 +1,9 @@
 // tree-builder.test.ts — Unit tests for JSON-to-tree conversion and symlink parsing
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { assert, assertEquals, assertRejects, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { isPatternToolValue } from "@commonfabric/piece/verb-listing";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import { FsTree } from "./tree.ts";
 import { buildCallableScript, classifyCallableEntry } from "./callables.ts";
 import {
@@ -33,7 +33,7 @@ function getFileContent(tree: FsTree, parentIno: bigint, name: string): string {
   return decoder.decode(node.content);
 }
 
-Deno.test("buildJsonTree - null value creates empty file", () => {
+test("buildJsonTree - null value creates empty file", () => {
   const tree = new FsTree();
   buildJsonTree(tree, tree.rootIno, "empty", null);
 
@@ -47,7 +47,7 @@ Deno.test("buildJsonTree - null value creates empty file", () => {
   }
 });
 
-Deno.test("buildJsonTree - boolean values", () => {
+test("buildJsonTree - boolean values", () => {
   const tree = new FsTree();
   buildJsonTree(tree, tree.rootIno, "flag", true);
   assertEquals(getFileContent(tree, tree.rootIno, "flag"), "true");
@@ -56,7 +56,7 @@ Deno.test("buildJsonTree - boolean values", () => {
   assertEquals(getFileContent(tree, tree.rootIno, "off"), "false");
 });
 
-Deno.test("buildJsonTree - number values", () => {
+test("buildJsonTree - number values", () => {
   const tree = new FsTree();
   buildJsonTree(tree, tree.rootIno, "count", 42);
   assertEquals(getFileContent(tree, tree.rootIno, "count"), "42");
@@ -65,13 +65,13 @@ Deno.test("buildJsonTree - number values", () => {
   assertEquals(getFileContent(tree, tree.rootIno, "pi"), "3.14");
 });
 
-Deno.test("buildJsonTree - string values", () => {
+test("buildJsonTree - string values", () => {
   const tree = new FsTree();
   buildJsonTree(tree, tree.rootIno, "greeting", "hello world");
   assertEquals(getFileContent(tree, tree.rootIno, "greeting"), "hello world");
 });
 
-Deno.test("buildJsonTree - object creates directory with children", () => {
+test("buildJsonTree - object creates directory with children", () => {
   const tree = new FsTree();
   const obj = { name: "Alice", age: 30, active: true };
   buildJsonTree(tree, tree.rootIno, "user", obj);
@@ -92,7 +92,7 @@ Deno.test("buildJsonTree - object creates directory with children", () => {
   assertEquals(JSON.parse(jsonContent), obj);
 });
 
-Deno.test("buildJsonTree - encodes unsafe object keys in path names", () => {
+test("buildJsonTree - encodes unsafe object keys in path names", () => {
   const tree = new FsTree();
   const data = {
     "has/slash": 1,
@@ -118,7 +118,7 @@ Deno.test("buildJsonTree - encodes unsafe object keys in path names", () => {
   );
 });
 
-Deno.test("buildJsonTree - encodes user keys that look like internal pending roots", () => {
+test("buildJsonTree - encodes user keys that look like internal pending roots", () => {
   const tree = new FsTree();
   const data = {
     ".input.pending": 1,
@@ -134,7 +134,7 @@ Deno.test("buildJsonTree - encodes user keys that look like internal pending roo
   assertEquals(getFileContent(tree, dataIno, "%2Eresult.pending"), "2");
 });
 
-Deno.test("buildJsonTree - encodes depth-zero names that look like internal pending roots by default", () => {
+test("buildJsonTree - encodes depth-zero names that look like internal pending roots by default", () => {
   const tree = new FsTree();
 
   buildJsonTree(tree, tree.rootIno, ".result.pending", { value: 1 });
@@ -144,7 +144,7 @@ Deno.test("buildJsonTree - encodes depth-zero names that look like internal pend
   assertEquals(getFileContent(tree, dataIno, "value"), "1");
 });
 
-Deno.test("buildJsonTreeAsync - encodes depth-zero names that look like internal pending roots by default", async () => {
+test("buildJsonTreeAsync - encodes depth-zero names that look like internal pending roots by default", async () => {
   const tree = new FsTree();
 
   await buildJsonTreeAsync(tree, tree.rootIno, ".input.pending", { value: 1 });
@@ -154,7 +154,7 @@ Deno.test("buildJsonTreeAsync - encodes depth-zero names that look like internal
   assertEquals(getFileContent(tree, dataIno, "value"), "1");
 });
 
-Deno.test("buildPendingJsonTreeAsync - preserves pending roots for rebuild staging", async () => {
+test("buildPendingJsonTreeAsync - preserves pending roots for rebuild staging", async () => {
   const tree = new FsTree();
 
   await buildPendingJsonTreeAsync(
@@ -169,7 +169,7 @@ Deno.test("buildPendingJsonTreeAsync - preserves pending roots for rebuild stagi
   assertEquals(tree.lookup(tree.rootIno, "%2Eresult.pending"), undefined);
 });
 
-Deno.test("buildJsonTree - array creates directory with numeric indices", () => {
+test("buildJsonTree - array creates directory with numeric indices", () => {
   const tree = new FsTree();
   const arr = ["a", "b", "c"];
   buildJsonTree(tree, tree.rootIno, "items", arr);
@@ -188,7 +188,7 @@ Deno.test("buildJsonTree - array creates directory with numeric indices", () => 
   assertEquals(JSON.parse(jsonContent), arr);
 });
 
-Deno.test("buildJsonTree - nested objects", () => {
+test("buildJsonTree - nested objects", () => {
   const tree = new FsTree();
   const data = {
     user: {
@@ -210,7 +210,7 @@ Deno.test("buildJsonTree - nested objects", () => {
   assertEquals(getFileContent(tree, addressIno, "zip"), "10001");
 });
 
-Deno.test("buildJsonTreeAsync matches synchronous nested tree structure", async () => {
+test("buildJsonTreeAsync matches synchronous nested tree structure", async () => {
   const tree = new FsTree();
   const data = {
     profile: {
@@ -268,7 +268,7 @@ function describeSubtree(tree: FsTree, ino: bigint): unknown {
   return { ino: String(ino), kind: node.kind };
 }
 
-Deno.test("buildJsonTreeAsync matches synchronous build across many batches", async () => {
+test("buildJsonTreeAsync matches synchronous build across many batches", async () => {
   // Wide and deep enough that both entry points run several batches, so a
   // batch boundary falls in the middle of a directory's children.
   const data = Object.fromEntries(
@@ -308,7 +308,7 @@ Deno.test("buildJsonTreeAsync matches synchronous build across many batches", as
   );
 });
 
-Deno.test("FsTree - clear removes subtree", () => {
+test("FsTree - clear removes subtree", () => {
   const tree = new FsTree();
   const data = { a: { b: 1, c: 2 }, d: 3 };
   buildJsonTree(tree, tree.rootIno, "root", data);
@@ -327,7 +327,7 @@ Deno.test("FsTree - clear removes subtree", () => {
   assertEquals(getFileContent(tree, rootDirIno, "d"), "3");
 });
 
-Deno.test("buildJsonTree - circular references become [Circular]", () => {
+test("buildJsonTree - circular references become [Circular]", () => {
   const tree = new FsTree();
   // deno-lint-ignore no-explicit-any
   const obj: any = { name: "loop" };
@@ -346,7 +346,7 @@ Deno.test("buildJsonTree - circular references become [Circular]", () => {
   assertEquals(parsed.self, "[Circular]");
 });
 
-Deno.test("buildJsonTree - shared DAG objects are not circular", () => {
+test("buildJsonTree - shared DAG objects are not circular", () => {
   const tree = new FsTree();
   const shared = { leaf: "same" };
   const data = { a: shared, b: shared };
@@ -365,7 +365,7 @@ Deno.test("buildJsonTree - shared DAG objects are not circular", () => {
   });
 });
 
-Deno.test("buildJsonTreeAsync - shared DAG objects are not circular", async () => {
+test("buildJsonTreeAsync - shared DAG objects are not circular", async () => {
   const tree = new FsTree();
   const shared = { leaf: "same" };
   const data = { a: shared, b: shared };
@@ -384,7 +384,7 @@ Deno.test("buildJsonTreeAsync - shared DAG objects are not circular", async () =
   });
 });
 
-Deno.test("safeStringify - handles circular refs", () => {
+test("safeStringify - handles circular refs", () => {
   // deno-lint-ignore no-explicit-any
   const a: any = { x: 1 };
   a.y = a;
@@ -393,7 +393,7 @@ Deno.test("safeStringify - handles circular refs", () => {
   assertEquals(result.y, "[Circular]");
 });
 
-Deno.test("safeStringify - preserves shared DAG objects", () => {
+test("safeStringify - preserves shared DAG objects", () => {
   const shared = { leaf: "same" };
   const result = JSON.parse(safeStringify({ a: shared, b: shared }));
   assertEquals(result, {
@@ -422,7 +422,7 @@ function chainDepth(value: unknown): { depth: number; tail: unknown } {
   return { depth, tail: cursor };
 }
 
-Deno.test("safeStringify - a circular edge at the depth bound reads as circular", () => {
+test("safeStringify - a circular edge at the depth bound reads as circular", () => {
   // Objects at nesting levels 0 to the bound, the deepest pointing at the
   // root, so the back edge falls exactly where the depth bound would bite.
   const nodes: Record<string, unknown>[] = [];
@@ -440,7 +440,7 @@ Deno.test("safeStringify - a circular edge at the depth bound reads as circular"
   });
 });
 
-Deno.test("safeStringify - spells out nesting up to the depth bound", () => {
+test("safeStringify - spells out nesting up to the depth bound", () => {
   const shallow = JSON.parse(safeStringify(nestedChain(MAX_JSON_DEPTH - 2)));
   assertEquals(chainDepth(shallow), {
     depth: MAX_JSON_DEPTH - 2,
@@ -448,7 +448,7 @@ Deno.test("safeStringify - spells out nesting up to the depth bound", () => {
   });
 });
 
-Deno.test("safeStringify - marks values nested below the depth bound", () => {
+test("safeStringify - marks values nested below the depth bound", () => {
   const deep = JSON.parse(safeStringify(nestedChain(MAX_JSON_DEPTH * 4)));
   assertEquals(chainDepth(deep), {
     depth: MAX_JSON_DEPTH,
@@ -456,20 +456,20 @@ Deno.test("safeStringify - marks values nested below the depth bound", () => {
   });
 });
 
-Deno.test("safeStringify - survives nesting deeper than the call stack", () => {
+test("safeStringify - survives nesting deeper than the call stack", () => {
   // A serializer that recurses per level overflows well before this depth.
   const result = JSON.parse(safeStringify(nestedChain(100_000)));
   assertEquals(chainDepth(result).tail, MAX_DEPTH_MARKER);
 });
 
-Deno.test("safeStringify - bounds depth per value, not across siblings", () => {
+test("safeStringify - bounds depth per value, not across siblings", () => {
   const wide = { a: nestedChain(4), b: nestedChain(4) };
   const result = JSON.parse(safeStringify(wide)) as Record<string, unknown>;
   assertEquals(chainDepth(result.a).tail, { leaf: "bottom" });
   assertEquals(chainDepth(result.b).tail, { leaf: "bottom" });
 });
 
-Deno.test("buildJsonTree - projects nesting deeper than the call stack", () => {
+test("buildJsonTree - projects nesting deeper than the call stack", () => {
   const depth = MAX_JSON_DEPTH * 8;
   const tree = new FsTree();
   buildJsonTree(tree, tree.rootIno, "deep", nestedChain(depth));
@@ -498,7 +498,7 @@ Deno.test("buildJsonTree - projects nesting deeper than the call stack", () => {
   );
 });
 
-Deno.test("buildFsProjection - application/json writes index.json", () => {
+test("buildFsProjection - application/json writes index.json", () => {
   const tree = new FsTree();
   const fsValue: FsValue = {
     type: "application/json",
@@ -517,7 +517,7 @@ Deno.test("buildFsProjection - application/json writes index.json", () => {
   );
 });
 
-Deno.test("buildFsProjection - text/markdown quotes strings and writes other primitives bare", () => {
+test("buildFsProjection - text/markdown quotes strings and writes other primitives bare", () => {
   const tree = new FsTree();
   const fsValue: FsValue = {
     type: "text/markdown",
@@ -550,7 +550,7 @@ Deno.test("buildFsProjection - text/markdown quotes strings and writes other pri
   );
 });
 
-Deno.test("buildFsProjection - text/markdown keeps a multi-line string on one frontmatter line", () => {
+test("buildFsProjection - text/markdown keeps a multi-line string on one frontmatter line", () => {
   const tree = new FsTree();
   const fsValue: FsValue = {
     type: "text/markdown",
@@ -573,7 +573,7 @@ Deno.test("buildFsProjection - text/markdown keeps a multi-line string on one fr
   );
 });
 
-Deno.test("buildFsProjection - a pattern cannot overwrite entityId", () => {
+test("buildFsProjection - a pattern cannot overwrite entityId", () => {
   const tree = new FsTree();
   const fsValue = {
     type: "application/json",
@@ -588,7 +588,7 @@ Deno.test("buildFsProjection - a pattern cannot overwrite entityId", () => {
   );
 });
 
-Deno.test("buildFsProjection - an unknown type falls back to index.txt", () => {
+test("buildFsProjection - an unknown type falls back to index.txt", () => {
   const tree = new FsTree();
   const fsValue = { type: "text/csv", content: "a,b" } as unknown as FsValue;
 
@@ -603,7 +603,7 @@ Deno.test("buildFsProjection - an unknown type falls back to index.txt", () => {
   );
 });
 
-Deno.test("buildFsProjection - names the failing entry when a value cannot serialize", () => {
+test("buildFsProjection - names the failing entry when a value cannot serialize", () => {
   const tree = new FsTree();
   const piece = tree.addDir(tree.rootIno, "todo-app");
   const fsValue = {
@@ -618,7 +618,7 @@ Deno.test("buildFsProjection - names the failing entry when a value cannot seria
   );
 });
 
-Deno.test("stringifyEntryValue - names the failing entry's mounted path", () => {
+test("stringifyEntryValue - names the failing entry's mounted path", () => {
   const tree = new FsTree();
   const space = tree.addDir(tree.rootIno, "did:key:zSpace");
   const pieces = tree.addDir(space, "pieces");
@@ -632,7 +632,7 @@ Deno.test("stringifyEntryValue - names the failing entry's mounted path", () => 
   assertEquals((error as Error).cause instanceof TypeError, true);
 });
 
-Deno.test("FsTree - addSymlink", () => {
+test("FsTree - addSymlink", () => {
   const tree = new FsTree();
   tree.addSymlink(tree.rootIno, "link", "../target/path");
 
@@ -649,7 +649,7 @@ Deno.test("FsTree - addSymlink", () => {
 // Sigil link tests
 //
 
-Deno.test("isSigilLink - detects valid sigil links", () => {
+test("isSigilLink - detects valid sigil links", () => {
   assertEquals(
     isSigilLink({ "/": { "link@1": { id: "bafy123" } } }),
     true,
@@ -670,7 +670,7 @@ Deno.test("isSigilLink - detects valid sigil links", () => {
   );
 });
 
-Deno.test("isSigilLink - rejects non-sigil values", () => {
+test("isSigilLink - rejects non-sigil values", () => {
   assertEquals(isSigilLink(null), false);
   assertEquals(isSigilLink(42), false);
   assertEquals(isSigilLink("hello"), false);
@@ -682,7 +682,7 @@ Deno.test("isSigilLink - rejects non-sigil values", () => {
   assertEquals(isSigilLink({ "/": { "link@1": {} }, extra: true }), false);
 });
 
-Deno.test("isHandlerCell - detects stream cells via duck-typing", () => {
+test("isHandlerCell - detects stream cells via duck-typing", () => {
   // Mock Cell with isStream() returning true
   assertEquals(isHandlerCell({ isStream: () => true }), true);
   // Mock Cell with isStream() returning false
@@ -694,7 +694,7 @@ Deno.test("isHandlerCell - detects stream cells via duck-typing", () => {
   assertEquals(isHandlerCell({ $stream: true }), false);
 });
 
-Deno.test("buildJsonTree - handler cells skipped via skipEntry", () => {
+test("buildJsonTree - handler cells skipped via skipEntry", () => {
   const tree = new FsTree();
 
   // Simulate live Cell objects with isStream() (as returned by piece.result.get())
@@ -747,7 +747,7 @@ Deno.test("buildJsonTree - handler cells skipped via skipEntry", () => {
   assertEquals(parsed.value, 10);
 });
 
-Deno.test("buildJsonTree - sigil link becomes symlink via resolveLink", () => {
+test("buildJsonTree - sigil link becomes symlink via resolveLink", () => {
   const tree = new FsTree();
 
   const resolveLink = (_value: unknown, depth: number): string | null => {
@@ -776,7 +776,7 @@ Deno.test("buildJsonTree - sigil link becomes symlink via resolveLink", () => {
   assertEquals(getFileContent(tree, resultIno, "name"), "Alice");
 });
 
-Deno.test("buildJsonTree - sigil link in nested array gets correct depth", () => {
+test("buildJsonTree - sigil link in nested array gets correct depth", () => {
   const tree = new FsTree();
 
   const resolveLink = (_value: unknown, depth: number): string | null => {
@@ -803,7 +803,7 @@ Deno.test("buildJsonTree - sigil link in nested array gets correct depth", () =>
   }
 });
 
-Deno.test("buildJsonTree - unresolvable sigil link falls through to object", () => {
+test("buildJsonTree - unresolvable sigil link falls through to object", () => {
   const tree = new FsTree();
 
   const resolveLink = (): string | null => null;
@@ -825,12 +825,12 @@ Deno.test("buildJsonTree - unresolvable sigil link falls through to object", () 
 // Stream / handler tests
 //
 
-Deno.test("isStreamValue - detects stream markers", () => {
+test("isStreamValue - detects stream markers", () => {
   assertEquals(isStreamValue({ $stream: true }), true);
   assertEquals(isStreamValue({ $stream: true, extra: 1 }), true);
 });
 
-Deno.test("isStreamValue - rejects non-stream values", () => {
+test("isStreamValue - rejects non-stream values", () => {
   assertEquals(isStreamValue(null), false);
   assertEquals(isStreamValue(42), false);
   assertEquals(isStreamValue("hello"), false);
@@ -840,7 +840,7 @@ Deno.test("isStreamValue - rejects non-stream values", () => {
   assertEquals(isStreamValue({}), false);
 });
 
-Deno.test("transformStreamValues - replaces stream markers with handler sigils", () => {
+test("transformStreamValues - replaces stream markers with handler sigils", () => {
   const input = {
     items: [1, 2, 3],
     count: 3,
@@ -852,21 +852,21 @@ Deno.test("transformStreamValues - replaces stream markers with handler sigils",
   assertEquals(result.addItem, { "/handler": "addItem" });
 });
 
-Deno.test("transformStreamValues - returns original when no streams", () => {
+test("transformStreamValues - returns original when no streams", () => {
   const input = { name: "Alice", age: 30 };
   const result = transformStreamValues(input);
   // Should be the exact same reference
   assertEquals(result === input, true);
 });
 
-Deno.test("transformStreamValues - passes through non-objects", () => {
+test("transformStreamValues - passes through non-objects", () => {
   assertEquals(transformStreamValues(null), null);
   assertEquals(transformStreamValues(42), 42);
   assertEquals(transformStreamValues("hello"), "hello");
   assertEquals(transformStreamValues([1, 2]), [1, 2]);
 });
 
-Deno.test("buildJsonTree - stream values are skipped in object directories", () => {
+test("buildJsonTree - stream values are skipped in object directories", () => {
   const tree = new FsTree();
   const data = {
     items: ["a", "b"],
@@ -890,7 +890,7 @@ Deno.test("buildJsonTree - stream values are skipped in object directories", () 
   assertEquals(tree.lookup(resultIno, "reset"), undefined);
 });
 
-Deno.test("buildJsonTree - .json sibling replaces streams with handler sigils", () => {
+test("buildJsonTree - .json sibling replaces streams with handler sigils", () => {
   const tree = new FsTree();
   const data = {
     items: ["a"],
@@ -904,7 +904,7 @@ Deno.test("buildJsonTree - .json sibling replaces streams with handler sigils", 
   assertEquals(parsed.addItem, { "/handler": "addItem" });
 });
 
-Deno.test("buildJsonTree - a nested .json sibling shows a stream handle as a handler sigil", () => {
+test("buildJsonTree - a nested .json sibling shows a stream handle as a handler sigil", () => {
   // A stream holds no value; what stands at a nested stream position in a
   // read value is the handle minted for it, which is not data to spell out.
   const tree = new FsTree();
@@ -925,7 +925,7 @@ Deno.test("buildJsonTree - a nested .json sibling shows a stream handle as a han
   assertEquals(tree.lookup(nestedIno, "bump"), undefined);
 });
 
-Deno.test("classifyCallableEntry - a schema declaring a stream is a handler whatever stands at it", () => {
+test("classifyCallableEntry - a schema declaring a stream is a handler whatever stands at it", () => {
   assertEquals(
     classifyCallableEntry(undefined, { asCell: ["stream"], type: "object" }),
     "handler",
@@ -939,7 +939,7 @@ Deno.test("classifyCallableEntry - a schema declaring a stream is a handler what
   assertEquals(classifyCallableEntry({}, { type: "object" }), null);
 });
 
-Deno.test("classifyCallableEntry does not treat ordinary data as a tool when linked schema disagrees", () => {
+test("classifyCallableEntry does not treat ordinary data as a tool when linked schema disagrees", () => {
   const value = {
     pattern: "just-data",
     extraParams: {
@@ -962,7 +962,7 @@ Deno.test("classifyCallableEntry does not treat ordinary data as a tool when lin
   assertEquals(classifyCallableEntry(value, schema), null);
 });
 
-Deno.test("buildJsonTree - nested .json siblings keep ordinary pattern-shaped objects intact", () => {
+test("buildJsonTree - nested .json siblings keep ordinary pattern-shaped objects intact", () => {
   const tree = new FsTree();
   const data = {
     nested: {
@@ -991,7 +991,7 @@ Deno.test("buildJsonTree - nested .json siblings keep ordinary pattern-shaped ob
   });
 });
 
-Deno.test("buildJsonTree - root .json siblings keep ordinary pattern-shaped objects intact without a classifier", () => {
+test("buildJsonTree - root .json siblings keep ordinary pattern-shaped objects intact without a classifier", () => {
   const tree = new FsTree();
   const data = {
     pattern: "literal-pattern",
@@ -1006,7 +1006,7 @@ Deno.test("buildJsonTree - root .json siblings keep ordinary pattern-shaped obje
   assertEquals(parsed, data);
 });
 
-Deno.test("FsTree - addCallable creates callable handler node", () => {
+test("FsTree - addCallable creates callable handler node", () => {
   const tree = new FsTree();
   const dirIno = tree.addDir(tree.rootIno, "result", "object");
   const handlerIno = tree.addCallable(
@@ -1030,7 +1030,7 @@ Deno.test("FsTree - addCallable creates callable handler node", () => {
   assertEquals(tree.lookup(dirIno, "addItem.handler"), handlerIno);
 });
 
-Deno.test("FsTree - handler nodes coexist with regular files", () => {
+test("FsTree - handler nodes coexist with regular files", () => {
   const tree = new FsTree();
   const dirIno = tree.addDir(tree.rootIno, "result", "object");
   tree.addFile(dirIno, "count", "3", "number");
@@ -1056,7 +1056,7 @@ Deno.test("FsTree - handler nodes coexist with regular files", () => {
   assertEquals(names, ["addItem.handler", "count", "reset.handler"]);
 });
 
-Deno.test("FsTree - clear removes handler nodes", () => {
+test("FsTree - clear removes handler nodes", () => {
   const tree = new FsTree();
   const dirIno = tree.addDir(tree.rootIno, "result", "object");
   const handlerIno = tree.addCallable(
@@ -1074,7 +1074,7 @@ Deno.test("FsTree - clear removes handler nodes", () => {
   assertEquals(tree.lookup(tree.rootIno, "result"), undefined);
 });
 
-Deno.test("buildJsonTree - .tool callables appear beside ordinary fields", () => {
+test("buildJsonTree - .tool callables appear beside ordinary fields", () => {
   const tree = new FsTree();
   const data = {
     count: 3,
@@ -1121,7 +1121,7 @@ Deno.test("buildJsonTree - .tool callables appear beside ordinary fields", () =>
   }
 });
 
-Deno.test("buildJsonTree - .json siblings replace handlers and tools with sigils", () => {
+test("buildJsonTree - .json siblings replace handlers and tools with sigils", () => {
   const tree = new FsTree();
   const data = {
     count: 3,
@@ -1157,7 +1157,7 @@ Deno.test("buildJsonTree - .json siblings replace handlers and tools with sigils
   assertEquals(parsed.search, { "/tool": "search" });
 });
 
-Deno.test("buildJsonTree - a root key the classifier names a callable projects no value", () => {
+test("buildJsonTree - a root key the classifier names a callable projects no value", () => {
   // A declared stream is a callable whatever stands at it, so what stands
   // there is not projected beside the callable's own file.
   const tree = new FsTree();
@@ -1179,7 +1179,7 @@ Deno.test("buildJsonTree - a root key the classifier names a callable projects n
   assertEquals(parsed.events, { "/handler": "events" });
 });
 
-Deno.test("callable scripts begin with a cf exec shebang and shell fallback", () => {
+test("callable scripts begin with a cf exec shebang and shell fallback", () => {
   const tree = new FsTree();
   const resultIno = tree.addDir(tree.rootIno, "result", "object");
   const callableIno = tree.addCallable(
@@ -1200,7 +1200,7 @@ Deno.test("callable scripts begin with a cf exec shebang and shell fallback", ()
   }
 });
 
-Deno.test("CellBridge.sendToHandler resolves mounted callable paths under pieces and entities", async () => {
+test("CellBridge.resolveHandlerTarget resolves mounted callable paths under pieces and entities", async () => {
   const tree = new FsTree();
   const bridge = new CellBridge(tree);
   const calls: Array<{
@@ -1295,8 +1295,11 @@ Deno.test("CellBridge.sendToHandler resolves mounted callable paths under pieces
     srcErrorLogInos: new Map(),
   });
 
-  await bridge.sendToHandler(piecesHandlerIno, { count: 1 });
-  await bridge.sendToHandler(entitiesHandlerIno, { count: 2 });
+  const piecesTarget = bridge.resolveHandlerTarget(piecesHandlerIno);
+  const entitiesTarget = bridge.resolveHandlerTarget(entitiesHandlerIno);
+  assert(piecesTarget !== null && entitiesTarget !== null);
+  await bridge.sendToHandlerTarget(piecesTarget, { count: 1 });
+  await bridge.sendToHandlerTarget(entitiesTarget, { count: 2 });
 
   assertEquals(calls, [
     {
@@ -1314,7 +1317,7 @@ Deno.test("CellBridge.sendToHandler resolves mounted callable paths under pieces
   ]);
 });
 
-Deno.test("CellBridge.sendToHandlerTarget survives callable inode rebuilds", async () => {
+test("CellBridge.sendToHandlerTarget survives callable inode rebuilds", async () => {
   const tree = new FsTree();
   const bridge = new CellBridge(tree);
   const calls: Array<{
@@ -1394,7 +1397,7 @@ Deno.test("CellBridge.sendToHandlerTarget survives callable inode rebuilds", asy
   ]);
 });
 
-Deno.test("CellBridge.loadPieceTree materializes callable dirs from sparse result roots", async () => {
+test("CellBridge.loadPieceTree materializes callable dirs from sparse result roots", async () => {
   const tree = new FsTree();
   const bridge = new CellBridge(tree, "/tmp/cf-exec");
 
@@ -1507,7 +1510,7 @@ Deno.test("CellBridge.loadPieceTree materializes callable dirs from sparse resul
   assertEquals(resultJson.search, { "/tool": "search" });
 });
 
-Deno.test("CellBridge.loadPieceTree keeps schema-backed callables beside populated result fields", async () => {
+test("CellBridge.loadPieceTree keeps schema-backed callables beside populated result fields", async () => {
   const tree = new FsTree();
   const bridge = new CellBridge(tree, "/tmp/cf-exec");
 
@@ -1651,7 +1654,7 @@ function buildTestTree(): {
   return { tree, bridge, resultIno };
 }
 
-Deno.test("parseSymlinkTarget - same-space entity ref", () => {
+test("parseSymlinkTarget - same-space entity ref", () => {
   const { bridge, resultIno } = buildTestTree();
 
   const result = bridge.parseSymlinkTarget(
@@ -1662,7 +1665,7 @@ Deno.test("parseSymlinkTarget - same-space entity ref", () => {
   assertEquals(result, { id: "ba4jcbvpq3k5" });
 });
 
-Deno.test("parseSymlinkTarget - same-space entity ref with path", () => {
+test("parseSymlinkTarget - same-space entity ref with path", () => {
   const { bridge, resultIno } = buildTestTree();
 
   const result = bridge.parseSymlinkTarget(
@@ -1673,7 +1676,7 @@ Deno.test("parseSymlinkTarget - same-space entity ref with path", () => {
   assertEquals(result, { id: "ba4jcbvpq3k5", path: ["items", "0"] });
 });
 
-Deno.test("parseSymlinkTarget - cross-space entity ref", () => {
+test("parseSymlinkTarget - cross-space entity ref", () => {
   const { tree, bridge, resultIno } = buildTestTree();
 
   // Add another space
@@ -1689,7 +1692,7 @@ Deno.test("parseSymlinkTarget - cross-space entity ref", () => {
   assertEquals(result, { id: "xyz123", space: "did:key:z6MkOther" });
 });
 
-Deno.test("parseSymlinkTarget - cross-space entity ref with path", () => {
+test("parseSymlinkTarget - cross-space entity ref with path", () => {
   const { tree, bridge, resultIno } = buildTestTree();
 
   const otherIno = tree.addDir(tree.rootIno, "other");
@@ -1708,7 +1711,7 @@ Deno.test("parseSymlinkTarget - cross-space entity ref with path", () => {
   });
 });
 
-Deno.test("parseSymlinkTarget - self-reference within piece", () => {
+test("parseSymlinkTarget - self-reference within piece", () => {
   const { bridge, resultIno } = buildTestTree();
 
   // Target points to input/items/0 within the same piece
@@ -1720,7 +1723,7 @@ Deno.test("parseSymlinkTarget - self-reference within piece", () => {
   assertEquals(result, { path: ["items", "0"] });
 });
 
-Deno.test("parseSymlinkTarget - escapes mount root returns null", () => {
+test("parseSymlinkTarget - escapes mount root returns null", () => {
   const { bridge, resultIno } = buildTestTree();
 
   const result = bridge.parseSymlinkTarget(
@@ -1731,7 +1734,7 @@ Deno.test("parseSymlinkTarget - escapes mount root returns null", () => {
   assertEquals(result, null);
 });
 
-Deno.test("parseSymlinkTarget - unresolvable target returns null", () => {
+test("parseSymlinkTarget - unresolvable target returns null", () => {
   const { bridge, resultIno } = buildTestTree();
 
   // Resolves to mount root (no entities/ or pieces/ pattern)
@@ -1743,7 +1746,30 @@ Deno.test("parseSymlinkTarget - unresolvable target returns null", () => {
   assertEquals(result, null);
 });
 
-Deno.test("parseSymlinkTarget - unknown cross-space uses name as fallback", () => {
+test("parseSymlinkTarget - ignores empty and `.` segments", () => {
+  const { bridge, resultIno } = buildTestTree();
+
+  assertEquals(
+    bridge.parseSymlinkTarget(resultIno, "./../..//../entities/./abc/"),
+    { id: "abc" },
+  );
+});
+
+test("parseSymlinkTarget - a parent no longer in the tree returns null", () => {
+  const { tree, bridge, resultIno } = buildTestTree();
+  const target = "../../../entities/abc";
+  const pieceIno = tree.parents.get(resultIno)!;
+  const removedIno = tree.addDir(pieceIno, "removed");
+  assertEquals(bridge.parseSymlinkTarget(removedIno, target), {
+    id: "abc",
+  });
+
+  tree.removeChild(pieceIno, "removed");
+
+  assertEquals(bridge.parseSymlinkTarget(removedIno, target), null);
+});
+
+test("parseSymlinkTarget - unknown cross-space uses name as fallback", () => {
   const { bridge, resultIno } = buildTestTree();
 
   // "unknown" space isn't in knownSpaces
@@ -1755,7 +1781,7 @@ Deno.test("parseSymlinkTarget - unknown cross-space uses name as fallback", () =
   assertEquals(result, { id: "abc", space: "unknown" });
 });
 
-Deno.test("makeLinkResolver encodes unsafe link components", () => {
+test("makeLinkResolver encodes unsafe link components", () => {
   const bridge = new CellBridge(new FsTree());
   const resolveLink = bridge.accessForTestingOnly.makeLinkResolver("home");
 
@@ -1773,7 +1799,7 @@ Deno.test("makeLinkResolver encodes unsafe link components", () => {
   );
 });
 
-Deno.test("makeLinkResolver leaves malformed link paths inert", () => {
+test("makeLinkResolver leaves malformed link paths inert", () => {
   const bridge = new CellBridge(new FsTree());
   const resolveLink = bridge.accessForTestingOnly.makeLinkResolver("home");
 
@@ -1790,7 +1816,7 @@ Deno.test("makeLinkResolver leaves malformed link paths inert", () => {
   );
 });
 
-Deno.test("a failure during a rebuild names where the entry mounts", async () => {
+test("a failure during a rebuild names where the entry mounts", async () => {
   // A rebuild of a prop that already exists assembles under a staging root and
   // reconciles onto the live tree afterwards. The staging name is internal and
   // never appears in the mount, so the failure names the live path instead.
@@ -1813,7 +1839,7 @@ Deno.test("a failure during a rebuild names where the entry mounts", async () =>
   assertEquals(firstHydration.message, rebuild.message);
 });
 
-Deno.test("a failure under the [FS] staging container names the piece entry", () => {
+test("a failure under the [FS] staging container names the piece entry", () => {
   const tree = new FsTree();
   const piece = tree.addDir(tree.addDir(tree.rootIno, "pieces"), "todo-app");
   const stage = tree.addDir(piece, ".fs.pending");

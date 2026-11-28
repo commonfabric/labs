@@ -1,11 +1,12 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { stripAnsi } from "../lib/view/ansi.ts";
 import type { MergeRequest } from "../lib/view/github.ts";
 import type { Key } from "../lib/view/keys.ts";
 import { helpOverlay, Session } from "../lib/view/session.ts";
+import { say } from "../lib/view/tasklog.ts";
 import { drawnRows, parseDocument } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A session over a line wider than its 80 by 12 screen. */
 function session(color = false): Session {
@@ -55,7 +56,7 @@ describe("view-land", () => {
     function asking(): Session {
       const s = session();
       s.beginTask("Land", () => {});
-      s.appendTaskOutput("Looking.\n");
+      s.beginTaskStep(say`Looking`)();
       s.confirmLand(LANDING);
       return s;
     }
@@ -73,17 +74,23 @@ describe("view-land", () => {
       for (const [method, line] of bodies) {
         const s = session();
         s.beginTask("Land", () => {});
-        s.appendTaskOutput("Looking.\n");
+        s.beginTaskStep(say`Looking`)();
         s.confirmLand({ ...LANDING, method });
 
         const dialog = s.view().dialog!;
         expect(dialog.title).toBe("Land");
         expect(shown(s)).toEqual([
-          "Looking.",
+          "Looking... ✓",
           line,
           "if its head is still c0ffee?",
         ]);
-        expect(dialog.emphasized).toEqual([1, 2]);
+        const spans = dialog.spans![dialog.body.indexOf(line)];
+        expect(spans.find((span) => span.tone === "name")).toEqual({
+          from: line.indexOf("7"),
+          to: line.indexOf("7") + 1,
+          tone: "name",
+          url: "https://github.com/octo/repo/pull/7",
+        });
         expect(dialog.buttons.map((b) => b.label)).toEqual([
           "Merge",
           "Cancel",
@@ -98,7 +105,7 @@ describe("view-land", () => {
       s.confirmLand(LANDING);
       expect(s.view().dialog).toBeNull();
       s.beginTask("Land", () => {});
-      s.finishTask("Done.");
+      s.finishTask(say`Done.`);
 
       s.confirmLand(LANDING);
       expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual([
@@ -139,16 +146,17 @@ describe("view-land", () => {
 
     it("keeps what it found and what it asked when the merge continues the dialog, which then offers Abort", () => {
       const s = asking();
+      s.resize(80, 24);
       s.handleKey(typed("m"));
 
       s.continueTask(() => {});
-      s.appendTaskOutput("Merging.\n");
+      s.beginTaskStep(say`Merging`);
 
       expect(shown(s)).toEqual([
-        "Looking.",
+        "Looking... ✓",
         "Squash and merge pull request 7 of octo/repo,",
         "if its head is still c0ffee?",
-        "Merging.",
+        "Merging... ◐",
       ]);
       expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual(["Abort"]);
     });
@@ -172,7 +180,7 @@ describe("view-land", () => {
       const s = session();
       s.beginTask(title, () => {});
       for (let i = 1; i <= count; i++) s.appendTaskOutput(`line ${i}\n`);
-      s.finishTask("Done.");
+      s.finishTask(say`Done.`);
       return s;
     }
 
@@ -191,13 +199,13 @@ describe("view-land", () => {
       expect(end.at(-1)).toBe("Done.");
 
       s.handleKey({ name: "up" });
-      expect(shown(s).at(-1)).toBe("line 20");
+      expect(shown(s).at(-1)).toBe("  line 20");
       s.handleKey({ name: "home" });
-      expect(shown(s)[0]).toBe("line 1");
+      expect(shown(s)[0]).toBe("  line 1");
       s.handleKey({ name: "up" });
-      expect(shown(s)[0]).toBe("line 1");
+      expect(shown(s)[0]).toBe("  line 1");
       s.handleKey({ name: "down" });
-      expect(shown(s)[0]).toBe("line 2");
+      expect(shown(s)[0]).toBe("  line 2");
       s.handleKey({ name: "end" });
       expect(shown(s)).toEqual(end);
       s.handleKey({ name: "pageup" });
@@ -226,11 +234,11 @@ describe("view-land", () => {
       s.handleKey({ name: "home" });
 
       s.appendTaskOutput("line 21\n");
-      expect(shown(s)[0]).toBe("line 1");
+      expect(shown(s)[0]).toBe("  line 1");
       s.handleKey({ name: "end" });
       s.appendTaskOutput("line 22\n");
 
-      expect(shown(s).at(-1)).toBe("line 22");
+      expect(shown(s).at(-1)).toBe("  line 22");
     });
 
     it("shows the end of its output again when asked to, however far it was scrolled back", () => {
@@ -247,16 +255,16 @@ describe("view-land", () => {
       const end = shown(s);
 
       s.handleKey({ name: "wheel-up" });
-      expect(shown(s).at(-1)).toBe("line 19");
+      expect(shown(s).at(-1)).toBe("  line 19");
       s.handleKey({ name: "wheel-up" });
       s.handleKey({ name: "wheel-down" });
-      expect(shown(s).at(-1)).toBe("line 19");
+      expect(shown(s).at(-1)).toBe("  line 19");
       s.handleKey({ name: "wheel-down" });
 
       expect(shown(s)).toEqual(end);
     });
 
-    it("draws the lines written emphasized brighter than the rest", () => {
+    it("draws the viewer's own words brighter than the text it quotes, and the names they interpolate in a color of their own", () => {
       const s = new Session(
         parseDocument("const a = 1;\n"),
         { color: true, showLineNumbers: false },
@@ -264,25 +272,24 @@ describe("view-land", () => {
       );
       s.beginTask("Push", () => {});
       s.appendTaskOutput("quoted text\n");
-      s.appendTaskOutput("Touch the key.\n", true);
+      s.beginTaskStep(say`Touching ${"laptop"} now`);
       s.appendTaskOutput("more quoted\n");
 
-      const dialog = s.view().dialog!;
-      const at = (text: string) => dialog.body.indexOf(text);
-      expect(dialog.emphasized).toEqual([at("Touch the key.")]);
       const rows = drawnRows(s);
       const style = (text: string) => {
         const row = rows.find((r) => r.includes(text))!;
         return row.slice(0, row.indexOf(text)).split("\x1b[").at(-1);
       };
-      expect(style("Touch the key.")).not.toBe(style("quoted text"));
+      expect(style("Touching")).not.toBe(style("quoted text"));
+      expect(style("laptop")).not.toBe(style("Touching"));
+      expect(style("laptop")).not.toBe(style("quoted text"));
       expect(style("more quoted")).toBe(style("quoted text"));
     });
 
     it("offers a button that asks to try the task again, when it ended saying so, and none otherwise", () => {
       const s = session();
       s.beginTask("Push", () => {});
-      s.finishTask("Failed. To retry, press Create PR.", "Create PR");
+      s.finishTask(say`Failed. To retry, press ${"Create PR"}.`, "Create PR");
 
       expect(s.view().dialog!.buttons.map((b) => b.label)).toEqual([
         "Close",
@@ -310,7 +317,7 @@ describe("view-land", () => {
       s.beginTask("Push", () => {});
       for (let i = 1; i <= 20; i++) s.appendTaskOutput(`row ${i}\n`);
 
-      expect(shown(s).at(-1)).toBe("row 20");
+      expect(shown(s).at(-1)).toBe("  row 20");
     });
   });
 

@@ -3,9 +3,10 @@
  * holds and retains, vets each one as the owner, and registers each offer that
  * passes in Home's shared-space catalog through Home's `registerSharedSpace`
  * stream, then has Home's chat manager accept each room it newly registers.
- * Vetting reads the offered space's access list, the kind it declares, and its
- * root, which a Home handler cannot do; `docs/features/private-inbox.md`
- * describes the whole arrangement.
+ * A notice that a room the catalog lists changed has the chat manager read the
+ * room's title again. Vetting reads the offered space's access list, the kind
+ * it declares, and its root, which a Home handler cannot do;
+ * `docs/features/private-inbox.md` describes the whole arrangement.
  */
 
 import type { DID } from "@commonfabric/identity";
@@ -63,9 +64,16 @@ export type OfferRefusal =
 /**
  * What an instance decided about an offer: `sent` to Home's
  * `registerSharedSpace`, skipped as `received` because the catalog holds its
- * receipt, or refused, for the reason given.
+ * receipt, or refused, for the reason given. A notice that a room changed is
+ * `sent` to Home's chat manager's `joinRoom`, skipped as `notice-handled`
+ * because the catalog marks it handled, or `notice-ignored`.
  */
-export type OfferDecision = "sent" | "received" | OfferRefusal;
+export type OfferDecision =
+  | "sent"
+  | "received"
+  | "notice-handled"
+  | "notice-ignored"
+  | OfferRefusal;
 
 /** An offer whose envelope is well formed, as the intake registers it. */
 interface VettableOffer {
@@ -75,6 +83,7 @@ interface VettableOffer {
   host: string;
   title: string;
   from: DID;
+  sharedAt: number;
 
   /** The space DID of the recipient's profile the offer names, if any. */
   profile?: DID;
@@ -90,16 +99,18 @@ const retainedSchema = {
   items: inboxPieceLinkSchema,
 } as const;
 
-// Every field of every row, as stored, so that a malformed field reaches the
-// vetting rather than being projected away.
-const offersSchema = {
-  type: "array",
-  items: { type: "object", additionalProperties: true },
-} as const;
+// Every row, as stored, so that a malformed field reaches the vetting rather
+// than being projected away, and a row that is not a record is passed over
+// rather than failing the list, which would hide every other row.
+const offersSchema = { type: "array", items: true } as const;
 
 const catalogSchema = {
   type: "object",
-  properties: { offers: { type: "object", additionalProperties: true } },
+  properties: {
+    entries: { type: "object", additionalProperties: true },
+    offers: { type: "object", additionalProperties: true },
+    notices: { type: "object", additionalProperties: true },
+  },
 } as const;
 
 // Home's observation of its profile records, read loosely, since the intake
@@ -118,12 +129,18 @@ const profilesSchema = {
  * What the intake reads of Home before deciding the rows of an inbox: the
  * offers its catalog holds receipts for, by {@link offerIdentity}, with the
  * `profileConflict` each receipt carries, if any, the spaces Home records no
- * profile for, and the spaces of the profiles a registration can record.
+ * profile for, the spaces of the profiles a registration can record, the
+ * spaces of the rooms the catalog lists as saved, the notices it marks
+ * handled, by {@link offerIdentity}, each with the `sharedAt` its mark holds,
+ * and whether the catalog could be read at all.
  */
 interface HomeReceipts {
   received: Map<string, unknown>;
   unrecorded: Set<string>;
   live: Set<string>;
+  rooms: Set<string>;
+  noticed: Map<string, unknown>;
+  catalogRead: boolean;
 }
 
 /**
@@ -196,6 +213,8 @@ export function startShareIntakeOf(
  *
  * Each row of an inbox is decided by its whole content, so a row naming
  * another offer's sender and `id` decides nothing about that offer. A row
+ * that is not a record is passed over, unlogged, and decides nothing about
+ * the rows around it. A row
  * refused for something in the row itself (its envelope, its `kind` or its
  * `host`) or for the kind its space declares, which never changes, is decided
  * for the life of the instance, and so is one Home handled once sent, or
@@ -245,6 +264,33 @@ export function startShareIntakeOf(
  * and an entry archived since it was registered stays archived. An entry
  * already there gets no acceptance, and neither does a `loom` entry, whose
  * registration is the whole of the Loom's arrival.
+ *
+ * A row carrying `changes` is a notice that a room changed, which is never
+ * registered and carries no room data: it says only that the room's title,
+ * as its `changes` says, is to be read again. The instance acts on one when:
+ *
+ * - its envelope is well formed, as an offer's must be, and its `host` is
+ *   this runtime's own, as an offer's must be;
+ * - its `kind` is `fabrichat-room`, its `id` is `changed:` followed by its
+ *   `space`, and its `changes` is a record whose `title` is `true`;
+ * - Home's catalog lists that space as a saved room;
+ * - the catalog's mark for its sender and `id`, under `notices`, holds a
+ *   `sharedAt` other than the row's, or none, and the instance has sent no
+ *   other row holding the same sender, `id` and `sharedAt`;
+ * - Home's chat manager has a `joinRoom`, and the space passes the vetting a
+ *   room's space does, its sender holding a `WRITE` or `OWNER` entry of its
+ *   own there, as an offer's must.
+ *
+ * Acting on it sends the space's root to that `joinRoom` with the notice's
+ * sender, `id` and `sharedAt` as `notice`, and the manager brings the title
+ * the catalog lists the room under up to the room's own and writes the mark.
+ * So the catalog, not the instance, holds which notices were acted on, and an
+ * instance started afterwards reads no room for them; a row a sender replaces
+ * with a later one is acted on again. Any other notice is ignored, its room
+ * unread, for the life of the instance. While Home's catalog cannot be read,
+ * a notice is left undecided, to be taken up as an offer left undecided is.
+ * One whose vetting fails other than by a refusal waits on its space's state,
+ * and one whose send fails is left undecided, as an offer is.
  */
 export class ShareIntake {
   #runtime: Runtime;
@@ -266,6 +312,12 @@ export class ShareIntake {
   /** What follows the state of each space a row of {@link #waiting} names. */
   #spaces = new Map<DID, Cancel>();
   #logged = new Set<string>();
+  /**
+   * The notices this instance has sent and not seen fail, each by its
+   * sender, `id` and `sharedAt`, so that another row holding one is not sent
+   * again.
+   */
+  #noticesSent = new Set<string>();
   #holdersChanged = false;
   #everyInbox = false;
   #changedInboxes = new Set<string>();
@@ -559,12 +611,12 @@ export class ShareIntake {
 
   /**
    * The offers Home's catalog holds receipts for, the spaces Home records no
-   * profile for, and the profiles it can record, as {@link HomeReceipts}
-   * holds them.
+   * profile for, the profiles it can record, the rooms the catalog lists and
+   * the notices it marks handled, as {@link HomeReceipts} holds them.
    */
   async #homeReceipts(): Promise<HomeReceipts> {
     return {
-      received: await this.#receipts(),
+      ...await this.#catalogRecords(),
       ...await this.#profileRecords(),
     };
   }
@@ -596,14 +648,27 @@ export class ShareIntake {
   }
 
   /**
-   * The offers Home's catalog holds receipts for, by {@link offerIdentity},
-   * each with the `profileConflict` its receipt carries, or none while the
-   * catalog cannot be read, since Home's handler refuses a duplicate in any
-   * case. Each is read from the `from` and `id` its receipt stores, whatever
-   * the key the catalog files it under, and a receipt that stores no such
-   * pair is passed over.
+   * What Home's catalog holds that the intake decides by, or none of it
+   * while the catalog cannot be read: the offers it holds receipts for, the
+   * rooms it lists as saved, and the notices it marks handled, as
+   * {@link HomeReceipts} holds them. Reading none of the receipts registers
+   * offers that Home's handler refuses as duplicates in any case, and a
+   * catalog that cannot be read leaves every notice undecided. Each receipt
+   * is read from
+   * the `from` and `id` it stores, whatever the key the catalog files it
+   * under, and a receipt that stores no such pair is passed over. A room is
+   * one whose entry is filed under the space it names, as a `fabrichat-room`
+   * whose `state` is `saved`.
    */
-  async #receipts(): Promise<HomeReceipts["received"]> {
+  async #catalogRecords(): Promise<
+    Pick<HomeReceipts, "received" | "rooms" | "noticed" | "catalogRead">
+  > {
+    const records = {
+      received: new Map<string, unknown>(),
+      rooms: new Set<string>(),
+      noticed: new Map<string, unknown>(),
+      catalogRead: false,
+    };
     let catalog;
     try {
       catalog = await this.#home.key("sharedSpaceCatalog").asSchema(
@@ -616,21 +681,35 @@ export class ShareIntake {
           error,
         ]);
       }
-      return new Map();
+      return records;
     }
-    const received = new Map<string, unknown>();
-    if (!isObjectNotArray(catalog?.offers)) return received;
-    for (const receipt of Object.values(catalog.offers)) {
-      if (
-        !isObjectNotArray(receipt) || typeof receipt.from !== "string" ||
-        typeof receipt.id !== "string"
-      ) continue;
-      received.set(
-        offerIdentity(receipt.from, receipt.id),
-        receipt.profileConflict,
-      );
+    records.catalogRead = true;
+    if (isObjectNotArray(catalog?.offers)) {
+      for (const receipt of Object.values(catalog.offers)) {
+        if (
+          !isObjectNotArray(receipt) || typeof receipt.from !== "string" ||
+          typeof receipt.id !== "string"
+        ) continue;
+        records.received.set(
+          offerIdentity(receipt.from, receipt.id),
+          receipt.profileConflict,
+        );
+      }
     }
-    return received;
+    if (isObjectNotArray(catalog?.entries)) {
+      for (const [space, entry] of Object.entries(catalog.entries)) {
+        if (
+          isObjectNotArray(entry) && entry.space === space &&
+          entry.kind === CHAT_ROOM_SPACE_KIND && entry.state === "saved"
+        ) records.rooms.add(space);
+      }
+    }
+    if (isObjectNotArray(catalog?.notices)) {
+      for (const [key, sharedAt] of Object.entries(catalog.notices)) {
+        records.noticed.set(key, sharedAt);
+      }
+    }
+    return records;
   }
 
   /** Decides `raw`, a row of an inbox's offers, unless it is decided already. */
@@ -641,6 +720,10 @@ export class ShareIntake {
   ): Promise<void> {
     if (!isObjectNotArray(raw)) return;
     const row = rowKey(raw);
+    if (raw.changes !== undefined) {
+      await this.#considerNotice(row, raw, receipts, address);
+      return;
+    }
     const receipt = offerIdentity(raw.from, raw.id);
     const offer = wellFormedOffer(raw);
     const conflict = receipts.received.get(receipt);
@@ -708,23 +791,108 @@ export class ShareIntake {
     logger.info("offer-sent", () => [`Sent Home the offer ${receipt}`]);
     this.#decide(row, raw, "sent", address);
     const room = offer.kind === CHAT_ROOM_SPACE_KIND ? root : undefined;
-    const pending = this.#afterSend(
+    this.#track(this.#afterSend(
       row,
       receipt,
       address,
       this.#scannedThrough,
       sending,
-      room,
+      (link) => this.#afterRegistration(row, receipt, link, room),
+    ));
+  }
+
+  /**
+   * Helper for {@link #consider}, which decides `raw`, a row of the inbox at
+   * `address` keyed `row` that carries `changes`, as a notice that a room
+   * changed, as {@link ShareIntake} says, unless it is decided already.
+   */
+  async #considerNotice(
+    row: string,
+    raw: Record<string, unknown>,
+    receipts: HomeReceipts,
+    address: string,
+  ): Promise<void> {
+    if (this.#settled.has(row)) return;
+    // Which rooms the catalog lists, and which notices it marks, is what
+    // decides a notice, so one is left for the next scan while the catalog
+    // cannot be read.
+    if (!receipts.catalogRead) return;
+    const notice = roomNoticeOf(raw);
+    if (
+      notice === undefined || notice.host !== this.#host ||
+      !receipts.rooms.has(notice.space)
+    ) {
+      this.#decide(row, raw, "notice-ignored", address);
+      return;
+    }
+    const identity = offerIdentity(notice.from, notice.id);
+    // A row holding a notice this instance has already sent is one more
+    // row for that same notice, which the send's mark will cover.
+    const sent = JSON.stringify([identity, notice.sharedAt]);
+    if (
+      receipts.noticed.get(identity) === notice.sharedAt ||
+      this.#noticesSent.has(sent)
+    ) {
+      this.#decide(row, raw, "notice-handled", address);
+      return;
+    }
+    const joinRoom = this.#home.key("chatManager").key("joinRoom");
+    if (joinRoom.getRaw() === undefined) {
+      this.#decide(row, raw, "notice-ignored", address);
+      return;
+    }
+    let vetted;
+    try {
+      vetted = await vetSpace(
+        this.#runtime,
+        notice.space,
+        this.#identity,
+        CHAT_ROOM_SPACE_KIND,
+        (acl) => isWriter(acl?.[notice.from]) ? undefined : "sender-not-member",
+      );
+    } catch (error) {
+      if (this.#halted) return;
+      logger.warn("vetting-failed", () => [
+        `Vetting the room of the notice ${identity}:`,
+        error,
+      ]);
+      this.#waitOn(row, notice.space, address);
+      return;
+    }
+    if (this.#halted) return;
+    if (!isCell(vetted)) {
+      this.#decide(row, raw, "notice-ignored", address);
+      return;
+    }
+    const sending = sendVerbEvent(joinRoom, {
+      room: vetted,
+      notice: { from: notice.from, id: notice.id, sharedAt: notice.sharedAt },
+    });
+    logger.info("notice-sent", () => [
+      `Sent Home's chat manager the notice ${identity}`,
+    ]);
+    this.#decide(row, raw, "sent", address);
+    this.#noticesSent.add(sent);
+    this.#track(
+      this.#afterSend(row, identity, address, this.#scannedThrough, sending)
+        .finally(() => {
+          // A send that failed left its row undecided, to be sent again.
+          if (this.#settled.get(row) !== "sent") this.#noticesSent.delete(sent);
+        }),
     );
+  }
+
+  /** Has {@link idle} wait for `pending`, the handling of a send. */
+  #track(pending: Promise<void>): void {
     this.#pending.add(pending);
     void pending.finally(() => this.#pending.delete(pending));
   }
 
   /**
    * Waits for Home's handling of the row keyed `row`, in the inbox at
-   * `address`, which `sending` sent, and acts on its receipt
-   * (`#afterRegistration`). A send that failed, at once or in Home's handling,
-   * registered nothing, so the row is left undecided again, to be vetted
+   * `address`, which `sending` sent, and passes its receipt to `handled`, if
+   * given. A send that failed, at once or in Home's handling, did nothing,
+   * so the row is left undecided again, to be vetted
    * again when its inbox next changes, Home's profile records change, or a
    * lost connection to the host comes back. Its space, which vetting passed,
    * keeps it waiting no longer. A change that came after the scan that sent
@@ -739,7 +907,7 @@ export class ShareIntake {
     address: string,
     scannedThrough: number,
     sending: ReturnType<typeof sendVerbEvent>,
-    room: Cell<unknown> | undefined,
+    handled?: (link: NormalizedFullLink) => Promise<void>,
   ): Promise<void> {
     let failed: { error: unknown } | undefined;
     let link: NormalizedFullLink | undefined;
@@ -754,9 +922,7 @@ export class ShareIntake {
       failed = { error };
     }
     if (failed === undefined) {
-      if (link !== undefined) {
-        await this.#afterRegistration(row, receipt, link, room);
-      }
+      if (link !== undefined) await handled?.(link);
       return;
     }
     if (this.#settled.get(row) === "sent") {
@@ -1054,7 +1220,47 @@ function wellFormedOffer(
     host: origin,
     title,
     from,
+    sharedAt,
     ...(profile === undefined ? {} : { profile }),
+  };
+}
+
+/** A notice that a room changed, as {@link roomNoticeOf} reads one. */
+interface RoomNotice {
+  /** The space of the room. */
+  space: DID;
+
+  /** The notice's sender. */
+  from: DID;
+
+  /** The notice's `id`, `changed:` followed by the room's space. */
+  id: string;
+
+  /** The origin of the host serving the room, as the notice names it. */
+  host: string;
+
+  /** When the sender shared the notice, by the sender's clock. */
+  sharedAt: number;
+}
+
+/**
+ * `raw`, a row carrying `changes`, as a notice that the room in its `space`
+ * changed its title, or `undefined` when it is not one the intake acts on, as
+ * `#considerNotice` says.
+ */
+function roomNoticeOf(raw: Record<string, unknown>): RoomNotice | undefined {
+  const offer = wellFormedOffer(raw);
+  if (
+    offer === undefined || offer.kind !== CHAT_ROOM_SPACE_KIND ||
+    offer.id !== `changed:${offer.space}` ||
+    !isObjectNotArray(raw.changes) || raw.changes.title !== true
+  ) return undefined;
+  return {
+    space: offer.space,
+    from: offer.from,
+    id: offer.id,
+    host: offer.host,
+    sharedAt: offer.sharedAt,
   };
 }
 

@@ -1,10 +1,15 @@
 import { settle } from "./dom.ts";
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type Stub, stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { FabricBridge } from "../src/bridge.ts";
 import { CommonIframeSandboxElement } from "../src/index.ts";
@@ -26,6 +31,9 @@ const PRESENTATION: IframePresentation = {
   attributes: { "data-theme": "dark" },
   stylesheets: ["https://example.com/a.css"],
 };
+
+const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
+const MENU = "data:font/woff2;base64,d09GMg==";
 
 const ALARM: GuestError = {
   description: "boom",
@@ -240,6 +248,44 @@ describe("CommonIframeSandboxElement", () => {
       }
     });
 
+    describe("assets", () => {
+      it("is an empty record until one is assigned", async () => {
+        const element = await mount();
+        expect(element.assets).toEqual({});
+      });
+
+      it("holds a frozen copy of what was assigned", async () => {
+        const element = await mount();
+        const assets = { glaze: GLAZE };
+        element.assets = assets;
+        assets.glaze = MENU;
+
+        expect(element.assets).toEqual({ glaze: GLAZE });
+        expect(Object.isFrozen(element.assets)).toBe(true);
+      });
+
+      for (
+        const [what, value] of [
+          ["a value that is not a record", GLAZE],
+          ["`null`", null],
+          ["a name outside `[A-Za-z0-9_-]+`", { "glaze.png": GLAZE }],
+          ["a URL that is not a base64 `data:` URL", {
+            glaze: "https://example.com/glaze.png",
+          }],
+        ] as const
+      ) {
+        it(`throws a \`TypeError\` given ${what}, keeping the one it had`, async () => {
+          const element = await mount((element) => {
+            element.assets = { glaze: GLAZE };
+          });
+          expect(() => Reflect.set(element, "assets", value)).toThrow(
+            TypeError,
+          );
+          expect(element.assets).toEqual({ glaze: GLAZE });
+        });
+      }
+    });
+
     describe("outerFrameUrl", () => {
       it("renders the outer frame inlined as `srcdoc` while it is unset", async () => {
         const element = await mount();
@@ -359,6 +405,85 @@ describe("CommonIframeSandboxElement", () => {
           data: guestDocument("<p>guest</p>", "console.log(1);"),
           presentation: PRESENTATION,
         }]);
+      });
+
+      it("asks the frame to load `src` with each reference to an asset replaced", async () => {
+        const element = await mount((element) => {
+          element.src = '<img src="cf-asset:glaze">';
+          element.assets = { glaze: GLAZE };
+        });
+        const posts = recordOuterPosts(element);
+        let errors = 0;
+        element.addEventListener("common-iframe-error", () => errors++);
+
+        postFromOuter(element, { type: "ready" });
+        await settle();
+
+        expect(posts).toEqual([{
+          type: "load-document",
+          data: guestDocument('<img src="cf-asset:glaze">', "", {
+            glaze: GLAZE,
+          }),
+          presentation: null,
+        }]);
+        expect(JSON.stringify(posts)).toContain(`<img src=\\"${GLAZE}\\">`);
+        expect(errors).toBe(0);
+      });
+
+      it("reports each reference to an asset it was not given, naming its assets, and asks for the document all the same", async () => {
+        const src = '<img src="cf-asset:logo"><img src="cf-asset:glaze">' +
+          '<img src="cf-asset:bell"><img src="cf-asset:logo">';
+        const element = await mount((element) => {
+          element.src = src;
+          element.assets = { glaze: GLAZE, menu: MENU };
+        });
+        const posts = recordOuterPosts(element);
+        const errors: CustomEvent[] = [];
+        element.addEventListener("common-iframe-error", (event) => {
+          if (event instanceof CustomEvent) errors.push(event);
+        });
+
+        postFromOuter(element, { type: "ready" });
+        await settle();
+
+        const description = "The guest's document refers to assets it was " +
+          "not given: `cf-asset:logo`, `cf-asset:bell`. It was given " +
+          "`glaze`, `menu`.";
+        expect(errors.map(({ detail }) => detail)).toEqual([{
+          description,
+          message: description,
+          source: "guest document",
+          lineno: 0,
+          colno: 0,
+          stacktrace: description,
+          stack: description,
+        }]);
+        expect(element.loadState).toBe("loading");
+        expect(posts).toEqual([{
+          type: "load-document",
+          data: guestDocument(src, "", { glaze: GLAZE, menu: MENU }),
+          presentation: null,
+        }]);
+      });
+
+      it("reports that it was given no assets when it has none", async () => {
+        const element = await mount((element) => {
+          element.src = '<img src="cf-asset:glaze">';
+        });
+        const descriptions: string[] = [];
+        element.addEventListener("common-iframe-error", (event) => {
+          if (event instanceof CustomEvent) {
+            descriptions.push(event.detail.description);
+          }
+        });
+
+        postFromOuter(element, { type: "ready" });
+        await settle();
+
+        expect(descriptions).toEqual([
+          "The guest's document refers to assets it was not given: " +
+          "`cf-asset:glaze`. It was given none.",
+        ]);
       });
 
       it("loads nothing, and says nothing is loaded, without a `src`", async () => {
@@ -657,20 +782,94 @@ describe("CommonIframeSandboxElement", () => {
       }]);
     });
 
-    for (const property of ["script", "bridge"] as const) {
-      it(`reloads the document when \`${property}\` changes`, async () => {
+    for (const value of ["", undefined, null] as const) {
+      it(`clears the guest and its subscriptions when \`src\` becomes ${JSON.stringify(value) ?? "undefined"}`, async () => {
+        const { bridge, open } = countingBridge();
         const { element, posts } = await readyElement((element) => {
           element.src = "<p>guest</p>";
+          element.script = "go();";
+          element.bridge = bridge;
+        });
+        addGuestFrame(element);
+        const client = connectFabric();
+        postFromOuter(element, { type: "load" });
+        try {
+          client.cell("count").sink(() => {});
+          await client.describe();
+          expect(open()).toBe(1);
+
+          element.src = value;
+          await element.updateComplete;
+          await settle();
+
+          expect(element.src).toBe("");
+          expect(open()).toBe(0);
+          expect(posts).toEqual([{
+            type: "load-document",
+            data: "",
+            presentation: null,
+          }]);
+
+          element.src = "<p>next guest</p>";
+          await element.updateComplete;
+          await settle();
+          expect(posts.at(-1)).toEqual({
+            type: "load-document",
+            data: guestDocument("<p>next guest</p>", "go();"),
+            presentation: null,
+          });
+        } finally {
+          client.disconnect();
+        }
+      });
+    }
+
+    it("clears the guest when the `src` attribute is removed", async () => {
+      const { element, posts } = await readyElement((element) => {
+        element.setAttribute("src", "<p>guest</p>");
+      });
+
+      element.removeAttribute("src");
+      await element.updateComplete;
+      await settle();
+
+      expect(element.src).toBe("");
+      expect(posts).toEqual([{
+        type: "load-document",
+        data: "",
+        presentation: null,
+      }]);
+    });
+
+    const changes = {
+      script: (element: CommonIframeSandboxElement) => {
+        element.script = "go();";
+      },
+      bridge: (element: CommonIframeSandboxElement) => {
+        element.bridge = countingBridge().bridge;
+      },
+      assets: (element: CommonIframeSandboxElement) => {
+        element.assets = { glaze: GLAZE };
+      },
+    };
+
+    for (const [property, change] of Object.entries(changes)) {
+      it(`reloads the document when \`${property}\` changes`, async () => {
+        const { element, posts } = await readyElement((element) => {
+          element.src = "<p>cf-asset:glaze</p>";
         });
 
-        if (property === "script") element.script = "go();";
-        else element.bridge = countingBridge().bridge;
+        change(element);
         await element.updateComplete;
         await settle();
 
         expect(posts).toEqual([{
           type: "load-document",
-          data: guestDocument("<p>guest</p>", element.script),
+          data: guestDocument(
+            "<p>cf-asset:glaze</p>",
+            element.script,
+            element.assets,
+          ),
           presentation: null,
         }]);
       });
@@ -678,8 +877,7 @@ describe("CommonIframeSandboxElement", () => {
       it(`loads nothing when \`${property}\` changes without a \`src\``, async () => {
         const { element, posts } = await readyElement();
 
-        if (property === "script") element.script = "go();";
-        else element.bridge = countingBridge().bridge;
+        change(element);
         await element.updateComplete;
         await settle();
 
@@ -687,6 +885,21 @@ describe("CommonIframeSandboxElement", () => {
         expect(posts).toEqual([]);
       });
     }
+
+    it("asks for no document when `assets` is assigned the same names and URLs again", async () => {
+      const { element, posts } = await readyElement((element) => {
+        element.src = "<p>cf-asset:glaze</p>";
+        element.assets = { glaze: GLAZE, menu: MENU };
+      });
+      const held = element.assets;
+
+      element.assets = { menu: MENU, glaze: GLAZE };
+      await element.updateComplete;
+      await settle();
+
+      expect(element.assets).toBe(held);
+      expect(posts).toEqual([]);
+    });
 
     it("sends a new presentation without reloading the document", async () => {
       const { element, posts } = await readyElement((element) => {

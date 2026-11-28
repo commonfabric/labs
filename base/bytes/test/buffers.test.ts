@@ -8,10 +8,10 @@
  * that skips it is holding a view someone else can mutate or transfer away.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isDetached, toOwnedUint8Array } from "@commonfabric/bytes/buffers";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("buffers", () => {
   describe("isDetached()", () => {

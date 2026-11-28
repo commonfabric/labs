@@ -102,6 +102,12 @@ export interface OfferRequest {
    * reads; the first when absent.
    */
   profile?: number;
+
+  /**
+   * The kinds of thing that changed, for a notice that the space's thing
+   * changed rather than an offer of it.
+   */
+  changes?: Record<string, true>;
 }
 
 /**
@@ -119,6 +125,7 @@ function envelopeOf(request: OfferRequest): OfferEvent {
     title: request.title,
     ...(from !== undefined && { from }),
     sharedAt: Date.now(),
+    ...(request.changes !== undefined && { changes: request.changes }),
   };
 }
 

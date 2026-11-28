@@ -19,6 +19,39 @@ import type { TransformationContext } from "../../core/mod.ts";
 import { createLiftAppliedCall } from "../builtins/lift-applied.ts";
 
 /**
+ * True when a function between `node` and the root is a compute callback an
+ * earlier lowering pass synthesized.
+ */
+export function hasSyntheticComputeCallbackAncestor(
+  node: ts.Node,
+  context: TransformationContext,
+): boolean {
+  let current = node.parent;
+  while (current) {
+    if (
+      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
+      context.isSyntheticComputeCallback(current)
+    ) {
+      return true;
+    }
+    current = current.parent;
+  }
+  return false;
+}
+
+/**
+ * True when `node` sits in a compute context and inside a node an earlier
+ * lowering pass marked as owned by a synthesized compute wrapper.
+ */
+export function isAlreadySyntheticComputeOwned(
+  node: ts.Node,
+  context: TransformationContext,
+): boolean {
+  return context.getReactiveContext(node).kind === "compute" &&
+    context.isSyntheticComputeOwnedNode(node);
+}
+
+/**
  * True when `node` is the receiver an array-method call is made on, looking
  * through any transparent wrappers between the two: `xs`, `(xs)`, and
  * `(xs as T[])!` are all the receiver of `.map(...)`.
@@ -176,24 +209,16 @@ export function createReactiveWrapperForExpression(
   context.markSyntheticComputeOwnedSubtree(expression);
 
   // Get result type for the synthetic lift-applied call we're about to emit.
-  let resultTypeNode: ts.TypeNode | undefined;
-  let resultType: ts.Type | undefined;
-
-  try {
-    resultType = checker.getTypeAtLocation(expression);
-    // Build via the canonical chokepoint so commonfabric refs normalize to
-    // `__cfHelpers.X` and the node is registered for schema generation. (The
-    // call-node registration below still keys the lift-applied CallExpression
-    // to its result Type.)
-    resultTypeNode = typeToTypeNodeWithRegistry(
-      resultType,
-      { checker, factory, sourceFile, state: context.state },
-      context.state.typeRegistry,
-    );
-  } catch {
-    resultTypeNode = undefined;
-    resultType = undefined;
-  }
+  const resultType = checker.getTypeAtLocation(expression);
+  // Build via the canonical chokepoint so commonfabric refs normalize to
+  // `__cfHelpers.X` and the node is registered for schema generation. (The
+  // call-node registration below still keys the lift-applied CallExpression
+  // to its result Type.)
+  const resultTypeNode = typeToTypeNodeWithRegistry(
+    resultType,
+    { checker, factory, sourceFile, state: context.state },
+    context.state.typeRegistry,
+  );
 
   // Emit the canonical lift-applied form for a zero-input compute wrapper:
   //   __cfHelpers.lift(() => expression)({})
@@ -244,11 +269,8 @@ export function createReactiveWrapperForExpression(
     expression,
   );
 
-  // Register types for both the TypeNode and the lift-applied CallExpression
-  if (resultTypeNode && resultType) {
-    context.state.typeRegistry.set(resultTypeNode, resultType);
-    context.state.typeRegistry.set(liftAppliedCall, resultType);
-  }
+  // Key the call to its result type for schema generation.
+  context.state.typeRegistry.set(liftAppliedCall, resultType);
 
   // CRITICAL: Set parent pointers and connect to parent chain
   // This maintains the parent chain so walking up from nested callbacks works
@@ -297,34 +319,38 @@ function unionWithEnclosingScopeFreeIdentifiers(
   const added: ts.Expression[] = [];
   const addedNames = new Set<string>();
 
+  // Each identifier is judged by the node the walk reached it from, since a
+  // node an earlier pass synthesized may carry no `parent` pointer of its own.
+  // The wrapped expression itself is a value wherever it sits.
   const visit = (node: ts.Node): void => {
     // Nothing named in erased syntax is a runtime input: not a type alias or
     // interface an `as`/`satisfies` cast or a type argument mentions, and not
     // a member of a type literal (`get` in `value as { get(): unknown }`),
     // whose symbol is a property and so passes the value-space test below.
     if (isErasedAtEmit(node)) return;
-    if (ts.isIdentifier(node) && isReferenceSite(node)) {
+    if (
+      ts.isIdentifier(node) &&
+      !alreadyCoveredNames.has(node.text) && !addedNames.has(node.text)
+    ) {
+      const symbol = checker.getSymbolAtLocation(node);
+      // Only capture value-space symbols that have a runtime binding: a
+      // `const enum` is inlined, so it is not an input, and a type
+      // parameter is no value at all.
       if (
-        !alreadyCoveredNames.has(node.text) && !addedNames.has(node.text)
+        symbol &&
+        (symbol.flags & ts.SymbolFlags.Value) !== 0 &&
+        !hasOnlyErasedDeclarations(symbol) &&
+        !isNestedFunctionLocalCapture(node, expression, checker) &&
+        isEnclosingScopeDeclaration(symbol)
       ) {
-        const symbol = checker.getSymbolAtLocation(node);
-        // Only capture value-space symbols that have a runtime binding: a
-        // `const enum` is inlined, so it is not an input. Type parameters are
-        // also filtered by `isEnclosingScopeDeclaration` below.
-        if (
-          symbol &&
-          (symbol.flags & ts.SymbolFlags.Value) !== 0 &&
-          !hasOnlyErasedDeclarations(symbol) &&
-          !isNestedFunctionLocalCapture(node, expression, checker) &&
-          isEnclosingScopeDeclaration(symbol)
-        ) {
-          addedNames.add(node.text);
-          added.push(node);
-        }
+        addedNames.add(node.text);
+        added.push(node);
       }
     }
 
-    ts.forEachChild(node, visit);
+    ts.forEachChild(node, (child) => {
+      if (!ts.isIdentifier(child) || isReferenceSite(child, node)) visit(child);
+    });
   };
 
   visit(expression);
@@ -362,9 +388,11 @@ function getRootIdentifier(expr: ts.Expression): ts.Identifier | undefined {
   }
 }
 
-function isReferenceSite(node: ts.Identifier): boolean {
-  const parent = node.parent;
-  if (!parent) return false;
+/**
+ * Whether `node`, sitting in `parent`, names a value rather than a property or
+ * a tag.
+ */
+function isReferenceSite(node: ts.Identifier, parent: ts.Node): boolean {
   // Property name in a property access — not a free reference.
   if (ts.isPropertyAccessExpression(parent) && parent.name === node) {
     return false;
@@ -397,18 +425,16 @@ function isEnclosingScopeDeclaration(symbol: ts.Symbol): boolean {
     ) {
       return false;
     }
-    if (ts.isTypeParameterDeclaration(decl)) {
-      return false;
-    }
   }
   // Accept only if SOME declaration is inside a function-like ancestor
   // (i.e., truly enclosing-scope, not floating somewhere weird).
   return declarations.some((decl) => {
-    let current: ts.Node | undefined = decl.parent;
-    while (current) {
+    for (
+      let current = decl.parent;
+      !ts.isSourceFile(current);
+      current = current.parent
+    ) {
       if (ts.isFunctionLike(current)) return true;
-      if (ts.isSourceFile(current)) return false;
-      current = current.parent;
     }
     return false;
   });

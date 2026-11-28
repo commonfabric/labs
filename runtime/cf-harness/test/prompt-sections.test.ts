@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { HARNESS_RUN_DEPTHS } from "../src/contracts/run-depth.ts";
 import {
@@ -15,6 +14,7 @@ import {
   type HarnessTaskDomain,
   type HarnessTaskTag,
 } from "../src/task-classification.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Every subset of `all`, the empty one among them. */
 const subsets = <T>(all: readonly T[]): ReadonlySet<T>[] =>

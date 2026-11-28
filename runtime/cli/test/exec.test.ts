@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, join } from "@std/path";
 import type { JSONSchema } from "@commonfabric/api";
@@ -25,6 +24,12 @@ import type { SpaceConfig } from "../lib/piece.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
 import { argv, cf, relevantStderr, sendThroughStandIn } from "./utils.ts";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 function makeSpec(

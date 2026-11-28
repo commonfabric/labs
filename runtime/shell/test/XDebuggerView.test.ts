@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { LogCounts, LoggerBreakdown } from "@commonfabric/logger";
 import type {
@@ -8,6 +7,12 @@ import type {
   SchedulerDiagnosisResult,
   TimingStats,
 } from "@commonfabric/runtime-client";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { DebuggerController } from "../src/lib/debugger-controller.ts";
 import type {

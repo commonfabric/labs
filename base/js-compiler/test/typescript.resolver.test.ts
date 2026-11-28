@@ -1,13 +1,14 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   collectDataFileNames,
+  collectDataReads,
   collectImportSpecifiers,
   resolveProgram,
   scanModuleDeclarations,
 } from "../typescript/resolver.ts";
 import { TARGET } from "../typescript/options.ts";
 import { InMemoryProgram } from "../program.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("typescript/resolver.ts", () => {
   describe("resolveProgram", () => {
@@ -240,6 +241,36 @@ describe("typescript/resolver.ts", () => {
       )).toEqual(["/data/cities.json"]);
     });
 
+    it("reads the path a call to dataFile's `url` member names", () => {
+      expect(namesIn(
+        "/donuts/main.tsx",
+        'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile.url("./glaze.png");\n',
+      )).toEqual(["/donuts/glaze.png"]);
+    });
+
+    it("follows the binding to the `url` member through a renaming import", () => {
+      expect(names(
+        'import { dataFile as read } from "commonfabric";\n' +
+          'export default () => read.url("/glaze.png");\n',
+      )).toEqual(["/glaze.png"]);
+    });
+
+    it("follows the binding to the `url` member through a namespace import", () => {
+      expect(names(
+        'import * as cf from "commonfabric";\n' +
+          'export default () => cf.dataFile.url("/glaze.png");\n',
+      )).toEqual(["/glaze.png"]);
+    });
+
+    it("ignores a `url` member of anything but the runtime's dataFile", () => {
+      expect(names(
+        'import { dataFile } from "commonfabric";\n' +
+          "const other = { url: (path: string) => path };\n" +
+          'export default () => [other.url("/glaze.png"), dataFile.text];\n',
+      )).toEqual([]);
+    });
+
     it("ignores a dataFile that is not the runtime's", () => {
       expect(names(
         'import { dataFile } from "./local-helpers.ts";\n' +
@@ -431,6 +462,43 @@ describe("typescript/resolver.ts", () => {
 
     it("finds nothing in a module that never imports it", () => {
       expect(names("export const x = 1;\n")).toEqual([]);
+    });
+  });
+
+  describe("collectDataReads", () => {
+    const directoriesIn = (name: string, contents: string) =>
+      collectDataReads({ name, contents }, TARGET).directories;
+
+    it("reads the directory a call to dataFile's `urls` member names", () => {
+      expect(directoriesIn(
+        "/donuts/main.tsx",
+        'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile.urls("./assets");\n',
+      )).toEqual(["/donuts/assets"]);
+    });
+
+    it("follows the binding through a namespace import", () => {
+      expect(directoriesIn(
+        "/main.tsx",
+        'import * as cf from "commonfabric";\n' +
+          'export default () => cf.dataFile.urls("/assets");\n',
+      )).toEqual(["/assets"]);
+    });
+
+    it("reads no directory from a file read", () => {
+      expect(directoriesIn(
+        "/main.tsx",
+        'import { dataFile } from "commonfabric";\n' +
+          'export default () => [dataFile("/a.json"), dataFile.url("/b.png")];\n',
+      )).toEqual([]);
+    });
+
+    it("leaves a directory read out of the file names", () => {
+      expect(collectDataFileNames({
+        name: "/main.tsx",
+        contents: 'import { dataFile } from "commonfabric";\n' +
+          'export default () => dataFile.urls("/assets");\n',
+      }, TARGET)).toEqual([]);
     });
   });
 

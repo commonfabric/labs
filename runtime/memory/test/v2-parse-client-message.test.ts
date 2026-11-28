@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricPlainObject } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { encodeMemoryBoundary } from "../v2.ts";
 import { parseClientMessage } from "../v2/server.ts";
@@ -31,11 +31,51 @@ describe("parseClientMessage()", () => {
         ["a genesis root that is not one", { genesisRoot: "of:root" }],
         ["a malformed space kind", { spaceKind: "Not A Kind" }],
         ["`demand: true`", { demand: true }],
+        ["a branch that is not a string", { branch: 7 }],
         ["an invite that is not a redemption", { invite: { code: 7 } }],
       ] as const
     ) {
       it(`returns an \`invalid\` rejection for a session declaring ${label}`, () => {
         expect(open(session)).toEqual({ type: "invalid", requestId: "open-1" });
+      });
+    }
+  });
+
+  describe("`branch.create`", () => {
+    const create = (fields: FabricPlainObject) =>
+      parseClientMessage(encodeMemoryBoundary({
+        type: "branch.create",
+        requestId: "create-1",
+        space: SPACE,
+        sessionId: "session:1",
+        name: "fork",
+        ...fields,
+      }));
+
+    it("returns the message with the parent branch and fork point it names", () => {
+      expect(create({ parentBranch: "base", forkSeq: 3 })).toEqual({
+        type: "branch.create",
+        requestId: "create-1",
+        space: SPACE,
+        sessionId: "session:1",
+        name: "fork",
+        parentBranch: "base",
+        forkSeq: 3,
+      });
+    });
+
+    for (
+      const [label, fields] of [
+        ["a parent branch that is not a string", { parentBranch: 7 }],
+        ["a negative fork point", { forkSeq: -1 }],
+        ["a fork point that is not an integer", { forkSeq: 1.5 }],
+      ] as const
+    ) {
+      it(`returns an \`invalid\` rejection for ${label}`, () => {
+        expect(create(fields)).toEqual({
+          type: "invalid",
+          requestId: "create-1",
+        });
       });
     }
   });

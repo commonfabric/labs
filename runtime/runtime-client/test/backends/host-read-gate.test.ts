@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, type CfcAtom, cfcAtom } from "@commonfabric/api/cfc";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -29,6 +28,7 @@ import {
   type SpaceMembershipProvider,
 } from "@commonfabric/runner/cfc";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -1188,6 +1188,67 @@ describe("HostReadGate", () => {
   });
 
   describe("subscribe()", () => {
+    it("decides the latest value again when an access list it consulted changes, delivering it once the list grants the reader and a refusal once the list revokes that", async () => {
+      await using docs = await shelf();
+      const team = visitor.did();
+      const TEAM_NOTE = "note-for-members-of-the-team";
+      let granted = false;
+      const listeners = new Set<() => void>();
+      const ceiling = defaultRenderConfidentialityCeiling(owner.did());
+      const membership: SpaceMembershipProvider = {
+        readerRole: (of) => granted && of === team ? "reader" : null,
+        subscribe: (of, onChange) => {
+          expect(of).toBe(team);
+          listeners.add(onChange);
+          return () => listeners.delete(onChange);
+        },
+        load: () => Promise.resolve(),
+      };
+      const modulePolicies = renderModulePolicySourceFor(docs.runtime, ceiling);
+      const gate = new HostReadGate(rootRenderPolicyFor(ceiling), {
+        resolveConfidentiality: renderConfidentialityResolverFor(
+          docs.runtime,
+          owner,
+          ceiling,
+          owner.did(),
+          membership,
+          modulePolicies,
+        ),
+        membership,
+        modulePolicies,
+      });
+      const listChanged = (grants: boolean) => {
+        granted = grants;
+        for (const listener of [...listeners]) listener();
+      };
+      const note = await docs.write("watched-team-note", TEAM_NOTE, [[
+        [],
+        [cfcAtom.space(team)],
+      ]]);
+
+      const { updates, cancel } = subscribe(gate, note);
+      expect(holds(updates, TEAM_NOTE)).toBe(false);
+      expect(updates).toHaveLength(1);
+      expect("refused" in updates[0]).toBe(true);
+      expect(listeners.size).toBe(1);
+
+      listChanged(true);
+      expect(updates).toHaveLength(2);
+      expect(updates[1]).toEqual(
+        expect.objectContaining({ value: TEAM_NOTE }),
+      );
+
+      listChanged(false);
+      expect(updates).toHaveLength(3);
+      expect(holds(updates[2], TEAM_NOTE)).toBe(false);
+      expect("refused" in updates[2]).toBe(true);
+
+      cancel();
+      expect(listeners.size).toBe(0);
+      listChanged(true);
+      expect(updates).toHaveLength(3);
+    });
+
     it("delivers a refusal to a visitor, and no value", async () => {
       await using docs = await shelf();
       const { updates, cancel } = subscribe(

@@ -288,6 +288,47 @@ interface CommitLogEntry {
   resolution
 - `runtime/runner/src/storage/v2-transaction.ts` - client-side commit building
 
+### 2.6 Verification After Expiry (Requirements, Not Yet Met)
+
+Recorded in November 2026, when the commit log stopped keeping read sets
+([memory-v2 02-storage.md](../memory-v2/02-storage.md) §3.3). The basis was an
+exercise on a store written with server execution on, then compacted with
+payloads expired and each document's history cut to its head.
+
+Afterward a verifier could still establish three things about an output:
+- which commit wrote it, because a revision's `seq` names that commit even when
+  compaction re-attributes the row;
+- the lease holder a derived commit records;
+- whether the writer was authorized, from the ACL's history, which compaction
+  never truncates.
+
+It could not establish the following, before compaction or after. Each is a
+requirement for verification:
+
+- [ ] **Code identity per output.** Neither a derived commit nor the value it
+      writes names the action that computed it. `scheduler_basis` keys actions
+      as `module:symbol:instance`, but links no output to an action and keeps
+      only each action's latest run.
+- [ ] **Inputs per output or per action run, at the revisions read.**
+  - A wave stores no read set, and an authored commit's read set is kept only
+    as a digest.
+  - A list of parent commits per commit is not enough on its own, because one
+    wave batches many actions' outputs.
+  - A dependency list recorded at admission (the revisions a commit's reads
+    observed, or the commits that wrote them) would serve retention and
+    commit-level provenance.
+- [ ] **A verifiable actor.** A derived commit's row records the lease holder
+      admission checked, not a signature a verifier can check.
+      `invocation_ref` and `authorization_ref` are reserved and unpopulated.
+- [ ] **What a re-run needs.** Recovery recomputes from current state and never
+      replays ([server-side execution](../server-side-execution/README.md)). LLM
+      and fetch results are kept only as the current memoized result. Compaction
+      deletes history below each instance's kept revisions.
+- [ ] **A commitment that survives compaction in one form.** The compaction
+      marker hashes the stored text. So a commit stored whole and the same
+      commit stored in digest form get different marker hashes, and neither is
+      the digest's SHA-256.
+
 ---
 
 ## Phase 3: Reactive Scheduling Integration

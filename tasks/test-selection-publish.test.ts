@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -27,6 +26,8 @@ import {
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   emptyAggregate,
   Fold,
@@ -48,10 +49,11 @@ import {
   laneMeasurementName,
 } from "./lane-measurement.ts";
 import { sampleManifest } from "./test-selection/testing.ts";
+import { ObservationSpool } from "./test-selection/observation-spool.ts";
 import { rollupManifestName, rollupPrefix } from "./test-records-compact.ts";
 import { ciSubmissionsPrefix } from "./test-records-config.ts";
 import type { Suite } from "./test-topology/suite.ts";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
 /**
  * A topology holding the one suite these cases record against. Supplied
@@ -210,6 +212,31 @@ describe("test-selection-publish", () => {
         .toBeUndefined();
       expect(parseArgs(["--dry-run", "--create", "/tmp/out"]))
         .toBeUndefined();
+    });
+  });
+
+  describe("as a program", () => {
+    it("exits 2 with its usage for arguments it does not understand", async () => {
+      const root = fromFileUrl(new URL("..", import.meta.url));
+      const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-env",
+          join(root, "tasks/test-selection-publish.ts"),
+          "--days",
+          "0",
+        ],
+      });
+      expect(code).toBe(2);
+      expect(new TextDecoder().decode(stdout)).toBe("");
+      expect(new TextDecoder().decode(stderr)).toContain(
+        "usage: test-selection-publish.ts",
+      );
     });
   });
 
@@ -1914,6 +1941,50 @@ describe("publish() over a day that has been compacted", () => {
     );
     expect(said).toContain("that shard is gone");
     expect(said).toContain(`reading ${DAY} from its raw objects instead`);
+  });
+
+  it("refuses to publish when a rollup fails after the fold took it", async () => {
+    // The spool the fold reads the day into fails as it is released, which
+    // is after the day is counted. Reading the day again from its raw
+    // objects would count it twice, so the run ends instead.
+
+    class UnreleasableSpool extends ObservationSpool {
+      override [Symbol.dispose](): void {
+        super[Symbol.dispose]();
+        throw new Error("the spool would not release");
+      }
+    }
+    const { store, created } = fakeStore({
+      ...seed(),
+      [ROLLUP]: object("c3", "pass", "2026-08-20T03:00:00.000Z"),
+    }, { [DAY]: [ROLLUP] });
+    const read: string[] = [];
+    const recording: StoreAccess = {
+      ...store,
+      read: (name) => {
+        read.push(name);
+        return store.read(name);
+      },
+    };
+    let code: number | undefined;
+    const said = await saying(async () => {
+      code = await publish(["--bootstrap", "--days", "1"], {
+        store: recording,
+        now: NOW,
+        topology: suites,
+        previousManifest: noPrevious,
+        observationSpool: () => new UnreleasableSpool(),
+      });
+    }, "warn");
+    expect(code).toBe(1);
+    expect(said).toContain(
+      `reading the rollup of ${DAY} failed: Error: the spool would not release`,
+    );
+    expect(said).toContain("refusing to publish from part of the window");
+    expect(said).not.toContain("from its raw objects instead");
+    // The raw objects the seed holds are not read the long way.
+    expect(read).toEqual([ROLLUP]);
+    expect(created.size).toBe(0);
   });
 
   for (

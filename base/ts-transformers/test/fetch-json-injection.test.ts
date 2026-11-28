@@ -3,6 +3,7 @@ import ts from "typescript";
 import { transformSource } from "./utils.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { callsNamed, emittedSchemas, parseModule } from "./transformed-ast.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // The Repo schema the transformer derives from `fetchJson<Repo>(...)`.
 const REPO_SCHEMA = {
@@ -34,7 +35,7 @@ interface Repo {
 // no argument at all.
 //
 
-Deno.test("fetchJson injects a schema by spreading a non-literal argument", async () => {
+test("fetchJson injects a schema by spreading a non-literal argument", async () => {
   const source = `
     import { fetchJson } from "commonfabric";
     ${REPO}
@@ -63,7 +64,7 @@ Deno.test("fetchJson injects a schema by spreading a non-literal argument", asyn
   assert(spreadsOpts, "expected the original argument spread as `...opts`");
 });
 
-Deno.test("fetchJson injects a schema when called with no argument", async () => {
+test("fetchJson injects a schema when called with no argument", async () => {
   const source = `
     import { fetchJson } from "commonfabric";
     ${REPO}

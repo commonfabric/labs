@@ -25,7 +25,6 @@
 //   cell ops; a sink without the hook, a batch without per-op scope
 //   keys, and a FOREIGN batch with sqlite ops are all refused loudly.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -41,6 +40,12 @@ import {
 import { streamEntriesDocId } from "@commonfabric/memory/v2";
 import { table } from "@commonfabric/memory/sqlite/schema";
 import { runQuery } from "@commonfabric/memory/sqlite/exec";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { Runtime } from "../src/runtime.ts";
 import type {

@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { Cell } from "../../src/cell.ts";
 import type { ServerRunInfo } from "../../src/runtime.ts";
 import { txToReactivityLog } from "../../src/scheduler.ts";

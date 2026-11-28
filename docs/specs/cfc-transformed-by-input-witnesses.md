@@ -329,7 +329,9 @@ Each of these refuses an honest release rather than admitting a crafted one:
 
 - **An unattributed input.** `TransformedBy` is minted only when every write in
   the transaction came from one identity and the transaction's join is
-  nonempty. A value written by a transaction that read nothing labeled carries
+  nonempty. A served event's processed claim, which the serving loop writes in
+  the handler's transaction, is the runtime's write (§6.2.2) and outside the
+  join's stamp, so it is not counted. A value written by a transaction that read nothing labeled carries
   no `TransformedBy`, so a transformation over it retains no witness. An
   endorsed writer whose inputs should be witnessed reads something labeled,
   so its writes are attributed. For the first member of a list whose clause is

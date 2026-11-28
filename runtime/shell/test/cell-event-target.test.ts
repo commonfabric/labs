@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   $conn,
@@ -17,6 +16,7 @@ import {
   type CellRef,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   CellEventTarget,

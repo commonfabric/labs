@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fitColumns, prose } from "./prose.ts";
 import { columns } from "./text.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Where a Topic cited by its number links to. */
 const topicHref = (number: string) => `https://fabric.example/top/${number}`;

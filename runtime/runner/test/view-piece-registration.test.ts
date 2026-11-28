@@ -1,8 +1,13 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -147,6 +152,72 @@ describe("view-piece-registration", () => {
       }
     });
   }
+
+  describe("a root this replica stops covering while the artifact loads", () => {
+    // The stored identity is read before the load and again once it lands,
+    // and the second read is the one that meets the replica's change.
+
+    /** Starts the view, with `during` run while its artifact load is held. */
+    const startAcrossLoad = async (during: () => Disposable) => {
+      const entered = Promise.withResolvers<void>();
+      const loaded = Promise.withResolvers<Pattern | undefined>();
+      using _loading = stub(
+        runtime.patternManager,
+        "loadPatternByIdentity",
+        () => {
+          entered.resolve();
+          return loaded.promise;
+        },
+      );
+      pattern.nodes.push({
+        module: { type: "javascript", implementation: () => {} },
+        inputs: {},
+        outputs: {},
+      });
+      const installing = runtime.runner.startViewPiece(
+        root,
+        identity,
+        () => true,
+      );
+      await entered.promise;
+      using _change = during();
+      loaded.resolve(pattern);
+      return await installing;
+    };
+
+    it("registers the graph uninstalled, and installs it on a resume once the root is covered again", async () => {
+      const replica = runtime.storageManager.open(space).replica;
+      const rootId = root.getAsNormalizedFullLink().id;
+
+      const registration = await startAcrossLoad(() =>
+        stub(
+          replica,
+          "hasLocalDocumentCoverage",
+          (id) => id !== rootId,
+        )
+      );
+
+      expect(registration).toBeDefined();
+      expect(registration!.graphIsInstalled()).toBe(false);
+      expect(runtime.runner.isRunning(root)).toBe(true);
+      expect(registration!.resume()).toBe(true);
+      expect(registration!.graphIsInstalled()).toBe(true);
+      registration!();
+      expect(root.get()).toEqual({ $UI: "confirmed" });
+    });
+
+    it("throws a failure of the replica's read of the root, and registers nothing", async () => {
+      const replica = runtime.storageManager.open(space).replica;
+      const failure = new Error("Replica read failed");
+
+      await expect(startAcrossLoad(() =>
+        stub(replica, "getDocument", () => {
+          throw failure;
+        })
+      )).rejects.toBe(failure);
+      expect(runtime.runner.isRunning(root)).toBe(false);
+    });
+  });
 
   it("installs referenced boundary bindings without executing their modules", async () => {
     pattern.nodes.push({

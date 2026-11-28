@@ -14,12 +14,13 @@ import {
   assertStringIncludes,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
+import { fromFileUrl, join } from "@std/path";
 import type { GitHubDelivery } from "@commonfabric/github-webhooks/relay";
 import {
   broadcast,
   clients,
+  type DashboardEvent,
   handle,
   heartbeat,
   nextFaviconRedSince,
@@ -32,8 +33,8 @@ import {
 } from "./server.ts";
 import {
   CI_WORKFLOW,
-  LOOM_CI_WORKFLOW,
-  LOOM_REPO,
+  CFS_CI_WORKFLOW,
+  CFS_REPO,
   PORT,
   REPO,
 } from "./config.ts";
@@ -52,10 +53,12 @@ import { GitHubWebhooks } from "./github-webhooks.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
 import { dashboardCacheFile } from "./history-files.ts";
 import { SERVING_VERSION, VERSION_HEADER } from "./version.ts";
+import { receivedText } from "./sent-text.ts";
 import {
   sampleManifest,
   serializeManifest,
 } from "@commonfabric/test-support/records";
+import { afterEach, beforeEach, describe, it, test } from "@commonfabric/test-support/test";
 import {
   MANIFEST_SHARE_MS,
   TEST_SELECTION_PREFIX,
@@ -67,7 +70,7 @@ const req = (path: string) => new Request(`http://localhost${path}`);
 // it sees none of the views, run times, and red streak an earlier test left.
 // The reset after the test fails the test that left a collection running.
 function boardTest(name: string, fn: () => void | Promise<void>): void {
-  Deno.test(name, async () => {
+  test(name, async () => {
     resetBoardForTest();
     await fn();
     resetBoardForTest();
@@ -142,9 +145,25 @@ interface TestUpdate {
   message: { text: string; updatedAt: number | null; revision: number };
 }
 
-function updateFromEvent(event: string): TestUpdate {
-  assertStringIncludes(event, "event: update\n");
-  return JSON.parse(event.match(/^data: (.*)$/m)?.[1] ?? "") as TestUpdate;
+// Reads the updates one client is sent, in the order it is sent them, each
+// with its markup whole. A client's first update carries the whole markup, and
+// each later one the edits from the markup of the update before.
+function updateReader(): (event: string) => TestUpdate {
+  let held: TestUpdate | undefined;
+  return (event) => {
+    assertStringIncludes(event, "event: update\n");
+    const sent: DashboardEvent = JSON.parse(event.match(/^data: (.*)$/m)?.[1] ?? "");
+    if (!held) {
+      assertEquals(typeof sent.gridHtml, "string", "a first update sends the grid whole");
+      assertEquals(typeof sent.wideHtml, "string", "a first update sends the wide tiles whole");
+    }
+    held = {
+      ...sent,
+      gridHtml: receivedText(held?.gridHtml ?? "", sent.gridHtml),
+      wideHtml: receivedText(held?.wideHtml ?? "", sent.wideHtml),
+    };
+    return held;
+  };
 }
 
 // The rendered markup for one tile, found by its label. The returned string
@@ -935,13 +954,14 @@ boardTest("each completed collection is published while slower tiles are still r
     },
   } as unknown as ReadableStreamDefaultController<Uint8Array>;
   const slow = deferred<TileView>();
+  const read = updateReader();
   clients.add(client);
   const collection = tick([
     fake("ci", () => ({ status: "good", value: "fast" })),
     fake("dau", () => slow.promise),
   ]);
   try {
-    const first = updateFromEvent(await firstUpdate).gridHtml;
+    const first = read(await firstUpdate).gridHtml;
     assertEquals(messages.length, 1);
     assertStringIncludes(tileHtml("ci", first), "fast");
     assert(!tileHtml("dau", first).includes("slow"));
@@ -953,7 +973,7 @@ boardTest("each completed collection is published while slower tiles are still r
     await collection;
   }
   assertEquals(messages.length, 2);
-  assertStringIncludes(tileHtml("dau", updateFromEvent(messages[1]).gridHtml), "slow");
+  assertStringIncludes(tileHtml("dau", read(messages[1]).gridHtml), "slow");
 });
 
 boardTest("each run source publishes its dependent tiles as one batch", async () => {
@@ -970,7 +990,7 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
     sourceTile("ci", [labsSource]),
     sourceTile("labs ci trust", [labsSource]),
     sourceTile("dau", [loomSource]),
-    sourceTile("loom ci trust", [loomSource]),
+    sourceTile("cfs ci trust", [loomSource]),
     sourceTile("recent commits", [labsSource, loomSource], true),
   ];
 
@@ -984,12 +1004,13 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
       waiting.shift()?.(message);
     },
   } as unknown as ReadableStreamDefaultController<Uint8Array>;
+  const read = updateReader();
   clients.add(client);
   const refresh = tick(tiles, sourceCtx);
   try {
     const firstMessage = nextMessage();
     labs.resolve([sourceRun(1, "labs new")]);
-    const first = updateFromEvent(await firstMessage);
+    const first = read(await firstMessage);
     assertStringIncludes(tileHtml("ci", first.gridHtml), "labs new");
     assertStringIncludes(tileHtml("labs ci trust", first.gridHtml), "labs new");
     assert(!tileHtml("dau", first.gridHtml).includes("loom new"));
@@ -999,9 +1020,9 @@ boardTest("each run source publishes its dependent tiles as one batch", async ()
 
     const secondMessage = nextMessage();
     loom.resolve([sourceRun(2, "loom new")]);
-    const second = updateFromEvent(await secondMessage);
+    const second = read(await secondMessage);
     assertStringIncludes(tileHtml("dau", second.gridHtml), "loom new");
-    assertStringIncludes(tileHtml("loom ci trust", second.gridHtml), "loom new");
+    assertStringIncludes(tileHtml("cfs ci trust", second.gridHtml), "loom new");
     assertStringIncludes(second.wideHtml, "labs new, loom new");
     assert(!second.wideHtml.includes("pending"));
     assertEquals(messages.length, 2, "the second source produces the second broadcast");
@@ -1055,13 +1076,14 @@ boardTest("a ready source publishes while an older combined collection is still 
     combined,
   ];
   const messages: string[] = [];
-  let published = (_message: string) => {};
-  const nextMessage = () => new Promise<string>((resolve) => published = resolve);
+  const read = updateReader();
+  let published = (_update: TestUpdate) => {};
+  const nextUpdate = () => new Promise<TestUpdate>((resolve) => published = resolve);
   const client = {
     enqueue(value: Uint8Array) {
       const message = dec.decode(value);
       messages.push(message);
-      published(message);
+      published(read(message));
     },
   } as unknown as ReadableStreamDefaultController<Uint8Array>;
   let refresh: Promise<void> | undefined;
@@ -1081,9 +1103,9 @@ boardTest("a ready source publishes while an older combined collection is still 
     assertStringIncludes(tileHtml("recent commits"), "refresh still pending");
     messages.length = 0;
 
-    const loomUpdate = nextMessage();
+    const loomUpdate = nextUpdate();
     loom.resolve([sourceRun(5, "loom ready")]);
-    const first = updateFromEvent(await loomUpdate);
+    const first = await loomUpdate;
     assertStringIncludes(tileHtml("dau", first.gridHtml), "loom ready");
     const firstRecent = tileHtml("recent commits", first.wideHtml);
     assertStringIncludes(firstRecent, "labs ready, loom ready");
@@ -1093,9 +1115,9 @@ boardTest("a ready source publishes while an older combined collection is still 
     assertEquals(messages.length, 1);
     assertStringIncludes(tileHtml("recent commits"), "labs ready, loom ready");
 
-    const labsUpdate = nextMessage();
+    const labsUpdate = nextUpdate();
     oldCollection.resolve(undefined);
-    const second = updateFromEvent(await labsUpdate);
+    const second = await labsUpdate;
     assertStringIncludes(tileHtml("ci", second.gridHtml), "labs ready");
     const secondRecent = tileHtml("recent commits", second.wideHtml);
     assertStringIncludes(secondRecent, "labs ready, loom ready");
@@ -1638,6 +1660,7 @@ boardTest("a tile can publish cached data while its collection is still running"
   });
   let publishIntermediate = (_view: TileView) => {};
   let collection: Promise<void> | undefined;
+  const read = updateReader();
   clients.add(client);
   try {
     collection = tick([{
@@ -1652,7 +1675,7 @@ boardTest("a tile can publish cached data while its collection is still running"
     }]);
     await sawCached;
     assertEquals(messages.length, 1);
-    assertStringIncludes(updateFromEvent(messages[0]).gridHtml, "cached");
+    assertStringIncludes(read(messages[0]).gridHtml, "cached");
 
     releaseCollection({
       status: "good",
@@ -1660,7 +1683,7 @@ boardTest("a tile can publish cached data while its collection is still running"
     });
     await collection;
     assertEquals(messages.length, 2);
-    assertStringIncludes(updateFromEvent(messages[1]).gridHtml, "refreshed");
+    assertStringIncludes(read(messages[1]).gridHtml, "refreshed");
     publishIntermediate({
       status: "bad",
       value: "late cached value",
@@ -1695,6 +1718,7 @@ boardTest("a source-backed tile can publish cached data while its collection is 
   const sawCached = new Promise<void>((resolve) => cachedPublished = resolve);
   let publishIntermediate = (_view: TileView) => {};
   let collection: Promise<void> | undefined;
+  const read = updateReader();
   clients.add(client);
   try {
     collection = tick([{
@@ -1710,12 +1734,12 @@ boardTest("a source-backed tile can publish cached data while its collection is 
     }], sourceCtx);
     await sawCached;
     assertEquals(messages.length, 1);
-    assertStringIncludes(updateFromEvent(messages[0]).gridHtml, "cached");
+    assertStringIncludes(read(messages[0]).gridHtml, "cached");
 
     finalView.resolve({ status: "good", value: "refreshed" });
     await collection;
     assertEquals(messages.length, 2);
-    assertStringIncludes(updateFromEvent(messages[1]).gridHtml, "refreshed");
+    assertStringIncludes(read(messages[1]).gridHtml, "refreshed");
     publishIntermediate({ status: "bad", value: "late cached value" });
     assertEquals(messages.length, 2);
     assertStringIncludes(tileHtml("all benchmarks"), "refreshed");
@@ -1733,7 +1757,8 @@ boardTest("sse: /events opens a stream, tick pushes new tile markup, disconnect 
   const reader = res.body!.getReader();
   assertEquals(await chunk(reader), ": connected\n\n");
   assertEquals(clients.size, 1);
-  const initial = updateFromEvent(await chunk(reader));
+  const read = updateReader();
+  const initial = read(await chunk(reader));
   // The page reloads itself when these two disagree, so the version the stream
   // reports has to be the one the page it is feeding was built with.
   const page = await (await handle(req("/"))).text();
@@ -1747,7 +1772,7 @@ boardTest("sse: /events opens a stream, tick pushes new tile markup, disconnect 
   assert(Object.hasOwn(initial, "faviconRedAgeMs"));
 
   await tick([fake("ci", () => ({ status: "good", value: "live update" }))]);
-  const update = updateFromEvent(await chunk(reader));
+  const update = read(await chunk(reader));
   assertStringIncludes(tileHtml("ci", update.gridHtml), "live update");
   assert(update.ageSeconds >= 0);
   assertEquals(update.shellVersion, initial.shellVersion);
@@ -1759,11 +1784,48 @@ boardTest("sse: /events opens a stream, tick pushes new tile markup, disconnect 
   assertEquals(clients.size, 0, "a disconnected browser is not kept as a client");
 });
 
+boardTest("sse: a client holding markup is sent the edits to it, and one sent nothing the whole of it", async () => {
+  const res = await handle(req("/events"));
+  const reader = res.body!.getReader();
+  await chunk(reader);
+  const read = updateReader();
+  read(await chunk(reader));
+  const joined: string[] = [];
+  const late = {
+    enqueue(value: Uint8Array) {
+      joined.push(dec.decode(value));
+    },
+  } as unknown as ReadableStreamDefaultController<Uint8Array>;
+  clients.add(late);
+  try {
+    await tick([fake("ci", () => ({ status: "good", value: "edited" }))]);
+    const event = await chunk(reader);
+    const sent: DashboardEvent = JSON.parse(event.match(/^data: (.*)$/m)![1]);
+    assert(typeof sent.gridHtml !== "string", "a client holding the grid is sent edits");
+    const update = read(event);
+    assertEquals(
+      sent.wideHtml,
+      { from: update.wideHtml.length, edits: [] },
+      "and no edits for wide tiles that did not change",
+    );
+    assertStringIncludes(tileHtml("ci", update.gridHtml), "edited");
+
+    assertEquals(joined.length, 1);
+    const whole = updateReader()(joined[0]);
+    assertEquals(whole.gridHtml, update.gridHtml);
+    assertEquals(whole.wideHtml, update.wideHtml);
+  } finally {
+    clients.delete(late);
+    await reader.cancel();
+  }
+});
+
 boardTest("message: an edit is saved and sent to every connected dashboard", async () => {
   const events = await handle(req("/events"));
   const reader = events.body!.getReader();
   await chunk(reader);
-  await chunk(reader);
+  const read = updateReader();
+  read(await chunk(reader));
   try {
     const response = await handle(new Request("http://localhost/message", {
       method: "PUT",
@@ -1776,7 +1838,7 @@ boardTest("message: an edit is saved and sent to every connected dashboard", asy
     assertEquals(typeof saved.updatedAt, "number");
     assertEquals(typeof saved.revision, "number");
 
-    const update = updateFromEvent(await chunk(reader));
+    const update = read(await chunk(reader));
     assertEquals(update.message, saved);
     const html = await (await handle(req("/"))).text();
     assertStringIncludes(html, `value="Deploying &lt;main&gt;"`);
@@ -1888,19 +1950,20 @@ boardTest("message: the serving clock clears text after its fade completes", asy
   const events = await handle(req("/events"));
   const reader = events.body!.getReader();
   await chunk(reader);
-  await chunk(reader);
+  const read = updateReader();
+  read(await chunk(reader));
   try {
     const saved = await (await handle(new Request("http://localhost/message", {
       method: "PUT",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ text: "Fading announcement" }),
     }))).json();
-    assertEquals(updateFromEvent(await chunk(reader)).message.text, "Fading announcement");
+    assertEquals(read(await chunk(reader)).message.text, "Fading announcement");
 
     now += DASHBOARD_MESSAGE_LIFETIME_MS;
     await serveTick(() => {});
     assertStringIncludes(await chunk(reader), "event: ping\n");
-    assertEquals(updateFromEvent(await chunk(reader)).message, {
+    assertEquals(read(await chunk(reader)).message, {
       text: "",
       updatedAt: null,
       revision: saved.revision + 1,
@@ -2047,13 +2110,13 @@ boardTest("sse: a repository's page is live and follows the tiles' views", async
 });
 
 boardTest("routes: a tile's drill-down path wins over the page; anything else is the page", async () => {
-  const gantt = await handle(req("/bench?view=gantt&repo=loom"));
+  const gantt = await handle(req("/bench?view=gantt&repo=cfs"));
   assertEquals(gantt.status, 200);
   assertEquals(gantt.headers.get(VERSION_HEADER), SERVING_VERSION);
   assertEquals(gantt.headers.get("content-type"), "text/html; charset=utf-8");
   const html = await gantt.text();
   assertStringIncludes(html, "<title>CI run Gantt</title>");
-  assertStringIncludes(html, `${LOOM_REPO} · ${LOOM_CI_WORKFLOW}`);
+  assertStringIncludes(html, `${CFS_REPO} · ${CFS_CI_WORKFLOW}`);
 
   const sha = "c".repeat(40);
   const commitGantt = await handle(
@@ -2073,6 +2136,43 @@ boardTest("routes: a tile's drill-down path wins over the page; anything else is
   assertEquals(fallback.status, 200);
   assertEquals(fallback.headers.get("content-type"), "text/html; charset=utf-8");
   assertStringIncludes(await fallback.text(), "<title>Dashboard — LIVE</title>");
+});
+
+boardTest("routes: /runners is the runners page, marked with the serving version", async () => {
+  const res = await handle(req("/runners"));
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get(VERSION_HEADER), SERVING_VERSION);
+  assertEquals(res.headers.get("content-type"), "text/html; charset=utf-8");
+  assertStringIncludes(await res.text(), "<title>Runners</title>");
+});
+
+boardTest("routes: /runners/socket without a WebSocket upgrade is a 426", async () => {
+  const res = await handle(req("/runners/socket"));
+  assertEquals(res.status, 426);
+  await res.body?.cancel();
+});
+
+boardTest("routes: /runners/key serves the runners socket's key, never cached", async () => {
+  const res = await handle(req("/runners/key"));
+  assertEquals(res.status, 200);
+  assertEquals(res.headers.get("cache-control"), "no-store");
+  assertEquals(res.headers.get("content-type"), "text/plain; charset=utf-8");
+  const key = await res.text();
+  assert(key.length > 0, "the key is not empty");
+  assertEquals(await (await handle(req("/runners/key"))).text(), key);
+});
+
+boardTest("routes: a /runners/socket upgrade without the served key is a 403", async () => {
+  const key = await (await handle(req("/runners/key"))).text();
+  for (const query of ["", `?key=${encodeURIComponent(`${key}x`)}`]) {
+    const res = await handle(
+      new Request(`http://localhost/runners/socket${query}`, {
+        headers: { upgrade: "websocket" },
+      }),
+    );
+    assertEquals(res.status, 403, query);
+    await res.body?.cancel();
+  }
 });
 
 boardTest("start: serves the handler on the configured port and keeps collecting", () => {
@@ -2212,6 +2312,76 @@ boardTest("start: connects to the relay, and connects again on its clock once th
   await relay.end();
   await onTick();
   assertEquals(relay.connections, 2);
+});
+
+boardTest("start: binds the runners page's feed to the relay it is given", async () => {
+  const key = async () => await (await handle(req("/runners/key"))).text();
+  const before = await key();
+  const log = console.log;
+  console.log = () => {};
+  const relay = new FakeRelay();
+  let timer: ReturnType<typeof setInterval> | undefined;
+  try {
+    ({ timer } = start(
+      ((opts: Deno.ServeTcpOptions) => {
+        opts.onListen?.({ transport: "tcp", hostname: "localhost", port: PORT });
+        return undefined;
+      }) as unknown as typeof Deno.serve,
+      () => {},
+      relay.webhooks,
+    ));
+  } finally {
+    clearInterval(timer);
+    console.log = log;
+  }
+
+  const after = await key();
+  assert(after !== before, "a feed of its own serves a key of its own");
+  assertEquals(await key(), after);
+});
+
+// Runs `deno run` in this package as the Dockerfile does, but with no network
+// access, so serving fails where it would bind the port. The child reads a
+// copy of the checked-in lock it may not change, and skips V8's code cache,
+// which would report a module's top-level branches as run whether they ran or
+// not. `program` is the module `-` reads from standard input.
+async function runWithoutNetwork(
+  module: string,
+  program = "",
+): Promise<{ success: boolean; stderr: string }> {
+  const directory = await Deno.makeTempDir({ prefix: "dashboard-server-run-" });
+  try {
+    const lock = join(directory, "deno.lock");
+    await Deno.copyFile(fromFileUrl(new URL("../deno.lock", import.meta.url)), lock);
+    const child = new Deno.Command(Deno.execPath(), {
+      args: ["run", `--lock=${lock}`, "--frozen", "--no-code-cache", "--allow-env", module],
+      cwd: fromFileUrl(new URL(".", import.meta.url)),
+      env: { DASHBOARD_PORT: "18731", NO_COLOR: "1" },
+      stdin: "piped",
+      stdout: "null",
+      stderr: "piped",
+    }).spawn();
+    const stdin = child.stdin.getWriter();
+    await stdin.write(new TextEncoder().encode(program));
+    await stdin.close();
+    const { success, stderr } = await child.output();
+    return { success, stderr: new TextDecoder().decode(stderr) };
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+}
+
+test("running the file serves on DASHBOARD_PORT before it reaches any source", async () => {
+  const { success, stderr } = await runWithoutNetwork("server.ts");
+  assert(!success, stderr);
+  assertStringIncludes(stderr, 'Requires net access to "0.0.0.0:18731"');
+  assertEquals(stderr.split("Requires net access").length, 2, stderr);
+});
+
+test("importing the file serves nothing", async () => {
+  const { success, stderr } = await runWithoutNetwork("-", 'await import("./server.ts");');
+  assert(success, stderr);
+  assert(!stderr.includes("Requires net access"), stderr);
 });
 
 describe("workflow activity", () => {

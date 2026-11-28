@@ -19,6 +19,7 @@ import {
   metadataAttributeValue,
   runtimeContextFromMetadata,
 } from "@/lib/ai-telemetry.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function mockModel() {
   return new MockLanguageModelV4({
@@ -97,7 +98,7 @@ const metadataOf = (span: ReadableSpan) =>
     ),
   );
 
-Deno.test(
+test(
   "runtime context named in includeRuntimeContext reaches OpenInference metadata on every span",
   { sanitizeOps: false, sanitizeResources: false },
   async () => {
@@ -128,7 +129,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "runtime context is withheld from spans when includeRuntimeContext omits it",
   { sanitizeOps: false, sanitizeResources: false },
   async () => {
@@ -144,7 +145,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "nested and non-string runtime context is flattened the same way on every span",
   { sanitizeOps: false, sanitizeResources: false },
   async () => {
@@ -193,18 +194,18 @@ Deno.test(
   },
 );
 
-Deno.test("metadataAttributeValue records strings, numbers, and booleans as they are", () => {
+test("metadataAttributeValue records strings, numbers, and booleans as they are", () => {
   assertEquals(metadataAttributeValue("req-abc"), "req-abc");
   assertEquals(metadataAttributeValue(2), 2);
   assertEquals(metadataAttributeValue(true), true);
 });
 
-Deno.test("metadataAttributeValue serializes objects and arrays to JSON", () => {
+test("metadataAttributeValue serializes objects and arrays to JSON", () => {
   assertEquals(metadataAttributeValue({ a: 1 }), '{"a":1}');
   assertEquals(metadataAttributeValue(["a", "b"]), '["a","b"]');
 });
 
-Deno.test("metadataAttributeValue drops values that have no attribute form", () => {
+test("metadataAttributeValue drops values that have no attribute form", () => {
   assertEquals(metadataAttributeValue(undefined), undefined);
   assertEquals(metadataAttributeValue(() => {}), undefined);
 });
@@ -216,7 +217,7 @@ Deno.test("metadataAttributeValue drops values that have no attribute form", () 
 // carry has to reach the spans, not just the string ones.
 //
 
-Deno.test("runtimeContextFromMetadata carries every value that has an attribute form", () => {
+test("runtimeContextFromMetadata carries every value that has an attribute form", () => {
   const { runtimeContext, includeRuntimeContext } = runtimeContextFromMetadata({
     requestId: "req-abc",
     attempt: 2,
@@ -239,14 +240,14 @@ Deno.test("runtimeContextFromMetadata carries every value that has an attribute 
   });
 });
 
-Deno.test("runtimeContextFromMetadata passes nothing on when there is no metadata", () => {
+test("runtimeContextFromMetadata passes nothing on when there is no metadata", () => {
   assertEquals(runtimeContextFromMetadata(undefined), {
     runtimeContext: undefined,
     includeRuntimeContext: undefined,
   });
 });
 
-Deno.test(
+test(
   "object metadata reaches every span as the JSON the root span records",
   { sanitizeOps: false, sanitizeResources: false },
   async () => {

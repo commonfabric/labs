@@ -540,6 +540,14 @@ interface SpliceOp {
   index: number; // Start index
   remove: number; // Number of elements to remove
   add: FabricValue[]; // Elements to insert at the index
+  // Marks a splice diffed under a recursive read of the array, standing for
+  // the per-index writes of the same change: server execution's supersession
+  // reads the indices whose values it changed as overwritten, where an
+  // unmarked splice overwrites nothing. Sent only to a server advertising
+  // `markedSplicesV1`, and admitted only under that read, alone on its array
+  // in the commit (08-conflict-granularity.md, "Array writes and the
+  // leaf-only matcher").
+  pinned?: true;
 }
 
 type PatchOp = ReplaceOp | AddOp | RemoveOp | MoveOp | SpliceOp;

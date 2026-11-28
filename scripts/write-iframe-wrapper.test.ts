@@ -1,16 +1,20 @@
 import { expect } from "@std/expect";
-import { resolve } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
+import { dirname, resolve } from "@std/path";
+
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROOT = resolve(import.meta.dirname!, "..");
 const SCRIPT = resolve(import.meta.dirname!, "write-iframe-wrapper.ts");
 const decoder = new TextDecoder();
 
-function generatedGuestHtml(source: string): string {
-  const literal = source.match(/^const GUEST_HTML = (.*);$/m)?.[1];
-  expect(literal).toBeDefined();
-  return JSON.parse(literal!);
+/** Expects nothing to be at any of `paths`, a dangling symlink included. */
+async function expectAbsent(...paths: string[]): Promise<void> {
+  for (const path of paths) {
+    await expect(Deno.lstat(path)).rejects.toBeInstanceOf(
+      Deno.errors.NotFound,
+    );
+  }
 }
 
 async function removeDirectory(path: string): Promise<void> {
@@ -51,6 +55,23 @@ async function generate(
   ]);
 }
 
+/** Runs this checkout's `cf check` on `entry`, in a program rooted at `root`. */
+async function cfCheck(entry: string, root: string, ...args: string[]) {
+  return await runDeno((lockPath) => [
+    "run",
+    "--allow-all",
+    "--frozen=true",
+    "--lock",
+    lockPath,
+    resolve(ROOT, "runtime/cli/launcher.ts"),
+    "check",
+    entry,
+    "--root",
+    root,
+    ...args,
+  ]);
+}
+
 const contractPrefix = `
 export interface IframeInputData { heading: string }
 export interface IframeStateData { count: number }
@@ -59,6 +80,52 @@ export const DEFAULT_INPUT: IframeInputData = { heading: "Test" };
 export const DEFAULT_STATE: IframeStateData = { count: 0 };
 export const DEFAULT_OUTPUT: IframeOutputData = { count: 0 };
 `;
+
+/**
+ * Runs `body` with a fresh temporary directory whose name starts with
+ * `prefix`, and removes the directory afterward.
+ */
+async function inTemporaryDirectory(
+  prefix: string,
+  body: (directory: string) => Promise<void>,
+): Promise<void> {
+  const directory = await Deno.makeTempDir({ prefix });
+  try {
+    await body(directory);
+  } finally {
+    await removeDirectory(directory);
+  }
+}
+
+/**
+ * Writes a contract whose `IFRAME_PATTERN` is the source `iframePattern`, and
+ * a guest that sets the body's text, into `directory`. Returns their paths and
+ * the paths of the files the generator writes for a wrapper at `out`, which is
+ * relative to `directory`.
+ */
+async function writeFixture(
+  directory: string,
+  iframePattern: string,
+  out = "main.tsx",
+) {
+  const contract = resolve(directory, "contract.ts");
+  const guest = resolve(directory, "guest.ts");
+  const wrapper = resolve(directory, out);
+  await Deno.writeTextFile(
+    contract,
+    `${contractPrefix}
+export const IFRAME_PATTERN = ${iframePattern} as const;
+`,
+  );
+  await Deno.writeTextFile(guest, "document.body.textContent = 'guest';\n");
+  return {
+    contract,
+    guest,
+    out: wrapper,
+    script: resolve(wrapper, "..", "guest.js"),
+    html: resolve(wrapper, "..", "guest.html"),
+  };
+}
 
 describe("iframe pattern wrapper generator", () => {
   it("bundles React TSX with the guest-owned React instance", async () => {
@@ -88,9 +155,9 @@ createRoot(document.querySelector("#root")!).render(
       const result = await generate(contract, guest, out, "--react");
 
       expect(result.code, decoder.decode(result.stderr)).toBe(0);
-      const generated = await Deno.readTextFile(out);
-      expect(generated).toContain("react.production.js");
-      expect(generated).not.toContain("@commonfabric/runner/jsx-runtime");
+      const bundle = await Deno.readTextFile(resolve(directory, "guest.js"));
+      expect(bundle).toContain("react.production.js");
+      expect(bundle).not.toContain("@commonfabric/runner/jsx-runtime");
     } finally {
       await removeDirectory(directory);
     }
@@ -132,6 +199,9 @@ export const IFRAME_PATTERN = {
         "const iframeInput = input ?? DEFAULT_INPUT;",
       );
       expect(generated).toContain("input: iframeInput,");
+      expect(generated).toContain(
+        " * ScopedState, run as an iframe guest: the guest's\n",
+      );
       expect(generated).not.toContain("new Writable.perUser");
       expect(generated).not.toContain("new Writable.perSession");
     } finally {
@@ -212,20 +282,7 @@ export const IFRAME_PATTERN = {
         const result = await generate(contract, guest, out);
         expect(result.code, decoder.decode(result.stderr)).toBe(0);
 
-        const check = await runDeno((lockPath) => [
-          "run",
-          "--allow-all",
-          "--frozen=true",
-          "--lock",
-          lockPath,
-          resolve(ROOT, "runtime/cli/launcher.ts"),
-          "check",
-          out,
-          "--root",
-          directory,
-          "--no-run",
-          "--json",
-        ]);
+        const check = await cfCheck(out, directory, "--no-run", "--json");
         expect(check.code, decoder.decode(check.stderr)).toBe(0);
         const compiled = JSON.parse(decoder.decode(check.stdout)) as {
           files: { output: string }[];
@@ -263,50 +320,52 @@ export const IFRAME_PATTERN = {
     });
   }
 
-  it("hides embedded guest tokens from the host module scanner", async () => {
-    const directory = await Deno.makeTempDir({
-      prefix: "pattern-iframe-module-string-",
-    });
-    try {
-      const contract = resolve(directory, "contract.ts");
-      const guest = resolve(directory, "guest.ts");
-      const html = resolve(directory, "guest.html");
-      const out = resolve(directory, "main.tsx");
-      await Deno.writeTextFile(
-        contract,
-        `${contractPrefix}
-export const IFRAME_PATTERN = { name: "ModuleString" } as const;
-`,
-      );
-      await Deno.writeTextFile(
-        guest,
-        `document.body.dataset.syntax = "import(";\n` +
-          `document.body.dataset.replacement = "$& $\` $'";\n`,
-      );
-      await Deno.writeTextFile(
-        html,
-        "<!doctype html><body><!-- guest --><!-- PATTERN_IFRAME_SCRIPT --></body>",
-      );
+  it("keeps the guest's text out of the wrapper module", async () => {
+    // SES refuses a module whose source holds an import expression or an HTML
+    // comment, even inside a string. The wrapper holds none of the guest's
+    // text, only the `dataFile()` reads of the files that do, so the host
+    // module loads whatever the guest's document and bundle contain.
 
-      const result = await generate(contract, guest, out, "--html", html);
-      expect(result.code, decoder.decode(result.stderr)).toBe(0);
-      const generated = await Deno.readTextFile(out);
-      const moduleString = generated.match(/^const GUEST_HTML = (.*);$/m)?.[1];
-      expect(moduleString).toBeDefined();
-      expect(moduleString).not.toContain("import");
-      expect(moduleString).not.toContain("<!--");
-      expect(moduleString).not.toContain("-->");
-      expect(moduleString).toContain("\\u0069mport");
-      expect(moduleString).toContain("\\u003c!--");
-      expect(moduleString).toContain("--\\u003e");
-      expect(generatedGuestHtml(generated).match(/<!doctype html>/gi))
-        .toHaveLength(1);
-    } finally {
-      await removeDirectory(directory);
-    }
+    await inTemporaryDirectory(
+      "pattern-iframe-module-string-",
+      async (directory) => {
+        const { contract, guest, out, script, html } = await writeFixture(
+          directory,
+          `{ name: "ModuleString" }`,
+        );
+        await Deno.writeTextFile(
+          guest,
+          `document.body.dataset.syntax = "import(";\n`,
+        );
+        const document =
+          "<!doctype html><body><!-- guest --><!-- PATTERN_IFRAME_SCRIPT --></body>";
+        await Deno.writeTextFile(html, document);
+
+        const result = await generate(contract, guest, out, "--html", html);
+        expect(result.code, decoder.decode(result.stderr)).toBe(0);
+        const generated = await Deno.readTextFile(out);
+        expect(generated).not.toContain("import(");
+        expect(generated).not.toContain("<!--");
+        expect(generated).not.toContain("-->");
+        expect(generated).toContain(
+          'const GUEST_HTML = dataFile("./guest.html");',
+        );
+        expect(generated).toContain(
+          'const GUEST_SCRIPT = dataFile("./guest.js");',
+        );
+        const bundle = await Deno.readTextFile(script);
+        expect(bundle).toContain("import(");
+        expect(await Deno.readTextFile(html)).toBe(document);
+
+        const check = await cfCheck(out, directory);
+        expect(check.code, decoder.decode(check.stderr)).toBe(0);
+      },
+    );
   });
 
   it("replaces a forced output symlink without overwriting its source", async () => {
+    // Each file the generator writes is a link to the guest's source here.
+
     const directory = await Deno.makeTempDir({
       prefix: "pattern-iframe-symlink-",
     });
@@ -314,6 +373,8 @@ export const IFRAME_PATTERN = { name: "ModuleString" } as const;
       const contract = resolve(directory, "contract.ts");
       const guest = resolve(directory, "guest.ts");
       const out = resolve(directory, "main.tsx");
+      const script = resolve(directory, "guest.js");
+      const html = resolve(directory, "guest.html");
       const guestSource = 'document.body.textContent = "guest";\n';
       await Deno.writeTextFile(
         contract,
@@ -322,22 +383,55 @@ export const IFRAME_PATTERN = { name: "SymlinkSafe" } as const;
 `,
       );
       await Deno.writeTextFile(guest, guestSource);
-      await Deno.symlink("guest.ts", out);
+      for (const output of [out, script, html]) {
+        await Deno.symlink("guest.ts", output);
+      }
 
       const result = await generate(contract, guest, out, "--force");
 
-      expect(result.code).toBe(0);
+      expect(result.code, decoder.decode(result.stderr)).toBe(0);
       expect(await Deno.readTextFile(guest)).toBe(guestSource);
-      expect((await Deno.lstat(out)).isSymlink).toBe(false);
+      for (const output of [out, script, html]) {
+        expect((await Deno.lstat(output)).isSymlink).toBe(false);
+      }
       expect(await Deno.readTextFile(out)).toContain(
         "export default pattern<SymlinkSafeInput, SymlinkSafeOutput>",
       );
+      expect(await Deno.readTextFile(script)).toContain(
+        'document.body.textContent="guest"',
+      );
+      expect(await Deno.readTextFile(html)).toContain("<!doctype html>");
     } finally {
       await removeDirectory(directory);
     }
   });
 
+  it("writes nothing, even with --force, when --out names a directory", async () => {
+    await inTemporaryDirectory(
+      "pattern-iframe-out-directory-",
+      async (directory) => {
+        const fixture = await writeFixture(directory, `{ name: "Blocked" }`);
+        await Deno.mkdir(fixture.out);
+
+        const result = await generate(
+          fixture.contract,
+          fixture.guest,
+          fixture.out,
+          "--force",
+        );
+
+        expect(result.code).not.toBe(0);
+        expect(decoder.decode(result.stderr)).toContain(
+          `--out names ${fixture.out}, which is a directory.`,
+        );
+        await expectAbsent(fixture.script, fixture.html);
+      },
+    );
+  });
+
   it("replaces a forced output hardlink without overwriting its source", async () => {
+    // Each file the generator writes is a link to the guest's source here.
+
     const directory = await Deno.makeTempDir({
       prefix: "pattern-iframe-hardlink-",
     });
@@ -345,6 +439,8 @@ export const IFRAME_PATTERN = { name: "SymlinkSafe" } as const;
       const contract = resolve(directory, "contract.ts");
       const guest = resolve(directory, "guest.ts");
       const out = resolve(directory, "main.tsx");
+      const script = resolve(directory, "guest.js");
+      const html = resolve(directory, "guest.html");
       const guestSource = 'document.body.textContent = "guest";\n';
       await Deno.writeTextFile(
         contract,
@@ -353,16 +449,25 @@ export const IFRAME_PATTERN = { name: "HardlinkSafe" } as const;
 `,
       );
       await Deno.writeTextFile(guest, guestSource);
-      await Deno.link(guest, out);
+      for (const output of [out, script, html]) {
+        await Deno.link(guest, output);
+      }
 
       const result = await generate(contract, guest, out, "--force");
 
-      expect(result.code).toBe(0);
+      expect(result.code, decoder.decode(result.stderr)).toBe(0);
       expect(await Deno.readTextFile(guest)).toBe(guestSource);
       expect(await Deno.readTextFile(out)).toContain(
         "export default pattern<HardlinkSafeInput, HardlinkSafeOutput>",
       );
-      expect((await Deno.stat(guest)).ino).not.toBe((await Deno.stat(out)).ino);
+      expect(await Deno.readTextFile(script)).toContain(
+        'document.body.textContent="guest"',
+      );
+      expect(await Deno.readTextFile(html)).toContain("<!doctype html>");
+      const guestInode = (await Deno.stat(guest)).ino;
+      for (const output of [out, script, html]) {
+        expect((await Deno.stat(output)).ino).not.toBe(guestInode);
+      }
     } finally {
       await removeDirectory(directory);
     }
@@ -452,19 +557,7 @@ export const IFRAME_PATTERN = {
 
       // The wrapper is only as good as its compile: the context names one
       // cell twice, and the kind `presence` has to be one `cf-iframe` takes.
-      const check = await runDeno((lockPath) => [
-        "run",
-        "--allow-all",
-        "--frozen=true",
-        "--lock",
-        lockPath,
-        resolve(ROOT, "runtime/cli/launcher.ts"),
-        "check",
-        out,
-        "--root",
-        directory,
-        "--no-run",
-      ]);
+      const check = await cfCheck(out, directory, "--no-run");
       expect(check.code, decoder.decode(check.stderr)).toBe(0);
     } finally {
       await removeDirectory(directory);
@@ -582,19 +675,7 @@ export default pattern(() => {
 });
 `,
       );
-      const check = await runDeno((lockPath) => [
-        "run",
-        "--allow-all",
-        "--frozen=true",
-        "--lock",
-        lockPath,
-        resolve(ROOT, "runtime/cli/launcher.ts"),
-        "check",
-        parent,
-        "--root",
-        directory,
-        "--no-run",
-      ]);
+      const check = await cfCheck(parent, directory, "--no-run");
       expect(check.code, decoder.decode(check.stderr)).toBe(0);
     } finally {
       await removeDirectory(directory);
@@ -698,6 +779,373 @@ export const IFRAME_PATTERN = {
     });
   }
 
+  it("writes the guest's bundle to guest.js beside the wrapper", async () => {
+    await inTemporaryDirectory("pattern-iframe-bundle-", async (directory) => {
+      const { contract, guest, out, script } = await writeFixture(
+        directory,
+        `{ name: "Bundled" }`,
+        "pattern/main.tsx",
+      );
+      await Deno.writeTextFile(
+        guest,
+        'document.body.dataset.probe = "bundle-probe";\n',
+      );
+
+      const result = await generate(contract, guest, out);
+
+      expect(result.code, decoder.decode(result.stderr)).toBe(0);
+      expect(await Deno.readTextFile(script)).toContain("bundle-probe");
+      await expectAbsent(resolve(directory, "guest.js"));
+      const generated = await Deno.readTextFile(out);
+      expect(generated).not.toContain("bundle-probe");
+      expect(generated).toContain('} from "../contract.ts";');
+      expect(generated).toContain(
+        'const GUEST_SCRIPT = dataFile("./guest.js");',
+      );
+      expect(generated).toContain("script={GUEST_SCRIPT}");
+    });
+  });
+
+  it("writes a default document to guest.html beside the wrapper", async () => {
+    await inTemporaryDirectory(
+      "pattern-iframe-document-",
+      async (directory) => {
+        const { contract, guest, out, html } = await writeFixture(
+          directory,
+          `{ name: "Documented", displayName: "Notes <&> more" }`,
+          "pattern/main.tsx",
+        );
+
+        const result = await generate(contract, guest, out);
+
+        expect(result.code, decoder.decode(result.stderr)).toBe(0);
+        const document = await Deno.readTextFile(html);
+        expect(document).toContain("<title>Notes &lt;&amp;&gt; more</title>");
+        expect(document).toContain('<div id="root"></div>');
+        expect(document).not.toContain("<script");
+        await expectAbsent(resolve(directory, "guest.html"));
+        const generated = await Deno.readTextFile(out);
+        expect(generated).toContain(
+          'const GUEST_HTML = dataFile("./guest.html");',
+        );
+        expect(generated).toContain("src={GUEST_HTML}");
+      },
+    );
+  });
+
+  for (
+    const [existing, message] of [
+      ["guest.js", "already exists; pass --force to regenerate it."],
+      [
+        "guest.html",
+        "already exists; pass --force to regenerate it, or --html to read it as the guest's document.",
+      ],
+    ]
+  ) {
+    it(`replaces an existing ${existing} beside the wrapper only when forced`, async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-existing-",
+        async (directory) => {
+          const fixture = await writeFixture(directory, `{ name: "Existing" }`);
+          const authored = resolve(directory, existing);
+          await Deno.writeTextFile(authored, "authored\n");
+
+          const refused = await generate(
+            fixture.contract,
+            fixture.guest,
+            fixture.out,
+          );
+
+          expect(refused.code).not.toBe(0);
+          expect(decoder.decode(refused.stderr)).toContain(
+            `${authored} ${message}`,
+          );
+          expect(await Deno.readTextFile(authored)).toBe("authored\n");
+          await expectAbsent(
+            fixture.out,
+            ...[fixture.script, fixture.html].filter((path) =>
+              path !== authored
+            ),
+          );
+
+          const forced = await generate(
+            fixture.contract,
+            fixture.guest,
+            fixture.out,
+            "--force",
+          );
+
+          expect(forced.code, decoder.decode(forced.stderr)).toBe(0);
+          expect(await Deno.readTextFile(authored)).not.toBe("authored\n");
+        },
+      );
+    });
+  }
+
+  it("reads the document --html names in place", async () => {
+    await inTemporaryDirectory("pattern-iframe-html-", async (directory) => {
+      const { contract, guest, out, html } = await writeFixture(
+        directory,
+        `{ name: "OwnDocument" }`,
+      );
+      await Deno.mkdir(resolve(directory, "pages"));
+      const own = resolve(directory, "pages", "page.html");
+      const document =
+        '<!doctype html><title>Own</title><div id="app"></div>\n';
+      await Deno.writeTextFile(own, document);
+
+      const result = await generate(contract, guest, out, "--html", own);
+
+      expect(result.code, decoder.decode(result.stderr)).toBe(0);
+      expect(await Deno.readTextFile(own)).toBe(document);
+      await expectAbsent(html);
+      expect(await Deno.readTextFile(out)).toContain(
+        'const GUEST_HTML = dataFile("./pages/page.html");',
+      );
+
+      // Running the wrapper reads the document by the path it names.
+      const check = await cfCheck(out, directory);
+      expect(check.code, decoder.decode(check.stderr)).toBe(0);
+    });
+  });
+
+  for (
+    const { description, guest, out, args, message } of [
+      {
+        description: "an --html that names no file",
+        guest: "guest.ts",
+        out: "main.tsx",
+        args: (directory: string) => [
+          "--html",
+          resolve(directory, "missing.html"),
+        ],
+        message: "missing.html, which is not a file.",
+      },
+      {
+        description: "a guest source named guest.js beside --out",
+        guest: "guest.js",
+        out: "main.tsx",
+        args: () => [],
+        message: "guest.js beside --out must not replace a source file.",
+      },
+      {
+        description: "an --out named guest.js",
+        guest: "guest.ts",
+        out: "guest.js",
+        args: () => [],
+        message:
+          "--out must not be guest.js, which the generator writes beside it.",
+      },
+      {
+        description: "an --out named guest.html and no --html",
+        guest: "guest.ts",
+        out: "guest.html",
+        args: () => [],
+        message:
+          "--out must not be guest.html, which the generator writes beside it.",
+      },
+    ]
+  ) {
+    it(`writes nothing for ${description}`, async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-outputs-refused-",
+        async (directory) => {
+          const fixture = await writeFixture(directory, `{ name: "Refused" }`);
+          const guestPath = resolve(directory, guest);
+          if (guestPath !== fixture.guest) {
+            await Deno.rename(fixture.guest, guestPath);
+          }
+          const outPath = resolve(directory, out);
+
+          const result = await generate(
+            fixture.contract,
+            guestPath,
+            outPath,
+            ...args(directory),
+          );
+
+          expect(result.code).not.toBe(0);
+          expect(decoder.decode(result.stderr)).toContain(message);
+          await expectAbsent(
+            ...[outPath, fixture.script, fixture.html].filter((path) =>
+              path !== guestPath
+            ),
+          );
+        },
+      );
+    });
+  }
+
+  describe("assets", () => {
+    it("passes no `assets` for a contract that declares none", async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-no-assets-",
+        async (directory) => {
+          const { contract, guest, out } = await writeFixture(
+            directory,
+            `{ name: "Plain" }`,
+          );
+
+          const result = await generate(contract, guest, out);
+
+          expect(result.code, decoder.decode(result.stderr)).toBe(0);
+          const generated = await Deno.readTextFile(out);
+          expect(generated).not.toContain("GUEST_ASSETS");
+          expect(generated).not.toContain("assets=");
+        },
+      );
+    });
+
+    it("passes a directory as `dataFile.urls()` of its path from the wrapper", async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-asset-directory-",
+        async (directory) => {
+          await Deno.mkdir(resolve(directory, "assets"));
+          await Deno.writeFile(
+            resolve(directory, "assets/glaze.png"),
+            new Uint8Array([0x89, 0x50, 0x4e, 0x47]),
+          );
+          const { contract, guest, out } = await writeFixture(
+            directory,
+            `{ name: "Sprites", assets: "./assets" }`,
+            "pattern/main.tsx",
+          );
+
+          const result = await generate(contract, guest, out);
+
+          expect(result.code, decoder.decode(result.stderr)).toBe(0);
+          const generated = await Deno.readTextFile(out);
+          expect(generated).toContain(
+            'const GUEST_ASSETS = dataFile.urls("../assets");',
+          );
+          expect(generated).toContain("          assets={GUEST_ASSETS}\n");
+          // Evaluating the wrapper lists the directory and reads each asset.
+          const check = await cfCheck(out, directory, "--pattern-json");
+          expect(check.code, decoder.decode(check.stderr)).toBe(0);
+          expect(decoder.decode(check.stdout)).toContain(
+            '"glaze": "data:image/png;base64,iVBORw=="',
+          );
+        },
+      );
+    });
+
+    it("passes each named file as `dataFile.url()` of its path from the wrapper", async () => {
+      await inTemporaryDirectory(
+        "pattern-iframe-asset-files-",
+        async (directory) => {
+          for (const file of ["images/glaze.png", "fonts/menu.woff2"]) {
+            await Deno.mkdir(resolve(directory, dirname(file)), {
+              recursive: true,
+            });
+            await Deno.writeFile(resolve(directory, file), new Uint8Array([0]));
+          }
+          const { contract, guest, out } = await writeFixture(
+            directory,
+            `{
+  name: "Glazed",
+  assets: {
+    glaze: "./images/glaze.png",
+    ["menu-font"]: "fonts/menu.woff2",
+  },
+}`,
+            "pattern/main.tsx",
+          );
+
+          const result = await generate(contract, guest, out);
+
+          expect(result.code, decoder.decode(result.stderr)).toBe(0);
+          const generated = await Deno.readTextFile(out);
+          expect(generated).toContain(`const GUEST_ASSETS = {
+  ["glaze"]: dataFile.url("../images/glaze.png"),
+  ["menu-font"]: dataFile.url("../fonts/menu.woff2"),
+};
+`);
+          expect(generated).toContain("          assets={GUEST_ASSETS}\n");
+          const check = await cfCheck(out, directory);
+          expect(check.code, decoder.decode(check.stderr)).toBe(0);
+        },
+      );
+    });
+
+    const notAPathOrRecord =
+      "IFRAME_PATTERN.assets must be a directory path or a record from an asset name to a file path.";
+    for (
+      const [assets, message] of [
+        ["42", notAPathOrRecord],
+        [`""`, notAPathOrRecord],
+        [`["./glaze.png"]`, notAPathOrRecord],
+        [
+          `{ "glaze.small": "./glaze.png" }`,
+          `Asset name "glaze.small" must be made of letters, digits, "_", and "-", such as glaze.`,
+        ],
+        [
+          `{ "": "./glaze.png" }`,
+          `Asset name "" must be made of letters, digits, "_", and "-", such as glaze.`,
+        ],
+        [`{ glaze: "" }`, `Asset "glaze" must have a file path string.`],
+        [`{ glaze: 1 }`, `Asset "glaze" must have a file path string.`],
+        [
+          `{ notes: "./notes.txt" }`,
+          `Asset "notes" must name an image, font, or sound file that dataFile.url() reads, such as a .png, .woff2, or .mp3; found "./notes.txt".`,
+        ],
+        [
+          `{ constructor: "./glaze.png" }`,
+          `Asset name "constructor" is reserved: setup refuses "__proto__" and "constructor" as keys of the record it stores.`,
+        ],
+        [`"./missing"`, "missing, which is not a directory."],
+        [`"./glaze.png"`, "glaze.png, which is not a directory."],
+        [`{ glaze: "./missing.png" }`, "missing.png, which is not a file."],
+        [
+          `"./dotted"`,
+          "has no asset name: `glaze.small` holds characters other than letters, digits, `_`, and `-`.",
+        ],
+        [
+          `"./reserved"`,
+          `Asset name "constructor" is reserved: setup refuses "__proto__" and "constructor" as keys of the record it stores.`,
+        ],
+      ]
+    ) {
+      it(`writes nothing for the assets ${assets}`, async () => {
+        await inTemporaryDirectory(
+          "pattern-iframe-assets-refused-",
+          async (directory) => {
+            await Deno.writeFile(
+              resolve(directory, "glaze.png"),
+              new Uint8Array([0]),
+            );
+            await Deno.writeTextFile(resolve(directory, "notes.txt"), "notes");
+            for (
+              const [folder, file] of [
+                ["dotted", "glaze.small.png"],
+                ["reserved", "constructor.png"],
+              ]
+            ) {
+              await Deno.mkdir(resolve(directory, folder));
+              await Deno.writeFile(
+                resolve(directory, folder, file),
+                new Uint8Array([0]),
+              );
+            }
+            const fixture = await writeFixture(
+              directory,
+              `{ name: "Refused", assets: ${assets} }`,
+            );
+
+            const result = await generate(
+              fixture.contract,
+              fixture.guest,
+              fixture.out,
+            );
+
+            expect(result.code).not.toBe(0);
+            expect(decoder.decode(result.stderr)).toContain(message);
+            await expectAbsent(fixture.out, fixture.script, fixture.html);
+          },
+        );
+      });
+    }
+  });
+
   it("bundles D3, Phaser, and Babylon.js guests", async () => {
     const frameworks = [
       {
@@ -756,11 +1204,17 @@ export const IFRAME_PATTERN = { name: "${framework.name}" } as const;
         const result = await generate(contract, guest, out);
 
         expect(result.code, decoder.decode(result.stderr)).toBe(0);
+        const bundle = await Deno.readTextFile(resolve(directory, "guest.js"));
+        expect(bundle).toContain(framework.marker);
         const generated = await Deno.readTextFile(out);
-        expect(generated).toContain(framework.marker);
-        expect(generated).toContain("const GUEST_HTML =");
-        const guestHtml = generatedGuestHtml(generated);
-        expect(guestHtml.match(/<!doctype html>/gi)).toHaveLength(1);
+        expect(generated).not.toContain(framework.marker);
+        expect(generated).toContain(
+          'const GUEST_SCRIPT = dataFile("./guest.js");',
+        );
+        const guestHtml = await Deno.readTextFile(
+          resolve(directory, "guest.html"),
+        );
+        expect(guestHtml).not.toContain(framework.marker);
       } finally {
         await removeDirectory(directory);
       }

@@ -2,8 +2,8 @@
 import "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { CFFragment } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 describe("CFFragment", () => {
   afterEach(() => document.body.replaceChildren());

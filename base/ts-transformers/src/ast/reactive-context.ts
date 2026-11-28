@@ -5,7 +5,10 @@ import {
   detectCallKind,
   isConsumedByTerminalChainCall,
 } from "./call-kind.ts";
-import { getCallbackBoundarySemantics } from "../policy/callback-boundary.ts";
+import {
+  type CallbackBoundaryLookup,
+  getCallbackBoundarySemantics,
+} from "../policy/callback-boundary.ts";
 
 export type ReactiveContextKind = "pattern" | "compute" | "neutral";
 
@@ -27,36 +30,10 @@ export interface ReactiveContextInfo {
   readonly inJsxExpression: boolean;
 }
 
-export interface ReactiveContextLookup {
-  isArrayMethodCallback(node: ts.Node): boolean;
-  isSourceFileDefaultLibrary?(sourceFile: ts.SourceFile): boolean;
+export interface ReactiveContextLookup extends CallbackBoundaryLookup {
   isSyntheticComputeCallback?(node: ts.Node): boolean;
   isSyntheticComputeOwnedNode?(node: ts.Node): boolean;
 }
-
-/**
- * Builder names that establish a pattern context where opaque reading and
- * computation lowering rules apply.
- */
-export const RESTRICTED_CONTEXT_BUILDERS = new Set([
-  "pattern",
-  "render",
-]);
-
-/**
- * Builder names that establish compute context.
- *
- * NOTE: this set currently has no consumers in the repo (it is exported from
- * ast/mod.ts but never read). Left in place pending a separate dead-export
- * audit; the former `"derive"` entry was removed here as part of retiring
- * `derive` (CT-1643) — derive is no longer a recognized builder name.
- */
-export const SAFE_WRAPPER_BUILDERS = new Set([
-  "computed",
-  "action",
-  "lift",
-  "handler",
-]);
 
 export interface CallbackContext {
   callback: ts.ArrowFunction | ts.FunctionExpression;
@@ -107,7 +84,7 @@ function getMarkedSyntheticCallbackContext(
             return { kind: "compute", owner: "lift-applied", inJsxExpression };
           }
           if (callKind?.kind === "builder") {
-            const builderContext = getBuilderContext(callKind.builderName);
+            const builderContext = BUILDER_CONTEXTS.get(callKind.builderName);
             if (builderContext) {
               return { ...builderContext, inJsxExpression };
             }
@@ -161,29 +138,18 @@ export function isStandaloneFunctionDefinition(
   return false;
 }
 
-function getBuilderContext(
-  builderName: string,
-): { kind: ReactiveContextKind; owner: ReactiveContextOwner } | undefined {
-  if (builderName === "pattern") {
-    return { kind: "pattern", owner: "pattern" };
-  }
-  if (builderName === "render") {
-    return { kind: "pattern", owner: "render" };
-  }
-  if (builderName === "computed") {
-    return { kind: "compute", owner: "computed" };
-  }
-  if (builderName === "action") {
-    return { kind: "compute", owner: "action" };
-  }
-  if (builderName === "lift") {
-    return { kind: "compute", owner: "lift" };
-  }
-  if (builderName === "handler") {
-    return { kind: "compute", owner: "handler" };
-  }
-  return undefined;
-}
+/** The context each builder establishes for its callback's body. */
+const BUILDER_CONTEXTS: ReadonlyMap<
+  string,
+  { kind: ReactiveContextKind; owner: ReactiveContextOwner }
+> = new Map([
+  ["pattern", { kind: "pattern", owner: "pattern" }],
+  ["render", { kind: "pattern", owner: "render" }],
+  ["computed", { kind: "compute", owner: "computed" }],
+  ["action", { kind: "compute", owner: "action" }],
+  ["lift", { kind: "compute", owner: "lift" }],
+  ["handler", { kind: "compute", owner: "handler" }],
+]);
 
 /**
  * Classifies the effective context at a node.
@@ -225,17 +191,8 @@ export function classifyReactiveContext(
           return { kind: "compute", owner: "standalone", inJsxExpression };
         }
 
-        const boundarySemantics = getCallbackBoundarySemantics(
-          current,
-          checker,
-          {
-            isArrayMethodCallback: (node) =>
-              lookup?.isArrayMethodCallback(node) ?? false,
-            isSourceFileDefaultLibrary: (sourceFile) =>
-              lookup?.isSourceFileDefaultLibrary?.(sourceFile) ?? false,
-          },
-        );
-        const bodyContext = boundarySemantics.bodyContext;
+        const bodyContext =
+          getCallbackBoundarySemantics(current, checker, lookup).bodyContext;
         if (bodyContext) {
           if (bodyContext.strategy === "inherit-parent") {
             current = current.parent;
@@ -303,15 +260,6 @@ export function isInsideSafeCallbackWrapper(
 ): boolean {
   const info = classifyReactiveContext(node, checker, lookup);
   return info.kind === "compute";
-}
-
-export function isInsideSafeWrapper(
-  node: ts.Node,
-  checker: ts.TypeChecker,
-  lookup?: ReactiveContextLookup,
-): boolean {
-  const info = classifyReactiveContext(node, checker, lookup);
-  return info.kind === "compute" || info.inJsxExpression;
 }
 
 export function isInsideRestrictedContext(

@@ -22,6 +22,11 @@ long way without a query-dependency analyzer.
   invalidation pass a narrower cell (e.g. a per-table or per-topic cell they bump
   themselves from the same handler that writes), trading precision for manual
   bookkeeping. v1 does not parse SQL to compute fine-grained read sets.
+- A query over an
+  [indexed collection](../../features/indexed-collections.md#queries) follows
+  the collection's `rev` without `reactOn`, and keeps `rev` out of its request
+  hash. A re-run for a new `rev` writes no pending claim: the result cell
+  changes only where the returned rows differ.
 - **A row document is immutable.** The write-back stores each result row as
   an entity document of its own under the query's result cell, keyed on the
   row's content and on the label that content is written under (CFC spec

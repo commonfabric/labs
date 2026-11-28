@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { runPatternScenario } from "../pattern-harness.ts";
 import type { PatternIntegrationScenario } from "../pattern-harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 export const contentPublishingWorkflowScenario: PatternIntegrationScenario = {
   name: "content publishing workflow orders queue by priority and schedule",

@@ -3,7 +3,9 @@
  * lowering could not read is carried as a `null` atom, a label nobody holds,
  * which says nothing about the value it was written to protect. A label list
  * that does not read as a list at all is an error: the runtime reads labels
- * only from a list, so none of what is written there would reach it.
+ * only from a list, so none of what is written there would reach it. A
+ * projection path that does not read as a path leaves the label out, and is
+ * reported as an unread label is.
  */
 
 import { getLogger } from "@commonfabric/logger";
@@ -172,28 +174,61 @@ export function reportLabelReading(
   labelNode: ts.TypeNode | undefined,
 ): void {
   const label = printedLabel(context, labelType, labelNode);
+  report(
+    context,
+    labelNode,
+    reading === "not-a-list"
+      ? {
+        severity: "error",
+        type: "cfc-label:not-a-list",
+        message: `A label list of \`${aliasName}\` is not a list: ${label}. ` +
+          "The runtime reads labels only from a list, so none of what is " +
+          "written there would reach it. Write the labels as a tuple of " +
+          'atoms, such as `readonly ["secret"]`.',
+      }
+      : {
+        severity: "warning",
+        type: "cfc-label:unread",
+        message: `A label of \`${aliasName}\` could not be read: ${label}. ` +
+          "An atom is a literal, an object literal of them, `AnyOf<…>`, or " +
+          "`PolicyOf<typeof …>`; the schema carries what it could not read " +
+          "as an atom that serializes as `null`, or as a field left out.",
+      },
+  );
+}
+
+/**
+ * Reports `aliasName`'s projection path, printed from `pathNode` or else from
+ * `pathType`, that does not read as a path, as a `cfc-label:unread` warning.
+ */
+export function reportUnreadProjectionPath(
+  context: GenerationContext,
+  aliasName: string,
+  pathType: ts.Type | undefined,
+  pathNode: ts.TypeNode | undefined,
+): void {
+  const path = printedLabel(context, pathType, pathNode);
+  report(context, pathNode, {
+    severity: "warning",
+    type: "cfc-label:unread",
+    message: `The projection path of \`${aliasName}\` could not be read: ` +
+      `${path}. A path is a JSON Pointer string or a tuple of string ` +
+      "literals; the schema carries no projection for it.",
+  });
+}
+
+/**
+ * Hands `diagnostic`, at `labelNode` or else at the node being generated, to
+ * `context.onDiagnostic`, or logs it where there is none.
+ */
+function report(
+  context: GenerationContext,
+  labelNode: ts.TypeNode | undefined,
+  diagnostic: Omit<SchemaGenerationDiagnostic, "node">,
+): void {
   const node = labelNode ?? context.typeNode;
-  const diagnostic: SchemaGenerationDiagnostic = reading === "not-a-list"
-    ? {
-      severity: "error",
-      type: "cfc-label:not-a-list",
-      message: `A label list of \`${aliasName}\` is not a list: ${label}. ` +
-        "The runtime reads labels only from a list, so none of what is " +
-        "written there would reach it. Write the labels as a tuple of atoms, " +
-        'such as `readonly ["secret"]`.',
-      ...(node && { node }),
-    }
-    : {
-      severity: "warning",
-      type: "cfc-label:unread",
-      message: `A label of \`${aliasName}\` could not be read: ${label}. ` +
-        "An atom is a literal, an object literal of them, `AnyOf<…>`, or " +
-        "`PolicyOf<typeof …>`; the schema carries what it could not read as " +
-        "an atom that serializes as `null`, or as a field left out.",
-      ...(node && { node }),
-    };
   if (context.onDiagnostic) {
-    context.onDiagnostic(diagnostic);
+    context.onDiagnostic({ ...diagnostic, ...(node && { node }) });
   } else if (diagnostic.severity === "error") {
     logger.error("schema-gen", () => diagnostic.message);
   } else {

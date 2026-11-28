@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { discoverGitCheckoutDirectories } from "../src/checkout-discovery.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("discoverGitCheckoutDirectories", () => {
   it("finds worktrees and does not descend into a checkout", async () => {
@@ -116,6 +116,34 @@ describe("discoverGitCheckoutDirectories", () => {
       ).then(() => undefined, (error: unknown) => error);
       expect(failure).toBeInstanceOf(Error);
       expect(failure).not.toBeInstanceOf(Deno.errors.NotFound);
+    } finally {
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("searches beneath a .git that is neither a file nor a directory", async () => {
+    const directory = await Deno.makeTempDir();
+    try {
+      const fifoHolder = join(directory, "fifo-holder");
+      const nested = join(fifoHolder, "nested");
+      await Deno.mkdir(join(nested, ".git"), { recursive: true });
+      await Deno.writeTextFile(join(nested, ".git", "HEAD"), "ref: main");
+      const mkfifo = await new Deno.Command("mkfifo", {
+        args: [join(fifoHolder, ".git")],
+      }).output();
+      expect(mkfifo.success).toBe(true);
+      const validated: string[] = [];
+      expect(
+        await discoverGitCheckoutDirectories(
+          [directory],
+          undefined,
+          (candidate) => {
+            validated.push(candidate);
+            return Promise.resolve(true);
+          },
+        ),
+      ).toEqual([nested]);
+      expect(validated).toEqual([nested]);
     } finally {
       await Deno.remove(directory, { recursive: true });
     }

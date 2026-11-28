@@ -5,9 +5,9 @@ Pacific day the commit under test was committed on.
 [TESTING.md](../development/TESTING.md#every-test-run-shuffles-its-order) is
 the reference for how that works and what it reaches. This plan carries the
 two stages below. Stage 1 is built, and Stage 2 is not. Where Stage 2 names
-something that already exists — the wrapper every test file's `describe()` and
-`it()` resolve to, the seed in the test records — that thing is current, and
-the stage is what would be built on it.
+something that already exists — the module every test file registers its tests
+through, the seed in the test records — that thing is current, and the stage is
+what would be built on it.
 
 ## Stage 1: a run under the next day's seed, a day ahead
 
@@ -52,43 +52,35 @@ kind of dependence between two `it()` calls is out of the shuffle's reach
 today.
 
 The place that would reach the rest already exists.
-[`base/test-support/src/records/bdd.ts`](../../base/test-support/src/records/bdd.ts)
-is what every test file's `import { describe, it } from "@std/testing/bdd"`
-resolves to: the root import map points that specifier at this repository's
-own module and gives the standard library's a second name,
-`@std/testing/bdd/real`. The module already wraps both functions, tracks the
-chain of names enclosing each registration, and can register a case as ignored
-in place of running it. So no test file's import has to change, and the
-question is only what to add to that module.
+[`base/test-support/src/testing.ts`](../../base/test-support/src/testing.ts) is the
+module every test file registers its tests through. Its `describe` already
+collects what its body registers — its `it()` calls and its nested
+`describe()` calls — into a tree before anything reaches Deno, and runs that
+tree's tests as steps once the file has loaded. So no test file has to change,
+and the question is only what order the module runs each group's children in.
 
-What to add: `describe` collects the registrations its body makes — its `it()`
-calls and its nested `describe()` calls — and replays them in the seed's order
-once the body has run, instead of letting each one register as the body
-reaches it. The hooks need no such treatment, since where a `beforeEach()`
-sits in the body does not decide when it runs. A case's identity is the chain
-of names around it joined with its own, which does not depend on the order, so
-the run-record store and the skip list keep working across the change.
+What to add: run the children of each group in the seed's order rather than in
+the order the body declared them. The hooks need no such treatment, since where
+a `beforeEach()` sits in the body does not decide when it runs. A case's
+identity is the chain of names around it joined with its own, which does not
+depend on the order, so the run-record store and the skip list keep working
+across the change.
 
-Three things to get right, and the reason to measure before starting:
+Two things to get right, and the reason to measure before starting:
 
-- The module hands back the standard library's own functions untouched when no
-  record capture is installed, and a run in that state has to shuffle too.
-  Whatever holds the seed therefore sits outside the capture, not inside it.
-- The wrapper has to keep carrying everything the two functions already do —
-  `it.only`, `it.ignore`, `describe.only`, `describe.ignore`, the
-  named-suite handle a call can pass instead of nesting inside it, and the
-  object-form overloads. It carries them today; collecting and replaying
-  registrations must not drop one.
+- A run that records nothing has to shuffle too, so the seed comes from the
+  environment the runner sets (`CF_TEST_SHUFFLE_SEED`, or the commit's day),
+  not from anything recording installs.
 - A reader of a failing run sees cases in an order the file does not have.
   Each runner already prints its seed, which is what makes that order
   reproducible; whether it is also legible is worth checking on a real failure
   before committing to the change.
 
 The measurement that decides it: run the suite once under a throwaway version
-of that wrapper which shuffles within a file, and count the tests that fail.
+of that module which shuffles within a file, and count the tests that fail.
 That number is the size of the debt the change would open, and it has to be
 paid before the shuffle can be on by default. If it is a handful, fixing those
 by hand and holding the line with the rule in
 [unit-test-coding-style.md](../development/unit-test-coding-style.md#each-case-stands-on-its-own)
-costs less than the wrapper does. If it is large, the wrapper is what stops
+costs less than the change does. If it is large, the change is what stops
 the next one arriving.

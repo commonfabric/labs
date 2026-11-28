@@ -164,6 +164,12 @@ repository. That rule also accepts an issue reference in the tag position,
 which does not make one a good idea here: an issue number is exactly what this
 section says to leave out of a comment. Tag a person.
 
+Patterns the pattern index publishes are the exception: the source of every
+pattern under `patterns/` outside the trees the Pattern Index Sync excludes
+(`.github/workflows/pattern-index-sync.yml`) is public, and the index's privacy
+check holds source that names a developer. There, tag the subject the `TODO` is
+about instead, as in `TODO(strict-schema):`.
+
 ### The check that finds these
 
 Self-review does not reliably catch any of the above, because each shape reads

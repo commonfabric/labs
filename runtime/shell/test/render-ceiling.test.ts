@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isCfcRenderCeilingEnabled,
@@ -7,6 +6,7 @@ import {
 // Load the ambient-globals module so its declaration of
 // `commonfabric.cfcRenderCeiling` is exercised alongside the toggle.
 import "../src/globals.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const STORAGE_KEY = "cfcRenderCeiling";
 

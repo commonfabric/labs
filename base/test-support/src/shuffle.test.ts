@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 import {
@@ -13,6 +12,7 @@ import {
   shuffleNotice,
   shuffleSeed,
 } from "./shuffle.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Makes a git repository whose one commit was committed at `when`. */
 async function repoCommittedAt(when: string): Promise<string> {

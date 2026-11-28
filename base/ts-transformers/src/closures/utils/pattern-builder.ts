@@ -203,18 +203,31 @@ export class PatternBuilder {
   }
 
   /**
-   * Build a handler callback with positional parameters: (event, params, ...extra).
+   * Build a handler callback with the two positional parameters the runtime
+   * passes a handler: (event, params). The event parameter keeps the authored
+   * callback's first parameter, or is named `eventParamName` when the callback
+   * declares none; params destructures the captures, or is named
+   * `paramsParamName` when there are none. The runtime passes nothing else,
+   * so a further parameter of the authored callback, which TypeScript accepts
+   * when it is optional or rest, would be unbound in the rebuilt callback; it
+   * is reported as `handler-callback:extra-parameter`.
    */
   buildHandlerCallback(
     originalCallback: ts.ArrowFunction,
     body: ts.ConciseBody,
-    eventParamName: string = "event",
-    paramsParamName: string = "params",
-    returnType?: ts.TypeNode | null,
+    eventParamName: string,
+    paramsParamName: string,
   ): ts.ArrowFunction {
-    const eventParam = originalCallback.parameters[0];
-    const stateParam = originalCallback.parameters[1];
-    const extraParams = originalCallback.parameters.slice(2);
+    const [eventParam, extraParam] = originalCallback.parameters;
+    if (extraParam) {
+      this.#context.reportDiagnostic({
+        type: "handler-callback:extra-parameter",
+        message: "An event handler or action() callback receives only the " +
+          "event. Remove this parameter and read the value from a variable " +
+          "in scope instead.",
+        node: extraParam,
+      });
+    }
 
     // 1. Create event parameter
     // Ensure event parameter doesn't collide with captures
@@ -224,45 +237,27 @@ export class PatternBuilder {
       conflicts.add(renamed);
     }
 
-    let eventParameter: ts.ParameterDeclaration;
+    let eventBindingName: ts.BindingName;
     if (eventParam) {
       // Use original parameter name if possible
-      const bindingName = normalizeBindingName(
+      eventBindingName = normalizeBindingName(
         eventParam.name,
         this.#factory,
         conflicts,
       );
 
       // Register the chosen name as used
-      if (ts.isIdentifier(bindingName)) {
-        this.#usedBindingNames.add(bindingName.text);
+      if (ts.isIdentifier(eventBindingName)) {
+        this.#usedBindingNames.add(eventBindingName.text);
       }
-
-      eventParameter = this.#factory.createParameterDeclaration(
-        undefined,
-        undefined,
-        bindingName,
-        undefined,
-        undefined,
-        undefined,
-      );
     } else {
       // Generate unique name
-      const name = reserveIdentifier(
+      eventBindingName = reserveIdentifier(
         eventParamName,
         conflicts,
         this.#factory,
       );
-      this.#usedBindingNames.add(name.text);
-
-      eventParameter = this.#factory.createParameterDeclaration(
-        undefined,
-        undefined,
-        name,
-        undefined,
-        undefined,
-        undefined,
-      );
+      this.#usedBindingNames.add(eventBindingName.text);
     }
 
     // 2. Create params parameter (destructured captures)
@@ -276,63 +271,30 @@ export class PatternBuilder {
       createBindingIdentifier,
     );
 
-    let paramsBindingName: ts.BindingName;
-    if (stateParam) {
-      paramsBindingName = normalizeBindingName(
-        stateParam.name,
-        this.#factory,
-        this.#usedBindingNames,
-      );
-    } else if (captureBindings.length > 0) {
-      paramsBindingName = this.#factory.createObjectBindingPattern(
-        captureBindings,
-      );
-    } else {
-      paramsBindingName = reserveIdentifier(
+    const paramsBindingName = captureBindings.length > 0
+      ? this.#factory.createObjectBindingPattern(captureBindings)
+      : reserveIdentifier(
         paramsParamName,
         this.#usedBindingNames,
         this.#factory,
       );
-    }
 
-    const paramsParameter = this.#factory.createParameterDeclaration(
-      undefined,
-      undefined,
-      paramsBindingName,
-      undefined,
-      undefined,
-      undefined,
-    );
-
-    // 3. Handle extra parameters
-    const additionalParameters = extraParams.map(
-      (param: ts.ParameterDeclaration) => {
-        const bindingName = normalizeBindingName(
-          param.name,
-          this.#factory,
-          this.#usedBindingNames,
-        );
-        return this.#factory.createParameterDeclaration(
-          undefined,
-          undefined,
-          bindingName,
-          undefined,
-          undefined,
-          undefined,
-        );
-      },
-    );
-
-    const typeNode = returnType === null
-      ? undefined
-      : (returnType || originalCallback.type);
+    const createParameter = (name: ts.BindingName) =>
+      this.#factory.createParameterDeclaration(
+        undefined,
+        undefined,
+        name,
+        undefined,
+        undefined,
+        undefined,
+      );
 
     return preserveSourceMapRange(
       this.#factory.createArrowFunction(
         originalCallback.modifiers,
         originalCallback.typeParameters,
-        [eventParameter, paramsParameter, ...additionalParameters],
-        typeNode,
+        [createParameter(eventBindingName), createParameter(paramsBindingName)],
+        originalCallback.type,
         originalCallback.equalsGreaterThanToken,
         body,
       ),

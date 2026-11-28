@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { getLogger } from "@commonfabric/logger";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 import type {
   IMemorySpaceAddress,

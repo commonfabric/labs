@@ -5,7 +5,6 @@
  * on one and the `catch` around it never fires. Both arms are named instead.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
@@ -22,6 +21,7 @@ import {
   type RuntimeClient,
   type VNode,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { createVDomDebugHelpers, formatTree } from "../src/debug.ts";
 import { MockDoc } from "../src/mock-doc.ts";

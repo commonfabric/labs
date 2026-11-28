@@ -1,11 +1,11 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { CFDraggable } from "./index.ts";
 import { boundHandler } from "../../test-utils/template.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Mounts a draggable at (`x`, `y`) holding `content`, and returns it with the

@@ -1,8 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 
-import { createHarnessAgentRunExecutor } from "@commonfabric/agent-runner/agent-run-harness";
+import {
+  agentRunObservationCeiling,
+  createHarnessAgentRunExecutor,
+} from "@commonfabric/agent-runner/agent-run-harness";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { HarnessPromptLoopResult } from "@commonfabric/cf-harness/prompt-loop";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
@@ -21,16 +24,23 @@ import {
   type AgentRunRecord,
   AgentRunRecordSchema,
 } from "@commonfabric/runner/agent-run";
+import { cfcObservationFitsCeiling } from "@commonfabric/runner/cfc";
 import { listenServingMemoryServer } from "@commonfabric/runner/executor/serving-memory-server.deno";
 import {
   namesInstancesByDefault,
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
-import { startAgentRunner } from "../commands/agent.ts";
-import { getAcl } from "../lib/acl.ts";
+import {
+  type AgentRunnerCommandConfig,
+  harnessExecutorOptions,
+  startAgentRunner,
+} from "../commands/agent.ts";
+import { setAclEntry } from "../lib/acl.ts";
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
 import { loadIdentity } from "../lib/identity.ts";
+import { resetProcessDeployment } from "../lib/process-deployment.ts";
 
 const HOME_PATH = "/api/patterns/system/home/home.tsx";
 
@@ -115,15 +125,20 @@ describe("agent-connections", () => {
     const remote = connect(recordServer.url);
     let runner: Awaited<ReturnType<typeof startAgentRunner>> | undefined;
     const messages: string[] = [];
+    const config: AgentRunnerCommandConfig = {
+      identityPath,
+      home: identity.did(),
+      homeHost: homeServer.url.origin,
+      runnerHost: recordServer.url.origin,
+      tools: ["describe_handle"],
+      maxConcurrent: 1,
+      leaseMs: 60_000,
+      workRoot: directory,
+    };
+    const report = (message: string) => messages.push(message);
     try {
       const execute = createHarnessAgentRunExecutor({
-        identityKeyPath: identityPath,
-        requester: identity.did(),
-        workRoot: directory,
-        allowedTools: ["describe_handle"],
-        readSpaceAcl: (host, space) =>
-          getAcl({ apiUrl: host, space, identity: identityPath }),
-        report: (message) => messages.push(message),
+        ...harnessExecutorOptions(config, report),
         harnessDeps: {
           env: {
             CF_HARNESS_MODEL_PROVIDER: "openai-compatible-gateway",
@@ -164,21 +179,7 @@ describe("agent-connections", () => {
           }),
         },
       });
-      runner = await startAgentRunner(
-        {
-          identityPath,
-          home: identity.did(),
-          homeHost: homeServer.url.origin,
-          runnerHost: recordServer.url.origin,
-          tools: ["describe_handle"],
-          maxConcurrent: 1,
-          leaseMs: 60_000,
-          workRoot: directory,
-        },
-        (message) => messages.push(message),
-        undefined,
-        execute,
-      );
+      runner = await startAgentRunner(config, report, undefined, execute);
       const queue = agentQueueIndexCell(home, identity.did());
       await queue.sync();
       expect(queue.get().agentRunner).toMatchObject({
@@ -242,6 +243,70 @@ describe("agent-connections", () => {
       await remote.dispose();
       await homeServer.close();
       await recordServer.close();
+      await Deno.remove(directory, { recursive: true });
+    }
+  });
+
+  it("reads a request space's ACL from the run's toolshed as the runner's identity", async () => {
+    const directory = await Deno.makeTempDir({ prefix: "agent-connections-" });
+    const keyFor = async (name: string) => {
+      const path = join(directory, `${name}.key`);
+      await Deno.writeFile(path, await Identity.generatePkcs8());
+      return { path, did: (await loadIdentity(path)).did() };
+    };
+    const runner = await keyFor("runner");
+    const owner = await keyFor("owner");
+    const stranger = await keyFor("stranger");
+    const host = await startHost();
+    const apiUrl = host.url.origin;
+    const reports: string[] = [];
+    resetProcessDeployment();
+    try {
+      await setAclEntry(
+        { apiUrl, space: owner.did, identity: owner.path },
+        runner.did,
+        "READ",
+      );
+      const options = harnessExecutorOptions({
+        identityPath: runner.path,
+        home: runner.did,
+        homeHost: apiUrl,
+        runnerHost: apiUrl,
+        tools: [],
+        maxConcurrent: 1,
+        leaseMs: 60_000,
+        workRoot: directory,
+      }, (message) => reports.push(message));
+
+      expect(await options.readSpaceAcl(apiUrl, owner.did)).toMatchObject({
+        [runner.did]: "READ",
+      });
+      expect(await options.readSpaceAcl(apiUrl, stranger.did)).toBeNull();
+
+      const invitation = (space: string) => [{
+        type: CFC_ATOM_TYPE.Space,
+        id: space,
+      }];
+      const member = await agentRunObservationCeiling(
+        options,
+        apiUrl,
+        owner.did,
+        undefined,
+      );
+      expect(cfcObservationFitsCeiling(invitation(owner.did), member))
+        .toBe(true);
+      const outsider = await agentRunObservationCeiling(
+        options,
+        apiUrl,
+        stranger.did,
+        undefined,
+      );
+      expect(cfcObservationFitsCeiling(invitation(stranger.did), outsider))
+        .toBe(false);
+      expect(reports).toEqual([]);
+    } finally {
+      resetProcessDeployment();
+      await host.close();
       await Deno.remove(directory, { recursive: true });
     }
   });

@@ -1,7 +1,7 @@
 /** A private TLS listener with bounded WebSocket fragmentation before decoding. */
 
 // deno-lint-ignore no-external-import -- Deno types this TLS builtin by its node: specifier.
-import { createServer } from "node:https";
+import { createServer, type Server } from "node:https";
 // @ts-types="@types/ws"
 import { WebSocketServer } from "ws";
 
@@ -80,12 +80,8 @@ export async function listenRoutedMemory(
     server.once("error", reject);
     server.listen(options.port, options.hostname, () => resolve());
   });
-  const address = server.address();
-  if (address === null || typeof address === "string") {
-    throw new Error("Private memory listener failed");
-  }
   return {
-    port: address.port,
+    port: listeningPort(server.address()),
     close: async () => {
       options.host.close();
       for (const socket of sockets.clients) socket.terminate();
@@ -97,4 +93,12 @@ export async function listenRoutedMemory(
       );
     },
   };
+}
+
+/** Reads a listening server's TCP port, refusing a pipe path or no address. */
+export function listeningPort(address: ReturnType<Server["address"]>): number {
+  if (address === null || typeof address === "string") {
+    throw new Error("Private memory listener failed");
+  }
+  return address.port;
 }

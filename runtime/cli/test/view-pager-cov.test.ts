@@ -18,8 +18,13 @@ import {
 } from "../lib/view/pager.ts";
 import type { BlameLine, BlameRequest } from "../lib/view/blame.ts";
 import { fileSource } from "../lib/view/editsource.ts";
+import { type FileGateway, realFileGateway } from "../lib/view/filegateway.ts";
 import { parseDiff } from "../lib/view/diff.ts";
-import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
+import {
+  buildDiffDocument,
+  type DiffWorkspace,
+  WorkspaceCache,
+} from "../lib/view/diffdoc.ts";
 import { diffSource } from "../lib/view/diffedit.ts";
 import { ViewError } from "../lib/view/errors.ts";
 import { sgr, term } from "../lib/view/ansi.ts";
@@ -28,10 +33,20 @@ import { swiftLanguage } from "../lib/view/languages/swift/language.ts";
 import { styleFor, ui } from "../lib/view/theme.ts";
 import { buildView } from "../lib/view/mod.ts";
 import type { GitHubApi } from "../lib/view/github.ts";
+import { plainTextLanguage } from "../lib/view/languages/plain-text/language.ts";
+import {
+  parse,
+  type ParseJob,
+  type ParseOutcome,
+  PendingParses,
+  recolorBatch,
+} from "../lib/view/backgroundparse.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A GitHub API that these tests never reach. */
 const noGitHub: GitHubApi = {
   find: () => Promise.reject(new Error("these tests find nothing")),
+  defaultBranch: () => Promise.reject(new Error("these tests ask nothing")),
   mergeMethod: () => Promise.reject(new Error("these tests merge nothing")),
   create: () => Promise.reject(new Error("these tests create nothing")),
   merge: () => Promise.reject(new Error("these tests merge nothing")),
@@ -68,6 +83,8 @@ interface FakeOpts {
   removeSignalThrows?: boolean;
   env?: Record<string, string>;
   blame?: PagerDeps["blame"];
+  parseInBackground?: PagerDeps["parseInBackground"];
+  files?: FileGateway;
 }
 
 function makeFake(opts: FakeOpts = {}) {
@@ -166,6 +183,11 @@ function makeFake(opts: FakeOpts = {}) {
       timers.set(id, h);
       return () => timers.delete(id);
     },
+    setSpinnerTimer: (h) => {
+      const id = nextTimer++;
+      timers.set(id, h);
+      return () => timers.delete(id);
+    },
     // Resolve at once: a test drives frames with `fireTimers`, so a real wait
     // here would only stall the run.
     delay: () => Promise.resolve(),
@@ -184,6 +206,10 @@ function makeFake(opts: FakeOpts = {}) {
     pullRequestList: () => Promise.resolve(null),
     blame: opts.blame ??
       (() => Promise.reject(new Error("these tests blame nothing"))),
+    files: opts.files ?? realFileGateway(),
+    parseInBackground: opts.parseInBackground ?? (() => {
+      throw new Error("these tests parse nothing in the background");
+    }),
   };
   return {
     deps,
@@ -198,7 +224,7 @@ function makeFake(opts: FakeOpts = {}) {
   };
 }
 
-Deno.test("pager: b draws the blame column when git blame returns", async () => {
+test("pager: b draws the blame column when git blame returns", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const path = join(dir, "f.ts");
@@ -243,7 +269,7 @@ Deno.test("pager: b draws the blame column when git blame returns", async () => 
   }
 });
 
-Deno.test("pager: closing the viewer stops a blame still running", async () => {
+test("pager: closing the viewer stops a blame still running", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const path = join(dir, "f.ts");
@@ -269,7 +295,7 @@ Deno.test("pager: closing the viewer stops a blame still running", async () => {
   }
 });
 
-Deno.test("pager: a missing /dev/tty raises a ViewError", async () => {
+test("pager: a missing /dev/tty raises a ViewError", async () => {
   const { deps } = makeFake({ openThrows: true });
   await assertRejects(
     () => runPager(DOC, OPTS, undefined, undefined, deps),
@@ -278,7 +304,7 @@ Deno.test("pager: a missing /dev/tty raises a ViewError", async () => {
   );
 });
 
-Deno.test("pager: draws the document and quits on q", async () => {
+test("pager: draws the document and quits on q", async () => {
   const { deps, writes } = makeFake({ steps: [{ bytes: enc("q") }] });
   await runPager(DOC, OPTS, undefined, undefined, deps);
   assert(writes.length > 0, "wrote frames");
@@ -290,9 +316,17 @@ Deno.test("pager: draws the document and quits on q", async () => {
     writes.some((w) => w.includes(term.disableMouse)),
     "disabled the mouse",
   );
+  // Keys are reported as the terminal reports them by default, with no dialog
+  // up to need anything else.
+  assert(
+    !writes.some((w) =>
+      w.includes(term.reportAllKeys) || w.includes(term.reportKeysAsBefore)
+    ),
+    "left the way keys are reported alone",
+  );
 });
 
-Deno.test("pager: restores the terminal when the initial write fails", async () => {
+test("pager: restores the terminal when the initial write fails", async () => {
   const { deps, ttyState } = makeFake({ writeThrowsFrom: 1 });
   await assertRejects(
     () => runPager(DOC, OPTS, undefined, undefined, deps),
@@ -303,7 +337,7 @@ Deno.test("pager: restores the terminal when the initial write fails", async () 
   assertEquals(ttyState.closes, 1);
 });
 
-Deno.test("pager: an SGR mouse-wheel report scrolls the document", async () => {
+test("pager: an SGR mouse-wheel report scrolls the document", async () => {
   const doc = parseDocument(
     Array.from({ length: 20 }, (_, i) => `line ${i}`).join("\n"),
   );
@@ -326,7 +360,7 @@ Deno.test("pager: an SGR mouse-wheel report scrolls the document", async () => {
   }
 });
 
-Deno.test("pager: unknown named files schedule no semantic work", async () => {
+test("pager: unknown named files schedule no semantic work", async () => {
   const view = buildView("const incomplete = `plain\n", "LICENSE");
   const semantics = view.semantics();
   assertEquals(semantics, undefined);
@@ -335,7 +369,7 @@ Deno.test("pager: unknown named files schedule no semantic work", async () => {
   assertEquals(timers.size, 0);
 });
 
-Deno.test("pager: with color, matches the terminal background to the status bar and restores it", async () => {
+test("pager: with color, matches the terminal background to the status bar and restores it", async () => {
   // A redraw (the 'j' scroll) in its own read precedes the quit, so the frame is
   // drawn again inside the loop.
   const { deps, writes } = makeFake({
@@ -358,12 +392,12 @@ Deno.test("pager: with color, matches the terminal background to the status bar 
   assert(all.includes("\x1b]111\x07"), "restored the default background");
 });
 
-Deno.test("pager: a closed terminal (EOF) ends the loop", async () => {
+test("pager: a closed terminal (EOF) ends the loop", async () => {
   const { deps } = makeFake({ steps: [{ eof: true }] });
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: a keystroke split across reads is stitched back together", async () => {
+test("pager: a keystroke split across reads is stitched back together", async () => {
   // 'λ' is CE BB; the lead byte arrives alone, so it is held over and joined
   // with the continuation byte on the next read (exercising concat).
   const { deps } = makeFake({
@@ -376,7 +410,7 @@ Deno.test("pager: a keystroke split across reads is stitched back together", asy
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: SIGWINCH resizes the session and redraws", async () => {
+test("pager: SIGWINCH resizes the session and redraws", async () => {
   const { deps } = makeFake({
     steps: [{ fire: "SIGWINCH" }, { bytes: enc("q") }],
     consoleSize: { columns: 100, rows: 40 },
@@ -384,7 +418,7 @@ Deno.test("pager: SIGWINCH resizes the session and redraws", async () => {
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: SIGINT on a clean buffer terminates with code 130", async () => {
+test("pager: SIGINT on a clean buffer terminates with code 130", async () => {
   const { deps, exited } = makeFake({ steps: [{ fire: "SIGINT" }] });
   await assertRejects(
     () => runPager(DOC, OPTS, undefined, undefined, deps),
@@ -393,7 +427,7 @@ Deno.test("pager: SIGINT on a clean buffer terminates with code 130", async () =
   assertEquals(exited, [130]);
 });
 
-Deno.test("pager: SIGTERM terminates with code 143", async () => {
+test("pager: SIGTERM terminates with code 143", async () => {
   const { deps, exited } = makeFake({ steps: [{ fire: "SIGTERM" }] });
   await assertRejects(
     () => runPager(DOC, OPTS, undefined, undefined, deps),
@@ -402,7 +436,7 @@ Deno.test("pager: SIGTERM terminates with code 143", async () => {
   assertEquals(exited, [143]);
 });
 
-Deno.test("pager: SIGWINCH that the platform rejects is ignored", async () => {
+test("pager: SIGWINCH that the platform rejects is ignored", async () => {
   const { deps } = makeFake({
     steps: [{ bytes: enc("q") }],
     addSignalThrowsFor: "SIGWINCH",
@@ -410,7 +444,7 @@ Deno.test("pager: SIGWINCH that the platform rejects is ignored", async () => {
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: cleanup tolerates setRaw and close failing", async () => {
+test("pager: cleanup tolerates setRaw and close failing", async () => {
   const { deps } = makeFake({
     steps: [{ bytes: enc("q") }],
     setRawThrows: true,
@@ -419,7 +453,7 @@ Deno.test("pager: cleanup tolerates setRaw and close failing", async () => {
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: removeSignalListener failing during cleanup is ignored", async () => {
+test("pager: removeSignalListener failing during cleanup is ignored", async () => {
   const { deps } = makeFake({
     steps: [{ bytes: enc("q") }],
     removeSignalThrows: true,
@@ -427,7 +461,7 @@ Deno.test("pager: removeSignalListener failing during cleanup is ignored", async
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: the size falls back to the environment when consoleSize throws", async () => {
+test("pager: the size falls back to the environment when consoleSize throws", async () => {
   const { deps } = makeFake({
     steps: [{ bytes: enc("q") }],
     consoleSizeThrows: true,
@@ -436,7 +470,7 @@ Deno.test("pager: the size falls back to the environment when consoleSize throws
   await runPager(DOC, OPTS, undefined, undefined, deps);
 });
 
-Deno.test("pager: the size falls back to 80x24 when neither console nor env give one", async () => {
+test("pager: the size falls back to 80x24 when neither console nor env give one", async () => {
   const { deps } = makeFake({
     steps: [{ bytes: enc("q") }],
     consoleSizeThrows: true,
@@ -470,7 +504,7 @@ function editableDoc(): {
   return { doc: parseDocument(text, path), source, dir, parses: () => parses };
 }
 
-Deno.test("pager: an edit schedules the deferred reparse, which then runs", async () => {
+test("pager: an edit schedules the deferred reparse, which then runs", async () => {
   const { doc, source, dir, parses } = editableDoc();
   try {
     const { deps, writes } = makeFake({
@@ -493,7 +527,7 @@ Deno.test("pager: an edit schedules the deferred reparse, which then runs", asyn
   }
 });
 
-Deno.test("pager: a parser that finishes loading re-parses and redraws the document", async () => {
+test("pager: a parser that finishes loading re-parses and redraws the document", async () => {
   const { doc, source, dir, parses } = editableDoc();
   try {
     const { deps, parserListeners, parserWrites } = makeFake({
@@ -508,7 +542,7 @@ Deno.test("pager: a parser that finishes loading re-parses and redraws the docum
   }
 });
 
-Deno.test("pager: a Swift file parsed before its parser loads is colored once it loads", async () => {
+test("pager: a Swift file parsed before its parser loads is colored once it loads", async () => {
   const dir = Deno.makeTempDirSync();
   try {
     const path = join(dir, "main.swift");
@@ -546,7 +580,442 @@ Deno.test("pager: a Swift file parsed before its parser loads is colored once it
   }
 });
 
-Deno.test("pager: a parser that cannot load says why and leaves the document as it was", async () => {
+/** A diff of one TypeScript file in an in-memory workspace, built with both
+ * of its complete files' parses pending, and its editable source. */
+function pendingDiff() {
+  const text = "export const answer = 42; // the answer\n";
+  const diff = `diff --git a/answer.ts b/answer.ts
+--- a/answer.ts
++++ b/answer.ts
+@@ -1 +1 @@
+-export const answer = 41;
++${text}`;
+  const ws: DiffWorkspace = {
+    resolve: (path) => `/workspace/${path}`,
+    read: (path) => path === "/workspace/answer.ts" ? text : null,
+  };
+  const cache = new WorkspaceCache();
+  const pending = new PendingParses(0);
+  const { doc, edit } = buildDiffDocument(
+    diff,
+    parseDiff(diff)!,
+    ws,
+    cache,
+    "source",
+    undefined,
+    pending,
+  );
+  const source = diffSource(ws, edit, cache, undefined, pending);
+  return { doc, source, jobs: pending.take() };
+}
+
+test("pager: a diff colors the files whose parses finish in the background", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const keyword = sgr(styleFor("storageKeyword")).slice(0, -1);
+  const colored = new RegExp(`${keyword.replace("[", "\\[")}[;0-9]*mexport`);
+  const started = Promise.withResolvers<(outcomes: ParseOutcome[]) => void>();
+  const finished = Promise.withResolvers<void>();
+  let stopped = 0;
+  const given: (readonly ParseJob[])[] = [];
+  const { deps, writes } = makeFake({
+    steps: [
+      {
+        wait: started.promise.then((deliver) =>
+          deliver(jobs.map((job, index) => ({
+            kind: "parsed",
+            index,
+            result: parse(job.kind, job.language, job.text, job.fileName),
+          })))
+        ),
+      },
+      { wait: finished.promise },
+      { eof: true },
+    ],
+    parseInBackground: (parses, deliver) => {
+      given.push(parses);
+      started.resolve(deliver);
+      return () => stopped++;
+    },
+  });
+  const write = deps.write;
+  deps.write = (text) => {
+    write(text);
+    if (colored.test(text) && !text.includes("Highlighting")) {
+      finished.resolve();
+    }
+  };
+
+  await runPager(
+    doc,
+    { color: true, showLineNumbers: false, parses: jobs },
+    undefined,
+    source,
+    deps,
+  );
+
+  const frames = writes.filter((frame) => frame.includes("answer"));
+  assertEquals(given, [jobs], "the pager parsed the view's pending parses");
+  assertEquals(colored.test(frames[0]), false, "the first frame is plain");
+  assert(
+    writes.some((frame) => frame.includes("░".repeat(10))),
+    "the status bar shows the progress before any parse finishes",
+  );
+  assertEquals(stopped, 1, "the parses are stopped once, when they end");
+});
+
+test("pager: background parses rebuild the document each time a batch of source finishes, and at the end", async () => {
+  // Each entry is how much source one finished parse adds, and whether the
+  // document is built again once it lands.
+  const batch = recolorBatch(DOC.text.length);
+  const steps: [number, boolean][] = [
+    [batch / 2, false],
+    [batch / 2, true],
+    [batch - 1, false],
+    [1, true],
+    [batch * 2, true],
+    [1, false],
+    [1, true],
+  ];
+  const jobs: ParseJob[] = steps.map(([size]) => ({
+    kind: "lines",
+    language: plainTextLanguage,
+    text: "x".repeat(size),
+    fileName: undefined,
+    finish: () => {},
+    fail: () => {},
+  }));
+  let builds = 0;
+  const source = {
+    label: "big.diff",
+    editable: false,
+    parse: () => {
+      builds++;
+      return DOC;
+    },
+    save: () => "Nothing to save.",
+  };
+  const rebuilt: boolean[] = [];
+  let writesBeforeTheLast = 0;
+  const delivered = Promise.withResolvers<void>();
+  const { deps, writes } = makeFake({
+    steps: [{ wait: delivered.promise }, { eof: true }],
+    parseInBackground: (_parses, deliver) => {
+      queueMicrotask(() => {
+        for (const index of jobs.keys()) {
+          const before = builds;
+          writesBeforeTheLast = writes.length;
+          deliver([{
+            kind: "parsed",
+            index,
+            result: { kind: "lines", lines: [] },
+          }]);
+          rebuilt.push(builds > before);
+        }
+        delivered.resolve();
+      });
+      return () => {};
+    },
+  });
+
+  await runPager(DOC, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assertEquals(rebuilt, steps.map(([, expected]) => expected));
+  assert(
+    writes.slice(0, writesBeforeTheLast).some((frame) =>
+      frame.includes("█") && frame.includes("░")
+    ),
+    "the progress shows part of the source parsed while parses are unfinished",
+  );
+  assertEquals(
+    writes.slice(writesBeforeTheLast).some((frame) => frame.includes("░")),
+    false,
+    "the progress is gone once every parse has ended",
+  );
+});
+
+test("pager: background parses end once the document is built from the last of them", async () => {
+  const jobs: ParseJob[] = ["x", "y"].map((text) => ({
+    kind: "lines",
+    language: plainTextLanguage,
+    text,
+    fileName: undefined,
+    finish: () => {},
+    fail: () => {},
+  }));
+  let builds = 0;
+  const source = {
+    label: "big.diff",
+    editable: false,
+    parse: () => {
+      builds++;
+      return DOC;
+    },
+    save: () => "Nothing to save.",
+  };
+  const ended: number[] = [];
+  const endedAtDelivery: number[] = [];
+  const delivered = Promise.withResolvers<void>();
+  const { deps } = makeFake({
+    steps: [{ wait: delivered.promise }, { eof: true }],
+    parseInBackground: (_parses, deliver) => {
+      queueMicrotask(() => {
+        for (const index of jobs.keys()) {
+          endedAtDelivery.push(ended.length);
+          deliver([{
+            kind: "parsed",
+            index,
+            result: { kind: "lines", lines: [] },
+          }]);
+        }
+        delivered.resolve();
+      });
+      return () => {};
+    },
+  });
+
+  await runPager(
+    DOC,
+    { ...OPTS, parses: jobs, parsesEnded: () => ended.push(builds) },
+    undefined,
+    source,
+    deps,
+  );
+
+  assertEquals(endedAtDelivery, [0, 0], "nothing ended before the last");
+  assertEquals(ended, [builds], "they ended once, after the last build");
+});
+
+test("pager: background parse outcomes that arrive after the viewer closes change nothing", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  let deliver: ((outcomes: ParseOutcome[]) => void) | undefined;
+  let finished = 0;
+  const watched = jobs.map((job) => ({
+    ...job,
+    finish: () => finished++,
+    fail: () => finished++,
+  }));
+  const { deps, writes } = makeFake({
+    steps: [{ eof: true }],
+    parseInBackground: (_parses, given) => {
+      deliver = given;
+      return () => {};
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: watched }, undefined, source, deps);
+  const written = writes.length;
+  deliver?.([{
+    kind: "parsed",
+    index: 0,
+    result: parse(jobs[0].kind, jobs[0].language, jobs[0].text, undefined),
+  }]);
+
+  assertEquals(finished, 0, "no outcome was kept");
+  assertEquals(writes.length, written, "nothing was drawn");
+});
+
+test("pager: the semantics prewarm once the first frame is drawn, and are disposed on exit", async () => {
+  let prewarmed = 0;
+  let writesWhenPrewarmed = 0;
+  let disposed = 0;
+  const semantics = {
+    typeAt: () => null,
+    definitionOf: () => [],
+    fileLines: () => null,
+    prewarm: () => {
+      prewarmed++;
+      writesWhenPrewarmed = writes.length;
+    },
+    dispose: () => {
+      disposed++;
+    },
+  };
+  const { deps, writes } = makeFake({ steps: [{ eof: true }] });
+
+  await runPager(DOC, OPTS, semantics, undefined, deps);
+
+  assertEquals(prewarmed, 1);
+  assert(writesWhenPrewarmed > 0, "the first frame was drawn first");
+  assertEquals(disposed, 1);
+});
+
+test("pager: background parses that fail say so and leave their files plain", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const { deps, writes } = makeFake({
+    steps: [{ eof: true }],
+    consoleSize: { columns: 200, rows: 24 },
+    parseInBackground: (_parses, deliver) => {
+      deliver(jobs.map((_job, index) => ({
+        kind: "failed",
+        index,
+        failure: "The grammar is broken.",
+      })));
+      return () => {};
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.join("").includes(
+      "Some files could not be highlighted, and are shown as plain text: " +
+        "The grammar is broken.",
+    ),
+    "the status line says why",
+  );
+});
+
+test("pager: background parses stop when the viewer quits", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  let stopped = 0;
+  const { deps } = makeFake({
+    steps: [{ eof: true }],
+    parseInBackground: () => () => stopped++,
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assertEquals(stopped, 1);
+});
+
+test("pager: a background outcome that cannot be applied says why", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const delivered = Promise.withResolvers<void>();
+  let stopped = 0;
+  const { deps, writes } = makeFake({
+    steps: [{ wait: delivered.promise }, { eof: true }],
+    consoleSize: { columns: 200, rows: 24 },
+    parseInBackground: (_parses, deliver) => {
+      queueMicrotask(() => {
+        deliver([{
+          kind: "parsed",
+          index: 0,
+          result: parse("lines", jobs[0].language, jobs[0].text, undefined),
+        }]);
+        delivered.resolve();
+      });
+      return () => stopped++;
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.join("").includes(
+      "Highlighting failed: A document parse cannot finish with lines.",
+    ),
+    "the status line says why",
+  );
+  assertEquals(stopped, 1, "the parses stopped");
+});
+
+test("pager: background parses that cannot start say why", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const { deps, writes } = makeFake({
+    steps: [{ eof: true }],
+    consoleSize: { columns: 200, rows: 24 },
+    parseInBackground: () => {
+      throw new Error("No worker can start.");
+    },
+  });
+
+  await runPager(doc, { ...OPTS, parses: jobs }, undefined, source, deps);
+
+  assert(
+    writes.join("").includes("Highlighting failed: No worker can start."),
+    "the status line says why",
+  );
+  assertEquals(
+    writes.at(-2)?.includes("░"),
+    false,
+    "the progress is gone",
+  );
+});
+
+test("pager: background parses stop once the viewer opens another file", async () => {
+  const { doc, source, jobs } = pendingDiff();
+  const opened = parseDocument("export const other = 1;\n");
+  let deliver: ((outcomes: ParseOutcome[]) => void) | undefined;
+  let stopped = 0;
+  let ended = 0;
+  let stoppedBeforeTheBatch = 0;
+  const fileOpened = Promise.withResolvers<void>();
+  const { deps, writes } = makeFake({
+    steps: [
+      { bytes: enc("\x18\x06") },
+      { bytes: enc("other") },
+      { bytes: enc("\r") },
+      {
+        wait: fileOpened.promise.then(() => {
+          stoppedBeforeTheBatch = stopped;
+          deliver?.([{
+            kind: "parsed",
+            index: 0,
+            result: parse(
+              jobs[0].kind,
+              jobs[0].language,
+              jobs[0].text,
+              jobs[0].fileName,
+            ),
+          }]);
+        }),
+      },
+      { eof: true },
+    ],
+    files: {
+      cwd: () => "/work",
+      list: () => [{ name: "other.ts", isDir: false }],
+      open: () => {
+        fileOpened.resolve();
+        return {
+          source: {
+            label: "other.ts",
+            editable: false,
+            parse: () => opened,
+            save: () => "Nothing to save.",
+          },
+          text: opened.text,
+        };
+      },
+      join: (dir, name) => `${dir}/${name}`,
+      parent: () => "/work",
+      base: (path) => path.split("/").at(-1)!,
+    },
+    parseInBackground: (_parses, given) => {
+      deliver = given;
+      return () => stopped++;
+    },
+  });
+
+  await runPager(
+    doc,
+    { ...OPTS, parses: jobs, parsesEnded: () => ended++ },
+    undefined,
+    source,
+    deps,
+  );
+
+  assert(
+    writes.some((frame) => frame.includes("other = 1")),
+    "the viewer shows the opened file",
+  );
+  assertEquals(ended, 1, "the parses ended once");
+  assertEquals(
+    stoppedBeforeTheBatch,
+    1,
+    "opening the file stopped the parses before the next batch arrived",
+  );
+  assertEquals(stopped, 1, "nothing stopped them again");
+  assertEquals(
+    writes.filter((frame) => frame.includes("other")).some((frame) =>
+      frame.includes("░")
+    ),
+    false,
+    "the opened file shows no progress",
+  );
+});
+
+test("pager: a parser that cannot load says why and leaves the document as it was", async () => {
   const { doc, source, dir, parses } = editableDoc();
   try {
     const { deps, writes } = makeFake({
@@ -570,7 +1039,7 @@ Deno.test("pager: a parser that cannot load says why and leaves the document as 
   }
 });
 
-Deno.test("pager: a second edit reschedules the reparse; a pending timer is cleared on exit", async () => {
+test("pager: a second edit reschedules the reparse; a pending timer is cleared on exit", async () => {
   const { doc, source, dir, parses } = editableDoc();
   try {
     const { deps, writes } = makeFake({
@@ -593,7 +1062,7 @@ Deno.test("pager: a second edit reschedules the reparse; a pending timer is clea
   }
 });
 
-Deno.test("pager: a SIGINT with unsaved edits routes through the save prompt", async () => {
+test("pager: a SIGINT with unsaved edits routes through the save prompt", async () => {
   const { doc, source, dir } = editableDoc();
   try {
     const { deps, writes } = makeFake({
@@ -616,22 +1085,29 @@ Deno.test("pager: a SIGINT with unsaved edits routes through the save prompt", a
   }
 });
 
-Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
+test("realPagerDeps: the wrappers reach the real primitives", () => {
   const d = realPagerDeps();
   d.write(""); // writes nothing to stdout
   d.env("PATH");
   d.env("CF_VIEW_DEFINITELY_UNSET");
   const cancel = d.setTimer(() => {}, 0);
   cancel();
+  d.setSpinnerTimer(() => {})();
   d.onGrammarLoad(() => {})();
   // Setting up a push reads the environment and runs nothing that changes a
   // repository.
-  d.pushIo(() => {}, new AbortController().signal);
+  d.pushIo(
+    { write: () => {}, step: () => () => {} },
+    new AbortController().signal,
+  );
   // Git runs in the repository the viewer runs in, set up by the first call,
   // and an empty relay address names no relay.
   assert(d.git(["--version"])?.startsWith("git version "));
   assertEquals(d.git(["--version"]), d.git(["--version"]));
   assertEquals(d.relay(""), undefined);
+  // No jobs start no worker, and the file system is the real one.
+  d.parseInBackground([], () => {})();
+  assert(d.files.cwd().length > 0);
   // Opening the controlling terminal either succeeds (close it) or throws when
   // the test has none; both reach the wrapper.
   try {
@@ -639,7 +1115,7 @@ Deno.test("realPagerDeps: the wrappers reach the real primitives", () => {
   } catch { /* no controlling terminal in this environment */ }
 });
 
-Deno.test("realPagerDeps: the pull request list and touch-gate's configuration are the user's", async () => {
+test("realPagerDeps: the pull request list and touch-gate's configuration are the user's", async () => {
   const home = Deno.makeTempDirSync();
   try {
     const d = realPagerDeps(home);
@@ -653,7 +1129,7 @@ Deno.test("realPagerDeps: the pull request list and touch-gate's configuration a
     const error = await assertRejects(() =>
       d.touchGate("work").merge(
         { repository: "octo/repo", number: 7, method: "squash", sha: "c0" },
-        () => {},
+        () => () => {},
         new AbortController().signal,
       )
     );
@@ -706,7 +1182,7 @@ ${lines.slice(34, 44).map((l) => ` ${l}`).join("\n")}
   };
 }
 
-Deno.test("pager: Ctrl-L walks the revealed lines in a frame at a time", async () => {
+test("pager: Ctrl-L walks the revealed lines in a frame at a time", async () => {
   const { doc, source, done } = revealFixture();
   try {
     const { deps, writes } = makeFake({
@@ -731,7 +1207,7 @@ Deno.test("pager: Ctrl-L walks the revealed lines in a frame at a time", async (
   }
 });
 
-Deno.test("pager: Ctrl-L draws no frames of its own accord", async () => {
+test("pager: Ctrl-L draws no frames of its own accord", async () => {
   const { doc, source, done } = revealFixture();
   try {
     const { deps, writes } = makeFake({
@@ -747,7 +1223,7 @@ Deno.test("pager: Ctrl-L draws no frames of its own accord", async () => {
   }
 });
 
-Deno.test("pager: a key during the reveal drops the frames left", async () => {
+test("pager: a key during the reveal drops the frames left", async () => {
   const { doc, source, done } = revealFixture();
   try {
     const { deps, writes } = makeFake({
@@ -805,7 +1281,7 @@ index 0000000..1111111 100644
   };
 }
 
-Deno.test("pager: the reason Ctrl-L did nothing stands, then takes itself away", async () => {
+test("pager: the reason Ctrl-L did nothing stands, then takes itself away", async () => {
   const { doc, source, done } = atBottomFixture();
   try {
     const { deps, writes } = makeFake({
@@ -833,7 +1309,7 @@ Deno.test("pager: the reason Ctrl-L did nothing stands, then takes itself away",
   }
 });
 
-Deno.test("pager: the reason stays up until its moment is up", async () => {
+test("pager: the reason stays up until its moment is up", async () => {
   const { doc, source, done } = atBottomFixture();
   try {
     const { deps, writes } = makeFake({
@@ -849,7 +1325,7 @@ Deno.test("pager: the reason stays up until its moment is up", async () => {
   }
 });
 
-Deno.test("pager: what a reveal says takes itself away once the lines have landed", async () => {
+test("pager: what a reveal says takes itself away once the lines have landed", async () => {
   const { doc, source, done } = revealFixture();
   try {
     const { deps, writes } = makeFake({
@@ -875,7 +1351,7 @@ Deno.test("pager: what a reveal says takes itself away once the lines have lande
   }
 });
 
-Deno.test("pager: a prompt button's result waits for the press animation to finish", async () => {
+test("pager: a prompt button's result waits for the press animation to finish", async () => {
   // Open the revert prompt, then Esc to activate its Cancel button. The press
   // is drawn at once; its result ("Cancelled") is what the push timer draws, so
   // without the timer firing the result never reaches the screen.
@@ -921,7 +1397,7 @@ Deno.test("pager: a prompt button's result waits for the press animation to fini
   );
 });
 
-Deno.test("pager: paints a pressed button before its synchronous action starts", async () => {
+test("pager: paints a pressed button before its synchronous action starts", async () => {
   const { doc, source: base, dir } = editableDoc();
   try {
     const { deps, writes } = makeFake({
@@ -973,7 +1449,7 @@ Deno.test("pager: paints a pressed button before its synchronous action starts",
   }
 });
 
-Deno.test("pager: a committing button plays its press before the pager quits", async () => {
+test("pager: a committing button plays its press before the pager quits", async () => {
   const { doc, source, dir } = editableDoc();
   try {
     const { deps, writes } = makeFake({
@@ -995,7 +1471,98 @@ Deno.test("pager: a committing button plays its press before the pager quits", a
   }
 });
 
-Deno.test("pager: a resize does not strand the reason Ctrl-L put up", async () => {
+test("pager: has every key reported in full while a dialog is up, and as before once it closes", async () => {
+  const { doc, source, dir } = editableDoc();
+  try {
+    const { deps, writes } = makeFake({
+      steps: [
+        { bytes: enc("e") }, // edit mode
+        { bytes: enc("X") }, // dirty the buffer
+        { bytes: enc("\x03") }, // Ctrl-C: raise the save-and-quit prompt
+        // Alt+C, as the kitty keyboard protocol reports it: Cancel.
+        { bytes: enc("\x1b[99;3u") },
+        { fireTimers: true }, // the press animation ends
+        { eof: true },
+      ],
+    });
+    await runPager(doc, OPTS, undefined, source, deps);
+    const opened = writes.findIndex((w) => w.includes("Save changes to"));
+    const closed = writes.findIndex((w) => w.includes("Cancelled"));
+    assert(opened >= 0 && closed > opened, "the prompt opened, then closed");
+    assertEquals(
+      writes.flatMap((w, i) => w.includes(term.reportAllKeys) ? [i] : []),
+      [opened],
+    );
+    assertEquals(
+      writes.flatMap((w, i) => w.includes(term.reportKeysAsBefore) ? [i] : []),
+      [closed],
+    );
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+test("pager: has keys reported as before when the write asking for every key fails", async () => {
+  const { doc, source, dir } = editableDoc();
+  try {
+    const fake = makeFake({
+      steps: [
+        { bytes: enc("e") },
+        { bytes: enc("X") },
+        { bytes: enc("\x03") }, // Ctrl-C: raise the save-and-quit prompt
+      ],
+    });
+    const write = fake.deps.write;
+    let failed = false;
+    fake.deps.write = (text) => {
+      write(text);
+      if (!failed && text.includes(term.reportAllKeys)) {
+        failed = true;
+        throw new Error("write failed");
+      }
+    };
+    await assertRejects(
+      () => runPager(doc, OPTS, undefined, source, fake.deps),
+      Error,
+      "write failed",
+    );
+    const asked = fake.writes.findIndex((w) => w.includes(term.reportAllKeys));
+    const restored = fake.writes.findIndex((w) =>
+      w.includes(term.reportKeysAsBefore)
+    );
+    assert(asked >= 0 && restored > asked, "asked to stop after the failure");
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+test("pager: has keys reported as before when it closes with a dialog up", async () => {
+  const { doc, source, dir } = editableDoc();
+  try {
+    const { deps, writes } = makeFake({
+      steps: [
+        { bytes: enc("e") },
+        { bytes: enc("X") },
+        { bytes: enc("\x03") }, // Ctrl-C: raise the save-and-quit prompt
+        { eof: true },
+      ],
+    });
+    await runPager(doc, OPTS, undefined, source, deps);
+    const restored = writes.findIndex((w) =>
+      w.includes(term.reportKeysAsBefore)
+    );
+    assert(restored >= 0, "keys were reported as before");
+    assert(
+      writes[restored].indexOf(term.reportKeysAsBefore) <
+        writes[restored].indexOf(term.leaveAltScreen),
+      "before leaving the alternate screen",
+    );
+  } finally {
+    Deno.removeSync(dir, { recursive: true });
+  }
+});
+
+test("pager: a resize does not strand the reason Ctrl-L put up", async () => {
   const { doc, source, done } = atBottomFixture();
   try {
     const { deps, writes } = makeFake({

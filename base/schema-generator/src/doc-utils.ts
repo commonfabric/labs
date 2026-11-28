@@ -5,10 +5,9 @@ import ts from "typescript";
  * '@'. Returns undefined when no useful text is present.
  */
 export function getSymbolDoc(
-  symbol: ts.Symbol | undefined,
+  symbol: ts.Symbol,
   checker: ts.TypeChecker,
 ): string | undefined {
-  if (!symbol) return undefined;
   const parts = symbol.getDocumentationComment(checker);
   // @ts-ignore - displayPartsToString exists on the TS namespace
   const text = ts.displayPartsToString(parts) || "";
@@ -32,17 +31,10 @@ export function getDeclDocs(decl: ts.Declaration): string[] {
     // to the declaration at the front of the list.
     const sorted = [...jsDocs].sort((a, b) => b.pos - a.pos);
     for (const d of sorted) {
-      const comment = (d as any).comment as unknown;
-      let text = "";
-      if (typeof comment === "string") {
-        text = comment;
-      } else if (Array.isArray(comment)) {
-        text = comment
-          .map((c) => (typeof c === "string" ? c : (c as any).text ?? ""))
-          .join("");
-      }
+      // The text keeps an inline tag such as `{@link Name}` as written.
+      const text = ts.getTextOfJSDocComment(d.comment);
       if (!text) continue;
-      const lines = String(text).split(/\r?\n/).filter((l) =>
+      const lines = text.split(/\r?\n/).filter((l) =>
         !l.trim().startsWith("@")
       );
       const cleaned = lines.join("\n").trim();
@@ -62,21 +54,15 @@ export function extractDocFromSymbolAndDecls(
   checker: ts.TypeChecker,
 ): { text?: string; all: string[] } {
   const all: string[] = [];
-  if (symbol) {
-    const decls = symbol.declarations ?? [];
-    for (const decl of decls) {
-      const sf = decl.getSourceFile();
-      if (!sf.isDeclarationFile) {
-        for (const s of getDeclDocs(decl)) if (!all.includes(s)) all.push(s);
-      }
-    }
+  const userDecls = (symbol?.declarations ?? []).filter((d) =>
+    !d.getSourceFile().isDeclarationFile
+  );
+  for (const decl of userDecls) {
+    for (const s of getDeclDocs(decl)) if (!all.includes(s)) all.push(s);
   }
 
   // Only include symbol-level docs if there is a non-declaration-file declaration
-  const hasUserDecl = (symbol?.declarations ?? []).some((d) =>
-    !d.getSourceFile().isDeclarationFile
-  );
-  if (hasUserDecl) {
+  if (symbol && userDecls.length > 0) {
     const symText = getSymbolDoc(symbol, checker);
     if (symText && !all.includes(symText)) all.push(symText);
   }
@@ -128,10 +114,9 @@ export function extractDocFromType(
  * hides by default while the verb stays callable.
  */
 export function symbolHasDeprecatedTag(
-  symbol: ts.Symbol | undefined,
+  symbol: ts.Symbol,
   checker: ts.TypeChecker,
 ): boolean {
-  if (!symbol) return false;
   const hasUserDecl = (symbol.declarations ?? []).some((d) =>
     !d.getSourceFile().isDeclarationFile
   );

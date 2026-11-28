@@ -1,7 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import { main, USAGE } from "./llm-exercise.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 const API_URL = "http://toolshed.test";
 
@@ -104,6 +106,70 @@ describe("llm-exercise", () => {
           logError: () => {},
         }),
       ).rejects.toThrow("Listing models failed: HTTP status 503");
+    });
+  });
+
+  describe("as a script", () => {
+    const script = fromFileUrl(new URL("./llm-exercise.ts", import.meta.url));
+    const repositoryRoot = fromFileUrl(new URL("../../../", import.meta.url));
+
+    /**
+     * Runs the script under `deno run` against a toolshed serving the models
+     * `good`, which answers, and `bad`, which fails.
+     */
+    async function runScript(args: string[]) {
+      const asked: string[] = [];
+      await using server = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+        async (request) => {
+          if (new URL(request.url).pathname === "/api/ai/llm/models") {
+            return Response.json({ good: {}, bad: {} });
+          }
+          const { model } = await request.json();
+          asked.push(model);
+          return Response.json({ content: "Blue" }, {
+            status: model === "good" ? 200 : 500,
+          });
+        },
+      );
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repositoryRoot,
+        cwd: fromFileUrl(new URL("../", import.meta.url)),
+        args: (lock) => [
+          "run",
+          `--lock=${lock}`,
+          "--allow-net=127.0.0.1",
+          "--allow-env",
+          script,
+          ...args,
+        ],
+        env: { API_URL: `http://127.0.0.1:${server.addr.port}` },
+      });
+      const decoder = new TextDecoder();
+      return {
+        code: output.code,
+        stdout: decoder.decode(output.stdout),
+        stderr: decoder.decode(output.stderr),
+        asked,
+      };
+    }
+
+    it("asks the toolshed `API_URL` names and exits 0 when all answer", async () => {
+      const { code, stdout, stderr, asked } = await runScript(["good"]);
+      expect(code).toBe(0);
+      expect(stderr).not.toContain("ERROR for");
+      expect(asked).toEqual(["good"]);
+      expect(stdout).toContain("Success!");
+    });
+
+    it("exits 1 and reports a failing model on stderr", async () => {
+      const { code, stdout, stderr, asked } = await runScript([]);
+      expect(code).toBe(1);
+      expect(asked).toEqual(["good", "bad"]);
+      expect(stderr).toContain("ERROR for bad:");
+      expect(stderr).not.toContain("ERROR for good");
+      expect(stdout).toContain("* bad");
+      expect(stdout).not.toContain("Success!");
     });
   });
 });

@@ -7,7 +7,6 @@
  * what is re-encoded there is the value the case makes.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { fabricInstanceClassesByName } from "@/fabric-instances";
@@ -30,6 +29,7 @@ import {
   type ValuePath,
   type ValueProbe,
 } from "@/for-testing-only.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURE_URL = new URL(
   "./fixtures/fvj1-conformance.json",
@@ -317,6 +317,40 @@ describe("fvj1-conformance", () => {
         probes: [[[], { record: 1 }], [["__proto__"], "fvj1:1"]],
         canonical: 'fvj1:{"__proto__":1}',
         divergence: { note: "note", encode: { refused: "unencodable" } },
+      });
+    });
+
+    it("returns an entry with no mods for a text holding a symbol and an unknown tag, which a made value with an unregistered symbol needs", () => {
+      // Decoding a text makes a registered symbol, and an `UnknownValue` only
+      // under a tag no class claims, so what a text alone decodes to is
+      // written by that text alone. A value made with a symbol of no registry
+      // key is written with a patch putting it back.
+
+      const text = 'fvj1:[{"/Symbol@1":"k"},{"/Zork@1":1}]';
+      const [fromText, made] = JSON.parse(
+        fvj1ConformanceFixtureTextForTestingOnly([
+          { name: "text", section: "s", text },
+          { name: "made", section: "s", make: () => [Symbol("k")] },
+        ]),
+      ).cases;
+      expect(fromText).toEqual({
+        name: "text",
+        section: "s",
+        text,
+        probes: [
+          [[], { array: 2 }],
+          [[0], 'fvj1:{"/Symbol@1":"k"}'],
+          [[1], { unknown: "Zork@1" }],
+          [[1, "state"], "fvj1:1"],
+        ],
+      });
+      expect(made).toEqual({
+        name: "made",
+        section: "s",
+        text: "fvj1:[null]",
+        patches: [{ at: [0], put: { unregisteredSymbol: "k" } }],
+        probes: [[[], { array: 1 }]],
+        reencode: { refused: "unencodable" },
       });
     });
 

@@ -1,13 +1,23 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
 import type { URI } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   cfcLabelViewFromMetadata,
   readCfcDocumentLabels,
 } from "../../src/cfc/label-view-state.ts";
+import {
+  readStoredCfcMetadata,
+  StoredCfcMetadataError,
+  UnknownCfcMetadataVersionError,
+} from "../../src/cfc/metadata.ts";
 import { Runtime } from "../../src/runtime.ts";
 import { StorageManager } from "../../src/storage/cache.deno.ts";
 import {
@@ -21,6 +31,10 @@ const space = signer.did();
 
 describe("label-view-state", () => {
   describe("cfcLabelViewFromMetadata()", () => {
+    it("returns no view without metadata", () => {
+      expect(cfcLabelViewFromMetadata(undefined, [])).toBeUndefined();
+    });
+
     it("returns a view without an entry of the label-metadata class", () => {
       expect(cfcLabelViewFromMetadata({
         labelMap: {
@@ -80,6 +94,51 @@ describe("label-view-state", () => {
         { path: ["body"], label: { confidentiality: ["s"] } },
       ]);
       tx.abort();
+    });
+
+    it("returns the same index for labels that have not changed", () => {
+      const tx = runtime.edit();
+      const first = readCfcDocumentLabels(tx, address);
+      expect(first).toBeDefined();
+      expect(readCfcDocumentLabels(tx, address)).toBe(first);
+      tx.abort();
+    });
+
+    it("returns no labels through a transaction whose reads fail", () => {
+      const tx = runtime.edit();
+      tx.abort();
+      // The read itself fails, with an error that is not a stored-metadata
+      // error, so the labeled document answers with no view.
+      let failure: unknown;
+      try {
+        readStoredCfcMetadata(tx, address);
+      } catch (error) {
+        failure = error;
+      }
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure instanceof StoredCfcMetadataError).toBe(false);
+      expect(readCfcDocumentLabels(tx, address)).toBeUndefined();
+    });
+
+    it("rethrows a stored-metadata error rather than answering no labels", async () => {
+      const tx = runtime.edit();
+      seedStoredEnvelope(tx, address, {
+        value: { body: "sealed" },
+        cfc: {
+          version: 999,
+          schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+          labelMap: {
+            version: 1,
+            entries: [{ path: ["body"], label: { confidentiality: ["s"] } }],
+          },
+        },
+      });
+      expect((await tx.commit().settled).error).toBeUndefined();
+      const reader = runtime.edit();
+      expect(() => readCfcDocumentLabels(reader, address)).toThrow(
+        UnknownCfcMetadataVersionError,
+      );
+      reader.abort();
     });
   });
 });

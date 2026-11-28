@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { resolveScopeKey, type ScopeKey } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   dirtyFanOutForCause,
   fanOutInstances,

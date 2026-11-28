@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { decodeMemoryBoundary, encodeMemoryBoundary } from "../v2.ts";
 import {
@@ -23,6 +22,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const OWNER = "did:key:z6Mk-client-accepted-commit-owner";
 

@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   DEFAULT_ROUTED_HOST_LIMITS,
   routedHostLimits,
   routedHostLimitsFor,
 } from "../v2/routed-host.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("routed-host-limits", () => {
   it("uses defaults for omitted fields and preserves explicit disabled quotas", () => {

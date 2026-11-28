@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { openProbeRuntime } from "../../src/pattern-index/probe-runtime.ts";
 
 describe("openProbeRuntime()", () => {

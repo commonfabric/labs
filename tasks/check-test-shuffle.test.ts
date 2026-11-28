@@ -6,10 +6,10 @@
  * thing the gate exists to stop.
  */
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assert } from "@std/assert";
-import { join } from "@std/path";
+import { dirname, fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   builtDenoTests,
   commandsOf,
@@ -19,8 +19,41 @@ import {
   staleRecords,
   writtenCommands,
 } from "./check-test-shuffle.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const SHUFFLE = "--shuffle=$(deno task -q test-seed)";
+
+const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
+
+/**
+ * Runs the gate as `deno task check-test-shuffle` does, handing it the
+ * arguments given, through the frozen-lock helper so that the run leaves
+ * the repository's lockfile alone.
+ */
+async function runGate(
+  ...args: string[]
+): Promise<{ code: number; out: string; err: string }> {
+  const result = await runDenoCommandWithTemporaryLock({
+    root: REPO_ROOT,
+    args: (lockPath) => [
+      "run",
+      "--config",
+      join(REPO_ROOT, "deno.jsonc"),
+      "--lock",
+      lockPath,
+      "--allow-read",
+      "--allow-env",
+      "--allow-run=git",
+      join(REPO_ROOT, "tasks", "check-test-shuffle.ts"),
+      ...args,
+    ],
+  });
+  return {
+    code: result.code,
+    out: new TextDecoder().decode(result.stdout),
+    err: new TextDecoder().decode(result.stderr),
+  };
+}
 
 /** The fixture repositories a test made, removed once it finishes. */
 const made: string[] = [];
@@ -330,6 +363,24 @@ describe("check-test-shuffle", () => {
       expect(err).toContain("deno test -A");
       expect(err).toContain("--shuffle=$(deno task -q test-seed)");
       expect(err).toContain("deno task test-seed");
+    });
+  });
+
+  describe("the script run as a command", () => {
+    it("exits 0 over the checkout holding it when given no root", async () => {
+      const { code, out, err } = await runGate();
+      expect(out).toContain("shuffles its order");
+      expect(err).not.toContain("without shuffling");
+      expect(code).toBe(0);
+    });
+
+    it("exits 1 over the root it is given when that tree fails", async () => {
+      const root = await fixtureRepo("deno test -A");
+      const { code, out, err } = await runGate(root);
+      expect(err).toContain("member/deno.jsonc (task `test`)");
+      expect(err).toContain("deno test -A");
+      expect(out).not.toContain("shuffles its order");
+      expect(code).toBe(1);
     });
   });
 

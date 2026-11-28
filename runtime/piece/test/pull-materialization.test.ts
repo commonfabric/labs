@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import {
@@ -52,13 +51,26 @@ import {
   materializedValueAtPath,
   omitMissingProjectionAliases,
   PieceController,
+  pieceSourceArgumentEvidence,
   rawResolvedValueAtPath,
   resolveDeclaredStreamCapability,
   selectCurrentContainerSchema,
 } from "../src/ops/piece-controller.ts";
 import { readPieceSourceState } from "../src/ops/piece-origin.ts";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
+import {
+  SEED_ENVELOPE_SCHEMA_HASH,
+  seedStoredEnvelope,
+  storedFields,
+  writeSeedEnvelopeDoc,
+} from "../../runner/test/cfc-seed-envelope.ts";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../../runner/src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("piece pull materialization");
@@ -220,6 +232,34 @@ function compiledMultiplierProgram(
   };
 }
 
+/**
+ * A piece whose input holds a list of items. `itemFields` adds to the item's
+ * declaration.
+ */
+function compiledRowHolderProgram(
+  version: string,
+  itemFields = "",
+): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [
+      {
+        name: "/main.tsx",
+        contents: [
+          "import { Default, NAME, pattern } from 'commonfabric';",
+          `interface Item { title: string; ${itemFields} }`,
+          "interface In { items?: Item[] | Default<[]>; }",
+          "interface Out { [NAME]: string; count: number; }",
+          "export default pattern<In, Out>(({ items }) => ({",
+          `  [NAME]: ${JSON.stringify("rows-" + version)},`,
+          "  count: items.length,",
+          "}));",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
 function compiledScopedInputProgram(version: string): RuntimeProgram {
   return {
     main: "/main.tsx",
@@ -239,6 +279,38 @@ function compiledScopedInputProgram(version: string): RuntimeProgram {
           "  [UI]: <div>{who}</div>,",
           "  who,",
           "  count: options.length,",
+          "}));",
+        ].join("\n"),
+      },
+    ],
+  };
+}
+
+/**
+ * A piece whose input holds an item three ways: in a list, behind a writable
+ * handle, and as a plain value. `itemFields` adds to the item's declaration.
+ */
+function compiledItemHolderProgram(
+  version: string,
+  itemFields = "",
+): RuntimeProgram {
+  return {
+    main: "/main.tsx",
+    files: [
+      {
+        name: "/main.tsx",
+        contents: [
+          "import { Default, NAME, pattern, type Writable } from 'commonfabric';",
+          `interface Item { title: string; ${itemFields} }`,
+          "interface In {",
+          "  items?: Item[] | Default<[]>;",
+          "  held?: Writable<Item>;",
+          "  other?: Item;",
+          "}",
+          "interface Out { [NAME]: string; count: number; }",
+          "export default pattern<In, Out>(({ items }) => ({",
+          `  [NAME]: ${JSON.stringify("holder-" + version)},`,
+          "  count: items.length,",
           "}));",
         ].join("\n"),
       },
@@ -1319,6 +1391,467 @@ describe("piece pull materialization", () => {
     ).not.toThrow();
   });
 
+  it("lets a retained pushed element take a contract that names a new optional field", async () => {
+    // The Topics shape: a comment pushed onto `comments` is a document of its
+    // own, with no contract of its own, and the piece's input holds a link to
+    // it. A source update holds such a document to the piece's prior input
+    // contract at the link's path, so the element is the piece's own input one
+    // hop away, and the update judges it as it judges the same object written
+    // inline: an open object may gain an optional named field.
+    const authorWith = (
+      extra: Record<string, JSONSchema>,
+      rest: Record<string, unknown> = {},
+    ): JSONSchema => ({
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        name: { type: "string" },
+        ...extra,
+      },
+      required: ["kind", "name"],
+      ...rest,
+    });
+    const argumentWith = (author: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        createdBy: author,
+        comments: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { author, body: { type: "string" } },
+            required: ["body"],
+          },
+        },
+      },
+      required: ["comments"],
+    });
+    const blob: JSONSchema = {
+      type: "object",
+      properties: { space: { type: "string" }, id: { type: "string" } },
+      required: ["space", "id"],
+    };
+    const prior = argumentWith(authorWith({}));
+    const candidate = argumentWith(authorWith({ pictureBlob: blob }));
+
+    const ada = { kind: "person", name: "Ada" };
+    const comment = runtime.getCell(
+      pieces.getSpace(),
+      "pushed-comment-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      comment.withTx(tx).set({ author: ada, body: "first" });
+    });
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "pushed-comment-argument-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      base.withTx(tx).set({ createdBy: ada, comments: [comment] });
+    });
+
+    const raw = base.getRaw() as { comments: unknown[] };
+    // Guard the premise: the update sees a SERIALIZED link to a document that
+    // carries no contract, which is what holds it to the prior contract.
+    expect(isLink(raw.comments[0])).toBe(true);
+    expect(isCell(raw.comments[0])).toBe(false);
+
+    const update = (
+      destination: JSONSchema,
+      priorArgumentSchema: JSONSchema = prior,
+      options: { linksPreservedVerbatim?: boolean } = {
+        linksPreservedVerbatim: true,
+      },
+      path: (string | number)[] = ["comments", 0],
+    ) =>
+      assertSuppliedLinkSchemasCompatible(
+        [{ path, value: raw.comments[0] }],
+        destination,
+        base,
+        pieces,
+        { priorArgumentSchema, ...options },
+      );
+
+    expect(() => update(candidate)).not.toThrow();
+
+    // The policy is the one the piece's own contract gets and no wider. A
+    // field the prior contract named may not narrow.
+    expect(() => update(argumentWith(authorWith({ name: { type: "number" } }))))
+      .toThrow(/comments\.0\.author\.name/);
+
+    // A newly named field may not be required without a default.
+    expect(() =>
+      update(
+        argumentWith(
+          authorWith({ pictureBlob: blob }, {
+            required: ["kind", "name", "pictureBlob"],
+          }),
+        ),
+      )
+    ).toThrow(/newly required argument field has no default/);
+
+    // A prior index signature over a narrower type promised that type for
+    // every unnamed field, this one included.
+    expect(() =>
+      update(
+        argumentWith(
+          authorWith({ pictureBlob: blob }, {
+            additionalProperties: { type: "string" },
+          }),
+        ),
+        argumentWith(
+          authorWith({}, { additionalProperties: { type: "string" } }),
+        ),
+      )
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // A caller that rebuilds its links declares no retained input, and the
+    // same link supplied where it is not already committed is a new one. Both
+    // keep the producer-side proof, which has no such policy.
+    expect(() => update(candidate, prior, {})).toThrow(
+      /comments\.0\.author\.pictureBlob/,
+    );
+    expect(() =>
+      update(candidate, prior, { linksPreservedVerbatim: true }, [
+        "comments",
+        1,
+      ])
+    ).toThrow(/comments\.1\.author\.pictureBlob/);
+
+    // A link inside an element is followed where setup's validation follows
+    // it: to more of the piece's own plain input. The Topics shape is a
+    // comment whose author is the author object of an earlier comment.
+    const overElement = async (
+      value: unknown,
+      destination: JSONSchema = candidate,
+      priorArgumentSchema: JSONSchema = prior,
+      element = runtime.getCell(
+        pieces.getSpace(),
+        "pushed-element-" + crypto.randomUUID(),
+      ),
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        element.withTx(tx).set(value as never);
+      });
+      await runtime.editWithRetry((tx) => {
+        base.withTx(tx).set({ createdBy: ada, comments: [element] });
+      });
+      const stored = base.getRaw() as { comments: unknown[] };
+      // Guard the premise: the element holds a SERIALIZED link.
+      expect(JSON.stringify(element.getRaw())).toContain("link@1");
+      return () =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["comments", 0], value: stored.comments[0] }],
+          destination,
+          base,
+          pieces,
+          { priorArgumentSchema, linksPreservedVerbatim: true },
+        );
+    };
+    expect(
+      await overElement({ author: comment.key("author"), body: "second" }),
+    ).not.toThrow();
+    expect(await overElement(comment)).not.toThrow();
+
+    // What a link inside an element reaches is not the piece's own plain
+    // input when it carries a contract of its own, when it is in another
+    // space, or when the candidate reads the link's position as a handle.
+    // Each keeps the proof without the policy.
+    const commentPiece = await pieces.runPersistent(
+      trustPattern(runtime, {
+        argumentSchema: { type: "object", properties: {} },
+        resultSchema: {
+          type: "object",
+          properties: { author: authorWith({}), body: { type: "string" } },
+          required: ["body"],
+        },
+        result: { author: ada, body: "third" },
+        nodes: [],
+      }),
+      {},
+      undefined,
+      { start: true },
+    );
+    expect(
+      await overElement({ author: commentPiece.key("author"), body: "x" }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    const elsewhere = runtime.getCell(
+      await runtime.createSpace(),
+      "comment-elsewhere-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      elsewhere.withTx(tx).set({ author: ada, body: "fourth" });
+    });
+    expect(
+      await overElement({ author: elsewhere.key("author"), body: "x" }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // Links that lead back to where they started reach no value for setup
+    // to read.
+    const looped = runtime.getCell(
+      pieces.getSpace(),
+      "looped-comment-" + crypto.randomUUID(),
+    );
+    const back = runtime.getCell(
+      pieces.getSpace(),
+      "looped-comment-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      back.withTx(tx).set({ author: looped.key("author"), body: "y" });
+    });
+    expect(
+      await overElement(
+        { author: back.key("author"), body: "x" },
+        candidate,
+        prior,
+        looped,
+      ),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // The documents read on the way to a value are bounded, and a chain of
+    // documents that each only link on counts every one of them. Eight are
+    // read: the element, six that link on, and the comment at the end. One
+    // more and the element keeps the proof without the policy.
+    const aliased = async (aliases: number) => {
+      let target = comment as Cell<unknown>;
+      for (let index = 0; index < aliases; index++) {
+        const alias = runtime.getCell(
+          pieces.getSpace(),
+          "alias-comment-" + crypto.randomUUID(),
+        ) as Cell<unknown>;
+        const next = target;
+        await runtime.editWithRetry((tx) => {
+          alias.withTx(tx).set(next);
+        });
+        target = alias;
+      }
+      return target;
+    };
+    expect(
+      await overElement({
+        author: (await aliased(6)).key("author" as never),
+        body: "x",
+      }),
+    ).not.toThrow();
+    expect(
+      await overElement({
+        author: (await aliased(7)).key("author" as never),
+        body: "x",
+      }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // A path that starts in the piece's own data can cross a link partway
+    // into a document in another space. Setup reads one document at a time
+    // and stops there, so the element is not read in full.
+    const crossing = runtime.getCell(
+      pieces.getSpace(),
+      "crossing-comment-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      crossing.withTx(tx).set({ kept: elsewhere });
+    });
+    expect(
+      await overElement({
+        author: crossing.key("kept").key("author"),
+        body: "x",
+      }),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // A link to another piece's input is a link to that piece's data, as a
+    // link to its result is.
+    expect(
+      await overElement({
+        author: pieces.getArgument(commentPiece).key("author"),
+        body: "x",
+      }),
+    ).toThrow(/comments\.0\.author/);
+
+    // A link at a place the candidate cannot put a contract to, here below
+    // a field it types as text, is not known to be read as a value. The
+    // element keeps the proof without the policy, which this candidate
+    // passes: it only widens a field.
+    const widened = (schema: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        createdBy: authorWith({}),
+        comments: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { author: authorWith({}), body: schema },
+            required: ["body"],
+          },
+        },
+      },
+      required: ["comments"],
+    });
+    expect(
+      await overElement(
+        { author: ada, body: { deep: comment.key("body") } },
+        widened({ type: ["string", "number", "object"] }),
+        widened({ type: ["string", "object"] }),
+      ),
+    ).not.toThrow();
+
+    // Stored bytes can hold a link envelope with nothing a link is made of
+    // inside it. A cell write refuses one, so it is written here as a store
+    // write below that layer would leave it. It is recognized as a link and
+    // cannot be followed, so the element keeps the proof without the policy
+    // rather than stopping the update on the envelope.
+    const malformed = runtime.getCell(
+      pieces.getSpace(),
+      "malformed-comment-" + crypto.randomUUID(),
+    );
+    const overMalformed = await overElement(
+      { author: comment.key("author"), body: "x" },
+      candidate,
+      prior,
+      malformed,
+    );
+    const rawWrite = runtime.edit();
+    seedStoredEnvelope(rawWrite, {
+      space: pieces.getSpace(),
+      scope: "space",
+      id: malformed.getAsNormalizedFullLink().id,
+      path: [],
+    }, { value: { author: { "/": { "link@1": null } }, body: "x" } });
+    expect((await rawWrite.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+    expect(malformed.getRaw()).toEqual({
+      author: { "/": { "link@1": null } },
+      body: "x",
+    });
+    expect(overMalformed).toThrow(/comments\.0\.author\.pictureBlob/);
+
+    // A position whose handle wrappers the candidate cannot settle is not
+    // known to be read as a value.
+    const eitherScope = (author: JSONSchema): JSONSchema =>
+      argumentWith({
+        anyOf: [
+          {
+            ...(author as Record<string, unknown>),
+            asCell: [{ kind: "cell", scope: "user" }],
+          },
+          {
+            ...(author as Record<string, unknown>),
+            asCell: [{ kind: "cell", scope: "space" }],
+          },
+        ],
+      } as JSONSchema);
+    expect(
+      await overElement(
+        { author: comment.key("author"), body: "x" },
+        eitherScope(authorWith({ pictureBlob: blob })),
+        eitherScope(authorWith({})),
+      ),
+    ).toThrow(/comments\.0\.author/);
+
+    const heldAuthor = (author: JSONSchema): JSONSchema =>
+      argumentWith({
+        ...(author as Record<string, unknown>),
+        asCell: ["cell"],
+      } as JSONSchema);
+    expect(
+      await overElement(
+        { author: comment.key("author"), body: "x" },
+        heldAuthor(authorWith({ pictureBlob: blob })),
+        heldAuthor(authorWith({})),
+      ),
+    ).toThrow(/comments\.0\.author\.pictureBlob/);
+  });
+
+  it("holds a retained link to another piece's result to the full producer proof", async () => {
+    // A reader whose list links to other pieces' results, each with a
+    // contract of its own. That contract is a producer's, which the update
+    // does not replace, so everything it admits must still be accepted: an
+    // open object there admits any value under a name it does not declare.
+    const authorWith = (extra: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        name: { type: "string" },
+        ...extra,
+      },
+      required: ["kind", "name"],
+    });
+    const argumentWith = (author: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        topics: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+        },
+      },
+      required: ["topics"],
+    });
+    const priorAuthor = authorWith({});
+    const candidateAuthor = authorWith({
+      pictureBlob: {
+        type: "object",
+        properties: { space: { type: "string" }, id: { type: "string" } },
+        required: ["space", "id"],
+      },
+    });
+    const prior = argumentWith(priorAuthor);
+    const candidate = argumentWith(candidateAuthor);
+    const producerWith = (author: JSONSchema) =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+          result: { createdBy: { kind: "person", name: "Ada" } },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "board-argument-" + crypto.randomUUID(),
+    );
+    const updateOver = async (
+      topic: Awaited<ReturnType<typeof producerWith>>,
+      destination: JSONSchema,
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        base.withTx(tx).set({ topics: [topic] });
+      });
+      const raw = base.getRaw() as { topics: unknown[] };
+      expect(isLink(raw.topics[0])).toBe(true);
+      expect(isCell(raw.topics[0])).toBe(false);
+      return () =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["topics", 0], value: raw.topics[0] }],
+          destination,
+          base,
+          pieces,
+          { priorArgumentSchema: prior, linksPreservedVerbatim: true },
+        );
+    };
+
+    const topic = await producerWith(priorAuthor);
+    expect(await updateOver(topic, prior)).not.toThrow();
+    expect(await updateOver(topic, candidate)).toThrow(
+      /topics\.0\.createdBy\.pictureBlob/,
+    );
+
+    // Once the producer's own contract names the field, the same update of
+    // the reader is accepted.
+    const moved = await producerWith(candidateAuthor);
+    expect(await updateOver(moved, candidate)).not.toThrow();
+  });
+
   it("refuses a preserved link whose carried wrapper widens its contract", async () => {
     // The envelope on a SERIALIZED link is caller-written bytes. Declaring
     // that links are preserved verbatim must not become a way to smuggle a
@@ -1449,6 +1982,332 @@ describe("piece pull materialization", () => {
         },
       )
     ).not.toThrow();
+  });
+
+  it("judges a retained row that only links on by the contract of what it links to", async () => {
+    // The Topics board's shape: pushing a piece onto a list stores a row, a
+    // document with no contract of its own whose whole value is a link to
+    // the piece. The row only passes its reader on, so the link to it stands
+    // for the link it holds, and the piece's contract is the producer's.
+    const authorWith = (extra: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: {
+        kind: { type: "string" },
+        name: { type: "string" },
+        ...extra,
+      },
+      required: ["kind", "name"],
+    });
+    const argumentWith = (author: JSONSchema): JSONSchema => ({
+      type: "object",
+      properties: {
+        topics: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+        },
+      },
+      required: ["topics"],
+    });
+    const priorAuthor = authorWith({});
+    const candidateAuthor = authorWith({
+      pictureBlob: {
+        type: "object",
+        properties: { space: { type: "string" }, id: { type: "string" } },
+        required: ["space", "id"],
+      },
+    });
+    const prior = argumentWith(priorAuthor);
+    const candidate = argumentWith(candidateAuthor);
+    const producerWith = (author: JSONSchema, name: string | number = "Ada") =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { createdBy: author },
+            required: ["createdBy"],
+          },
+          result: { createdBy: { kind: "person", name } },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+    const rowTo = async (
+      target: Cell<unknown>,
+      space = pieces.getSpace(),
+    ) => {
+      const row = runtime.getCell(space, "topic-row-" + crypto.randomUUID());
+      await runtime.editWithRetry((tx) => {
+        row.withTx(tx).set(target);
+      });
+      // Guard the premise: the row's whole value is a SERIALIZED link.
+      expect(isLink(row.getRaw())).toBe(true);
+      return row as Cell<unknown>;
+    };
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "row-holder-argument-" + crypto.randomUUID(),
+    );
+    const updateOver = async (
+      row: Cell<unknown>,
+      destination: JSONSchema,
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        base.withTx(tx).set({ topics: [row] });
+      });
+      const raw = base.getRaw() as { topics: unknown[] };
+      expect(isLink(raw.topics[0])).toBe(true);
+      expect(isCell(raw.topics[0])).toBe(false);
+      return () =>
+        assertSuppliedLinkSchemasCompatible(
+          [{ path: ["topics", 0], value: raw.topics[0] }],
+          destination,
+          base,
+          pieces,
+          { priorArgumentSchema: prior, linksPreservedVerbatim: true },
+        );
+    };
+
+    const onPrior = await producerWith(priorAuthor);
+    const onCandidate = await producerWith(candidateAuthor);
+
+    // A producer whose contract leaves the name open admits any value under
+    // it, which the candidate does not accept.
+    expect(await updateOver(await rowTo(onPrior), candidate)).toThrow(
+      /topics\.0\.createdBy\.pictureBlob/,
+    );
+
+    // Once the producer's contract names the field, the reader's update is
+    // accepted, through one row or a chain of them.
+    expect(await updateOver(await rowTo(onCandidate), candidate)).not
+      .toThrow();
+    expect(
+      await updateOver(await rowTo(await rowTo(onCandidate)), candidate),
+    ).not.toThrow();
+
+    // The producer is judged even where the reader's contract is unchanged:
+    // one whose contract the reader's does not accept is refused.
+    const misfit = await producerWith(
+      authorWith({ name: { type: "number" } }),
+      7,
+    );
+    expect(await updateOver(await rowTo(misfit), prior)).toThrow(
+      /topics\.0\.createdBy\.name/,
+    );
+
+    // A row in another space is not read, so it is held to the reader's
+    // prior contract, as a row that links to nothing with a contract is.
+    expect(
+      await updateOver(
+        await rowTo(onCandidate, await runtime.createSpace()),
+        candidate,
+      ),
+    ).toThrow(/topics\.0\.createdBy/);
+
+    // Rows that link to each other reach no contract, and following them
+    // ends.
+    const first = runtime.getCell(
+      pieces.getSpace(),
+      "topic-row-" + crypto.randomUUID(),
+    ) as Cell<unknown>;
+    const second = await rowTo(first);
+    await runtime.editWithRetry((tx) => {
+      first.withTx(tx).set(second);
+    });
+    expect(await updateOver(first, candidate)).toThrow(
+      /topics\.0\.createdBy/,
+    );
+
+    // A row is a whole document. A link to a place inside one is not
+    // followed: the path to that place could cross a link partway.
+    const inside = runtime.getCell(
+      pieces.getSpace(),
+      "topic-row-holder-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      inside.withTx(tx).set({ slot: onCandidate });
+    });
+    expect(
+      await updateOver(inside.key("slot") as Cell<unknown>, candidate),
+    ).toThrow(/topics\.0\.createdBy/);
+
+    // A row to a piece's input takes that piece's contract, which is
+    // recovered through the piece's result. Recovering it reads the result,
+    // so a result that is not the reader's own data to read, as one storing
+    // a confidentiality label is not, leaves the contract unproven and the
+    // row held to the reader's prior contract.
+    const inputProducerWith = () =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: {
+            type: "object",
+            properties: { createdBy: candidateAuthor },
+            required: ["createdBy"],
+          },
+          resultSchema: {
+            type: "object",
+            properties: { createdBy: candidateAuthor },
+            required: ["createdBy"],
+          },
+          result: {
+            createdBy: { $alias: { cell: "argument", path: ["createdBy"] } },
+          },
+          nodes: [],
+        }),
+        { createdBy: { kind: "person", name: "Ada" } },
+        undefined,
+        { start: true },
+      );
+    const readable = await inputProducerWith();
+    expect(
+      await updateOver(await rowTo(pieces.getArgument(readable)), candidate),
+    ).not.toThrow();
+    const guarded = await inputProducerWith();
+    const guardedResult = {
+      space: pieces.getSpace(),
+      scope: "space" as const,
+      id: guarded.getAsNormalizedFullLink().id,
+      path: [],
+    };
+    const label = runtime.edit();
+    writeSeedEnvelopeDoc(label, pieces.getSpace());
+    seedStoredEnvelope(label, guardedResult, {
+      ...(storedFields(label, guardedResult) as Record<string, never>),
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: pieces.getSpace(),
+              }],
+            },
+          }],
+        },
+      },
+    });
+    expect((await label.commit().settled).error).toBeUndefined();
+    expect(
+      await updateOver(await rowTo(pieces.getArgument(guarded)), candidate),
+    ).toThrow(/topics\.0\.createdBy/);
+
+    // A row is followed only for a link the piece already holds. A row can
+    // be pointed at another producer later, so a new binding through one
+    // takes the row's own contract, which it has none of, and the same link
+    // supplied where it is not committed is a new one.
+    await updateOver(await rowTo(onCandidate), candidate);
+    const held = (base.getRaw() as { topics: unknown[] }).topics[0];
+    expect(() =>
+      assertSuppliedLinkSchemasCompatible(
+        [{ path: ["topics", 0], value: held }],
+        candidate,
+        base,
+        pieces,
+      )
+    ).toThrow(/no durable schema contract/);
+    expect(() =>
+      assertSuppliedLinkSchemasCompatible(
+        [{ path: ["topics", 1], value: held }],
+        candidate,
+        base,
+        pieces,
+        { priorArgumentSchema: prior, linksPreservedVerbatim: true },
+      )
+    ).toThrow(/topics\.1\.createdBy/);
+
+    // A row that stores a confidentiality label is not read, so it is not
+    // followed.
+    const labeled = await rowTo(onCandidate);
+    const address = {
+      space: pieces.getSpace(),
+      scope: "space" as const,
+      id: labeled.getAsNormalizedFullLink().id,
+      path: [],
+    };
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, pieces.getSpace());
+    seedStoredEnvelope(seed, address, {
+      ...(storedFields(seed, address) as Record<string, never>),
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: [],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: pieces.getSpace(),
+              }],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    expect(await updateOver(labeled, candidate)).toThrow(
+      /topics\.0\.createdBy/,
+    );
+  });
+
+  it("names the producer a row passes on to in the evidence a confirmation is held to", async () => {
+    // A confirmation of an update is good only while the input it reviewed
+    // stands. A row can be pointed at another piece without the link to the
+    // row changing, so the evidence names the document the contract came
+    // from and the contract itself.
+    const producerWith = (extra: Record<string, JSONSchema>) =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { title: { type: "string" }, ...extra },
+            required: ["title"],
+          },
+          result: { title: "a" },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+    const first = await producerWith({});
+    const second = await producerWith({ note: { type: "string" } });
+    const row = runtime.getCell(
+      pieces.getSpace(),
+      "evidence-row-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      row.withTx(tx).set(first);
+    });
+    const base = runtime.getCell(
+      pieces.getSpace(),
+      "evidence-argument-" + crypto.randomUUID(),
+    );
+    await runtime.editWithRetry((tx) => {
+      base.withTx(tx).set({ items: [row] });
+    });
+    const held = base.getRaw();
+    const before = pieceSourceArgumentEvidence(base, pieces);
+    expect(pieceSourceArgumentEvidence(base, pieces)).toBe(before);
+
+    await runtime.editWithRetry((tx) => {
+      row.withTx(tx).set(second);
+    });
+    // Guard the premise: the input's own bytes did not change.
+    expect(base.getRaw()).toEqual(held);
+    expect(pieceSourceArgumentEvidence(base, pieces)).not.toBe(before);
   });
 
   it("fails closed for ambiguous producer and destination Cell contracts", async () => {
@@ -6167,6 +7026,76 @@ describe("piece pull materialization", () => {
     }
   });
 
+  it("updates a piece over a row once the piece the row links to names the new field", async () => {
+    // The whole path of the case above: a source update that names a new
+    // optional field on an item, over an input whose list holds a row that
+    // links to another piece. The update is refused while that piece's
+    // contract leaves the name open, and accepted once it names the field.
+    const candidate = () =>
+      compiledRowHolderProgram("v2", "pictureBlob?: number;");
+    const itemPiece = (extra: Record<string, JSONSchema>) =>
+      pieces.runPersistent(
+        trustPattern(runtime, {
+          argumentSchema: { type: "object", properties: {} },
+          resultSchema: {
+            type: "object",
+            properties: { title: { type: "string" }, ...extra },
+            required: ["title"],
+          },
+          result: { title: "a" },
+          nodes: [],
+        }),
+        {},
+        undefined,
+        { start: true },
+      );
+    const holderOver = async (item: Cell<unknown>) => {
+      const compiled = await runtime.patternManager.compilePattern(
+        compiledRowHolderProgram("v1"),
+        { space: pieces.getSpace() },
+      );
+      const piece = await pieces.runPersistent(
+        compiled,
+        {},
+        "row-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await runtime.idle();
+      const row = runtime.getCell(
+        pieces.getSpace(),
+        "item-row-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        row.withTx(tx).set(item);
+      });
+      const argument = pieces.getArgument(piece);
+      await runtime.editWithRetry((tx) => {
+        argument.withTx(tx).asSchema(undefined as never).key("items" as never)
+          .set([row] as never);
+      });
+      await runtime.idle();
+      const raw = argument.getRawUntyped({ lastNode: "top" }) as {
+        items: unknown[];
+      };
+      // Guard the premise: the list holds a link to a row, and the row's
+      // whole value is a link.
+      expect(isLink(raw.items[0])).toBe(true);
+      expect(isLink(row.getRaw())).toBe(true);
+      return new PieceController(pieces, piece);
+    };
+
+    const open = await holderOver(await itemPiece({}));
+    await expect(open.setPattern(candidate())).rejects.toThrow(
+      /input link at items\.0/,
+    );
+
+    const named = await holderOver(
+      await itemPiece({ pictureBlob: { type: "number" } }),
+    );
+    await named.setPattern(candidate());
+    expect(await named.result.get()).toMatchObject({ count: 1 });
+  });
+
   it("updates a piece whose argument holds scoped and mergeable-element links", async () => {
     // Mirrors a deployed piece: a `PerUser` input is stored as a scoped
     // redirect link, and a mergeable push stores the array element as its own
@@ -6215,6 +7144,212 @@ describe("piece pull materialization", () => {
     expect(await controller.input.get()).toMatchObject({
       options: [{ title: "Test Cafe" }],
     });
+  });
+
+  it("names a new optional field over a pushed element, and over nothing setup does not read in full", async () => {
+    // A source update that names a new optional field on an open object
+    // reaches a stored value under that name three ways. A pushed element is
+    // the piece's own plain input, which setup validates against the
+    // candidate, so the update is judged by the stored value. A writable
+    // handle is validated at its top level only, and a value in another
+    // space is not read, so each keeps the full schema proof, which refuses
+    // the candidate whatever the value is.
+    const candidate = () =>
+      compiledItemHolderProgram("v2", "pictureBlob?: number;");
+    const holder = async () => {
+      const compiled = await runtime.patternManager.compilePattern(
+        compiledItemHolderProgram("v1"),
+        { space: pieces.getSpace() },
+      );
+      const piece = await pieces.runPersistent(
+        compiled,
+        {},
+        "item-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await runtime.idle();
+      return {
+        controller: new PieceController(pieces, piece),
+        argument: pieces.getArgument(piece),
+      };
+    };
+    const documentHolding = async (
+      value: Record<string, unknown>,
+      space = pieces.getSpace(),
+    ) => {
+      const document = runtime.getCell(
+        space,
+        "held-item-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        document.withTx(tx).set(value);
+      });
+      return document;
+    };
+    const store = async (
+      argument: Cell<unknown>,
+      field: "items" | "held" | "other",
+      value: unknown,
+    ) => {
+      await runtime.editWithRetry((tx) => {
+        argument.withTx(tx).asSchema(undefined as never).key(field as never)
+          .set(value as never);
+      });
+      await runtime.idle();
+      const raw = argument.getRawUntyped({ lastNode: "top" }) as Record<
+        string,
+        unknown
+      >;
+      const stored = field === "items"
+        ? (raw.items as unknown[])[0]
+        : raw[field];
+      // Guard the premise: the update meets a SERIALIZED link.
+      expect(isLink(stored), field).toBe(true);
+    };
+
+    // A pushed element whose stored value fits the candidate: accepted.
+    const fits = await holder();
+    await store(fits.argument, "items", [
+      await documentHolding({ title: "a", pictureBlob: 42 }),
+    ]);
+    await fits.controller.setPattern(candidate());
+    expect(await fits.controller.result.get()).toMatchObject({ count: 1 });
+
+    // The same element holding a value the candidate cannot read: refused,
+    // by setup's validation of the stored input.
+    const misfits = await holder();
+    await store(misfits.argument, "items", [
+      await documentHolding({ title: "a", pictureBlob: "legacy" }),
+    ]);
+    await expect(misfits.controller.setPattern(candidate())).rejects.toThrow(
+      /pictureBlob/,
+    );
+
+    // The same value behind a writable handle: refused by the schema proof.
+    const handle = await holder();
+    await store(
+      handle.argument,
+      "held",
+      await documentHolding({ title: "a", pictureBlob: "legacy" }),
+    );
+    await expect(handle.controller.setPattern(candidate())).rejects.toThrow(
+      /input link at held/,
+    );
+
+    // The same value in another space: refused by the schema proof.
+    const elsewhere = await holder();
+    await store(
+      elsewhere.argument,
+      "other",
+      await documentHolding(
+        { title: "a", pictureBlob: "legacy" },
+        await runtime.createSpace(),
+      ),
+    );
+    await expect(elsewhere.controller.setPattern(candidate())).rejects.toThrow(
+      /input link at other/,
+    );
+
+    // The same value in a pushed element that stores a confidentiality
+    // label: setup reads the label and not the element, so the schema proof
+    // refuses it too.
+    const labeled = await holder();
+    const labeledItem = runtime.getCell(
+      pieces.getSpace(),
+      "labeled-item-" + crypto.randomUUID(),
+    );
+    const seed = runtime.edit();
+    writeSeedEnvelopeDoc(seed, pieces.getSpace());
+    seedStoredEnvelope(seed, {
+      space: pieces.getSpace(),
+      scope: "space",
+      id: labeledItem.getAsNormalizedFullLink().id,
+      path: [],
+    }, {
+      value: { title: "a", pictureBlob: "legacy" },
+      cfc: {
+        version: 1,
+        schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+        labelMap: {
+          version: 1,
+          entries: [{
+            path: ["pictureBlob"],
+            label: {
+              confidentiality: [{
+                type: "https://commonfabric.org/cfc/atom/PersonalSpace",
+                owner: pieces.getSpace(),
+              }],
+            },
+          }],
+        },
+      },
+    });
+    expect((await seed.commit().settled).error).toBeUndefined();
+    await store(labeled.argument, "items", [labeledItem]);
+    await expect(labeled.controller.setPattern(candidate())).rejects.toThrow(
+      /input link at items\.0/,
+    );
+  });
+
+  it("names a new optional field over a pushed element that links into the piece's own plain input", async () => {
+    // A pushed element can hold a link to another of the piece's pushed
+    // elements, as a comment whose author is the author object of an earlier
+    // comment does. Setup reads through such a link, in the input document's
+    // own space and scope, so the stored value behind it decides the update.
+    const version = (by: string) =>
+      compiledItemHolderProgram(by, `by?: { name: string; ${by} };`);
+    const holderOver = async (pictureBlob: unknown) => {
+      const compiled = await runtime.patternManager.compilePattern(
+        version(""),
+        { space: pieces.getSpace() },
+      );
+      const piece = await pieces.runPersistent(
+        compiled,
+        {},
+        "linked-element-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await runtime.idle();
+      const earlier = runtime.getCell(
+        pieces.getSpace(),
+        "earlier-item-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        earlier.withTx(tx).set({
+          title: "a",
+          by: { name: "Ada", pictureBlob },
+        });
+      });
+      const later = runtime.getCell(
+        pieces.getSpace(),
+        "later-item-" + crypto.randomUUID(),
+      );
+      await runtime.editWithRetry((tx) => {
+        later.withTx(tx).set({ title: "b", by: earlier.key("by") });
+      });
+      const argument = pieces.getArgument(piece);
+      await runtime.editWithRetry((tx) => {
+        argument.withTx(tx).asSchema(undefined as never).key("items" as never)
+          .set([later] as never);
+      });
+      await runtime.idle();
+      // Guard the premise: the later element's `by` is a SERIALIZED link, and
+      // the list reaches the earlier element only through it.
+      expect(isLink((later.getRaw() as { by: unknown }).by)).toBe(true);
+      return new PieceController(pieces, piece);
+    };
+    const candidate = () => version("pictureBlob?: number;");
+
+    const fits = await holderOver(42);
+    await fits.setPattern(candidate());
+    expect(await fits.result.get()).toMatchObject({ count: 1 });
+
+    // The same link reaching a value the candidate cannot read: refused, by
+    // setup's validation of the stored input.
+    const misfits = await holderOver("legacy");
+    await expect(misfits.setPattern(candidate())).rejects.toThrow(
+      /do not match the candidate schema[^]*pictureBlob/,
+    );
   });
 
   it("rejects a producer-declared undefined alternative at an optional destination", async () => {
@@ -7767,6 +8902,95 @@ describe("piece cold-replica slot read (two replicas, one server)", () => {
     } finally {
       await readerRuntime.dispose();
       await readerStorage.close();
+    }
+  });
+
+  it("a fresh replica proves a retained row against the piece the row links to", async () => {
+    // The proof recovers a row's contract from the piece the row links to,
+    // or from that piece's result when the row links to its argument. A
+    // replica that has pulled none of those documents has to load each before
+    // the proof runs, or the verdict turns on what it happens to hold.
+    const itemSchema: JSONSchema = {
+      type: "object",
+      properties: {
+        title: { type: "string" },
+        pictureBlob: { type: "number" },
+      },
+      required: ["title"],
+    };
+    const producer = await writerPieces.runPersistent(
+      trustPattern(writerRuntime, {
+        argumentSchema: itemSchema,
+        resultSchema: itemSchema,
+        result: { title: "a" },
+        nodes: [],
+      }),
+      { title: "a" },
+      undefined,
+      { start: true },
+    );
+    for (
+      const [shape, target] of [
+        ["its result", producer],
+        ["its argument", writerPieces.getArgument(producer)],
+      ] as const
+    ) {
+      const compiled = await writerRuntime.patternManager.compilePattern(
+        compiledRowHolderProgram("v1"),
+        { space: writerPieces.getSpace() },
+      );
+      const holder = await writerPieces.runPersistent(
+        compiled,
+        {},
+        "cold-row-holder-" + crypto.randomUUID(),
+        { start: true },
+      );
+      await writerRuntime.idle();
+      const row = writerRuntime.getCell(
+        writerPieces.getSpace(),
+        "cold-row-" + crypto.randomUUID(),
+      );
+      await writerRuntime.editWithRetry((tx) => {
+        row.withTx(tx).set(target);
+      });
+      await writerRuntime.editWithRetry((tx) => {
+        writerPieces.getArgument(holder).withTx(tx).asSchema(
+          undefined as never,
+        ).key("items" as never).set([row] as never);
+      });
+      await writerRuntime.idle();
+      await writerPieces.synced();
+      expect(isLink(row.getRaw()), shape).toBe(true);
+
+      const readerStorage = EmulatedStorageManager.connectTo(server, {
+        as: signer,
+      });
+      const readerRuntime = new Runtime({
+        apiUrl: new URL("http://localhost:9999"),
+        storageManager: readerStorage,
+      });
+      const readerPieces = new PiecesController(
+        createSession({
+          identity: signer,
+          spaceDid: writerPieces.getSpace(),
+        }),
+        readerRuntime,
+      );
+      try {
+        await readerPieces.synced();
+        const piece = await readerPieces.get(
+          entityRefToString(holder.entityId),
+          false,
+        );
+        const report = await piece.checkPattern(
+          compiledRowHolderProgram("v2", "pictureBlob?: number;"),
+        );
+        expect(report.issues.retainedLinks, shape).toBe(undefined);
+        expect(report.compatible, shape).toBe(true);
+      } finally {
+        await readerRuntime.dispose();
+        await readerStorage.close();
+      }
     }
   });
 

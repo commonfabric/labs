@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { LocalJobLane } from "../../src/local-jobs/lane.ts";
 import {
@@ -13,6 +12,7 @@ import {
   scriptedJob,
   toolReply,
 } from "../fixtures/scripted-job.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Resolves on the job's terminal event, including an unexpected failure. */
 const ended = (store: LocalJobStore, id: string) =>

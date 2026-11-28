@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { subscriptionSchemaGivesShape } from "@/backends/runtime-processor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("subscriptionSchemaGivesShape", () => {
   it("gives no shape for a missing schema, `true`, or an empty object", () => {

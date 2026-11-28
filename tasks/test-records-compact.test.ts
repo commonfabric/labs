@@ -1,5 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import * as path from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   closedDays,
@@ -26,6 +27,7 @@ import {
   type RunContext,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const NOW = Date.parse("2026-08-18T12:00:00Z");
 const DAY = "2026/08/11";
@@ -885,6 +887,38 @@ describe("test-records-compact", () => {
       );
       expect(code).toBe(2);
       expect(err).toEqual(["unknown flag --mystery"]);
+    });
+
+    it("sets the exit status of the script run as a program", async () => {
+      const root = path.fromFileUrl(new URL("..", import.meta.url));
+      const run = (args: string[]) =>
+        runDenoCommandWithTemporaryLock({
+          root,
+          args: (lockPath) => [
+            "run",
+            "--config",
+            path.join(root, "deno.jsonc"),
+            "--lock",
+            lockPath,
+            "--allow-read",
+            "--allow-env",
+            path.join(root, "tasks/test-records-compact.ts"),
+            ...args,
+          ],
+          env: { TEST_RECORDS_GCS_TOKEN: "" },
+        });
+      const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+      const malformed = await run(["--mystery"]);
+      expect(malformed.code).toBe(2);
+      expect(decode(malformed.stderr)).toContain("unknown flag --mystery");
+
+      const tokenless = await run([]);
+      expect(tokenless.code).toBe(2);
+      expect(decode(tokenless.stderr)).toContain(
+        "TEST_RECORDS_GCS_TOKEN is not set.",
+      );
+      expect(decode(tokenless.stderr)).not.toContain("unknown flag");
     });
   });
 

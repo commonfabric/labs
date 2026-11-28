@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import katex from "katex";
 
 import { KATEX_STYLES, renderFormula } from "./katex-render.ts";
 import { KATEX_STYLES_VERSION } from "./katex-styles.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The markup `renderFormula` returns for `tex`, failing if it returns none. */
 function htmlOf(tex: string, display = false): string {
@@ -26,9 +26,17 @@ describe("katex-render", () => {
 
     it("returns KaTeX's message for TeX it cannot parse", () => {
       const rendered = renderFormula("\\frac{1", false);
-      expect("error" in rendered && rendered.error).toContain(
-        "KaTeX parse error",
+      expect("error" in rendered && rendered.error).toMatch(
+        /^KaTeX parse error: /,
       );
+    });
+
+    it("returns the engine's error for TeX that nests too deeply to set", () => {
+      const nested = (depth: number) =>
+        `${"{".repeat(depth)}x${"}".repeat(depth)}`;
+      expect(htmlOf(nested(100))).toContain('class="katex"');
+      const rendered = renderFormula(nested(100_000), false);
+      expect(rendered).toEqual({ error: "Maximum call stack size exceeded" });
     });
 
     it("returns no link for a formula that asks for one", () => {

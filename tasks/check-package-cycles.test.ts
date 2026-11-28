@@ -1,4 +1,3 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join } from "@std/path";
 
@@ -20,6 +19,8 @@ import {
   scan,
   targetPackage,
 } from "./check-package-cycles.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 const edge = (from: string, to: string): Edge => ({
   from,
@@ -498,6 +499,21 @@ describe("check-package-cycles", () => {
       expect(await buildEdges(root)).toEqual([]);
     });
 
+    it("returns no edge for an import in a file outside every package", async () => {
+      const root = await tree({
+        alpha: { "src/mod.ts": `import "@commonfabric/beta";` },
+        beta: { "src/mod.ts": "" },
+      });
+      await Deno.mkdir(join(root, "scripts"));
+      await Deno.writeTextFile(
+        join(root, "scripts/tool.ts"),
+        `import "@commonfabric/beta";`,
+      );
+      expect((await buildEdges(root)).map((e) => e.file)).toEqual([
+        "runtime/alpha/src/mod.ts",
+      ]);
+    });
+
     it("returns the edges of the sources it can read, past one it cannot", async () => {
       const root = await tree({
         alpha: { "src/mod.ts": `import "@commonfabric/beta";` },
@@ -572,6 +588,77 @@ describe("check-package-cycles", () => {
       });
       const allowlist = [{ packages: ["alpha", "beta"], reason: "test" }];
       expect((await scan(root, allowlist)).resolved).toEqual(allowlist);
+    });
+  });
+
+  describe("the script", () => {
+    // Each fixture holds the cycles `ALLOWLIST` names, so the allowlist
+    // describes it exactly as it describes the repository.
+
+    /** Every allowlisted cycle, each package importing the next. */
+    const allowlisted = Object.fromEntries(
+      ALLOWLIST.flatMap(({ packages }) =>
+        packages.map((name, index) => [name, {
+          "src/mod.ts": `import "@commonfabric/${
+            packages[(index + 1) % packages.length]
+          }";`,
+        }])
+      ),
+    );
+
+    /**
+     * Runs the script with the task's permissions over `root`, returning
+     * its exit code and what it printed.
+     */
+    async function runScript(root: string) {
+      const repo = fromFileUrl(new URL("..", import.meta.url));
+      const output = await runDenoCommandWithTemporaryLock({
+        root: repo,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(repo, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-run=git",
+          join(repo, "tasks/check-package-cycles.ts"),
+          root,
+        ],
+      });
+      return {
+        code: output.code,
+        stdout: new TextDecoder().decode(output.stdout),
+        stderr: new TextDecoder().decode(output.stderr),
+      };
+    }
+
+    it("exits 1 and names a cycle the allowlist lacks in the repository it is given", async () => {
+      const { code, stdout, stderr } = await runScript(
+        await tree({
+          ...allowlisted,
+          alpha: { "src/mod.ts": `import "@commonfabric/beta";` },
+          beta: { "src/mod.ts": `import "@commonfabric/alpha";` },
+        }),
+      );
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain("1 package import cycle not on the allowlist");
+      expect(stderr).toContain("alpha + beta");
+    });
+
+    it("exits 0 and says so for a repository it is given holding only the allowlisted cycles", async () => {
+      const { code, stdout, stderr } = await runScript(await tree(allowlisted));
+      expect(stderr).toBe("");
+      expect(code).toBe(0);
+      expect(stdout).toContain("Package imports are acyclic");
+    });
+
+    it("exits 2 with its usage, scanning nothing, for an argument that is not a directory", async () => {
+      const { code, stdout, stderr } = await runScript("--help");
+      expect(code).toBe(2);
+      expect(stdout).toBe("");
+      expect(stderr).toBe("usage: check-package-cycles.ts [root]\n");
     });
   });
 

@@ -1,3 +1,10 @@
+/**
+ * Asks a language model to break a topic's budget into spending categories that
+ * add up to a ceiling, and shows each amount in an input above the total and
+ * the remaining balance. It uses `generateObject` with a schema and makes no
+ * request until a topic is given.
+ */
+
 import {
   computed,
   Default,

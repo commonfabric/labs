@@ -33,6 +33,7 @@ import type { MemorySpace } from "../storage/interface.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
 import type { HostOccupancy } from "./host.ts";
 import type { LoopbackConnection } from "./host-memory-server.ts";
+import type { RunEvent, RunIdentity } from "./run-beacon.ts";
 import {
   type BridgeNotices,
   type BridgeRequests,
@@ -95,6 +96,15 @@ export type ServingPortBridgeOptions = {
 
   /** Called with what the worker says of its memory, at each heartbeat. */
   onHeartbeat?: (heartbeat: WorkerHeartbeat) => void;
+
+  /** Called with what each number on the worker's run beacon stands for. */
+  onRunNamed?: (identity: RunIdentity) => void;
+
+  /**
+   * Called with numbers on the worker's run beacon whose actions the worker's
+   * realm has collected.
+   */
+  onRunsForgotten?: (runs: readonly number[]) => void;
 
   /**
    * Where the worker's `compiler.compile` requests run: the compile workers
@@ -161,6 +171,8 @@ export class ServingPortBridge {
         }),
       viewsChanged: (space, sessionId) =>
         endpoint.notify("observer.viewsChanged", { space, sessionId }),
+      currencyChanged: (space) =>
+        endpoint.notify("observer.currencyChanged", { space }),
       sessionChanged: (event) =>
         endpoint.notify("observer.sessionChanged", { event }),
     };
@@ -203,6 +215,15 @@ export class ServingPortBridge {
    */
   noteSpaceAclChanged(space: string): void {
     this.#endpoint.notify("observer.spaceAclChanged", { space });
+  }
+
+  /**
+   * Has the worker's host write `reason` as the consequence of `space`'s
+   * `event`, whose handler's run held the thread of a worker the pool ended,
+   * and not run the handler for it.
+   */
+  failEvent(space: MemorySpace, event: RunEvent, reason: string): void {
+    this.#endpoint.notify("host.failEvent", { space, event, reason });
   }
 
   /** The counters the worker last posted, or none before its first. */
@@ -385,6 +406,30 @@ export class ServingPortBridge {
         server.setViewSelection(space, handle, selection),
     );
     endpoint.onRequest(
+      "server.advanceCurrency",
+      ({ space }) => server.advanceCurrency(space),
+    );
+    endpoint.onRequest(
+      "server.storeCurrencyRecords",
+      ({ space, batch }) => server.storeCurrencyRecords(space, batch),
+    );
+    endpoint.onRequest(
+      "server.judgeCurrencyRoots",
+      ({ space, roots, excludePrincipal, epoch, running }) =>
+        server.judgeCurrencyRoots(space, roots, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
+          epoch,
+          ...(running !== undefined && { running }),
+        }),
+    );
+    endpoint.onRequest(
+      "server.setCarriedDemand",
+      ({ space, reader, rows, excludePrincipal }) =>
+        server.setCarriedDemand(space, reader, rows, {
+          ...(excludePrincipal !== undefined && { excludePrincipal }),
+        }),
+    );
+    endpoint.onRequest(
       "server.foreignWriteAuthorityFor",
       ({ space, principal }) =>
         server.foreignWriteAuthorityFor(space, principal),
@@ -496,6 +541,12 @@ export class ServingPortBridge {
     // The endpoint has already counted it, which is all the watchdog reads.
     endpoint.onNotice("worker.heartbeat", (heartbeat) => {
       this.#options.onHeartbeat?.(heartbeat);
+    });
+    endpoint.onNotice("worker.runNamed", (identity) => {
+      this.#options.onRunNamed?.(identity);
+    });
+    endpoint.onNotice("worker.runsForgotten", ({ runs }) => {
+      this.#options.onRunsForgotten?.(runs);
     });
     endpoint.onNotice("host.occupancy", ({ occupancy }) => {
       this.#options.onOccupancy?.(occupancy);

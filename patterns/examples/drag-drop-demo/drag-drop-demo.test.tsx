@@ -13,7 +13,7 @@ import {
   fireEvent,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import DragDropDemo from "./drag-drop-demo.tsx";
+import DragDropDemo from "./main.tsx";
 
 interface Item {
   title: string;

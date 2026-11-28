@@ -270,7 +270,7 @@ Colocate tests with components:
 
 ```typescript
 // cf-button.test.ts
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { CFButton } from "./cf-button.ts";
 

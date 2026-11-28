@@ -1,8 +1,8 @@
 import { Identity } from "@commonfabric/identity";
 import type { PresencePublication } from "@commonfabric/memory/v2";
 import type * as MemoryV2Client from "@commonfabric/memory/v2/client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { hasPresenceStorageCapability } from "../src/storage/interface.ts";
 import { StorageManager as V2StorageManager } from "../src/storage/v2.ts";
 
@@ -50,6 +50,7 @@ const buildStorage = (
             } as unknown as MemoryV2Client.Client;
             const session = {
               subscribeTermination: () => () => {},
+              subscribeServerSeq: () => () => {},
               close: () => Promise.resolve(),
               joinPresenceRoom: (
                 room: string,
@@ -220,6 +221,7 @@ describe("presence storage capability", () => {
               } as unknown as MemoryV2Client.Client;
               const session = {
                 subscribeTermination: () => () => {},
+                subscribeServerSeq: () => () => {},
                 close: () => Promise.resolve(),
                 joinPresenceRoom: (
                   _room: string,

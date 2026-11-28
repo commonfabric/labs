@@ -5,11 +5,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CfcProjectionAnnotator } from "./annotations.ts";
 import { FsTree } from "./tree.ts";
 import type { JsonType } from "./types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 
@@ -398,6 +398,49 @@ describe("FsTree", () => {
         expect(indexes.get(parentIno)?.get("first")).toBe(0);
         expect(tree.getCfcAnnotation(parentIno)?.entries?.entries.length)
           .toBe(1);
+      });
+
+      it("annotates only directories that carry entry annotations", () => {
+        const tree = new FsTree();
+        const annotator = new CfcProjectionAnnotator(tree, {
+          space: "did:key:zSpace",
+          generation: "generation-1",
+          labelView: { version: 1, entries: [] },
+        });
+        const annotated = tree.addDir(tree.rootIno, "annotated", "object");
+        annotator.annotateJsonDirectory(annotated, [], { first: "x" });
+        const firstIno = tree.addFile(annotated, "first", "x", "string");
+        annotator.annotateJsonScalar(firstIno, ["first"], "x");
+        annotator.annotateEntry(annotated, "first", firstIno);
+        const entry = tree.getCfcAnnotation(annotated)!.entries!.entries[0];
+        const plain = tree.addDir(tree.rootIno, "plain", "object");
+
+        tree.setCfcEntryAnnotation(annotated, "second", {
+          ...entry,
+          name: "second",
+        });
+        tree.setCfcEntryAnnotation(plain, "second", entry);
+        tree.setCfcEntryAnnotation(firstIno, "second", entry);
+
+        expect(
+          tree.getCfcAnnotation(annotated)!.entries!.entries.map((e) => e.name)
+            .sort(),
+        ).toEqual(["first", "second"]);
+        expect(tree.getCfcAnnotation(plain)).toBeUndefined();
+        expect(tree.getCfcAnnotation(firstIno)?.entries).toBeUndefined();
+      });
+    });
+
+    describe("getChildren()", () => {
+      it("lists a directory's entries in insertion order, and nothing for a file or a missing inode", () => {
+        const tree = new FsTree();
+        const dir = tree.addDir(tree.rootIno, "d");
+        const b = tree.addFile(dir, "b", "x", "string");
+        const a = tree.addDir(dir, "a");
+
+        expect(tree.getChildren(dir)).toEqual([["b", b], ["a", a]]);
+        expect(tree.getChildren(b)).toEqual([]);
+        expect(tree.getChildren(9_999n)).toEqual([]);
       });
     });
 

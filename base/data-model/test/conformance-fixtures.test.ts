@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { bigintToUnpaddedBase64url } from "@commonfabric/bytes/bigint";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricInstance, FabricValue } from "@";
 import { ProblematicStateError, UnknownValue } from "@/codec-common";
@@ -270,6 +270,22 @@ describe("conformance-fixtures", () => {
         "No codec registered",
       );
     });
+
+    it("throws given an instance of a subclass of a class a table names, which no codec writes", () => {
+      const state = {
+        type: "Error",
+        name: "Error",
+        message: "m",
+        stack: undefined,
+        cause: undefined,
+      };
+      class SubError extends FabricError {}
+      expect(probesOfForTestingOnly(new FabricError(state))[0])
+        .toEqual([[], { instance: "Error@1" }]);
+      expect(() => probesOfForTestingOnly([new SubError(state)])).toThrow(
+        "No codec in this package writes the instance under a tag.",
+      );
+    });
   });
 
   describe("textWithModsOfForTestingOnly()", () => {
@@ -325,6 +341,20 @@ describe("conformance-fixtures", () => {
           text: 'fvj1:{"/Link@1":{"self":null}}',
           patches: [{ at: ["payload", "self"], put: { cycle: ["payload"] } }],
         });
+    });
+
+    it("throws given a cycle that closes in place of a link's payload, which no text holds as `null`", () => {
+      const inner: { link?: FabricValue } = {};
+      const payload = Object.freeze({ inner });
+      const link = new FabricLink(payload);
+      inner.link = link;
+      expect(() => textWithModsOfForTestingOnly(payload)).toThrow(
+        "Field `payload` not a record",
+      );
+      expect(textWithModsOfForTestingOnly(link)).toEqual({
+        text: 'fvj1:{"/Link@1":{"inner":{"link":null}}}',
+        patches: [{ at: ["payload", "inner", "link"], put: { cycle: [] } }],
+      });
     });
 
     it("throws given a map, whose codec is a stub", () => {

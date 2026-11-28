@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { spy, stub } from "@std/testing/mock";
 import { Identity } from "@commonfabric/identity";
@@ -6,6 +5,7 @@ import { getLogger } from "@commonfabric/logger";
 import {
   getServerExecutionConfig,
   type PatchOp,
+  resolveScopeKey,
   SERVER_EXECUTION_WATERMARK_DOC_ID,
   setServerExecutionConfig,
   streamEntriesDocId,
@@ -14,6 +14,13 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryServer from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SpaceServer,
@@ -36,6 +43,12 @@ const space = owner.did();
 const stream = { id: "of:event-drain-stream" as const, path: [] };
 const sidecar = streamEntriesDocId(stream) as `of:${string}`;
 const logId = "of:event-drain-log";
+const awaitedId = "of:event-drain-awaited";
+/** The scope key of the awaited instance: the event actor's user instance. */
+const awaitedKey = resolveScopeKey("user", {
+  principal: owner.did(),
+  sessionId: "session:drain-actor",
+});
 const warnings = (key: string): number =>
   getLogger("space-server").countsByKey[key]?.warn ?? 0;
 
@@ -119,9 +132,13 @@ describe("SpaceServer", () => {
       /** Whether the serving runtime loads the log before its tenure
        * begins, rather than leaving the handler's first read to. */
       loadLog?: boolean;
+      /** Asked on each dispatch: when it answers true, the handler does not
+       * run, as one whose argument read the scoped instance of `awaitedId`
+       * that the serving loop has not produced does not. */
+      withdraw?: () => boolean;
     } = {},
   ) {
-    const { policy, prepare, loadLog = true } = options;
+    const { policy, prepare, loadLog = true, withdraw } = options;
     /** The sink calls held by `holdNext()`: while a method has a gate, its
      * next call waits for the gate before reaching the store. */
     const gates = new Map<HeldSinkCall, Promise<void>>();
@@ -210,6 +227,16 @@ describe("SpaceServer", () => {
         runtime.scheduler.addEventHandler((tx, event) => {
           const name = (event as { name?: string } | undefined)?.name ?? "?";
           called.push(name);
+          if (withdraw?.()) {
+            // What the runner and link resolution record for such a run.
+            tx.dispatchedHandlerNotRun = { reason: "argument did not resolve" };
+            tx.tx.unproducedScopedInstance = {
+              space,
+              id: awaitedId,
+              scope: "user",
+            };
+            return;
+          }
           const cell = log.withTx(tx);
           cell.set([...(cell.get() ?? []), name]);
         }, { space, ...stream, scope: "space" });
@@ -317,6 +344,159 @@ describe("SpaceServer", () => {
         true,
         true,
       ]);
+    });
+  });
+
+  describe("a served event whose handler did not run", () => {
+    // The handler's argument read a scoped instance the serving loop has not
+    // produced. Whether a writer that owes it will still run is the
+    // scheduler's answer (`comingOwedScopedInstance()`), stubbed here so each
+    // test fixes it.
+
+    const withdrawUntilAwaitedArrives = async (coming: boolean) => {
+      let arrived = false;
+      const fixture = await serve({
+        prepare: (runtime) => {
+          stub(
+            runtime.scheduler,
+            "comingOwedScopedInstance",
+            () => coming ? awaitedKey : undefined,
+          );
+        },
+        withdraw: () => !arrived && fixture.called.at(-1) === "W",
+      });
+      await admit("waiting", { name: "W" });
+      await fixture.activate();
+      await admit("later", { name: "L" });
+      await fixture.feed();
+      // More unrelated commits and backstop periods than the deferral
+      // budget allows.
+      for (let i = 0; i < 12; i++) {
+        await settle(
+          server.writeDocument(space, `of:event-drain-unrelated-${i}`, { i }),
+        );
+        await fixture.feed();
+        await clock.tick(1_000);
+      }
+      return {
+        fixture,
+        /** Commits the awaited document at its space slot only, which is
+         * not the instance the handler waits on. */
+        async writeSpaceSlot() {
+          await settle(server.writeDocument(space, awaitedId, { slot: true }));
+          await fixture.feed();
+        },
+        /** Commits the awaited instance. The store writes the document at
+         * its space slot, so the commit's notice is relabelled with the
+         * instance's scope key, as a served run's write of it carries. */
+        async arrive() {
+          arrived = true;
+          await settle(server.writeDocument(space, awaitedId, { ready: true }));
+          for (const notice of fixture.notices) {
+            notice.writes = notice.writes.map((write) =>
+              write.id === awaitedId
+                ? { ...write, scopeKey: awaitedKey }
+                : write
+            );
+          }
+          await fixture.feed();
+        },
+      };
+    };
+
+    it("waits on the document a writer still owes, dispatching neither it nor a later arrival, and delivers both in order once a commit writes the awaited instance", async () => {
+      const { fixture, writeSpaceSlot, arrive } =
+        await withdrawUntilAwaitedArrives(true);
+      // Dispatched once; the unrelated commits and backstop periods neither
+      // re-dispatch it nor let the later arrival overtake it.
+      expect(fixture.called).toEqual(["W"]);
+      expect(fixture.entries()[0].consequenced).not.toBe(true);
+      expect(fixture.entries()[0].status).toBeUndefined();
+      expect(fixture.stats.events.handlerNotRunWaits).toBe(1);
+
+      // Another instance of the document is not the one it waits on.
+      await writeSpaceSlot();
+      expect(fixture.called).toEqual(["W"]);
+
+      await arrive();
+      expect(fixture.called).toEqual(["W", "W", "L"]);
+      expect(fixture.entries().map((entry) => entry.consequenced)).toEqual([
+        true,
+        true,
+      ]);
+      expect(fixture.storedLog()).toEqual(["W", "L"]);
+    });
+
+    it("dispatches a waiting event again when a writer of the awaited document finishes a run, though it commits no write to the instance", async () => {
+      // A writer whose run yields `undefined` writes nothing, so the
+      // scheduler's watch is what wakes the wait.
+
+      let resolved = false;
+      const wakes: (() => void)[] = [];
+      const fixture = await serve({
+        prepare: (runtime) => {
+          stub(
+            runtime.scheduler,
+            "comingOwedScopedInstance",
+            () => resolved ? undefined : awaitedKey,
+          );
+          stub(
+            runtime.scheduler,
+            "watchProducedDocument",
+            (_address: unknown, wake: () => void) => {
+              wakes.push(wake);
+              return () => {};
+            },
+          );
+        },
+        withdraw: () => !resolved,
+      });
+      await admit("waiting", { name: "W" });
+      await fixture.activate();
+      expect(fixture.called).toEqual(["W"]);
+      expect(wakes.length).toBe(1);
+
+      resolved = true;
+      wakes[0]();
+      await fixture.feed();
+      expect(fixture.called).toEqual(["W", "W"]);
+      expect(fixture.entries()[0].consequenced).toBe(true);
+      expect(fixture.storedLog()).toEqual(["W"]);
+    });
+
+    it("cancels its watch of the awaited document when the tenure parks", async () => {
+      let cancelled = 0;
+      const fixture = await serve({
+        prepare: (runtime) => {
+          stub(
+            runtime.scheduler,
+            "comingOwedScopedInstance",
+            () => awaitedKey,
+          );
+          stub(
+            runtime.scheduler,
+            "watchProducedDocument",
+            () => () => cancelled++,
+          );
+        },
+        withdraw: () => true,
+      });
+      await admit("waiting", { name: "W" });
+      await fixture.activate();
+      expect(fixture.stats.events.handlerNotRunWaits).toBe(1);
+      expect(cancelled).toBe(0);
+
+      await settle(fixture.serving.park("test-park"));
+
+      expect(cancelled).toBe(1);
+      expect(fixture.called).toEqual(["W"]);
+    });
+
+    it("drops the event through the deferral budget when no writer that owes the document will run", async () => {
+      const { fixture } = await withdrawUntilAwaitedArrives(false);
+      expect(fixture.entries()[0].status).toBe("dropped");
+      expect(fixture.stats.events.handlerNotRunWaits).toBe(0);
+      expect(fixture.storedLog()).toEqual(["L"]);
     });
   });
 

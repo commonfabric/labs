@@ -225,6 +225,7 @@ function hoistBuilderCalls(
     const mapSite = context.options.builderSourceSites?.mapSite;
     if (
       mapSite === undefined || artifact === undefined ||
+      inputSourceFile === undefined ||
       Object.hasOwn(builderSourceSites, symbol)
     ) {
       return;
@@ -585,9 +586,8 @@ function resolveSameFileFunctionDeclaration(
  */
 function resolveCompilerInputSite(
   artifact: BuilderArtifact,
-  inputSourceFile: ts.SourceFile | undefined,
+  inputSourceFile: ts.SourceFile,
 ): BuilderSourceSite | undefined {
-  if (!inputSourceFile) return undefined;
   const candidates = artifact.fn
     ? [artifact.fn, artifact.call]
     : [artifact.call];

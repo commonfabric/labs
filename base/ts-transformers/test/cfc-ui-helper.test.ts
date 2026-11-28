@@ -1,4 +1,5 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
 import {
   CommonFabricTransformerPipeline,
@@ -8,6 +9,7 @@ import {
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
 import { transformSource } from "./utils.ts";
 import { collect, parseModule, patternSchemas } from "./transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 /** Every JSX tag name (opening/self-closing) appearing under `root`. */
 function jsxTagNames(root: ts.Node): string[] {
@@ -140,7 +142,7 @@ function createProgram(source: string): {
   return { program, sourceFile };
 }
 
-Deno.test(
+test(
   "UI helpers lower to intrinsic tags and emit data-ui markers",
   async () => {
     const source = `/// <cts-enable />
@@ -184,7 +186,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper literal props seed cfcUiContract hints but dynamic props do not",
   () => {
     const source = `/// <cts-enable />
@@ -247,7 +249,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper contract hints propagate onto generated schemas",
   async () => {
     const source = `/// <cts-enable />
@@ -271,7 +273,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper contract hints require all required semantic props to be literal",
   async () => {
     const source = `/// <cts-enable />
@@ -303,7 +305,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "UI helper contract hints also reach explicit output schemas",
   async () => {
     const source = `/// <cts-enable />
@@ -328,3 +330,83 @@ Deno.test(
     });
   },
 );
+
+describe("ui-helper-lowering", () => {
+  /** The module `jsx` renders in, transformed and parsed. */
+  async function lowered(jsx: string): Promise<ts.SourceFile> {
+    return parseModule(
+      await transformSource(
+        `/// <cts-enable />
+import { UiAction, UiDisclosure, UiPromptSlot } from "commonfabric";
+const extra = { title: "t" };
+const ui = { Panel: () => null };
+export default () => (${jsx});
+`,
+        { types: COMMONFABRIC_TYPES },
+      ),
+    );
+  }
+
+  it("omits the data attribute of a helper prop that is absent", async () => {
+    const textarea = soleJsxElement(
+      await lowered(`<UiPromptSlot surface="PromptPane" />`),
+      "ct-textarea",
+    );
+    expect(jsxAttr(textarea, "data-ui-surface")).toEqual({
+      literal: "PromptPane",
+    });
+    expect(jsxAttr(textarea, "data-ui-role")).toEqual({});
+  });
+
+  it("omits the data attribute of a helper prop written without a value", async () => {
+    const card = soleJsxElement(
+      await lowered(`<UiDisclosure kind>Heads up</UiDisclosure>`),
+      "ct-card",
+    );
+    expect(jsxAttr(card, "data-ui-disclosure-kind")).toEqual({});
+  });
+
+  it("takes the tag from an `as` prop holding a braced string", async () => {
+    const root = await lowered(
+      `<UiAction action="SubmitDirectCommand" as={"a"}>Go</UiAction>`,
+    );
+    expect(jsxTagNames(root)).toEqual(["a"]);
+  });
+
+  it("keeps a spread attribute", async () => {
+    const button = soleJsxElement(
+      await lowered(
+        `<UiAction action="SubmitDirectCommand" {...extra}>Go</UiAction>`,
+      ),
+      "ct-button",
+    );
+    expect(
+      button.attributes.properties.map((attribute) =>
+        ts.SyntaxKind[attribute.kind]
+      ),
+    ).toEqual(["JsxAttribute", "JsxSpreadAttribute"]);
+  });
+
+  it("copies a helper prop whose value is an element into its data attribute", async () => {
+    const card = soleJsxElement(
+      await lowered(`<UiDisclosure kind=<b />>Heads up</UiDisclosure>`),
+      "ct-card",
+    );
+    const attribute = card.attributes.properties.find((property) =>
+      ts.isJsxAttribute(property) &&
+      property.name.getText() === "data-ui-disclosure-kind"
+    );
+    assert(attribute && ts.isJsxAttribute(attribute));
+    expect(
+      attribute.initializer && ts.SyntaxKind[attribute.initializer.kind],
+    ).toBe("JsxSelfClosingElement");
+  });
+
+  it("leaves an element whose tag is a member access", async () => {
+    const root = await lowered(`<ui.Panel />`);
+    const [element] = collect(root, ts.isJsxSelfClosingElement);
+    expect(element && ts.isPropertyAccessExpression(element.tagName)).toBe(
+      true,
+    );
+  });
+});

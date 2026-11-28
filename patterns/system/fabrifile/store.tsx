@@ -32,6 +32,7 @@ import {
   spaceOf,
   VIEWS,
   wish,
+  type WishErrorCode,
   type Writable,
   type WriteAuthorizedBy,
   type WritePolicyAnyOf,
@@ -109,6 +110,18 @@ const refuse = (
 ): void => {
   requests.key(requestId).set({ status: "refused", code, reason });
 };
+
+/**
+ * Why an add is refused for want of the adder's profile, by the `errorCode`
+ * of the wish that looks for it: none exists, it could not be read, or it is
+ * not known yet.
+ */
+const noProfileReason = (errorCode: WishErrorCode | undefined): string =>
+  errorCode === "no-match"
+    ? "You have no profile yet."
+    : errorCode !== undefined
+    ? "Your profile couldn't be read."
+    : "Your profile hasn't loaded yet; try again.";
 
 /**
  * Indicates whether the principal the running event acts for may change the
@@ -213,6 +226,12 @@ export interface AddState {
 
   /** The adder's profile, which holds no value while it is unknown. */
   myProfile: FileProfileCell | undefined;
+
+  /**
+   * Why the wish for the adder's profile found none, as its `errorCode`;
+   * absent while it is still looking, and once it finds one.
+   */
+  myProfileErrorCode?: WishErrorCode;
 }
 
 /**
@@ -222,13 +241,18 @@ export interface AddState {
  * (`nameBlob()`).
  */
 export const commitAdd = handler<AddFileEvent, AddState>(
-  (event, { entries, requests, myProfile }) => {
+  (event, { entries, requests, myProfile, myProfileErrorCode }) => {
     if (!mayWrite(entries)) return;
     const requestId = event?.requestId ?? eventKey();
     if (requests.key(requestId).get() !== undefined) return;
     const profile = myProfile?.resolveAsCell();
     if (profile === undefined || profile.get() === undefined) {
-      refuse(requests, requestId, "not-permitted", "You have no profile yet.");
+      refuse(
+        requests,
+        requestId,
+        "not-permitted",
+        noProfileReason(myProfileErrorCode),
+      );
       return;
     }
     const { name, mediaType, blob, size } = event ?? {};
@@ -424,6 +448,12 @@ export interface FileStoreCoreInput {
 
   /** The viewer's profile, which holds no value while it is unknown. */
   myProfile: FileProfileCell | undefined;
+
+  /**
+   * Why the wish for the viewer's profile found none, as its `errorCode`;
+   * absent while it is still looking, and once it finds one.
+   */
+  myProfileErrorCode?: WishErrorCode;
 }
 
 /**
@@ -431,7 +461,7 @@ export interface FileStoreCoreInput {
  * whole of `FileStoreOutput`. `FileStore` resolves the viewer's own.
  */
 export const FileStoreCore = pattern<FileStoreCoreInput, FileStoreOutput>(
-  ({ entries, requests, myProfile }) => {
+  ({ entries, requests, myProfile, myProfileErrorCode }) => {
     const entryCells = computed((): Cell<FileEntry>[] =>
       entries.get().map((_, i) => entryAt(entries, i))
     );
@@ -444,7 +474,7 @@ export const FileStoreCore = pattern<FileStoreCoreInput, FileStoreOutput>(
       entries: entryCells,
       byName,
       requests: computed(() => requests.get()),
-      add: commitAdd({ entries, requests, myProfile }),
+      add: commitAdd({ entries, requests, myProfile, myProfileErrorCode }),
       remove: commitRemove({ entries, requests }),
       rename: commitRename({ entries, requests }),
     };
@@ -473,6 +503,7 @@ const FileStore = pattern<FileStoreInput, FileStoreOutput>(
       entries,
       requests,
       myProfile: profileWish.result,
+      myProfileErrorCode: profileWish.errorCode,
     });
   },
 );

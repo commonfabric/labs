@@ -1,17 +1,21 @@
 import { join } from "@std/path";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
+import { stripAnsi } from "../lib/view/ansi.ts";
 import type { Key } from "../lib/view/keys.ts";
 import { realPushIo } from "../lib/view/push.ts";
 import { cursorScreenPos } from "../lib/view/render.ts";
 import { helpOverlay, Session } from "../lib/view/session.ts";
 import {
+  DEFAULT_QUIT_DELAY,
+  NO_QUIT_DELAY,
+  QUIT_DELAYS,
   readSettings,
   saveSettings,
   type ViewSettings,
 } from "../lib/view/settings.ts";
 import { cellOf, drawnRows, mouseKey, parseDocument } from "./view-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RELAY = "github-webhooks.example.test:8081";
 
@@ -19,6 +23,7 @@ const OFF: ViewSettings = {
   pullRequestTool: "browser",
   touchGateToken: "",
   quitOnPullRequest: false,
+  quitDelay: 2000,
   webhookRelay: "",
 };
 
@@ -26,6 +31,7 @@ const ON: ViewSettings = {
   pullRequestTool: "touch-gate",
   touchGateToken: "mine",
   quitOnPullRequest: true,
+  quitDelay: 250,
   webhookRelay: RELAY,
 };
 
@@ -33,7 +39,8 @@ const ON: ViewSettings = {
 const TOOL = 0;
 const TOKEN = 1;
 const QUIT = 2;
-const RELAY_LINE = 3;
+const DELAY = 3;
+const RELAY_LINE = 4;
 
 const decoder = new TextDecoder();
 
@@ -57,9 +64,15 @@ function repository() {
     clearEnv: true,
   }).outputSync();
   Deno.mkdirSync(join(work, "sub"));
-  const git = realPushIo({ cwd: work, env, write() {} }).query;
+  const git =
+    realPushIo({ cwd: work, env, write() {}, step: () => () => {} }).query;
   /** The query that runs git in a directory inside the work tree. */
-  const gitInSub = realPushIo({ cwd: join(work, "sub"), env, write() {} })
+  const gitInSub = realPushIo({
+    cwd: join(work, "sub"),
+    env,
+    write() {},
+    step: () => () => {},
+  })
     .query;
   /** What the configuration file of `scope` sets, one `name=value` a line. */
   const file = (scope: "global" | "local") =>
@@ -91,6 +104,13 @@ function settingsSession(settings: ViewSettings = OFF): Session {
   return s;
 }
 
+/** Returns the value the slider of the settings dialog in `s` shows. */
+function delayShown(s: Session): string {
+  const field = s.view().dialog!.fields![DELAY];
+  if (field.kind !== "slider") throw new Error("field is not the slider");
+  return field.text;
+}
+
 /** The key that types `char`. */
 function typed(char: string): Key {
   return { name: char, char };
@@ -98,7 +118,7 @@ function typed(char: string): Key {
 
 describe("settings", () => {
   describe("readSettings()", () => {
-    it("returns the browser as the pull request tool, and everything else off and empty, when git's configuration sets nothing", () => {
+    it("returns the browser as the pull request tool, two seconds as the delay before quitting, and everything else off and empty, when git's configuration sets nothing", () => {
       const { root, git } = repository();
       try {
         expect(readSettings(git)).toEqual(OFF);
@@ -113,6 +133,7 @@ describe("settings", () => {
         git(["config", "--global", "cf-view.pullRequestTool", "touch-gate"]);
         git(["config", "--global", "cf-view.touchGateToken", " mine "]);
         git(["config", "--global", "cf-view.quitOnPullRequest", "yes"]);
+        git(["config", "--global", "cf-view.quitDelay", "250"]);
         git(["config", "--global", "cf-view.webhookRelay", ` ${RELAY} `]);
 
         expect(readSettings(git)).toEqual(ON);
@@ -136,6 +157,73 @@ describe("settings", () => {
       expect(read("API")).toBe("browser");
       expect(read("ssh")).toBe("browser");
     });
+
+    it("reads the delay before quitting as a whole number of milliseconds as git reads one, a delay outside the slider's range as the nearer end of it, and anything else as two seconds", () => {
+      const { root, git } = repository();
+      try {
+        const read = (delay: string) => {
+          git(["config", "--global", "cf-view.quitDelay", delay]);
+          return readSettings(git).quitDelay;
+        };
+
+        expect(["16", "250", "1500", "10000", "2k"].map(read)).toEqual([
+          16,
+          250,
+          1500,
+          10000,
+          2048,
+        ]);
+        expect(["15", "1", "0", "-5", "10001", "1m"].map(read)).toEqual([
+          16,
+          16,
+          16,
+          16,
+          10000,
+          10000,
+        ]);
+        expect(["", "soon", "1.5", "1e3", "2s", " 250 "].map(read)).toEqual(
+          Array(6).fill(2000),
+        );
+      } finally {
+        Deno.removeSync(root, { recursive: true });
+      }
+    });
+  });
+
+  describe("QUIT_DELAYS", () => {
+    it("holds ten stops to each power of ten from 16 ms to 10 s, rounded to two significant digits, the first of them counting as no delay and the default among them", () => {
+      expect(QUIT_DELAYS.slice(0, 9)).toEqual([
+        16,
+        20,
+        25,
+        32,
+        40,
+        50,
+        63,
+        79,
+        100,
+      ]);
+      expect(QUIT_DELAYS.slice(-11)).toEqual([
+        1000,
+        1300,
+        1600,
+        2000,
+        2500,
+        3200,
+        4000,
+        5000,
+        6300,
+        7900,
+        10000,
+      ]);
+      expect(QUIT_DELAYS).toHaveLength(29);
+      expect(NO_QUIT_DELAY).toBe(QUIT_DELAYS[0]);
+      expect(
+        QUIT_DELAYS.every((delay, i) => i === 0 || delay > QUIT_DELAYS[i - 1]),
+      )
+        .toBe(true);
+      expect(QUIT_DELAYS).toContain(DEFAULT_QUIT_DELAY);
+    });
   });
 
   describe("saveSettings()", () => {
@@ -147,7 +235,8 @@ describe("settings", () => {
         expect(readSettings(git)).toEqual(ON);
         expect(file("global")).toBe(
           "cf-view.pullrequesttool=touch-gate\ncf-view.touchgatetoken=mine\n" +
-            `cf-view.quitonpullrequest=true\ncf-view.webhookrelay=${RELAY}\n`,
+            "cf-view.quitonpullrequest=true\ncf-view.quitdelay=250\n" +
+            `cf-view.webhookrelay=${RELAY}\n`,
         );
       } finally {
         Deno.removeSync(root, { recursive: true });
@@ -164,7 +253,7 @@ describe("settings", () => {
         expect(file("local")).toContain(`cf-view.webhookrelay=${RELAY}\n`);
         expect(file("global")).toBe(
           "cf-view.pullrequesttool=touch-gate\ncf-view.touchgatetoken=mine\n" +
-            "cf-view.quitonpullrequest=true\n",
+            "cf-view.quitonpullrequest=true\ncf-view.quitdelay=250\n",
         );
       } finally {
         Deno.removeSync(root, { recursive: true });
@@ -254,6 +343,7 @@ describe("settings", () => {
           "config --global cf-view.pullRequestTool touch-gate",
           "config --global cf-view.touchGateToken mine",
           "config --global cf-view.quitOnPullRequest true",
+          "config --global cf-view.quitDelay 250",
           `config --global cf-view.webhookRelay ${RELAY}`,
         ]);
     });
@@ -269,7 +359,7 @@ describe("settings", () => {
       expect(s.view().dialog).toBeNull();
     });
 
-    it("shows the settings as radio buttons, an input line, a check box, and an input line, with the radio buttons focused", () => {
+    it("shows the settings as radio buttons, an input line, a check box, a slider, and an input line, with the radio buttons focused", () => {
       const s = settingsSession(ON);
 
       const dialog = s.view().dialog!;
@@ -301,6 +391,14 @@ describe("settings", () => {
           label: "Quit when the pull request opens or merges",
           hotkey: "q",
           checked: true,
+        },
+        {
+          kind: "slider",
+          label: "Delay before quitting",
+          hotkey: "d",
+          stopCount: QUIT_DELAYS.length,
+          stop: QUIT_DELAYS.indexOf(250),
+          text: "250 ms",
         },
         {
           kind: "inputLine",
@@ -345,7 +443,7 @@ describe("settings", () => {
       const box = cellOf(unchecked, "[ ] Quit when");
       expect(cellOf(checked, "[X] Quit when")).toEqual(box);
       const label = cellOf(unchecked, "Webhook relay (host:port)");
-      expect(label).toEqual({ x: box.x, y: box.y + 2 });
+      expect(label).toEqual({ x: box.x, y: box.y + 5 });
       expect(cellOf(unchecked, " OK ").y).toBe(label.y + 3);
     });
 
@@ -459,7 +557,7 @@ describe("settings", () => {
       };
 
       const seen = [focus()];
-      for (let i = 0; i < 6; i++) {
+      for (let i = 0; i < 7; i++) {
         s.handleKey({ name: "tab" });
         seen.push(focus());
       }
@@ -471,6 +569,7 @@ describe("settings", () => {
         [1, 0],
         [2, 0],
         [3, 0],
+        [4, 0],
         [-1, 0],
         [-1, 1],
         [0, 0],
@@ -552,6 +651,44 @@ describe("settings", () => {
 
       expect(s.view().dialog).toBeNull();
       expect(s.settingsToSave).toBeNull();
+    });
+
+    it("activates a button with Alt and its letter while the radio buttons have the focus", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey({ name: "c", alt: true });
+
+      expect(s.view().dialog).toBeNull();
+      expect(s.settingsToSave).toBeNull();
+    });
+
+    it("leaves the focus and the fields as they are on Alt with a letter that is no shortcut", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey({ name: "j", alt: true });
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "j", alt: true });
+
+      expect(s.view().dialog!.fieldFocus).toBe(RELAY_LINE);
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        value: "",
+        selected: true,
+      });
+    });
+
+    it("types into the focused input line the character Alt with a letter types when the letter is no shortcut, and presses the shortcut when it is one", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey(typed("w"));
+      s.handleKey({ name: "z", alt: true, char: "Ω" });
+      s.handleKey({ name: "l", alt: true, char: "¬" });
+
+      expect(s.view().dialog!.fieldFocus).toBe(TOOL);
+      expect(s.view().dialog!.fields![TOOL]).toMatchObject({ selected: 0 });
+      expect(s.view().dialog!.fields![RELAY_LINE]).toMatchObject({
+        value: "Ω",
+      });
     });
 
     it("closes without saving on Escape", () => {
@@ -703,6 +840,129 @@ describe("settings", () => {
       s.handleKey({ name: "home" });
       const start = drawnRows(s);
       expect(start[shown.y]).toMatch(/ x{44}►/);
+    });
+
+    it('draws the slider\'s label and value, "none" at its first stop, and under them a track as wide as the dialog with its thumb at the stop of its value', () => {
+      const rows = (quitDelay: number) => {
+        const drawn = drawnRows(settingsSession({ ...OFF, quitDelay }));
+        const label = cellOf(drawn, "Delay before quitting: ");
+        return { drawn, label, track: stripAnsi(drawn[label.y + 1]) };
+      };
+
+      const shortest = rows(16);
+      const longest = rows(10000);
+      const middle = rows(100);
+
+      expect(cellOf(shortest.drawn, "Delay before quitting: none"))
+        .toEqual(shortest.label);
+      expect(cellOf(rows(20).drawn, "Delay before quitting: 20 ms").y)
+        .toBe(shortest.label.y);
+      expect(cellOf(longest.drawn, "Delay before quitting: 10 s"))
+        .toEqual(longest.label);
+      expect(cellOf(middle.drawn, "Delay before quitting: 100 ms"))
+        .toEqual(middle.label);
+      const start = shortest.label.x;
+      const end = shortest.track.lastIndexOf("▒");
+      expect(shortest.track.indexOf("■")).toBe(start);
+      expect(shortest.track.slice(start + 1, end + 1)).toMatch(/^▒+$/);
+      expect(longest.track.indexOf("■")).toBe(end);
+      expect(longest.track.slice(start, end)).toMatch(/^▒+$/);
+      expect(middle.track.indexOf("■")).toBe(
+        start + Math.round(
+          QUIT_DELAYS.indexOf(100) / (QUIT_DELAYS.length - 1) * (end - start),
+        ),
+      );
+      expect(cellOf(shortest.drawn, "Webhook relay").y)
+        .toBe(shortest.label.y + 3);
+    });
+
+    it("moves the slider to the stop before or after the one its thumb is at with the arrow keys, and to its ends with Home and End, and saves its value", () => {
+      const s = settingsSession(OFF);
+
+      s.handleKey(typed("d"));
+      expect(s.view().dialog!.fieldFocus).toBe(DELAY);
+      const seen = [delayShown(s)];
+      for (
+        const name of [
+          "right",
+          "up",
+          "left",
+          "down",
+          "end",
+          "right",
+          "home",
+          "left",
+        ]
+      ) {
+        s.handleKey({ name });
+        seen.push(delayShown(s));
+      }
+      s.handleKey({ name: "space", char: " " });
+      expect(s.settingsToSave).toBeNull();
+      expect(s.view().dialog).not.toBeNull();
+      s.handleKey({ name: "right" });
+      s.handleKey({ name: "enter" });
+
+      expect(seen).toEqual([
+        "2 s",
+        "2.5 s",
+        "3.2 s",
+        "2.5 s",
+        "2 s",
+        "10 s",
+        "10 s",
+        "none",
+        "none",
+      ]);
+      expect(s.settingsToSave?.settings).toEqual({ ...OFF, quitDelay: 20 });
+    });
+
+    it("shows a value between stops at the nearer stop, moves from that stop to the one before or after it, and saves the value unchanged when the slider does not move", () => {
+      const delay = (keys: string[]) => {
+        const s = settingsSession({ ...OFF, quitDelay: 1500 });
+        const field = s.view().dialog!.fields![DELAY];
+        s.handleKey(typed("d"));
+        for (const name of keys) s.handleKey({ name });
+        s.handleKey({ name: "enter" });
+        return { field, saved: s.settingsToSave?.settings.quitDelay };
+      };
+
+      expect(delay([]).field).toMatchObject({
+        stop: QUIT_DELAYS.indexOf(1600),
+        text: "1.5 s",
+      });
+      expect(delay([]).saved).toBe(1500);
+      expect(
+        settingsSession({ ...OFF, quitDelay: 1445 }).view().dialog!
+          .fields![DELAY],
+      ).toMatchObject({ stop: QUIT_DELAYS.indexOf(1600) });
+      expect(
+        settingsSession({ ...OFF, quitDelay: 1435 }).view().dialog!
+          .fields![DELAY],
+      ).toMatchObject({ stop: QUIT_DELAYS.indexOf(1300) });
+      expect(delay(["left"]).saved).toBe(1300);
+      expect(delay(["right"]).saved).toBe(2000);
+    });
+
+    it("moves the slider to the stop nearest where the mouse goes down on its track, and only focuses it on its label", () => {
+      const s = settingsSession(OFF);
+      const label = cellOf(drawnRows(s), "Delay before quitting");
+      const track = stripAnsi(drawnRows(s)[label.y + 1]);
+      const end = { x: track.lastIndexOf("▒"), y: label.y + 1 };
+
+      s.handleKey(mouseKey(true, label));
+      s.handleKey(mouseKey(false, label));
+      expect(s.view().dialog!.fieldFocus).toBe(DELAY);
+      expect(delayShown(s)).toBe("2 s");
+      s.handleKey(mouseKey(true, end));
+      s.handleKey(mouseKey(false, end));
+      expect(delayShown(s)).toBe("10 s");
+      s.handleKey(mouseKey(true, { x: label.x - 1, y: end.y }));
+      expect(delayShown(s)).toBe("none");
+      s.handleKey(mouseKey(false, { x: label.x - 1, y: end.y }));
+      s.handleKey({ name: "enter" });
+
+      expect(s.settingsToSave?.settings).toEqual({ ...OFF, quitDelay: 16 });
     });
 
     it("lists `O` in the help", () => {

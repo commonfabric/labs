@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import { taggedHashStringOf } from "@commonfabric/data-model";
@@ -7,6 +6,12 @@ import { createSession, Identity } from "@commonfabric/identity";
 import { type Cell, isCell, Runtime } from "@commonfabric/runner";
 import { viewPieceSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { createBuilder } from "../../runner/src/builder/factory.ts";
 import { patchableCell } from "../../runner/test/support/patchable-cell.ts";

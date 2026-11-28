@@ -9,6 +9,7 @@ import type {
   NativeSessionSnapshot,
   SessionPage,
 } from "../src/types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function fakeDriver(): AgentDriver {
   const summaries = ["one", "two"].map((id) => ({
@@ -59,7 +60,7 @@ function fakeDriver(): AgentDriver {
   };
 }
 
-Deno.test("collectSource consumes every page and prepares stable session snapshots", async () => {
+test("collectSource consumes every page and prepares stable session snapshots", async () => {
   const collected = await collectSource(fakeDriver());
   assertEquals(collected.complete, true);
   assertEquals(
@@ -75,7 +76,7 @@ Deno.test("collectSource consumes every page and prepares stable session snapsho
   assertEquals(first.snapshotHash.startsWith("sha256:"), true);
 });
 
-Deno.test("collectSource lists a session the retain predicate accepts without reading it", async () => {
+test("collectSource lists a session the retain predicate accepts without reading it", async () => {
   const reads: string[] = [];
   const base = fakeDriver();
   const driver: AgentDriver = {
@@ -102,7 +103,7 @@ Deno.test("collectSource lists a session the retain predicate accepts without re
   assertEquals(collected.complete, true);
 });
 
-Deno.test("collectSource keeps a session a later page repeats once and records the repeat", async () => {
+test("collectSource keeps a session a later page repeats once and records the repeat", async () => {
   // A provider whose cursors overlap lists one session on two pages, the
   // second time with a newer update. The first listing stands, the session
   // is read once, and the inventory is not complete on the provider's word.
@@ -143,7 +144,7 @@ Deno.test("collectSource keeps a session a later page repeats once and records t
   );
 });
 
-Deno.test("collectSource ends an inventory that repeats one session under fresh cursors", async () => {
+test("collectSource ends an inventory that repeats one session under fresh cursors", async () => {
   // Every page is a new cursor listing the same session many times over:
   // the deduplicated inventory never grows, so the safety limit counts the
   // listings the provider sends, and the repeat is recorded once.
@@ -177,7 +178,7 @@ Deno.test("collectSource ends an inventory that repeats one session under fresh 
   assertEquals(collected.complete, false);
 });
 
-Deno.test("collectSource stops at a cursor the provider already returned", async () => {
+test("collectSource stops at a cursor the provider already returned", async () => {
   const base = fakeDriver();
   const [one, two] = [
     (await base.listSessions()).sessions[0],
@@ -209,7 +210,7 @@ Deno.test("collectSource stops at a cursor the provider already returned", async
   assertEquals(collected.complete, false);
 });
 
-Deno.test("collectSource records a session it cannot read and reads the rest", async () => {
+test("collectSource records a session it cannot read and reads the rest", async () => {
   const base = fakeDriver();
   const driver: AgentDriver = {
     ...base,
@@ -232,7 +233,7 @@ Deno.test("collectSource records a session it cannot read and reads the rest", a
   assertEquals(collected.complete, false);
 });
 
-Deno.test("streamSource reads the next session only after publication advances", async () => {
+test("streamSource reads the next session only after publication advances", async () => {
   const calls: string[] = [];
   const driver = fakeDriver();
   const listSessions = driver.listSessions;
@@ -263,7 +264,7 @@ Deno.test("streamSource reads the next session only after publication advances",
   });
 });
 
-Deno.test("streamSource consults the current cancellation signal", async () => {
+test("streamSource consults the current cancellation signal", async () => {
   const controller = new AbortController();
   let cancellationEnabled = true;
   const collected = streamSource(
@@ -281,7 +282,7 @@ Deno.test("streamSource consults the current cancellation signal", async () => {
   assertEquals(collected.outcome.complete, true);
 });
 
-Deno.test("collectSource retains lifecycle state reported only by inventory", async () => {
+test("collectSource retains lifecycle state reported only by inventory", async () => {
   const inventorySummary = {
     nativeSessionId: "one",
     title: "one",
@@ -315,7 +316,7 @@ Deno.test("collectSource retains lifecycle state reported only by inventory", as
   assertEquals(collected.sessions[0].summary.active, false);
 });
 
-Deno.test("collectSource rejects an oversized terminal inventory page", async () => {
+test("collectSource rejects an oversized terminal inventory page", async () => {
   const summary = {
     nativeSessionId: "one",
     title: "one",

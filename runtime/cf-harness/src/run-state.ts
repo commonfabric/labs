@@ -12,6 +12,7 @@ import {
   type HarnessCfcModelContext,
   type HarnessCfcModelContextObservationInput,
 } from "./contracts/cfc-model-context.ts";
+import type { HarnessImageAttachment } from "./contracts/image.ts";
 import type { HarnessCellLabels } from "./contracts/cell-labels.ts";
 import type { HarnessDocsCorpusRecord } from "./contracts/docs-corpus.ts";
 import type { HarnessCfcPolicySnapshot } from "./contracts/cfc-policy-snapshot.ts";
@@ -264,6 +265,8 @@ export interface HarnessRunState {
   policyTrace?: HarnessPolicyTrace;
   policyTracePath?: string;
   cfcModelContext?: HarnessCfcModelContext;
+  /** CFC-released image references delivered to this run, keyed by tool output ID. */
+  observedImageFrames?: Readonly<Record<string, HarnessImageAttachment>>;
   cfcInvocationContexts?: HarnessCfcInvocationContext[];
 
   /**

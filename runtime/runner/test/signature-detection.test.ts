@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { assertEquals } from "@std/assert";
 import {
   ifElseHasSchemas,
@@ -6,6 +5,7 @@ import {
   unlessHasSchemas,
   whenHasSchemas,
 } from "../src/builder/built-in.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Tests for signature detection utilities.

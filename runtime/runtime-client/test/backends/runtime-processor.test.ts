@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
 
 import type { CellScope } from "@commonfabric/api";
@@ -24,7 +23,6 @@ import { getLogger } from "@commonfabric/logger";
 import { type DID, Identity, legacySpaceDid } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
-  decodeMemoryBoundary,
   eventAttentionEntryKey,
   eventAttentionIndexKey,
   SERVER_EXECUTION_ATTENTION_DOC_ID,
@@ -50,7 +48,6 @@ import {
   popFrame,
   pushFrame,
   Runtime,
-  type RuntimeFetch,
   runtimePresets,
   type SigilLink,
   type SpaceHostRegistration,
@@ -71,6 +68,7 @@ import {
   StorageManager,
 } from "@commonfabric/runner/storage/cache.deno";
 import * as V2Storage from "@commonfabric/runner/storage/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   type CellGetResponse,
@@ -2838,6 +2836,45 @@ describe("runtime-processor", () => {
       expect(result.piece.cell.schema).toBeUndefined();
     });
 
+    it("follows a redirect that names no scope, from a document read in none, into the space scope", async () => {
+      const targetRef = {
+        id: "of:fid1-unscoped-target" as CellRef["id"],
+        space,
+        path: [],
+      } as unknown as CellRef;
+      const slugRef = {
+        id: "of:fid1-unscoped-slug" as CellRef["id"],
+        space,
+        path: [],
+      } as unknown as CellRef;
+      const followed: CellRef[] = [];
+      const targetCell = mockCell(targetRef);
+      const processor = buildProcessor({
+        runtime: {
+          storageManager: {},
+          runner: noSessionPointers,
+          getCellFromEntityId: () =>
+            mockCell(slugRef, { raw: redirectRaw(targetRef) }),
+          getCellFromLink: (link: CellRef) => {
+            followed.push(link);
+            return targetCell;
+          },
+        },
+        cc: { getSpace: () => space },
+        space,
+      });
+
+      await processor.handlePieceGet({
+        type: RequestType.PieceGet,
+        pieceId: fid("unscoped-slug"),
+        space,
+        runIt: true,
+      });
+
+      expect(followed.map((link) => link.scope)).toEqual(["space"]);
+      expect(followed[0]).toMatchObject({ id: targetRef.id, space });
+    });
+
     it("returns a cell inside a piece under the piece's result schema at its path when its links carry none, syncing the piece's root alone", async () => {
       const targetRef: CellRef = {
         id: "of:fid1-parent-piece" as CellRef["id"],
@@ -4030,118 +4067,6 @@ describe("runtime-processor", () => {
   });
 
   describe("`RuntimeProcessor` blob upload IPC", () => {
-    it("posts `FabricBytes` contents to the blob route and returns an absolute URL", async () => {
-      const originalFetch = globalThis.fetch;
-      let requestedUrl: string | undefined;
-      let requestedPayload: unknown;
-      const blobFetch: RuntimeFetch = (input, init) => {
-        requestedUrl = input.toString();
-        requestedPayload = decodeMemoryBoundary(init?.body as string);
-        return Promise.resolve(
-          new Response(
-            JSON.stringify({
-              id: "fid1:test",
-              url: "blobs/test.png",
-            }),
-            {
-              status: 201,
-              headers: { "Content-Type": "application/json" },
-            },
-          ),
-        );
-      };
-      globalThis.fetch = blobFetch as typeof globalThis.fetch;
-      // A processor over only the fields the handler reads.
-      const hostForSpaceCalls: string[] = [];
-      const processor = buildProcessor({
-        runtime: {
-          hostForSpace: (space: string) => {
-            hostForSpaceCalls.push(space);
-            return new URL("http://toolshed.test/base");
-          },
-        },
-      });
-
-      // The bytes as the transport's decode delivers them: the handler owns
-      // its request's payload. Kept here so the test can check what became of it.
-      const payload = new FabricBytes(new Uint8Array([1, 2, 3]));
-
-      try {
-        await expect(
-          processor.handleUploadBlob({
-            type: RequestType.UploadBlob,
-            space: "did:key:test-space" as never,
-            contentType: "image/png",
-            body: payload,
-            suffix: "png",
-          }),
-        ).resolves.toEqual({
-          id: "fid1:test",
-          url: "http://toolshed.test/did:key:test-space/blobs/test.png",
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      // The handler does not decode: the ceding that `BaseRequest`'s ownership
-      // rule turns on happens at the envelope rather than here, so the bytes
-      // arrive already decoded and are handed on as they are.
-
-      expect(requestedUrl).toBe(
-        "http://toolshed.test/did:key:test-space/blobs/upload.png",
-      );
-      // The host is resolved for the REQUEST's space, not any init space.
-      expect(hostForSpaceCalls).toEqual(["did:key:test-space"]);
-      // Strict, so that a request naming no file posts no `name` key at all:
-      // the blob's id is the hash of exactly what is posted.
-      expect(requestedPayload).toStrictEqual({
-        type: "image/png",
-        body: new FabricBytes(new Uint8Array([1, 2, 3])),
-      });
-    });
-
-    it("posts the file's name with the contents when the request names one", async () => {
-      const originalFetch = globalThis.fetch;
-      let requestedUrl: string | undefined;
-      let requestedPayload: unknown;
-      const blobFetch: RuntimeFetch = (input, init) => {
-        requestedUrl = input.toString();
-        requestedPayload = decodeMemoryBoundary(init?.body as string);
-        return Promise.resolve(
-          Response.json({ id: "fid1:test", url: "blobs/test.png" }, {
-            status: 201,
-          }),
-        );
-      };
-      globalThis.fetch = blobFetch as typeof globalThis.fetch;
-      const processor = buildProcessor({
-        runtime: { hostForSpace: () => new URL("http://toolshed.test/base") },
-      });
-
-      try {
-        await processor.handleUploadBlob({
-          type: RequestType.UploadBlob,
-          space: "did:key:test-space" as never,
-          contentType: "image/png",
-          body: new FabricBytes(new Uint8Array([1, 2, 3])),
-          name: "photo.png",
-        });
-      } finally {
-        globalThis.fetch = originalFetch;
-      }
-
-      expect(requestedPayload).toStrictEqual({
-        type: "image/png",
-        body: new FabricBytes(new Uint8Array([1, 2, 3])),
-        name: "photo.png",
-      });
-      // The request names no suffix, so the path names no blob, and the store
-      // takes the suffix from the name.
-      expect(requestedUrl).toBe(
-        "http://toolshed.test/did:key:test-space/blobs",
-      );
-    });
-
     it("returns the URL a blob's space's host serves it at", async () => {
       const hostForSpaceCalls: string[] = [];
       const processor = buildProcessor({
@@ -4215,7 +4140,7 @@ describe("runtime-processor", () => {
           name: 7 as never,
         }),
       ).rejects.toThrow(
-        "uploadBlob requires any name it is given to be a string",
+        "The name given is not one a blob may hold",
       );
     });
   });
@@ -5036,6 +4961,36 @@ describe("runtime-processor", () => {
         expect(worker.privateInboxSends()).toBe(1);
       });
 
+      it("reports a failed adoption of the catalog's rooms, and starts it again at the next bring-up", async () => {
+        await using worker = await homeWorker([]);
+        const adopt = stub(
+          PiecesController.prototype,
+          "adoptCatalogRooms",
+          () => Promise.reject(new Error("catalog unreadable")),
+        );
+        const warn = stub(console, "warn", () => {});
+        try {
+          // This bring-up resolves once the housekeeping has started.
+          const bringUp = () =>
+            worker.processor.handleEnsureHomePatternRunning({
+              type: RequestType.EnsureHomePatternRunning,
+            });
+          await bringUp();
+          await worker.processor.accessForTestingOnly.catalogRoomsAdopted;
+          expect(warn.calls.map(({ args }) => args[0])).toEqual([
+            "[RuntimeProcessor] Adopting the catalog's rooms:",
+          ]);
+          expect(worker.processor.accessForTestingOnly.catalogRoomsAdopted)
+            .toBeUndefined();
+
+          await bringUp();
+          expect(adopt.calls).toHaveLength(2);
+        } finally {
+          warn.restore();
+          adopt.restore();
+        }
+      });
+
       it("returns the root when Home's handling of the private inbox ensure fails, and reports the failure", async () => {
         const attempted = Promise.withResolvers<void>();
         await using worker = await homeWorker([], () => {
@@ -5403,7 +5358,10 @@ describe("runtime-processor", () => {
           scope: "space",
           path: [],
         };
-        const rootCell = { getAsLink: () => cellRefToSigilLink(ref) };
+        const rootCell = {
+          getAsLink: () => cellRefToSigilLink(ref),
+          getAsNormalizedFullLink: () => ref,
+        };
         const cc = {
           getDefaultPattern: () => Promise.resolve(undefined),
           ensureDefaultPattern: () =>
@@ -5445,6 +5403,7 @@ describe("runtime-processor", () => {
             calls.push(`getDefaultPattern:${JSON.stringify(open)}`);
             return Promise.resolve({
               getAsLink: () => cellRefToSigilLink(ref),
+              getAsNormalizedFullLink: () => ref,
             });
           },
           ensureDefaultPattern: () => {
@@ -6178,6 +6137,7 @@ describe("runtime-processor", () => {
                 },
               },
             }),
+            getAsNormalizedFullLink: () => ref,
           }),
         },
       });

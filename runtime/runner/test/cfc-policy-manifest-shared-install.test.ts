@@ -1,7 +1,7 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import { getLogger } from "@commonfabric/logger";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import type { Result, Unit, URI } from "@commonfabric/memory/interface";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
@@ -21,6 +21,12 @@ import { isRetryableCommitRejection } from "../src/storage/rejection.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
 
 const signer = await Identity.fromPassphrase("shared manifest install");
@@ -904,7 +910,8 @@ describe("cfc-policy-manifest-shared-install", () => {
     it("starts it again for the participant who set it up when the manifest cannot be loaded", async () => {
       // A manifest that cannot be loaded does not stop the start. A commit
       // that needs the manifest still reads it as absent and fails, and says
-      // so, as the part's own start does here.
+      // so, as the part's own start does here. The read that started loading
+      // the manifest logs the failed load.
 
       const installedId = await setUpByFirstParticipant();
       const storage = EmulatedStorageManager.connectTo(server, { as: signer });
@@ -923,6 +930,9 @@ describe("cfc-policy-manifest-shared-install", () => {
               ? Promise.reject(new Error("the memory server is unreachable"))
               : sync(id, selector, scope, instance),
         );
+        const failedLoads = () =>
+          getLogger("cell").countsByKey["load-failed"]?.warn ?? 0;
+        const failedLoadsBefore = failedLoads();
         const piece = runtime.getCell(space, "per-user-piece");
         await piece.sync();
 
@@ -931,6 +941,7 @@ describe("cfc-policy-manifest-shared-install", () => {
         await runtime.runner.idlePieceInstantiationSettlements();
 
         expect(runtime.runner.isRunning(piece)).toBe(true);
+        expect(failedLoads()).toBeGreaterThan(failedLoadsBefore);
       } finally {
         runtime.runner.stopAll();
         await runtime.idle();

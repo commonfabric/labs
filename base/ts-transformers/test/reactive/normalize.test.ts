@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
 
@@ -8,6 +7,7 @@ import {
   selectDataFlowsWithin,
 } from "../../src/ast/mod.ts";
 import { analyzeExpression } from "./harness.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("normalizeDataFlows", () => {
   it("filters data flows within a specific node", () => {

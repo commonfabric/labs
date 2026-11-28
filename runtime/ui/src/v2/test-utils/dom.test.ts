@@ -2,9 +2,9 @@
 import { internalsOf, mount, settle, window } from "./dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { ContextConsumer, createContext } from "@lit/context";
 import { html, LitElement } from "lit";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const greetingContext = createContext<string>("dom-test-greeting");
 
@@ -204,6 +204,53 @@ describe("dom", () => {
     document.removeEventListener("selectionchange", listener);
 
     expect(heard).toEqual(["returned", "selectionchange"]);
+  });
+
+  describe("a shadow root's `activeElement`", () => {
+    /** Appends a host with an open shadow root holding a focusable input. */
+    function hostWithInput(parent: Node = document.body) {
+      const host = document.createElement("div");
+      parent.appendChild(host);
+      const root = host.attachShadow({ mode: "open" });
+      const input = document.createElement("input");
+      root.append(input);
+      return { host, root, input };
+    }
+
+    it("is the focused element inside it", () => {
+      const { root, input } = hostWithInput();
+
+      input.focus();
+
+      expect(root.activeElement).toBe(input);
+    });
+
+    it("is the host of a shadow root inside it that holds focus", () => {
+      const outer = hostWithInput();
+      const inner = hostWithInput(outer.root);
+
+      inner.input.focus();
+
+      expect(outer.root.activeElement).toBe(inner.host);
+    });
+
+    it("is null while another shadow root holds focus", () => {
+      const first = hostWithInput();
+      const second = hostWithInput();
+
+      second.input.focus();
+
+      expect(first.root.activeElement).toBe(null);
+    });
+
+    it("is null on a host's own shadow root while the host holds focus", () => {
+      const { host, root } = hostWithInput();
+      host.tabIndex = 0;
+
+      host.focus();
+
+      expect(root.activeElement).toBe(null);
+    });
   });
 
   it("delivers a context request from a consumer to its provider", async () => {

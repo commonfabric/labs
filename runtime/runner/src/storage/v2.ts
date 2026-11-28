@@ -42,6 +42,7 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import {
   type ApplyOpOperation,
   type ApplyOpResolution,
+  type BranchInfo,
   type BranchName,
   canResolveScopeKey,
   type CellScope,
@@ -49,6 +50,7 @@ import {
   type CommitClass,
   type CommitPrecondition,
   commitPreconditionValueHash,
+  type CommitSummary,
   DEFAULT_BRANCH,
   type DocumentPath,
   type EntityDocument,
@@ -187,7 +189,6 @@ import {
   IOperationStorageCapability,
   IPreconditionFailedError,
   IPresenceStorageCapability,
-  IReadActivity,
   IRemoteStorageProviderSettings,
   ISpaceReplica,
   IStorageManager,
@@ -224,18 +225,14 @@ import {
   getBlindStructuralTarget,
   isDurableReadTx,
   isInternalVerifierRead,
-  isMergeableOpRead,
-  isReadExcludedFromConflict,
-  isReadIgnoredForCommit,
-  isReadMarkedAsAttemptedWrite,
   notifyCommitRejected,
   recordCoverageWait,
 } from "./reactivity-log.ts";
+import { commitReadActivities } from "./commit-read-activities.ts";
 import { SelectorTracker } from "./selector-tracker.ts";
 import { noteSpaceAccessRefusal } from "./space-access-refusal.ts";
 import * as SubscriptionManager from "./subscription.ts";
 import {
-  getDirectTransactionMergeableOpAddresses,
   getDirectTransactionReadActivities,
   getTransactionWriteAttempts,
 } from "./transaction-inspection.ts";
@@ -268,31 +265,6 @@ export type CfcSchemaDocumentSyncer = (
   space: MemorySpace,
   document: EntityDocument | undefined,
 ) => Promise<Error | undefined>;
-
-const isStrictPrefixPath = (
-  prefix: readonly string[],
-  path: readonly string[],
-): boolean =>
-  prefix.length < path.length &&
-  prefix.every((segment, index) => path[index] === segment);
-
-const isSamePath = (
-  a: readonly string[],
-  b: readonly string[],
-): boolean =>
-  a.length === b.length && a.every((segment, index) => b[index] === segment);
-
-// True when `path` is the immediate `length` child of `arrayPath` — i.e. a read
-// of that array's own element count. A mergeable append / add-unique /
-// remove-by-value changes this count, so such a read is a genuine dependency of
-// the writer, not one of the op's own incidental sub-reads.
-const isArrayLengthChildPath = (
-  arrayPath: readonly string[],
-  path: readonly string[],
-): boolean =>
-  path.length === arrayPath.length + 1 &&
-  path[arrayPath.length] === "length" &&
-  arrayPath.every((segment, index) => path[index] === segment);
 
 export { watchIdForEntry } from "./v2-watch.ts";
 export type { SessionConnection, SessionFactory } from "./v2-remote-session.ts";
@@ -1175,9 +1147,10 @@ const materializedVersionThroughPending = (
 
 /**
  * Drops the cached materializations of `record`'s pending layers from
- * `pendingIndex` on, and releases the whole cache, values included, when it
- * was built over another confirmed version than the record's or holds no
- * layer once the drop is done.
+ * `pendingIndex` on, and releases the whole cache, values included, when
+ * that is every layer. A cache is only ever built over the record's
+ * confirmed version and holds at least one layer: each site that replaces
+ * the confirmed version replaces or releases the cache with it.
  */
 const dropMaterializedSuffix = (
   record: DocumentRecord,
@@ -1185,21 +1158,8 @@ const dropMaterializedSuffix = (
 ): void => {
   if (pendingIndex <= 0) {
     record.materialized = undefined;
-    return;
-  }
-
-  const cache = record.materialized;
-  if (!cache) {
-    return;
-  }
-  if (cache.confirmed !== record.confirmed) {
-    record.materialized = undefined;
-    return;
-  }
-
-  cache.prefixes.length = Math.min(cache.prefixes.length, pendingIndex);
-  if (cache.prefixes.length === 0) {
-    record.materialized = undefined;
+  } else {
+    record.materialized?.prefixes.splice(pendingIndex);
   }
 };
 
@@ -1293,6 +1253,26 @@ export interface Options {
 
   id?: string;
   settings?: IRemoteStorageProviderSettings;
+
+  /**
+   * The branch each space listed here is opened on (the wire
+   * `SessionDescriptor.branch`): the manager's session of such a space reads
+   * and writes that branch, so everything the manager's runtime does in the
+   * space happens there. A space not listed is opened on its default
+   * branch. Fixed for the manager's lifetime.
+   */
+  branches?: Readonly<Record<string, BranchName>>;
+
+  /**
+   * The branch every space not listed in `branches` is opened on, which the
+   * server forks from that space's default branch on the first open (the
+   * wire `SessionDescriptor.forkBranch`). A manager showing a fork of one
+   * space sets this so that what its runtime writes to any other space is
+   * kept apart as well. A space the principal may not write to is opened on
+   * its default branch. Closing the manager deletes the branch in each space
+   * it opened. Fixed for the manager's lifetime.
+   */
+  forkBranch?: BranchName;
 
   /** The event-intent queue's store seam (server-execution v2 Phase 3;
    *  events.md §5; LT9 re-ruled 2026-08-15: PROCESS-LIFETIME — reload
@@ -1649,7 +1629,7 @@ const coarsenCommitForWire = (commit: ClientCommit): ClientCommit => {
  * (`compactDependencyGroup()`), in order of scope, document, shallow before
  * recursive, and path.
  */
-const compactCommitReads = <
+export const compactCommitReads = <
   Read extends ConfirmedCommitRead | PendingCommitRead,
 >(
   reads: Read[],
@@ -1712,6 +1692,18 @@ const toCommitReadPath = (
 // split-brain: caller sees ConflictError for a write that landed).
 const scalarizeLocalSeq = (localSeq: number | number[]): number =>
   Array.isArray(localSeq) ? maxOf(localSeq) : localSeq;
+
+/**
+ * Whether `connection` is up and advertises `markedSplicesV1` on the
+ * handshake it is up on. While it is down or reconnecting the flags it holds
+ * are the last connection's, and the server the next one reaches may not
+ * advertise the mark.
+ */
+const advertisesMarkedSplices = (
+  connection: SessionConnection | undefined,
+): boolean =>
+  connection?.connectionState === "connected" &&
+  connection.serverFlags?.markedSplicesV1 === true;
 
 const scalarizePendingReadStacks = (commit: ClientCommit): ClientCommit => {
   const hasStack = (reads: { localSeq: number | number[] }[]): boolean =>
@@ -1891,9 +1883,10 @@ export class StorageManager implements IStorageManager {
    * a replacement replica both see it. */
   readonly #storeReadThroughs = new Map<MemorySpace, StoreReadThrough>();
 
-  /** The crossing loads kicked, by target and selector (see
-   * `#loadCrossings`): one kick per manager, in flight or landed. */
-  readonly #crossingKicks = new Map<string, Set<string>>();
+  /** The crossing loads kicked, by the target's space, the rest of the
+   * target, and selector (see `#loadCrossings`): one kick per manager, in
+   * flight or landed. */
+  readonly #crossingKicks = new Map<MemorySpace, Map<string, Set<string>>>();
 
   /** The crossing loads in flight, by their pending-load key: the address
    * each names (IStorageManager.pendingCrossingLoadAddresses) and how many
@@ -1913,7 +1906,8 @@ export class StorageManager implements IStorageManager {
 
   /**
    * Docs already offered a link-target pull via `shouldPullDoc()`. One entry
-   * per (space, scope, id) for the manager's lifetime: the first pull registers
+   * per (space, scope, id), kept until the replica drops the doc, the kicked
+   * sync rejects, or the manager releases the space: the first pull registers
    * a server-side watch that keeps the doc flowing afterwards, so a second kick
    * is never needed — and never re-kicking is what keeps reads of genuinely
    * absent targets (dangling links, deleted docs) from churning the cross-space
@@ -1952,6 +1946,28 @@ export class StorageManager implements IStorageManager {
   readonly #documentsDroppedObservers = new Set<
     (space: MemorySpace, addresses: readonly LocalDocAddress[]) => void
   >();
+
+  /** Observers of `subscribeSpacesReleased()`. */
+  readonly #spacesReleasedObservers = new Set<(space: MemorySpace) => void>();
+
+  /**
+   * The spaces opened since the release pass under way began, which that
+   * pass leaves open (`#releaseUnusedSpaces()`).
+   */
+  readonly #openedDuringPass = new Set<MemorySpace>();
+
+  /**
+   * The closing of each released space's session, which a session opened in
+   * the space again waits for, so that the two never overlap.
+   */
+  readonly #releasingSessions = new Map<MemorySpace, Promise<void>>();
+
+  /**
+   * The session each released space left, which the next session opened
+   * there resumes: the server keeps a closed session resumable for a while,
+   * and refuses to open its id again without its token.
+   */
+  readonly #releasedSessions = new Map<MemorySpace, ReleasedSession>();
 
   /**
    * Immutable documents whose linked targets this manager has already pulled, keyed by a
@@ -2034,6 +2050,8 @@ export class StorageManager implements IStorageManager {
    * (`setSessionReadCeiling`); undefined on a manager whose sessions read
    * unbounded. */
   #sessionReadCeiling?: SessionReadCeiling;
+  #branches: Readonly<Record<string, BranchName>>;
+  #forkBranch: BranchName | undefined;
 
   /** Resume options for a space's manager-wide session that
    * `#createInitializedSession` detached ahead of a bootstrap that then
@@ -2185,6 +2203,8 @@ export class StorageManager implements IStorageManager {
       memoryEventAppendQueueStore();
     this.#eventAppendPacing = options.eventAppendPacing;
     this.#servingHomeSpace = options.servingHomeSpace;
+    this.#branches = { ...options.branches };
+    this.#forkBranch = options.forkBranch;
     this.#foreignScopedReadGrant = options.foreignScopedReadGrant;
     this.#holdRegistry = (options.createHoldRegistry ??
       ((cleanup) => new FinalizationRegistry(cleanup)))(
@@ -2572,17 +2592,26 @@ export class StorageManager implements IStorageManager {
 
   /**
    * The descriptor fields every session this manager opens carries beyond
-   * its id: the serving binding and the declared read ceiling. One place,
+   * its id: the serving binding, the declared read ceiling, and the branch
+   * `space` is opened on. One place,
    * so a reopen, a resume and a fresh mount all declare the same session.
    */
-  #sessionDescriptorFields(): {
+  #sessionDescriptorFields(space: MemorySpace): {
     actingAs?: "space-owner";
     readCeiling?: SessionReadCeiling;
+    branch?: BranchName;
+    forkBranch?: true;
   } {
+    const listed = this.#branches[space];
+    const branch = listed ?? this.#forkBranch;
     return {
       ...this.#servingActingAs(),
       ...(this.#sessionReadCeiling !== undefined
         ? { readCeiling: this.#sessionReadCeiling }
+        : {}),
+      ...(branch !== undefined && branch !== DEFAULT_BRANCH ? { branch } : {}),
+      ...(listed === undefined && this.#forkBranch !== undefined
+        ? { forkBranch: true as const }
         : {}),
     };
   }
@@ -2740,6 +2769,18 @@ export class StorageManager implements IStorageManager {
     return [...this.#providers.keys()];
   }
 
+  /** @inheritDoc */
+  documentCovered(
+    space: MemorySpace,
+    id: URI,
+    scope?: CellScope,
+  ): boolean | undefined {
+    return this.#providers.get(space)?.replica.hasLocalDocumentCoverage(
+      id,
+      scope,
+    );
+  }
+
   /**
    * IStorageManager — THE SESSION REMOUNT's trigger (see
    * SpaceReplica.#consumeOwedSessionRemount): an admitted commit touched
@@ -2874,7 +2915,7 @@ export class StorageManager implements IStorageManager {
       this.as,
       {
         sessionId: crypto.randomUUID(),
-        ...this.#sessionDescriptorFields(),
+        ...this.#sessionDescriptorFields(space),
       },
     );
     try {
@@ -2895,6 +2936,7 @@ export class StorageManager implements IStorageManager {
     // A manager reused after close() starts a new session; retention
     // follows it.
     this.#schemaRegistryLease ??= acquireSchemaRegistryLease();
+    this.#openedDuringPass.add(space);
     let provider = this.#providers.get(space);
     const firstOpen = !provider;
     if (!provider) {
@@ -2950,20 +2992,16 @@ export class StorageManager implements IStorageManager {
         onDocumentsDropped: (addresses) =>
           this.#forgetDocuments(space, addresses),
         routeState,
-        createSession: this.#sessionFactory.supportsAclBootstrap === true
-          ? (routeGeneration, routeSignal) =>
-            this.#createInitializedSession(
-              space,
-              signer,
-              routeState,
-              routeGeneration,
-              routeSignal,
-            )
-          : (_routeGeneration, routeSignal) =>
-            this.#createSession(space, signer, {
-              sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(),
-            }, routeSignal),
+        // A session opened in a space released a moment ago waits for the
+        // released one to close, and resumes it (`#openSession()`).
+        createSession: (routeGeneration, routeSignal) =>
+          this.#openSession(
+            space,
+            signer,
+            routeState,
+            routeGeneration,
+            routeSignal,
+          ),
         syncReplayDependencies: (document) =>
           this.#syncCfcSchemaDocument(space, document),
         getTelemetry: () => this.#telemetry,
@@ -3024,6 +3062,10 @@ export class StorageManager implements IStorageManager {
         eventAppendQueueStore: this.#eventAppendQueueStore,
         eventAppendPacing: this.#eventAppendPacing,
       });
+      const released = this.#releasedSessions.get(space);
+      if (released !== undefined) {
+        provider.replica.continueReleasedSession(released);
+      }
       this.#providers.set(space, provider);
     }
     if (firstOpen && this.spaceOpenObserver !== undefined) {
@@ -3096,7 +3138,7 @@ export class StorageManager implements IStorageManager {
             ? detached.options
             : {
               sessionId: this.#sessionId,
-              ...this.#sessionDescriptorFields(),
+              ...this.#sessionDescriptorFields(space),
             },
           routeSignal,
         ),
@@ -3114,7 +3156,7 @@ export class StorageManager implements IStorageManager {
         ...(normal.session.sessionToken !== undefined
           ? { sessionToken: normal.session.sessionToken }
           : {}),
-        ...this.#sessionDescriptorFields(),
+        ...this.#sessionDescriptorFields(space),
       };
       this.#detachedSessionResumes.set(space, {
         options: resumeNormal,
@@ -3238,6 +3280,7 @@ export class StorageManager implements IStorageManager {
     // A detached-session resume names the session id this close rotates;
     // presenting it afterwards would mount the OLD id under a stale token.
     this.#detachedSessionResumes.clear();
+    this.#releasedSessions.clear();
     // The lease releases AFTER teardown drains: a queued sync frame applied
     // during provider destruction still registers its schema documents
     // inside this session's epoch, not after the clear.
@@ -3245,6 +3288,11 @@ export class StorageManager implements IStorageManager {
       if (this.#providers.size === 0) {
         return;
       }
+      // Each provider's `destroy()` marks it destroyed and aborts its route
+      // before its first await, so a host hint or a session ending during the
+      // close sees a closing provider. Awaiting here only when there is a
+      // fork branch to delete keeps that synchronous for every other manager.
+      if (this.#forkBranch !== undefined) await this.#deleteForkBranches();
       // allSettled: one rejecting teardown must not release the lease (the
       // finally below) while sibling teardowns are still draining frames.
       const outcomes = await Promise.allSettled(
@@ -3261,21 +3309,44 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
-      // The providers have ended their sessions, so whatever connection the
-      // factory kept open for them has nothing left on it.
+      // The providers have ended their sessions, and so have the spaces
+      // released before, so whatever connection the factory kept open for
+      // them has nothing left on it.
+      await Promise.allSettled([...this.#releasingSessions.values()]);
       await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
     }
   }
 
+  /**
+   * Helper for `close()`, which deletes the branch `Options.forkBranch` had
+   * the server fork in each space this manager opened. A space the server
+   * forked nothing in refuses the deletion, which is not reported.
+   * `closeNow()` sends the deletions through this as well and does not wait
+   * for their answers.
+   */
+  async #deleteForkBranches(): Promise<void> {
+    const branch = this.#forkBranch;
+    if (branch === undefined) return;
+    await Promise.allSettled(
+      [...this.#providers].map(([space, provider]) =>
+        this.#branches[space] === undefined
+          ? provider.deleteBranch?.(branch)
+          : undefined
+      ),
+    );
+  }
+
   async closeNow(): Promise<void> {
     this.#forgetFollowUps();
     this.#detachedSessionResumes.clear();
+    this.#releasedSessions.clear();
     try {
       if (this.#providers.size === 0) {
         return;
       }
+      void this.#deleteForkBranches();
       const outcomes = await Promise.allSettled(
         [...this.#providers.values()].map((provider) => provider.destroyNow()),
       );
@@ -3290,6 +3361,7 @@ export class StorageManager implements IStorageManager {
       this.#dataURISyncs.clear();
       this.#sessionId = crypto.randomUUID();
     } finally {
+      await Promise.allSettled([...this.#releasingSessions.values()]);
       await this.#sessionFactory.close?.();
       this.#schemaRegistryLease?.();
       this.#schemaRegistryLease = undefined;
@@ -3639,16 +3711,26 @@ export class StorageManager implements IStorageManager {
       return false;
     }
     this.#docPullKicks.add(key);
-    // State the local replica can already serve needs no pull. getState is
-    // undefined both for never-pulled docs and for docs known to hold no
-    // value (deleted / genuinely absent) — the second kind gets one harmless
-    // kick and is then held off by the kick set above.
-    return this.open(space).replica.get({
-      id,
-      type: DOCUMENT_MIME as MIME,
-      scope,
-      ...(instance !== undefined ? { scopeKey: instance } : {}),
-    }) === undefined;
+    // A doc the replica holds no value for is pulled. `get()` is undefined
+    // both for never-pulled docs and for docs known to hold no value (deleted
+    // / genuinely absent) — the second kind gets one harmless kick and is
+    // then held off by the kick set above.
+    const { replica } = this.open(space);
+    if (
+      replica.get({
+        id,
+        type: DOCUMENT_MIME as MIME,
+        scope,
+        ...(instance !== undefined ? { scopeKey: instance } : {}),
+      }) === undefined
+    ) {
+      return true;
+    }
+    // A value the replica can serve needs no pull where a frame delivered it
+    // or a watch is rooted at it. One it holds from its own commit alone is
+    // served too, but nothing shows that a watch brings in what other
+    // sessions store there after it. The pull registers that watch.
+    return replica.lacksWatchEvidence?.(id, scope, instance) === true;
   }
 
   /** @inheritDoc */
@@ -3668,6 +3750,9 @@ export class StorageManager implements IStorageManager {
       const hold = { ref: new WeakRef(token), followsUp: false };
       this.#documentHolds.set(key, hold);
       this.#holdRegistry.register(token, { space: address.space, key, hold });
+      // The pass under way found its holds as it began, so the space of one
+      // taken since is kept as an open since then is.
+      this.#openedDuringPass.add(address.space);
     }
     return token;
   }
@@ -3689,19 +3774,198 @@ export class StorageManager implements IStorageManager {
   /** @inheritDoc */
   releaseUnreadDocuments(options: ReleaseOptions = {}): Promise<boolean> {
     const pass = this.#releasePass.catch(() => false).then(async () => {
+      this.#openedDuringPass.clear();
+      // A hold token still reachable is a cell that may read its document
+      // again, so its space is in use whether or not the document is loaded.
+      const held = new Set<MemorySpace>();
       for (const [key, hold] of this.#documentHolds) {
-        if (hold.ref.deref() === undefined) this.#documentHolds.delete(key);
-        else if (options.followUpOnCollection === true) hold.followsUp = true;
+        if (hold.ref.deref() === undefined) {
+          this.#documentHolds.delete(key);
+          continue;
+        }
+        held.add(key.slice(0, key.indexOf("\0")) as MemorySpace);
+        if (options.followUpOnCollection === true) hold.followsUp = true;
       }
       const results = await Promise.all(
         [...this.#providers.values()].map((provider) =>
           provider.replica.releaseUnread()
         ),
       );
+      this.#releaseUnusedSpaces(held);
       return results.some((result) => result.deferred);
     });
     this.#releasePass = pass;
     return pass;
+  }
+
+  /** @inheritDoc */
+  subscribeSpacesReleased(observer: (space: MemorySpace) => void): Cancel {
+    this.#spacesReleasedObservers.add(observer);
+    return () => this.#spacesReleasedObservers.delete(observer);
+  }
+
+  /**
+   * Helper for `releaseUnreadDocuments()`, which releases each space nothing
+   * uses, as "Releasing a space's session" in
+   * `docs/features/document-release.md` says: it forgets the space's
+   * provider and what this manager kept for the space alone, tells the
+   * observers of `subscribeSpacesReleased()`, and closes the space's
+   * session. The next use of the space opens it again, once that close has
+   * finished. `held` names the spaces of the hold tokens still reachable as
+   * the pass began, found there rather than here: a token dereferenced here
+   * would be kept from collection for the rest of the turn.
+   */
+  #releaseUnusedSpaces(held: ReadonlySet<MemorySpace>): void {
+    if (this.#multiSpaceCommitsApplying.size > 0) return;
+    for (const [space, provider] of [...this.#providers]) {
+      if (held.has(space) || !this.#isUnusedSpace(space, provider)) continue;
+      // A space opened on the fork branch keeps its provider, which is what
+      // deletes that branch when this manager closes.
+      if (
+        this.#forkBranch !== undefined && this.#branches[space] === undefined
+      ) {
+        continue;
+      }
+      this.#providers.delete(space);
+      this.#forgetSpace(space);
+      const released = provider.replica.releasedSession();
+      if (released !== undefined) this.#releasedSessions.set(space, released);
+      const closing = provider.destroy().catch((error) => {
+        logger.warn("release-space-failed", () => [
+          `closing the session of the released space ${space}:`,
+          error,
+        ]);
+      }).finally(() => {
+        if (this.#releasingSessions.get(space) === closing) {
+          this.#releasingSessions.delete(space);
+        }
+      });
+      this.#releasingSessions.set(space, closing);
+      for (const observer of [...this.#spacesReleasedObservers]) {
+        try {
+          observer(space);
+        } catch (error) {
+          console.error("spaces-released subscriber threw:", error);
+        }
+      }
+    }
+  }
+
+  /**
+   * Helper for `#releaseUnusedSpaces()`, which says whether nothing uses
+   * `space`, whose provider is `provider`. This manager's own spaces, the
+   * signer's home and a serving manager's home, are always in use, and so
+   * is a space opened since the pass began, one whose session was refused,
+   * and one a load is pending in.
+   */
+  #isUnusedSpace(space: MemorySpace, provider: Provider): boolean {
+    if (
+      space === this.as.did() || space === this.#servingHomeSpace ||
+      this.#openedDuringPass.has(space) || this.#spaceAccessErrors.has(space)
+    ) {
+      return false;
+    }
+    // A crossing load registers as a pending load too.
+    for (const entry of this.#pendingLoads.values()) {
+      if (entry.address.space === space) return false;
+    }
+    return provider.isUnused();
+  }
+
+  /**
+   * Helper for `#releaseUnusedSpaces()`, which forgets what this manager kept
+   * for the released `space` alone: the kind it read afresh, a detached
+   * session it could resume, and the link-target and crossing loads it
+   * kicked there, which the next read takes again.
+   */
+  #forgetSpace(space: MemorySpace): void {
+    this.#spaceKindsReadAfresh.delete(space);
+    this.#detachedSessionResumes.delete(space);
+    const prefix = `${space}\0`;
+    for (const key of this.#docPullKicks) {
+      if (key.startsWith(prefix)) this.#docPullKicks.delete(key);
+    }
+    this.#crossingKicks.delete(space);
+  }
+
+  /**
+   * Helper for a provider of `space`, which opens its session. A space
+   * released and not yet opened again waits for its released session to
+   * finish closing, and resumes it; the resume is kept until an open of it
+   * succeeds. Any other space opens its session at once, as it always has.
+   */
+  #openSession(
+    space: MemorySpace,
+    signer: Signer,
+    routeState: ProviderRouteState,
+    routeGeneration: number,
+    routeSignal: AbortSignal,
+  ): Promise<OpenedSpaceSession> {
+    const open = (): Promise<OpenedSpaceSession> => {
+      const resume = this.#releasedResumeOf(space);
+      if (this.#sessionFactory.supportsAclBootstrap === true) {
+        if (resume !== undefined) {
+          this.#detachedSessionResumes.set(space, {
+            options: resume,
+            routeGeneration,
+          });
+        }
+        const opened = this.#createInitializedSession(
+          space,
+          signer,
+          routeState,
+          routeGeneration,
+          routeSignal,
+        );
+        return resume === undefined ? opened : this.#afterResume(space, opened);
+      }
+      const opened = this.#createSession(
+        space,
+        signer,
+        resume ?? {
+          sessionId: this.#sessionId,
+          ...this.#sessionDescriptorFields(space),
+        },
+        routeSignal,
+      );
+      return resume === undefined ? opened : this.#afterResume(space, opened);
+    };
+    const releasing = this.#releasingSessions.get(space);
+    return releasing === undefined ? open() : releasing.then(open);
+  }
+
+  /**
+   * Helper for `#openSession()`, which forgets the released session of
+   * `space` once `opened`, the open that resumed it, succeeds.
+   */
+  async #afterResume(
+    space: MemorySpace,
+    opened: Promise<OpenedSpaceSession>,
+  ): Promise<OpenedSpaceSession> {
+    const session = await opened;
+    this.#releasedSessions.delete(space);
+    return session;
+  }
+
+  /**
+   * Helper for opening a session in `space`, which returns how to resume the
+   * session a release of the space left, or `undefined` when none is left.
+   * The session is forgotten only once an open of it succeeds, so an open
+   * that fails is followed by one that presents the same resume.
+   */
+  #releasedResumeOf(
+    space: MemorySpace,
+  ): MemoryV2Client.MountOptions | undefined {
+    const released = this.#releasedSessions.get(space);
+    if (released === undefined) return undefined;
+    return {
+      sessionId: released.sessionId,
+      seenSeq: released.seenSeq,
+      ...(released.sessionToken !== undefined
+        ? { sessionToken: released.sessionToken }
+        : {}),
+      ...this.#sessionDescriptorFields(space),
+    };
   }
 
   /**
@@ -3764,12 +4028,13 @@ export class StorageManager implements IStorageManager {
     addresses: readonly LocalDocAddress[],
   ): void {
     this.#droppedDocuments += addresses.length;
+    const crossingKicks = this.#crossingKicks.get(space);
     for (const address of addresses) {
       this.#docPullKicks.delete(
         this.#documentKey(space, address.id, address.scope, address.scopeKey),
       );
-      this.#crossingKicks.delete(
-        `${space}\0${normalizeCellScope(address.scope)}\0${address.id}`,
+      crossingKicks?.delete(
+        `${normalizeCellScope(address.scope)}\0${address.id}`,
       );
     }
     this.#dataURISyncs.clear();
@@ -3891,10 +4156,12 @@ export class StorageManager implements IStorageManager {
     space: MemorySpace,
     instance: ScopeKey | undefined,
   ): ScopedReadStanding {
-    if (instance === undefined) return "refused";
-    const actor = identityOfScopeKey(instance)?.principal;
-    if (actor === undefined) return "refused";
-    if (this.#foreignScopedReadGrant === undefined) return "refused";
+    const actor = instance === undefined
+      ? undefined
+      : identityOfScopeKey(instance)?.principal;
+    if (actor === undefined || this.#foreignScopedReadGrant === undefined) {
+      return "refused";
+    }
     const provider = this.#providers.get(space);
     return provider === undefined
       ? "unresolved"
@@ -4286,15 +4553,20 @@ export class StorageManager implements IStorageManager {
       if (scope !== "space" && this.#gatesForeignScopedReadsIn(space)) {
         continue;
       }
-      const target = `${space}\0${scope}\0${id}`;
+      const target = `${scope}\0${id}`;
       const selector = `${JSON.stringify(crossing.path)}\0${
         crossing.schema === undefined ? "" : hashStringOf(crossing.schema)
       }`;
-      let kicked = this.#crossingKicks.get(target);
+      let spaceKicks = this.#crossingKicks.get(space);
+      if (spaceKicks === undefined) {
+        spaceKicks = new Map();
+        this.#crossingKicks.set(space, spaceKicks);
+      }
+      let kicked = spaceKicks.get(target);
       if (kicked?.has(selector)) continue;
       if (kicked === undefined) {
         kicked = new Set();
-        this.#crossingKicks.set(target, kicked);
+        spaceKicks.set(target, kicked);
       }
       kicked.add(selector);
       const address = { space, scope, id };
@@ -4333,9 +4605,7 @@ export class StorageManager implements IStorageManager {
           loadFailure = error;
           this.#logSyncLoadFailure(space, id, error, heldProvider, undefined);
         } finally {
-          if (loadFailure !== undefined) {
-            this.#crossingKicks.get(target)?.delete(selector);
-          }
+          if (loadFailure !== undefined) kicked.delete(selector);
           releaseLoad(loadFailure);
           entry.count--;
           if (entry.count === 0) this.#pendingCrossingLoads.delete(ledgerKey);
@@ -4911,6 +5181,12 @@ type ProviderOptions = {
   /** Called when the space's memory session is replaced on reconnect. */
   onSessionReplaced?: () => void;
 
+  /**
+   * Called when the newest seq of the space the replica's session has
+   * learned of moves forward; see `SpaceSession.subscribeServerSeq()`.
+   */
+  onServerSeq?: (serverSeq: number) => void;
+
   /** Called when `sessionError()` starts reporting `error`. */
   onSessionError?: (error: Error) => void;
 
@@ -5093,6 +5369,7 @@ class Provider
 
   #routeAbort = new AbortController();
   #operationSubscriptions = new Set<ProviderOperationSubscription>();
+  #serverSeqObservers = new Set<(serverSeq: number) => void>();
   #presenceMemberships = new Set<ProviderPresenceMembership>();
 
   /**
@@ -5129,6 +5406,17 @@ class Provider
           address.scope,
           address.scopeKey,
         ),
+      // Observers belong to the provider, so a replacement replica's session
+      // reports to the same ones.
+      onServerSeq: (serverSeq) => {
+        for (const observer of [...this.#serverSeqObservers]) {
+          try {
+            observer(serverSeq);
+          } catch (cause) {
+            console.error("server-seq subscriber threw:", cause);
+          }
+        }
+      },
       // A released root is not read again on a replacement replica.
       onWatchesReleased: (roots) => {
         for (const root of roots) {
@@ -5195,6 +5483,13 @@ class Provider
   /** See {@link SpaceReplica.presentCount}. */
   presentCount(absences: readonly UnexaminedAbsence[]): number {
     return this.replica.presentCount(absences);
+  }
+
+  /** See {@link SpaceReplica.stillUnexamined}. */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return this.replica.stillUnexamined(absences);
   }
 
   /** See {@link SpaceReplica.storeReportedAbsent}. */
@@ -5545,6 +5840,18 @@ class Provider
     return this.replica.sessionAnswered();
   }
 
+  /**
+   * Whether nothing uses this provider: no operation subscription or
+   * presence membership is open through it, and nothing uses its replica
+   * (`SpaceReplica.isUnused()`).
+   */
+  isUnused(): boolean {
+    return !this.#destroyed && this.#operationSubscriptions.size === 0 &&
+      this.#presenceMemberships.size === 0 &&
+      // Someone following the space's history is using it.
+      this.#serverSeqObservers.size === 0 && this.replica.isUnused();
+  }
+
   ensureSession(): Promise<void> {
     return this.#followReplacement((replica) => replica.ensureSession());
   }
@@ -5620,6 +5927,41 @@ class Provider
     return this.#followReplacement((replica) => replica.entityIdExists(id));
   }
 
+  listHistory(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]> {
+    return this.#followReplacement((replica) => replica.listHistory(options));
+  }
+
+  /** See `IStorageProvider.subscribeServerSeq`. */
+  subscribeServerSeq(observer: (serverSeq: number) => void): () => void {
+    this.#serverSeqObservers.add(observer);
+    return () => this.#serverSeqObservers.delete(observer);
+  }
+
+  listBranches(): Promise<BranchInfo[]> {
+    return this.#followReplacement((replica) => replica.listBranches());
+  }
+
+  createBranch(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo> {
+    return this.#followReplacement((replica) =>
+      replica.createBranch(name, options)
+    );
+  }
+
+  deleteBranch(name: BranchName): Promise<void> {
+    return this.#followReplacement((replica) => replica.deleteBranch(name));
+  }
+
+  restoreBranch(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined> {
+    return this.#followReplacement((replica) => replica.restoreBranch(options));
+  }
+
   pullToServerHead(): Promise<void> {
     return this.#followReplacement((replica) => replica.pullToServerHead());
   }
@@ -5679,6 +6021,7 @@ class Provider
       subscription.cancel?.();
     }
     this.#operationSubscriptions.clear();
+    this.#serverSeqObservers.clear();
     this.#routeAbort.abort(new Error("memory replica closed"));
     this.options.routeState.generation++;
     await this.replica.close();
@@ -5692,12 +6035,31 @@ class Provider
         subscription.cancel?.();
       }
       this.#operationSubscriptions.clear();
+      this.#serverSeqObservers.clear();
       this.#routeAbort.abort(new Error("memory replica closed"));
       this.options.routeState.generation++;
     }
     await this.replica.closeNow();
   }
 }
+
+/**
+ * The session a released replica left (`SpaceReplica.releasedSession()`),
+ * which the next replica of the space resumes.
+ */
+type ReleasedSession = {
+  /** The session's id. */
+  sessionId: string;
+
+  /** The session's latest token, which a resume presents. */
+  sessionToken?: string;
+
+  /** The server sequence the session had seen. */
+  seenSeq: number;
+
+  /** The local sequence the session's next commit takes. */
+  nextLocalSeq: number;
+};
 
 type WatchAddress = {
   id: URI;
@@ -6359,6 +6721,11 @@ export class SpaceReplica
   #onAccessChange?: (error: Error | undefined) => void;
   #onSessionAnswered?: () => void;
   #cancelTermination: Cancel | undefined;
+  #onServerSeq?: (serverSeq: number) => void;
+  #cancelServerSeq: Cancel | undefined;
+
+  /** The newest seq this replica has reported to `#onServerSeq`. */
+  #reportedServerSeq = 0;
   #onSessionReplaced?: () => void;
   #onSessionError?: (error: Error) => void;
 
@@ -6394,6 +6761,7 @@ export class SpaceReplica
     this.#subscription = options.subscription;
     this.#onAccessChange = options.onAccessChange;
     this.#onSessionAnswered = options.onSessionAnswered;
+    this.#onServerSeq = options.onServerSeq;
     this.#onSessionReplaced = options.onSessionReplaced;
     this.#onSessionError = options.onSessionError;
     this.#scopeKeyIdentity = options.scopeKeyIdentity;
@@ -7535,6 +7903,43 @@ export class SpaceReplica
     return (await session.entityIdExists(id))?.exists;
   }
 
+  /** See `IStorageProvider.listHistory`. */
+  async listHistory(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.listHistory(options);
+  }
+
+  /** See `IStorageProvider.listBranches`. */
+  async listBranches(): Promise<BranchInfo[]> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.listBranches();
+  }
+
+  /** See `IStorageProvider.createBranch`. */
+  async createBranch(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.createBranch(name, options);
+  }
+
+  /** See `IStorageProvider.deleteBranch`. */
+  async deleteBranch(name: BranchName): Promise<void> {
+    const { session } = await this.#activeSessionHandle();
+    await session.deleteBranch(name);
+  }
+
+  /** See `IStorageProvider.restoreBranch`. */
+  async restoreBranch(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined> {
+    const { session } = await this.#activeSessionHandle();
+    return await session.restoreBranch(options);
+  }
+
   async pullToServerHead(): Promise<void> {
     await this.serverHeadSeq();
   }
@@ -7576,6 +7981,27 @@ export class SpaceReplica
    */
   sqliteServerCommitRowLabelEval(): boolean {
     return this.#sessionClient?.serverFlags?.sqliteCommitRowLabelEval === true;
+  }
+
+  /**
+   * Whether the server this replica is connected to advertises
+   * `markedSplicesV1` on the connection that is up now
+   * (`advertisesMarkedSplices()`). `false` until a session exists, and while
+   * its connection is down or reconnecting: a commit built then goes index by
+   * index.
+   *
+   * A commit built marked can reach its first send on another connection.
+   * The session checks it then, and refuses it, unsent, where that
+   * connection does not advertise the mark (memory client
+   * `isMarkedSpliceRefusal()`), which `#pushCommit()` takes as a local
+   * conflict. A resend of one already sent keeps its bytes, so that the store
+   * can answer a resend of a commit it already took (its replay identity).
+   * That resend reaches a server that does not read the mark only after a
+   * rollback past marked splices, which under server execution a deployment
+   * must not make (docs/specs/memory-v2/08-conflict-granularity.md).
+   */
+  markedSplices(): boolean {
+    return advertisesMarkedSplices(this.#sessionClient);
   }
 
   async registerSqliteDiskSource(
@@ -7623,6 +8049,21 @@ export class SpaceReplica
    */
   crossingsReported(): boolean {
     return this.#sessionClient?.serverFlags?.syncCrossingsV1 === true;
+  }
+
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document sees it move with every change to the ledger: the
+   * session asked for the default branch, where the invitation service moves
+   * it, and its server advertises `spaceInvitesRevision`. A session that asked
+   * to fork a branch is taken to be of it (`SpaceSession.requestedBranch`),
+   * even where the server opened it on the default branch, which errs toward
+   * reading the ledger. `false` until a session exists, and refreshed by each
+   * reconnect handshake.
+   */
+  invitesRevisionWatchable(): boolean {
+    return this.#sessionSession?.requestedBranch === DEFAULT_BRANCH &&
+      this.#sessionClient?.serverFlags?.spaceInvitesRevision === true;
   }
 
   /** Waits for session authentication and watch restoration after reconnect. */
@@ -7849,6 +8290,42 @@ export class SpaceReplica
       return undefined;
     }
     return this.#completeThroughSeq;
+  }
+
+  /**
+   * @inheritDoc
+   *
+   * No frame has delivered such a document, no watch of this replica's is
+   * rooted at it, and no release pass or retraction has settled what the
+   * session keeps of it. The server sends a session the documents its
+   * watches reach, so such a document stays at the replica's own version
+   * while other sessions change it, until something loads it, unless a
+   * watch rooted at another document reaches it. A document a release pass
+   * owes a watch, or one a retraction left unwatched for its holder, is
+   * that pass's to settle. Content under a
+   * content-addressed id cannot change and needs no watch, a document held
+   * only in this replica has no stored copy another session could change,
+   * and a replica that reads its store directly learns of every write to a
+   * document it holds.
+   */
+  lacksWatchEvidence(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean {
+    if (this.#storeReadThrough() !== undefined) return false;
+    const address = {
+      id,
+      scope,
+      ...(instance !== undefined ? { scopeKey: instance } : {}),
+    };
+    if (this.#isLocalSessionDocument(address)) return false;
+    const key = this.#docKeyOf(address);
+    const record = this.#docs.get(key);
+    return record !== undefined && !this.#delivered.has(key) &&
+      (this.#rootWatches.get(key)?.watches.size ?? 0) === 0 &&
+      !this.#owedWatches.has(key) && !this.#retractedHeld.has(key) &&
+      !holdsImmutableContent(id, scope, record);
   }
 
   /** ISpaceReplica.isConfirmedDocument. */
@@ -8147,6 +8624,8 @@ export class SpaceReplica
   async close(): Promise<void> {
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -8326,6 +8805,8 @@ export class SpaceReplica
   closeNow(): void {
     this.#cancelTermination?.();
     this.#cancelTermination = undefined;
+    this.#cancelServerSeq?.();
+    this.#cancelServerSeq = undefined;
     this.#localCoverageObservers.clear();
     this.#viewPlanObservers.clear();
     this.#cancelViewCapabilityLost?.();
@@ -8612,6 +9093,73 @@ export class SpaceReplica
   #holds(address: LocalDocAddress, key = this.#docKeyOf(address)): boolean {
     return (this.#docs.get(key)?.pending.length ?? 0) > 0 ||
       this.#sinks.has(key) || this.#isRead(address);
+  }
+
+  /**
+   * Whether nothing uses this replica, so that its space can be released
+   * ("Releasing a space's session" in `docs/features/document-release.md`):
+   * it keeps and watches no document, no write, load or watch change of its
+   * is under way, nothing subscribes through it, and its session is neither
+   * being opened nor refused. The watch of the space's access list that a
+   * gated replica keeps for itself, and the access list it keeps loaded, do
+   * not count. Only a provider not yet destroyed asks, so the replica it
+   * asks has not closed.
+   */
+  isUnused(): boolean {
+    const own = this.#accessListWatch === undefined
+      ? undefined
+      : docKey(aclDocId(this.#space) as URI, "space");
+    const onlyOwn = (keys: Iterable<string>): boolean => {
+      for (const key of keys) if (key !== own) return false;
+      return true;
+    };
+    const ownSinks = own === undefined ? 0 : this.#sinks.get(own)?.size ?? 0;
+    return onlyOwn(this.#docs.keys()) &&
+      (own === undefined || (this.#docs.get(own)?.pending.length ?? 0) === 0) &&
+      onlyOwn(this.#rootWatches.keys()) && onlyOwn(this.#delivered.keys()) &&
+      this.#owedWatches.size === 0 && this.#retractedHeld.size === 0 &&
+      this.#quarantined.size === 0 && this.#sinkCount === ownSinks &&
+      this.#operationSinks.size === 0 && this.#syncTasks.size === 0 &&
+      this.#syncPromises.size === 0 && this.#commitPromises.size === 0 &&
+      this.#inFlightCommits.size === 0 && this.#suppressedVerdicts.size === 0 &&
+      this.#rejectedPendingLayers.size === 0 &&
+      this.#operationWatchRemovals.size === 0 &&
+      this.#parkedAccepts.size === 0 && this.#watchRefreshInFlight === 0 &&
+      this.#queuedWatchRefresh === null &&
+      (this.#eventAppendQueue?.pending.length ?? 0) === 0 &&
+      this.#viewOwnerRetired === undefined && this.#viewPlans.length === 0 &&
+      !(this.#sessionHandle !== undefined && !this.sessionAnswered()) &&
+      this.#sessionAdmissionError === undefined &&
+      this.authorizationError() === undefined;
+  }
+
+  /**
+   * What a replica opened in this space after it is released needs to carry
+   * on this one's session: the session's id, its latest token and the
+   * server sequence it has seen, which a resume presents, and the local
+   * sequence its next commit takes, since the session's commits never reuse
+   * one. Absent when no session was opened.
+   */
+  releasedSession(): ReleasedSession | undefined {
+    const session = this.#sessionSession;
+    if (session === undefined) return undefined;
+    return {
+      sessionId: session.sessionId,
+      seenSeq: session.serverSeq,
+      ...(session.sessionToken !== undefined
+        ? { sessionToken: session.sessionToken }
+        : {}),
+      nextLocalSeq: this.#nextLocalSeq,
+    };
+  }
+
+  /**
+   * Takes up `released`, the session a released replica of this space left
+   * (`releasedSession()`): this replica's commits go on from its local
+   * sequence.
+   */
+  continueReleasedSession(released: ReleasedSession): void {
+    this.#nextLocalSeq = Math.max(this.#nextLocalSeq, released.nextLocalSeq);
   }
 
   /**
@@ -10508,6 +11056,32 @@ export class SpaceReplica
         });
         return { ok: {} };
       } catch (error) {
+        if (MemoryV2Client.isMarkedSpliceRefusal(error)) {
+          // The session refused the commit before its first send, as the
+          // connection it would have gone out on does not advertise
+          // `markedSplicesV1`. Nothing reached the store, so it is a local
+          // conflict, with no stale floor: the store never saw this localSeq
+          // and will never report it caught up. The action runs again and
+          // diffs the change for the connection as it is then.
+          const refused = this.#makeLocalRejection(
+            commit,
+            describeFailure(error),
+          );
+          telemetry?.submit({
+            type: "storage.push.error",
+            id: pushOpId,
+            error: refused.name,
+            ...rejectionAttribution(refused, commit),
+          });
+          notifyRejectionSources(refused);
+          return await this.#finalizeRejection(
+            localSeq,
+            operations,
+            source,
+            refused,
+            { pushed: true },
+          );
+        }
         let cause = error;
         if (this.#replacementRead !== undefined) {
           const routeConflict = new Error("memory replica route replaced");
@@ -10834,120 +11408,6 @@ export class SpaceReplica
       record.materialized = undefined;
     }
   }
-
-  /**
-   * Return the raw reads that become commit-time concurrency preconditions.
-   * Reconciliation and commit construction must use the same set: loading a
-   * read that buildReads later drops can spend a retry on an observation the
-   * server would never validate.
-   */
-  #commitReadActivities(
-    source: IStorageTransaction,
-    reads: Iterable<IReadActivity>,
-  ): IReadActivity[] {
-    // A mergeable op resolves against durable state, so it does not depend on
-    // the document's prior value. Reads incidental to the op are excluded,
-    // while a handler's own explicit read remains a real dependency.
-    const mergeableOpPathsByEntity = new Map<
-      string,
-      (readonly string[])[]
-    >();
-    for (const op of getDirectTransactionMergeableOpAddresses(source) ?? []) {
-      if (op.space !== this.#space) continue;
-      const key = `${op.id}\0${normalizeCellScope(op.scope)}`;
-      const paths = mergeableOpPathsByEntity.get(key);
-      if (paths) {
-        paths.push(op.path);
-      } else {
-        mergeableOpPathsByEntity.set(key, [op.path]);
-      }
-    }
-    // A document whose CFC envelope this transaction writes beside a
-    // mergeable op. The envelope is a whole-member replace whose entries name
-    // positions in the array the transaction read, and which carries forward
-    // the entries it read there; the op, by contrast, is placed by the store
-    // against the live array. Both the envelope and the array it was placed
-    // against are therefore dependencies of such a commit: a concurrent
-    // change to either moves an element away from the entry that describes
-    // it, or drops another writer's entries. Those documents keep every read
-    // the narrowing below would otherwise drop, so the commit conflicts and
-    // the writer re-derives its envelope against the list the store holds.
-    const envelopeWritersWithMergeableOps = new Set<string>();
-    if (mergeableOpPathsByEntity.size > 0) {
-      for (const write of getTransactionWriteAttempts(source) ?? []) {
-        if (
-          write.space !== this.#space ||
-          !Differential.isCfcEnvelopePath(write.path)
-        ) {
-          continue;
-        }
-        const key = `${write.id}\0${normalizeCellScope(write.scope)}`;
-        if (mergeableOpPathsByEntity.has(key)) {
-          envelopeWritersWithMergeableOps.add(key);
-        }
-      }
-    }
-
-    const commitReads: IReadActivity[] = [];
-    for (const read of reads) {
-      if (
-        read.space !== this.#space ||
-        (read.type ?? DOCUMENT_MIME) !== DOCUMENT_MIME ||
-        hasInlineCellScheme(read.id) ||
-        // Content-addressed documents cannot change, so their reads carry no
-        // commit-time concurrency precondition.
-        read.id.startsWith("cid:") ||
-        // Blind UI-input write-target reads are replaced by one structural
-        // parent read after buildReads' main loop.
-        isReadIgnoredForCommit(read.meta) ||
-        // Reference-resolution shape reads stay reactive but do not constrain
-        // the commit; recursive reads remain value dependencies.
-        (isReadExcludedFromConflict(read.meta) &&
-          read.nonRecursive === true)
-      ) {
-        continue;
-      }
-
-      const scope = normalizeCellScope(read.scope);
-      const key = `${read.id}\0${scope}`;
-      if (envelopeWritersWithMergeableOps.has(key)) {
-        commitReads.push(read);
-        continue;
-      }
-      // Runtime verifier reads of the CFC label are point-in-time policy
-      // observations, not consumed values.
-      if (
-        isInternalVerifierRead(read.meta) &&
-        Differential.isCfcEnvelopePath(read.path)
-      ) {
-        continue;
-      }
-      const opPaths = mergeableOpPathsByEntity.get(key);
-      // A read of an op array's length is a genuine dependency: the handler
-      // used the element count that a concurrent mergeable op changes.
-      const readsMergeableOpArrayLength = opPaths !== undefined &&
-        opPaths.some((opPath) => isArrayLengthChildPath(opPath, read.path));
-      if (
-        opPaths !== undefined &&
-        !readsMergeableOpArrayLength &&
-        (isMergeableOpRead(read.meta) ||
-          isReadMarkedAsAttemptedWrite(read.meta) ||
-          // A mergeable write reads the CFC envelope as part of the write;
-          // the read leaves the conflict set unless the transaction also
-          // writes the envelope (handled above).
-          Differential.isCfcEnvelopePath(read.path) ||
-          opPaths.some((opPath) =>
-            isStrictPrefixPath(opPath, read.path) ||
-            (read.nonRecursive === true && isSamePath(opPath, read.path))
-          ))
-      ) {
-        continue;
-      }
-      commitReads.push(read);
-    }
-    return commitReads;
-  }
-
   /**
    * The documents `source` read as absent that this replica has never
    * examined, each keyed the way a pending load for it is keyed: an address
@@ -10993,7 +11453,7 @@ export class SpaceReplica
       ownWrites.add(docKey(write.id, this.instanceKey(write.scope, identity)));
     }
     const unexamined = new Map<string, UnexaminedAbsence>();
-    for (const read of this.#commitReadActivities(source, reads)) {
+    for (const read of commitReadActivities(this.#space, source, reads)) {
       const scope = normalizeCellScope(read.scope);
       // A malformed/incomplete served identity cannot name the instance on
       // the wire. Leave its claim for commit admission rather than waiting
@@ -11036,6 +11496,23 @@ export class SpaceReplica
       if ((this.#docs.get(key)?.confirmed.seq ?? 0) > 0) present += 1;
     }
     return present;
+  }
+
+  /**
+   * Those of `absences` this replica still holds no record of: neither a
+   * revision nor an examined absence. `absences` is a list an
+   * {@link unexaminedAbsences} call returned, of this replica or of one it
+   * replaced, keyed as {@link presentCount} keys it.
+   */
+  stillUnexamined(
+    absences: readonly UnexaminedAbsence[],
+  ): UnexaminedAbsence[] {
+    return absences.filter((absence) =>
+      !this.#docs.has(docKey(
+        absence.id,
+        this.instanceKey(absence.scope, undefined, absence.scopeKey),
+      ))
+    );
   }
 
   /**
@@ -11238,7 +11715,9 @@ export class SpaceReplica
       pushCommitRead(pin.id as URI, pin.scope, toCommitReadPath([]), false);
     }
     for (
-      const read of source ? this.#commitReadActivities(source, reads) : []
+      const read of source
+        ? commitReadActivities(this.#space, source, reads)
+        : []
     ) {
       const scope = normalizeCellScope(read.scope);
       pushCommitRead(
@@ -13417,6 +13896,17 @@ export class SpaceReplica
     return false;
   }
 
+  /**
+   * Helper for `#memoizedSessionHandle()`, which reports `serverSeq` to
+   * `#onServerSeq` when it is newer than the one reported last.
+   */
+  #reportServerSeq(serverSeq: number): void {
+    if (this.#onServerSeq === undefined) return;
+    if (!(serverSeq > this.#reportedServerSeq)) return;
+    this.#reportedServerSeq = serverSeq;
+    this.#onServerSeq(serverSeq);
+  }
+
   #memoizedSessionHandle(): Promise<{
     client: SessionConnection;
     session: MemoryV2Client.SpaceSession;
@@ -13450,6 +13940,15 @@ export class SpaceReplica
           this.#lastAuthorizationError = null;
           this.#onAccessChange?.(undefined);
           this.#onSessionAnswered?.();
+          this.#cancelServerSeq?.();
+          this.#cancelServerSeq = this.#onServerSeq === undefined
+            ? undefined
+            : resolved.session.subscribeServerSeq((serverSeq) =>
+              this.#reportServerSeq(serverSeq)
+            );
+          // A session opened anew starts at the seq its open answered, which
+          // it reports to no observer, so the replica reports it here.
+          this.#reportServerSeq(resolved.session.serverSeq);
           this.#cancelTermination?.();
           this.#cancelTermination = resolved.session.subscribeTermination(
             (error) => {

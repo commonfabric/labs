@@ -1,24 +1,28 @@
 import { expect } from "@std/expect";
-import { afterAll, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
   getMemoryProtocolFlags,
+  MAX_UNTRUSTED_MESSAGE_SLOTS,
   MEMORY_PROTOCOL,
+  type ServerMessage,
 } from "@commonfabric/memory/v2";
 import {
   decodeCompressedMemoryMessage,
   encodeCompressedMemoryMessage,
   type EncodedMemoryMessage,
   encodeMemoryCompressionControlMessage,
+  MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
   parseMemoryCompressionControlMessage,
 } from "@commonfabric/memory/v2/message-compression";
+import { afterAll, describe, it } from "@commonfabric/test-support/test";
 
 import {
   attachMemorySocketPipeline,
   bufferTextMessagesUntilNegotiated,
+  MEMORY_SOCKET_SYNC_PARTS,
   type MemorySocketServer,
   setUpMemorySocket,
   warnOnOversizedOutboundFrame,
@@ -418,6 +422,51 @@ describe("memory.handlers", () => {
       if (typeof frame !== "string") throw new Error("Expected text hello");
       const reply = decodeMemoryBoundary<{ type: string }>(frame);
       expect(reply.type).toBe("hello.ok");
+    });
+
+    it("hands its server the sync bounds and sends a payload the server encoded as it is", async () => {
+      const fake = new FakeSocket();
+      let bounds: unknown;
+      const ok = {
+        type: "hello.ok",
+        protocol: MEMORY_PROTOCOL,
+        flags: { ...getMemoryProtocolFlags(), messageCompressionV1: false },
+      } as unknown as ServerMessage;
+      // Not the message's own encoding, so the frame shows which was sent.
+      const payload = encodeMemoryBoundary({
+        ...(ok as unknown as Record<string, never>),
+        encodedBy: "server",
+      } as never);
+      const server: MemorySocketServer = {
+        connect(send, syncParts) {
+          bounds = syncParts;
+          return {
+            id: "server-encoded",
+            receive() {
+              send(ok, payload);
+              return Promise.resolve();
+            },
+            close() {},
+          };
+        },
+      };
+
+      await attachOver(fake, server);
+
+      expect(bounds).toBe(MEMORY_SOCKET_SYNC_PARTS);
+      expect(fake.sent).toEqual([payload]);
+      fake.dispatchEvent(new CloseEvent("close"));
+    });
+
+    it("sends a sync whole only while the compression encoder still compresses it", () => {
+      // Past this the encoder sends text, which is several times the bytes:
+      // a sync that would be is split instead, each part compressed.
+      expect(MEMORY_SOCKET_SYNC_PARTS.whole).toBeLessThanOrEqual(
+        MAX_DECOMPRESSED_MEMORY_MESSAGE_BYTES,
+      );
+      expect(MEMORY_SOCKET_SYNC_PARTS.bytes).toBeLessThanOrEqual(
+        MEMORY_SOCKET_SYNC_PARTS.whole!,
+      );
     });
 
     it("drops server messages once the socket has left OPEN", async () => {
@@ -889,6 +938,65 @@ describe("memory.handlers", () => {
         requestId: "traced",
       });
       fake.dispatchEvent(new CloseEvent("close"));
+    });
+
+    it("traces a commit under the slot limit its server admits", async () => {
+      const envGet = Deno.env.get.bind(Deno.env);
+      using _env = stub(
+        Deno.env,
+        "get",
+        (name) => name === "CF_DEBUG_MEMORY_WRITES" ? "1" : envGet(name),
+      );
+      const traced: string[] = [];
+      using _console = stub(console, "error", (...args: unknown[]) => {
+        if (String(args[0]).startsWith("[memwrite]")) {
+          traced.push(String(args[0]));
+        }
+      });
+      // A write standing for one slot past the default, a few bytes encoded.
+      const items: unknown[] = [];
+      items[MAX_UNTRUSTED_MESSAGE_SLOTS] = 1;
+      const commit = encodeMemoryBoundary({
+        type: "transact",
+        requestId: "past-default",
+        space: "did:key:diagnostic",
+        sessionId: "missing-session",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: "of:large",
+            value: { value: { items } } as never,
+          }],
+        },
+      });
+      const hello = encodeMemoryBoundary({
+        type: "hello",
+        protocol: MEMORY_PROTOCOL,
+        flags: { ...getMemoryProtocolFlags(), messageCompressionV1: false },
+      });
+
+      for (
+        const untrustedMessageSlots of [
+          undefined,
+          MAX_UNTRUSTED_MESSAGE_SLOTS * 2,
+        ]
+      ) {
+        traced.length = 0;
+        const fake = new FakeSocket();
+        const { server } = recordingServer();
+        await attachOver(fake, {
+          ...server,
+          options: { untrustedMessageSlots },
+        }, hello);
+        fake.dispatchEvent(new MessageEvent("message", { data: commit }));
+        await Promise.race([fake.whenSent(2), fake.whenClosed()]);
+        expect(traced).toHaveLength(
+          untrustedMessageSlots === undefined ? 0 : 1,
+        );
+        fake.dispatchEvent(new CloseEvent("close"));
+      }
     });
   });
 

@@ -1,3 +1,13 @@
+/**
+ * A markdown note with an inline-editable title and a code editor that supports
+ * wiki-links and mentions of other pieces in the space. It shows which pieces
+ * link back to it and which notebook it belongs to, and lets you view it
+ * rendered, start a new note, or open a notebook from a menu that marks the
+ * ones holding it.
+ * An assistant can search a note's content or translate it into another
+ * language.
+ */
+
 import {
   action,
   cellFromUrl,
@@ -195,14 +205,10 @@ const Note = pattern<NoteInput, NoteOutput>(
     content,
     isHidden,
     linkPattern,
-    parentNotebook: _parentNotebook,
+    parentNotebook,
     references,
     [SELF]: self,
   }) => {
-    // Ensure parentNotebook is always a Writable (input is optional)
-    const parentNotebook = _parentNotebook ??
-      new Writable(null as NotebookPiece | null);
-
     // Type-based discovery for notebooks and "All Notes" piece
     const notebookWish = wish<NotebookPiece>({
       query: "#notebook",

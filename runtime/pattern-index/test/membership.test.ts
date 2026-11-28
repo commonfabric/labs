@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   decodeDelegation,
@@ -7,6 +6,7 @@ import {
   verifyDelegation,
 } from "@commonfabric/identity";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   checkIndexChain,
   DEFAULT_SIGNER_LINK_SECONDS,

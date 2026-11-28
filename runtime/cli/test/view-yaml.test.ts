@@ -10,11 +10,15 @@ import {
   yamlDocument,
   yamlHighlightLines,
 } from "../lib/view/languages/yaml/yaml.ts";
-import { languageForFile } from "../lib/view/languages/language.ts";
+import {
+  languageForFile,
+  languageForSource,
+} from "../lib/view/languages/language.ts";
 import type { Line, TokenClass } from "../lib/view/model.ts";
 import { parseDiff } from "../lib/view/diff.ts";
 import { buildDiffDocument, type DiffWorkspace } from "../lib/view/diffdoc.ts";
 import { createDiffHighlighter, diffSource } from "../lib/view/diffedit.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function verbatim(lines: readonly Line[]): string {
   return lines.map((line) => line.spans.map((span) => span.text).join(""))
@@ -31,7 +35,7 @@ function classesOf(lines: readonly Line[], token: string): Set<TokenClass> {
   return classes;
 }
 
-Deno.test("yaml: path matching recognizes yml and yaml", () => {
+test("yaml: path matching recognizes yml and yaml", () => {
   assertEquals(languageForFile("config.yaml").id, "yaml");
   assertEquals(
     languageForFile("/repo/.github/workflows/check.yml").id,
@@ -43,7 +47,30 @@ Deno.test("yaml: path matching recognizes yml and yaml", () => {
   assertEquals(languageForFile(undefined).id, "plain-text");
 });
 
-Deno.test("yaml: keys and scalar types receive distinct classes", () => {
+test("yaml: a .conf file selects YAML when it opens with a block key or a document marker", () => {
+  const collector = "jobs:\n  - name: toolshed-binary\n";
+
+  assertEquals(
+    languageForSource("netdata/go.d/systemdunits.conf", collector).id,
+    "yaml",
+  );
+  assertEquals(languageForSource("a.conf", "# jobs\n\n---\na: 1\n").id, "yaml");
+  assertEquals(languageForSource("a.conf", "jobs: # all\n\t- x\n").id, "yaml");
+  assertEquals(languageForSource("a.conf", "jobs:\n- x\n").id, "yaml");
+  assertEquals(
+    languageForSource("a.conf", "--- # generated\na: 1\n").id,
+    "yaml",
+  );
+  assertEquals(languageForSource("a.conf", "jobs:\n-x\n").id, "plain-text");
+  assertEquals(languageForSource("a.conf", "jobs:").id, "plain-text");
+  assertEquals(
+    languageForSource("a.conf", "template: web_log\n  on: x\n").id,
+    "directive",
+  );
+  assertEquals(languageForSource("a.yaml.txt", collector).id, "plain-text");
+});
+
+test("yaml: keys and scalar types receive distinct classes", () => {
   const lines = yamlHighlightLines([
     "name: widget",
     "count: 42",
@@ -77,7 +104,7 @@ Deno.test("yaml: keys and scalar types receive distinct classes", () => {
   assert(classesOf(lines, ":").has("punctuation"));
 });
 
-Deno.test("yaml: core scalar resolution uses exact YAML 1.2 spellings", () => {
+test("yaml: core scalar resolution uses exact YAML 1.2 spellings", () => {
   const typed: [string, TokenClass][] = [
     ["True", "boolean"],
     ["FALSE", "boolean"],
@@ -121,7 +148,7 @@ Deno.test("yaml: core scalar resolution uses exact YAML 1.2 spellings", () => {
   }
 });
 
-Deno.test("yaml: quoted keys and values keep escapes and doubled quotes", () => {
+test("yaml: quoted keys and values keep escapes and doubled quotes", () => {
   const source = [
     `"quoted key": "a \\"value\\" # still a value"`,
     "'single key': 'it''s # data'",
@@ -137,7 +164,7 @@ Deno.test("yaml: quoted keys and values keep escapes and doubled quotes", () => 
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: explicit multiline quoted keys retain key styling", () => {
+test("yaml: explicit multiline quoted keys retain key styling", () => {
   // YAML restricts implicit keys to one line, so multiline keys use `?`.
   for (
     const [source, fragments] of [
@@ -168,7 +195,7 @@ Deno.test("yaml: explicit multiline quoted keys retain key styling", () => {
   }
 });
 
-Deno.test("yaml: comments require separation and do not consume URLs", () => {
+test("yaml: comments require separation and do not consume URLs", () => {
   const source = [
     "url: https://example.test/a#fragment",
     "label: value # trailing comment",
@@ -184,7 +211,7 @@ Deno.test("yaml: comments require separation and do not consume URLs", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: flow collections use punctuation and rainbow brackets", () => {
+test("yaml: flow collections use punctuation and rainbow brackets", () => {
   const lines = yamlHighlightLines(
     `root: {items: [1, 0x2a, 0o17, 0b101], ready: false}`,
   );
@@ -202,7 +229,7 @@ Deno.test("yaml: flow collections use punctuation and rainbow brackets", () => {
   assert(classesOf(lines, ",").has("punctuation"));
 });
 
-Deno.test("yaml: flow delimiters only terminate plain scalars inside flow", () => {
+test("yaml: flow delimiters only terminate plain scalars inside flow", () => {
   const block = yamlHighlightLines("foo:[bar]");
   assertEquals([...classesOf(block, "foo:[bar]")], ["string"]);
   assert(!block[0].spans.some((span) => span.cls === "propertyName"));
@@ -227,7 +254,7 @@ Deno.test("yaml: flow delimiters only terminate plain scalars inside flow", () =
   assert(!adjacent[0].spans.some((span) => span.text === ":other"));
 });
 
-Deno.test("yaml: sequence markers, tags, anchors, and aliases are highlighted", () => {
+test("yaml: sequence markers, tags, anchors, and aliases are highlighted", () => {
   const source = [
     "---",
     "defaults: &defaults",
@@ -268,7 +295,7 @@ Deno.test("yaml: sequence markers, tags, anchors, and aliases are highlighted", 
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: an alias can be an explicit mapping key", () => {
+test("yaml: an alias can be an explicit mapping key", () => {
   const source = "? *alias\n: value";
   const lines = yamlHighlightLines(source);
 
@@ -277,7 +304,7 @@ Deno.test("yaml: an alias can be an explicit mapping key", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: verbatim tags and property-only lines remain lossless", () => {
+test("yaml: verbatim tags and property-only lines remain lossless", () => {
   const source = [
     "tagged: !<tag:example.org,2026:widget> value",
     "unfinished: !<tag:example.org,2026:widget",
@@ -302,7 +329,7 @@ Deno.test("yaml: verbatim tags and property-only lines remain lossless", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: adjacent flow mapping values follow complete key tokens", () => {
+test("yaml: adjacent flow mapping values follow complete key tokens", () => {
   const source = [
     '[foo":bar]',
     '{"foo" :bar}',
@@ -320,7 +347,7 @@ Deno.test("yaml: adjacent flow mapping values follow complete key tokens", () =>
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: flow collection block keys retain their mapping indent", () => {
+test("yaml: flow collection block keys retain their mapping indent", () => {
   for (
     const source of [
       "[a, b]:\n  |2\n  child: inside\nnext: done",
@@ -339,7 +366,7 @@ Deno.test("yaml: flow collection block keys retain their mapping indent", () => 
   }
 });
 
-Deno.test("yaml: completed block flow nodes do not leak into later keys", () => {
+test("yaml: completed block flow nodes do not leak into later keys", () => {
   for (
     const source of [
       'outer:\n  first: [a]\n"root":\n  |2\n  child: inside\nnext: done',
@@ -353,7 +380,7 @@ Deno.test("yaml: completed block flow nodes do not leak into later keys", () => 
   }
 });
 
-Deno.test("yaml: empty block keys establish their own mapping indent", () => {
+test("yaml: empty block keys establish their own mapping indent", () => {
   for (
     const source of [
       ":\n  |2\n  child: inside\nnext: done",
@@ -367,7 +394,7 @@ Deno.test("yaml: empty block keys establish their own mapping indent", () => {
   }
 });
 
-Deno.test("yaml: document markers start at the stream's first column", () => {
+test("yaml: document markers start at the stream's first column", () => {
   const withBom = "\uFEFF---\nkey: value";
   const bomLines = yamlHighlightLines(withBom);
   assertEquals([...classesOf(bomLines, "---")], ["sectionHeader"]);
@@ -419,7 +446,7 @@ Deno.test("yaml: document markers start at the stream's first column", () => {
   assertEquals([...classesOf(embeddedBom, "foo\uFEFF#bar")], ["string"]);
 });
 
-Deno.test("yaml: a BOM only starts a document prefix before a marker", () => {
+test("yaml: a BOM only starts a document prefix before a marker", () => {
   const content = "first: value\n\uFEFFsecond: value";
   assertEquals(verbatim(yamlHighlightLines(content)), content);
 
@@ -439,7 +466,7 @@ Deno.test("yaml: a BOM only starts a document prefix before a marker", () => {
   assertEquals(verbatim(lines), prefix);
 });
 
-Deno.test("yaml: block scalar content stays string until it dedents", () => {
+test("yaml: block scalar content stays string until it dedents", () => {
   const source = [
     "script: |2- # shell text",
     "  echo '# not a YAML comment'",
@@ -466,7 +493,7 @@ Deno.test("yaml: block scalar content stays string until it dedents", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: block scalars accept blank content and reject bad headers", () => {
+test("yaml: block scalars accept blank content and reject bad headers", () => {
   const source = [
     "literal: |",
     "  ",
@@ -485,7 +512,7 @@ Deno.test("yaml: block scalars accept blank content and reject bad headers", () 
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: a stream BOM does not add logical indentation", () => {
+test("yaml: a stream BOM does not add logical indentation", () => {
   const source = "\uFEFFscript: |1\n child: inside\nnext: true";
   const lines = yamlHighlightLines(source);
   assertEquals([...classesOf(lines, "child: inside")], ["string"]);
@@ -494,7 +521,7 @@ Deno.test("yaml: a stream BOM does not add logical indentation", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: explicit block indentation follows compact sequence mappings", () => {
+test("yaml: explicit block indentation follows compact sequence mappings", () => {
   const source = [
     "outer:",
     "  - key: |2",
@@ -540,7 +567,7 @@ Deno.test("yaml: explicit block indentation follows compact sequence mappings", 
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: node properties preserve a pending block scalar indent", () => {
+test("yaml: node properties preserve a pending block scalar indent", () => {
   for (
     const source of [
       "folded:\n   !foo\n  >1\n child: inside\nnext: done",
@@ -556,7 +583,7 @@ Deno.test("yaml: node properties preserve a pending block scalar indent", () => 
   }
 });
 
-Deno.test("yaml: a standalone explicit key carries state across lines", () => {
+test("yaml: a standalone explicit key carries state across lines", () => {
   const source = [
     "?",
     "  key",
@@ -572,7 +599,7 @@ Deno.test("yaml: a standalone explicit key carries state across lines", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: explicit flow collection keys carry state to their value", () => {
+test("yaml: explicit flow collection keys carry state to their value", () => {
   for (
     const source of [
       "?\n  [a, b]\n:\n  |2\n  child: inside\nnext: done",
@@ -587,7 +614,7 @@ Deno.test("yaml: explicit flow collection keys carry state to their value", () =
   }
 });
 
-Deno.test("yaml: nested explicit keys retain their outer value scope", () => {
+test("yaml: nested explicit keys retain their outer value scope", () => {
   for (
     const source of [
       "?\n  {? [a, b]: c}\n:\n  |2\n  child: inside\nnext: done",
@@ -607,7 +634,7 @@ Deno.test("yaml: nested explicit keys retain their outer value scope", () => {
   }
 });
 
-Deno.test("yaml: compact mappings inside explicit keys use local indentation", () => {
+test("yaml: compact mappings inside explicit keys use local indentation", () => {
   for (
     const source of [
       "? : value\n: outer",
@@ -634,7 +661,7 @@ Deno.test("yaml: compact mappings inside explicit keys use local indentation", (
   }
 });
 
-Deno.test("yaml: explicit value colons consume pending empty keys", () => {
+test("yaml: explicit value colons consume pending empty keys", () => {
   for (
     const source of [
       "?\n: |2\n  child: inside\nnext: done",
@@ -668,7 +695,7 @@ Deno.test("yaml: explicit value colons consume pending empty keys", () => {
   }
 });
 
-Deno.test("yaml: compact empty keys retain their mapping indentation", () => {
+test("yaml: compact empty keys retain their mapping indentation", () => {
   for (
     const source of [
       "- : true\n  next: done",
@@ -688,7 +715,7 @@ Deno.test("yaml: compact empty keys retain their mapping indentation", () => {
   }
 });
 
-Deno.test("yaml: nested explicit keys accept indentless sequence nodes", () => {
+test("yaml: nested explicit keys accept indentless sequence nodes", () => {
   const source = [
     "outer:",
     "  ?",
@@ -705,7 +732,7 @@ Deno.test("yaml: nested explicit keys accept indentless sequence nodes", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: explicit block scalar key content uses key styling", () => {
+test("yaml: explicit block scalar key content uses key styling", () => {
   for (
     const source of [
       "? |-\n  key text\n: value",
@@ -723,7 +750,7 @@ Deno.test("yaml: explicit block scalar key content uses key styling", () => {
   }
 });
 
-Deno.test("yaml: multiline plain explicit keys retain key styling", () => {
+test("yaml: multiline plain explicit keys retain key styling", () => {
   for (
     const source of [
       "? multi\n  line\n: value",
@@ -739,7 +766,7 @@ Deno.test("yaml: multiline plain explicit keys retain key styling", () => {
   }
 });
 
-Deno.test("yaml: multiline plain scalars resolve as strings", () => {
+test("yaml: multiline plain scalars resolve as strings", () => {
   const source = [
     "boolean: true",
     "  continued",
@@ -767,7 +794,7 @@ Deno.test("yaml: multiline plain scalars resolve as strings", () => {
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: multiline plain scalars preserve whitespace and comments", () => {
+test("yaml: multiline plain scalars preserve whitespace and comments", () => {
   const block = [
     "message: first",
     "  \t",
@@ -804,7 +831,7 @@ Deno.test("yaml: multiline plain scalars preserve whitespace and comments", () =
   }
 });
 
-Deno.test("yaml: structural lines end plain scalar continuation", () => {
+test("yaml: structural lines end plain scalar continuation", () => {
   for (
     const source of [
       "value: true\n  # separate comment",
@@ -820,7 +847,7 @@ Deno.test("yaml: structural lines end plain scalar continuation", () => {
   }
 });
 
-Deno.test("yaml: separate nodes retain multiline plain scalar state", () => {
+test("yaml: separate nodes retain multiline plain scalar state", () => {
   for (
     const source of [
       "key:\n  true\n  continued\nnext: false",
@@ -838,7 +865,7 @@ Deno.test("yaml: separate nodes retain multiline plain scalar state", () => {
   }
 });
 
-Deno.test("yaml: multiline quoted strings resume normal syntax after closing", () => {
+test("yaml: multiline quoted strings resume normal syntax after closing", () => {
   const source = [
     'message: "first line',
     '  second # data": value # comment',
@@ -851,7 +878,7 @@ Deno.test("yaml: multiline quoted strings resume normal syntax after closing", (
   assertEquals(verbatim(lines), source);
 });
 
-Deno.test("yaml: document and incremental highlighting are lossless", () => {
+test("yaml: document and incremental highlighting are lossless", () => {
   const before = "emoji: 🎉\nready: false\n";
   const after = "emoji: 🎉\nready: true\ncount: .inf\n";
   const document = yamlDocument(before);
@@ -864,7 +891,7 @@ Deno.test("yaml: document and incremental highlighting are lossless", () => {
   assertEquals(verbatim(highlighter.lines), after);
 });
 
-Deno.test("yaml: incomplete syntax remains lossless", () => {
+test("yaml: incomplete syntax remains lossless", () => {
   for (
     const source of [
       'key: "unterminated',
@@ -879,7 +906,7 @@ Deno.test("yaml: incomplete syntax remains lossless", () => {
   }
 });
 
-Deno.test("yaml: a YAML diff uses YAML highlighting on both sides", () => {
+test("yaml: a YAML diff uses YAML highlighting on both sides", () => {
   const root = Deno.makeTempDirSync();
   try {
     const file = "name: gadget\ncount: 2\n";
@@ -922,7 +949,7 @@ Deno.test("yaml: a YAML diff uses YAML highlighting on both sides", () => {
   }
 });
 
-Deno.test("yaml: an unavailable old diff side carries context into deletions", () => {
+test("yaml: an unavailable old diff side carries context into deletions", () => {
   const diff = [
     "--- a/config.yml",
     "+++ b/config.yml",
@@ -945,7 +972,7 @@ Deno.test("yaml: an unavailable old diff side carries context into deletions", (
   assert(!removed.spans.some((span) => span.cls === "propertyName"));
 });
 
-Deno.test("yaml: editing a YAML diff line re-applies YAML highlighting", () => {
+test("yaml: editing a YAML diff line re-applies YAML highlighting", () => {
   const diff = [
     "diff --git a/config.yml b/config.yml",
     "--- a/config.yml",
@@ -967,7 +994,7 @@ Deno.test("yaml: editing a YAML diff line re-applies YAML highlighting", () => {
   );
 });
 
-Deno.test("yaml: live diff edits preserve and update cross-line state", () => {
+test("yaml: live diff edits preserve and update cross-line state", () => {
   const diff = [
     "diff --git a/config.yml b/config.yml",
     "--- a/config.yml",
@@ -1024,7 +1051,7 @@ Deno.test("yaml: live diff edits preserve and update cross-line state", () => {
   );
 });
 
-Deno.test("yaml: live diff edits retain state that begins above the hunk", () => {
+test("yaml: live diff edits retain state that begins above the hunk", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -1168,19 +1195,19 @@ function assertLiveDiffLineOffsets(
   }
 }
 
-Deno.test("yaml: live diff line insertions shift later complete-file spans", () => {
+test("yaml: live diff line insertions shift later complete-file spans", () => {
   assertLiveDiffLineOffsets(false);
 });
 
-Deno.test("yaml: live diff offsets cross repeated file sections", () => {
+test("yaml: live diff offsets cross repeated file sections", () => {
   assertLiveDiffLineOffsets(true);
 });
 
-Deno.test("yaml: live diff offsets follow file coordinates", () => {
+test("yaml: live diff offsets follow file coordinates", () => {
   assertLiveDiffLineOffsets(true, true);
 });
 
-Deno.test("yaml: a touched path rehighlights every repeated section", () => {
+test("yaml: a touched path rehighlights every repeated section", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(
@@ -1244,7 +1271,7 @@ Deno.test("yaml: a touched path rehighlights every repeated section", () => {
   }
 });
 
-Deno.test("yaml: live diff highlighting leaves other files unchanged", () => {
+test("yaml: live diff highlighting leaves other files unchanged", () => {
   const root = Deno.makeTempDirSync();
   try {
     Deno.writeTextFileSync(

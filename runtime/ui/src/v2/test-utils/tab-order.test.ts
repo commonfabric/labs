@@ -2,10 +2,10 @@
 import { window } from "./dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { ReactiveElement } from "lit";
 
 import { type BetweenButtons, betweenButtons } from "./tab-order.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A control to place between the buttons, whose updates wait for a later task,

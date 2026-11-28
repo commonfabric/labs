@@ -12,6 +12,7 @@ import type {
   WrapOrPreserve,
 } from "@commonfabric/api";
 import type { Same } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * The api's own type utilities, applied to a stream that DECLARES A RESULT.
@@ -91,7 +92,7 @@ const _stripDefaultRoundTripsValueLess: Same<
   ValueLess
 > = true;
 
-Deno.test("api utilities carry a declared result through", () => {
+test("api utilities carry a declared result through", () => {
   // Compile-time assertions above; this keeps the module a test file.
   assertEquals(typeof _returningIsAStream, "boolean");
 });

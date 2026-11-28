@@ -75,14 +75,14 @@ export interface UnitRequest {
   skip: readonly string[];
 }
 
-/** One JUnit report an invocation writes, and how to read it. */
-export interface JUnitOutput {
-  path: string;
+/**
+ * What the tests an invocation runs are recorded as: the results the test
+ * module writes into the spool (`@commonfabric/test-support/records`,
+ * `readResults`) are read back under this kind and scope.
+ */
+export interface RecordedAs {
   kind: string;
   scope: string;
-
-  /** Prefixed onto a report's own file paths to reach the repository root. */
-  filePrefix?: string;
 }
 
 /** One command a suite runs, and what it leaves behind. */
@@ -90,7 +90,9 @@ export interface Invocation {
   command: readonly string[];
   cwd: string;
   env?: Record<string, string>;
-  junit?: readonly JUnitOutput[];
+
+  /** How the results its tests write are recorded, where they write any. */
+  results?: RecordedAs;
 }
 
 /** What a suite is given when it builds its commands. */
@@ -140,10 +142,9 @@ export interface CommandContext {
   baseRef?: string;
 
   /**
-   * The spool this batch's records go in, absolute. An invocation that
-   * loads the registration preload is permitted to write here, which is
-   * where the preload leaves the name map that gives each identity its
-   * file.
+   * The spool this batch's records go in, absolute. A `deno test` an
+   * invocation runs is permitted to write here, which is where its tests
+   * write their results.
    */
   spoolDir: string;
 }
@@ -179,9 +180,8 @@ export interface Suite {
    * several phases, and a gate that is a single identity.
    *
    * A lane writes no skip list for one of these, because its runner reads none.
-   * Every other unit is a file that `deno test` is pointed at, and the
-   * registration preload reads the skip list under that file's
-   * repository-relative path.
+   * Every other unit is a file that `deno test` is pointed at, and the test
+   * module reads the skip list under that file's repository-relative path.
    *
    * `tasks/test-topology.test.ts` checks this list in both directions. A unit
    * left out of it has to be such a file. A unit named in it has to be one its
@@ -513,9 +513,8 @@ export async function writeBatchSkipList(
 
 /**
  * The command that runs `deno test` over `files` under `flags`, recording
- * and shuffling as every suite's `deno test` does, and writing its report to
- * `junitPath`. The preload is permitted to read `skipList`, where the
- * batch has one.
+ * and shuffling as every suite's `deno test` does. Its tests may write into
+ * the batch's spool and read `skipList`, where the batch has one.
  *
  * It never type-checks. The `typecheck` suite checks every file a test
  * loads, so a test process checking its module graph again repeats that
@@ -525,7 +524,6 @@ export async function writeBatchSkipList(
 export function denoTestCommand(
   flags: readonly string[],
   context: CommandContext,
-  junitPath: string,
   files: readonly string[],
   skipList?: string,
 ): string[] {
@@ -540,10 +538,8 @@ export function denoTestCommand(
     shuffleFlag(shuffleSeed()),
     ...recordingArguments(unchecked, {
       spool: context.spoolDir,
-      root: context.root,
       skipList,
     }),
-    `--junit-path=${junitPath}`,
     ...files,
   ];
 }
@@ -568,8 +564,8 @@ export interface FilePart {
 
   env?: Record<string, string>;
 
-  /** How the report this part writes is read back. */
-  junit: Omit<JUnitOutput, "path">;
+  /** What this part's tests are recorded as. */
+  records: RecordedAs;
 
   /** Every available test file of this part, repository-relative. */
   files: readonly string[];
@@ -621,7 +617,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
   const recordSurfaces: RecordSurface[] = [];
   const unavailable: Unavailable[] = [];
   for (const part of options.parts) {
-    recordSurfaces.push({ kind: part.junit.kind, scope: part.junit.scope });
+    recordSurfaces.push({ kind: part.records.kind, scope: part.records.scope });
     for (const file of part.files) {
       units.push(file);
       partOf.set(file, part);
@@ -639,16 +635,16 @@ export function fileSuite(options: FileSuiteOptions): Suite {
     needs: options.needs,
     units,
     unavailable,
-    // Every unit here is a file the command names. The preload reads the skip
-    // list under the same path.
+    // Every unit here is a file the command names. The test module reads the
+    // skip list under the same path.
     whole: [],
     ...(options.measured === undefined ? {} : { measured: options.measured }),
 
     locate(record) {
       if (!claimsIdentity(surfaces, record.test)) return undefined;
       for (const part of options.parts) {
-        if (part.junit.scope !== record.test.s) continue;
-        if (part.junit.kind !== record.test.k) continue;
+        if (part.records.scope !== record.test.s) continue;
+        if (part.records.kind !== record.test.k) continue;
         const unit = (part.unitOf ?? ((r: LocatableRecord) => r.file))(record);
         if (unit !== undefined && partOf.get(unit) === part) {
           return { level: "unit", unit };
@@ -669,8 +665,9 @@ export function fileSuite(options: FileSuiteOptions): Suite {
       const invocations: Invocation[] = [];
       for (const [part, group] of byPart) {
         const cwd = path.resolve(context.root, part.packageDir);
-        const slug = `${options.id}-${part.junit.scope.replaceAll("/", "__")}`;
-        const junitPath = path.join(context.outputDir, `${slug}.xml`);
+        const slug = `${options.id}-${
+          part.records.scope.replaceAll("/", "__")
+        }`;
         const skips = skipListOf(group);
         // A leaf this configuration declares unavailable does not run,
         // whether or not the packer chose the rest of its unit. Saying so
@@ -695,7 +692,6 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           command: denoTestCommand(
             part.flags,
             context,
-            junitPath,
             group.map((request) =>
               path.relative(cwd, path.resolve(context.root, request.unit))
             ),
@@ -703,7 +699,7 @@ export function fileSuite(options: FileSuiteOptions): Suite {
           ),
           cwd,
           env,
-          junit: [{ path: junitPath, ...part.junit }],
+          results: part.records,
         });
       }
       return invocations;

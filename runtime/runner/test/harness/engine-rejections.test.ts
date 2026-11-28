@@ -1,6 +1,11 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { ProgramResolver, Source } from "@commonfabric/js-compiler";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { isDeterministicCompileFailure } from "../../src/harness/compile-failure.ts";
 import type { ModuleCompiler } from "../../src/harness/module-compile.ts";

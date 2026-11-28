@@ -32,6 +32,10 @@ type ServerMembers = Pick<
   | "commitDeliveryFailureNotice"
   | "resolveSpaceOwner"
   | "setViewSelection"
+  | "advanceCurrency"
+  | "storeCurrencyRecords"
+  | "judgeCurrencyRoots"
+  | "setCarriedDemand"
 >;
 
 /**

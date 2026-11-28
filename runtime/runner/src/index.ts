@@ -45,6 +45,7 @@ export type {
   SpaceCellContents,
 } from "./runtime.ts";
 export type { EventIntentOutcome } from "./speculation/overlay-destination.ts";
+export type { IndexedCollectionMaintenance } from "./builtins/indexed-collection/maintainer.ts";
 export {
   ADOPT_SERVER_FLAGS_ENV,
   type BrowserWorkerPresetParams,
@@ -248,7 +249,10 @@ export {
 export {
   currentPatternKey,
   formerPatternKey,
+  formerPatternKeys,
   mainNamesPattern,
+  type PatternKeyMoves,
+  patternKeyMovesIn,
 } from "./pattern-key-moves.ts";
 export { DocumentLoadError, loadDocument } from "./document-readiness.ts";
 export {
@@ -258,6 +262,8 @@ export {
   profileOwnership,
 } from "./profile-order.ts";
 export { loadProfileOwnerDocuments, profileOwnerAt } from "./profile-owner.ts";
+export { spaceMemberListAt } from "./builder/space-access.ts";
+export { joinSpaceMembers, spaceMembersAt } from "./space-members.ts";
 export { writtenPrincipalAt } from "./written-principal.ts";
 export {
   classifyPieceOriginString,
@@ -310,6 +316,7 @@ export {
   setPatternRepository,
   setPatternSource,
   setPieceReconciliation,
+  stampCreatedFromOrigin,
   STORED_ARGUMENT_SCHEMA_REFUSAL,
 } from "./runner.ts";
 export {
@@ -373,6 +380,7 @@ export {
   schema,
   type SchemaWithoutCell,
   type StreamValue,
+  SUGGESTIONS,
   TESTS,
   TILE_UI,
   type toJSON,
@@ -444,6 +452,10 @@ export {
 export type { ModuleByteCache } from "./runtime.ts";
 export type { CompiledModuleArtifact } from "./harness/types.ts";
 export {
+  type CompileClaims,
+  CompileTurns,
+} from "./harness/compile-interleave.ts";
+export {
   getCompileCacheRuntimeVersion,
   sourceDocKey,
 } from "./compilation-cache/cell-cache.ts";
@@ -483,8 +495,10 @@ export {
 export { schemaPathSelection } from "./schema-path.ts";
 export {
   acceptsOpaqueCellOrUnresolvedLink,
+  isStoredArgumentOwnData,
   materializeStoredValueForValidation,
   overlayUnreadableLinkPlaceholders,
+  readStoredLinkChainRaw,
   storedArgumentValidationIssue,
 } from "./stored-argument-validation.ts";
 

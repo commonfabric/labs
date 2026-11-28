@@ -6,6 +6,7 @@ import type { BuiltInCompileAndRunParams } from "commonfabric";
 
 import type { CellScope } from "../builder/types.ts";
 import type { Cell } from "../cell.ts";
+import { asBoundCell } from "../cell.ts";
 import { enqueueSinkRequestPostCommitEffect } from "../cfc/sink-request.ts";
 import {
   effectTargetKey,
@@ -370,10 +371,16 @@ export function compileAndRun(
         // The instantiation is the builtin's, in a continuation of its
         // action: no principal's act attributes what its setup initializes,
         // and its transaction holds none of the reads that chose the program.
-        runtime.runSynced(result, pattern, input.get(), {
-          attributeInitialization: false,
-          runtimeStarted: true,
-        });
+        // A schema-bearing read carries its cell binding. Recover the handle
+        // so dependency pre-sync can represent that binding as a link in its
+        // immutable argument stand-in.
+        const inputValue = input.get();
+        runtime.runSynced(
+          result,
+          pattern,
+          asBoundCell(inputValue) ?? inputValue,
+          { attributeInitialization: false, runtimeStarted: true },
+        );
         runtime.editWithRetry((asyncTx) => {
           result.withTx(asyncTx).key("isHidden").set(true);
         });

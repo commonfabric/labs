@@ -1,24 +1,21 @@
-import { assert, assertEquals } from "@std/assert";
-import { join } from "@std/path";
+import { assertEquals } from "@std/assert";
 import { parseDiff } from "../lib/view/diff.ts";
 import {
   _internal as _dd,
   buildDiffDocument,
   type DiffWorkspace,
-  type WorkspaceCache,
 } from "../lib/view/diffdoc.ts";
 import {
   _internal as _de,
   createDiffHighlighter,
 } from "../lib/view/diffedit.ts";
-import { computeLineStarts } from "../lib/view/lines.ts";
-import { languageForFile } from "../lib/view/languages/language.ts";
-import type { Document, Line } from "../lib/view/model.ts";
+import type { Line } from "../lib/view/model.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const NO_WS: DiffWorkspace = { resolve: () => null, read: () => null };
 const encode = (text: string): Uint8Array => new TextEncoder().encode(text);
 
-Deno.test("diffdoc cov: Git batch output accepts blobs and rejects malformed records", () => {
+test("diffdoc cov: Git batch output accepts blobs and rejects malformed records", () => {
   const a = "a".repeat(40);
   const b = "b".repeat(40);
   const parsed = _dd.parseGitBatchOutput(
@@ -52,7 +49,7 @@ Deno.test("diffdoc cov: Git batch output accepts blobs and rejects malformed rec
   );
 });
 
-Deno.test("diffdoc cov: Git blob reads stay local and return empty results after command failures", () => {
+test("diffdoc cov: Git blob reads stay local and return empty results after command failures", () => {
   type GitBatchRunner = NonNullable<
     Parameters<typeof _dd.readGitBlobs>[2]
   >;
@@ -93,7 +90,7 @@ Deno.test("diffdoc cov: Git blob reads stay local and return empty results after
   );
 });
 
-Deno.test("diffdoc cov: old-file reconstruction rejects inconsistent hunk metadata", () => {
+test("diffdoc cov: old-file reconstruction rejects inconsistent hunk metadata", () => {
   const diff = `diff --git a/m.ts b/m.ts
 --- a/m.ts
 +++ b/m.ts
@@ -127,67 +124,18 @@ Deno.test("diffdoc cov: old-file reconstruction rejects inconsistent hunk metada
   );
 });
 
-Deno.test("diffdoc cov: a file section without hunks has no old-file lines", () => {
+test("diffdoc cov: a file section without hunks has no old-file lines", () => {
   const diff = `diff --git a/image.png b/image.png
 Binary files a/image.png and b/image.png differ
 `;
   const { doc, edit } = buildDiffDocument(diff, parseDiff(diff)!, NO_WS);
-  assertEquals(edit.oldFileLines, [null]);
+  assertEquals(edit.oldFileLines(0), null);
   assertEquals(doc.text, diff);
 });
 
-Deno.test("diffdoc cov: mismatched cached spans fall back to fragment highlighting", () => {
-  const root = Deno.makeTempDirSync();
-  try {
-    const path = join(root, "m.ts");
-    const fileText = "export const value = 2;\n";
-    Deno.writeTextFileSync(path, fileText);
-    const wrongDoc = languageForFile(path).parseDocument(
-      "export const value = 3;\n",
-      path,
-    );
-    const entries = new Map<string, {
-      fileText: string;
-      fileDoc: Document;
-      fileLineStarts: number[];
-    }>([[
-      path,
-      {
-        fileText,
-        fileDoc: wrongDoc,
-        fileLineStarts: computeLineStarts(fileText),
-      },
-    ]]);
-    const cache = entries as unknown as WorkspaceCache;
-    const ws: DiffWorkspace = {
-      resolve: () => path,
-      read: () => fileText,
-    };
-    const diff = `diff --git a/m.ts b/m.ts
---- a/m.ts
-+++ b/m.ts
-@@ -1 +1 @@
--export const value = 1;
-+export const value = 2;
-`;
-    const { doc } = buildDiffDocument(diff, parseDiff(diff)!, ws, cache);
-    const added = diff.split("\n").indexOf("+export const value = 2;");
-    assertEquals(
-      doc.lines[added].spans.map((span) => span.text).join(""),
-      "+export const value = 2;",
-    );
-    assert(
-      doc.lines[added].spans.some((span) => span.text === "2"),
-      "the fragment parse supplies the new line's spans",
-    );
-  } finally {
-    Deno.removeSync(root, { recursive: true });
-  }
-});
-
-Deno.test("diffdoc cov: complete-line spans reject different source text", () => {
+test("diffdoc cov: complete-line spans reject different source text", () => {
   assertEquals(
-    _dd.shiftCompleteLineSpans("-actual", [{
+    _dd.completeFileLine({ text: "-actual", spans: [] }, "-actual", [{
       col: 0,
       text: "different",
       cls: "identifier",
@@ -196,7 +144,7 @@ Deno.test("diffdoc cov: complete-line spans reject different source text", () =>
   );
 });
 
-Deno.test("diffedit cov: live removed lines retain CRLF transport after old-file highlighting", () => {
+test("diffedit cov: live removed lines retain CRLF transport after old-file highlighting", () => {
   const diff = [
     "diff --git a/m.ts b/m.ts\r",
     "--- a/m.ts\r",
@@ -209,7 +157,8 @@ Deno.test("diffedit cov: live removed lines retain CRLF transport after old-file
     text: "removed",
     spans: [{ col: 0, text: "removed", cls: "comment" }],
   }];
-  const highlighter = createDiffHighlighter(diff, undefined, [oldLines]);
+  const oldFileLines = (fileIndex: number) => fileIndex === 0 ? oldLines : null;
+  const highlighter = createDiffHighlighter(diff, undefined, oldFileLines);
   const removed = diff.split("\n").indexOf("-removed\r");
   assertEquals(
     highlighter.lines[removed].spans.find((span) => span.text === "removed")
@@ -230,5 +179,5 @@ Deno.test("diffedit cov: live removed lines retain CRLF transport after old-file
       endLine: file.headerLine,
     })),
   };
-  assertEquals(_de.oldLineSpansAt(outside, removed, [oldLines]), undefined);
+  assertEquals(_de.oldLineSpansAt(outside, removed, oldFileLines), undefined);
 });

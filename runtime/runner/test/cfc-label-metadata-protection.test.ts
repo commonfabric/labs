@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { hashStringOf } from "@commonfabric/data-model";
 import { linkRefFrom } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -28,6 +28,7 @@ import {
 import { parseLink } from "../src/link-utils.ts";
 import { Runtime } from "../src/runtime.ts";
 import { StorageManager } from "../src/storage/cache.deno.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase(
   "runner-cfc-label-metadata-protection",
@@ -100,11 +101,12 @@ describe("CFC cross-space label-metadata persist transform (inv-12 Stage 1)", ()
     id: string,
   ): PersistedEntry[] => {
     const replica = storageManager.open(space).replica as unknown as {
-      getDocument(id: string): {
-        cfc?: { labelMap?: { entries: PersistedEntry[] } };
-      } | undefined;
+      getDocument(id: string): { cfc?: unknown } | undefined;
     };
-    return replica.getDocument(id)?.cfc?.labelMap?.entries ?? [];
+    return storedLabelEntries<PersistedEntry>(
+      replica.getDocument(id)?.cfc,
+      (labelId) => replica.getDocument(labelId),
+    );
   };
 
   // Seed a source doc in `sourceSpace` whose STORED cfc metadata carries a

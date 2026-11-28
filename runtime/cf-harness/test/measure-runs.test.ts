@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 
@@ -26,6 +25,7 @@ import {
 } from "../scripts/measure-runs.ts";
 import type { HarnessTranscriptMessage } from "../src/contracts/transcript.ts";
 import { createToolOutputId } from "../src/contracts/tool-result.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURE_ROOT = fromFileUrl(
   new URL("./support/measure-runs/runs", import.meta.url),

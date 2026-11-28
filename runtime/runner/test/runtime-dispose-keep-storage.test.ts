@@ -22,7 +22,6 @@
  * reader sits behind a manager of its own.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace, Signer } from "@commonfabric/memory/interface";
@@ -46,6 +45,12 @@ import {
   resetModernCellRepConfig,
   setModernCellRepConfig,
 } from "@commonfabric/data-model/cell-rep";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { Runtime } from "../src/runtime.ts";
 import {
   newSharedServer,
@@ -91,7 +96,7 @@ class CountingStorageManager extends StorageManager {
   /** Subscriptions handed to `subscribe` and not yet handed back. Mirrors the
    * calls reaching the manager, which is what the assertions below are about;
    * the relay's own membership is private, and its `hasSubscribers()` would
-   * read the same whether teardown was clean or leaked two per runtime. */
+   * read the same whether teardown was clean or leaked its subscriptions. */
   readonly live = new Set<IStorageSubscription>();
 
   static over(server: MemoryV2Server.Server): CountingStorageManager {
@@ -400,10 +405,12 @@ describe("runtime.dispose({ closeStorage })", () => {
   });
 
   it("leaves no storage subscriber behind on a store it does not close", async () => {
-    // `Scheduler` and `Runner` each register one at construction. `subscribe`
+    // `Scheduler`, `Runner` and the indexed-collection maintainer each
+    // register one at construction. `subscribe`
     // returns nothing, so the argument is the only handle there will ever be —
     // a subscription built inline is unreachable and can never be handed back.
-    // Nor can it retire itself: both return `{ done: false }` unconditionally,
+    // Nor can the first two retire themselves: they return `{ done: false }`
+    // unconditionally,
     // and `{ done: true }` is the contract's only self-cancelling answer.
     //
     // What is asserted is the CALLERS' half of the contract — that each keeps
@@ -411,7 +418,7 @@ describe("runtime.dispose({ closeStorage })", () => {
     // `live` mirrors the subscribe/unsubscribe calls reaching the manager, not
     // the relay's membership: the relay is private and its `hasSubscribers()`
     // is not surfaced, and it would answer the wrong question anyway, reading
-    // the same whether teardown was clean or leaked two per runtime.
+    // the same whether teardown was clean or leaked its subscriptions.
     const baseline = new Set(held.live);
     const addedBy = (built: Set<IStorageSubscription>) =>
       [...held.live].filter((s) => !built.has(s));
@@ -420,8 +427,8 @@ describe("runtime.dispose({ closeStorage })", () => {
       apiUrl: new URL("memory://"),
       storageManager: held,
     });
-    const firstPair = addedBy(baseline);
-    expect(firstPair).toHaveLength(2);
+    const firstHeld = addedBy(baseline);
+    expect(firstHeld).toHaveLength(3);
 
     // The two runtimes OVERLAP, and the assertions name WHICH subscriptions are
     // handed back rather than how many. Sequential construct-dispose rounds
@@ -432,15 +439,15 @@ describe("runtime.dispose({ closeStorage })", () => {
       apiUrl: new URL("memory://"),
       storageManager: held,
     });
-    const secondPair = addedBy(new Set([...baseline, ...firstPair]));
-    expect(secondPair).toHaveLength(2);
+    const secondHeld = addedBy(new Set([...baseline, ...firstHeld]));
+    expect(secondHeld).toHaveLength(3);
 
     await first.dispose({ closeStorage: false });
-    expect(firstPair.filter((s) => held.live.has(s))).toEqual([]);
-    expect(secondPair.filter((s) => held.live.has(s))).toEqual(secondPair);
+    expect(firstHeld.filter((s) => held.live.has(s))).toEqual([]);
+    expect(secondHeld.filter((s) => held.live.has(s))).toEqual(secondHeld);
 
     await second.dispose({ closeStorage: false });
-    expect(secondPair.filter((s) => held.live.has(s))).toEqual([]);
+    expect(secondHeld.filter((s) => held.live.has(s))).toEqual([]);
     expect(held.live).toEqual(baseline);
 
     // Neither disposal closed the store, which is the option's whole point.
@@ -454,7 +461,7 @@ describe("runtime.dispose({ closeStorage })", () => {
       storageManager: failing,
     });
     const registered = [...failing.live];
-    expect(registered).toHaveLength(2);
+    expect(registered).toHaveLength(3);
 
     setModernCellRepConfig(true);
     try {

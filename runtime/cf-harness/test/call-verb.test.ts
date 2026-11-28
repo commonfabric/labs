@@ -5,10 +5,10 @@
  * piece it holds rather than only read it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
+import { callVerb } from "@commonfabric/piece/verb-call";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import {
   createLLMFriendlyLink,
@@ -16,8 +16,15 @@ import {
 } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
+  storedFields,
   writeSeedEnvelopeDoc,
 } from "../../runner/test/cfc-seed-envelope.ts";
 import type { HarnessFabricSessionConfig } from "../src/config.ts";
@@ -361,6 +368,77 @@ describe("call-verb", () => {
       expect(await readField(ref, "status")).toBe("idle");
     });
 
+    it("refuses, without sending, a call whose piece cannot start under the session's read ceiling", async () => {
+      // Starting a piece reads its own document; where the session's read
+      // ceiling withholds what that holds, the call is refused before the
+      // event is sent, and the refusal names the ceiling, not the label.
+      const ceilingStorage = StorageManager.emulate({ as: signer });
+      const ceilingRuntime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: ceilingStorage,
+        cfcEnforcementMode: "observe",
+        cfcFlowLabels: "persist",
+        cfcReadMaxConfidentiality: ["call-verb-ceiling-other"],
+      });
+      try {
+        const pieces = new PiecesController(
+          createSession({
+            identity: signer,
+            spaceDid: (await Identity.generate()).did(),
+          }),
+          ceilingRuntime,
+        );
+        await pieces.synced();
+        const created = await pieces.create(TIMER_PATTERN_SOURCE, {
+          input: {},
+          start: false,
+        });
+        const link = created.getCell().getAsNormalizedFullLink();
+        const address = {
+          space: link.space,
+          scope: "space" as const,
+          id: link.id,
+          path: [],
+        };
+        const seed = ceilingRuntime.edit();
+        const stored = storedFields(seed, address);
+        writeSeedEnvelopeDoc(seed, link.space);
+        seedStoredEnvelope(seed, address, {
+          ...stored,
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: ["label"],
+                label: { confidentiality: ["call-verb-ceiling-secret"] },
+              }],
+            },
+          },
+        });
+        expect((await seed.commit().settled).ok).toBeDefined();
+        const ref = await hold(createLLMFriendlyLink(link, link.space));
+
+        const output = await callVerbTool.invoke(
+          contextWith({ pieces }, held),
+          { token: ref, verb: "stop" },
+        );
+
+        expect(output).toEqual({
+          outputId: expect.any(String),
+          status: "error",
+          message: 'the event for "stop" was not sent: this piece could not ' +
+            "be started here, because something it reads is above this " +
+            "session's read ceiling",
+        });
+        expect(ceilingRuntime.runner.isRunning(created.getCell())).toBe(false);
+      } finally {
+        await ceilingRuntime.dispose();
+        await ceilingStorage.close();
+      }
+    });
+
     it("answers a call whose handling's outcome is withheld as one that ran, with that message and no result", async () => {
       // Under server execution, a served handling that read data its
       // stream's space doesn't admit reports the same thing whether it
@@ -386,6 +464,134 @@ describe("call-verb", () => {
       });
       expect(output).not.toHaveProperty("result");
       expect(output).not.toHaveProperty("resultRef");
+    });
+
+    it("returns the receipt and the reason, and no result, when the call could not read what the verb returned", async () => {
+      // The handling landed, so a call that could not read its receipt is
+      // still one that ran; the answer says why beside the receipt rather
+      // than measuring a value it never read.
+      const ref = await createTimer();
+      let receipt: string | undefined;
+      const tool = createCallVerbTool(async (...args) => {
+        const called = await callVerb(...args);
+        if (called.status !== "settled" || called.receipt === undefined) {
+          throw new Error(`expected a settled call, got ${called.status}`);
+        }
+        receipt = createLLMFriendlyLink(
+          called.receipt,
+          session.pieces.getSpace(),
+        );
+        return { ...called, unread: "the receipt's space did not answer" };
+      });
+
+      const output = await tool.invoke(contextWith(session, held), {
+        token: ref,
+        verb: "start",
+        event: { minutes: 5 },
+      });
+      const read = await callVerbTool.invoke(contextWith(session, held), {
+        token: ref,
+        verb: "start",
+        event: { minutes: 6 },
+      });
+
+      expect(output).toEqual({
+        outputId: expect.any(String),
+        status: "ok",
+        verb: "start",
+        resultRef: receipt,
+        message: "the verb ran, and its result could not be returned: " +
+          "the receipt's space did not answer",
+      });
+      expect(read).toMatchObject({ status: "ok", result: { endsAt: 360000 } });
+      expect(read).not.toHaveProperty("message");
+    });
+
+    it("returns the receipt and the reason, and no result, when the receipt cannot be read to measure it", async () => {
+      // The result is read again, in a transaction of its own, to measure it
+      // against the release ceiling. A stand-in call hands back a receipt the
+      // session's read ceiling withholds, so that read fails where the
+      // call's own read had not.
+      const ceilingStorage = StorageManager.emulate({ as: signer });
+      const ceilingRuntime = new Runtime({
+        apiUrl: new URL("http://toolshed.test"),
+        storageManager: ceilingStorage,
+        cfcEnforcementMode: "observe",
+        cfcFlowLabels: "persist",
+        cfcReadMaxConfidentiality: ["call-verb-ceiling-other"],
+      });
+      try {
+        const pieces = new PiecesController(
+          createSession({
+            identity: signer,
+            spaceDid: (await Identity.generate()).did(),
+          }),
+          ceilingRuntime,
+        );
+        await pieces.synced();
+        const space = pieces.getSpace();
+        const seed = ceilingRuntime.edit();
+        const withheld = ceilingRuntime.getCell(space, "call-verb-withheld");
+        writeSeedEnvelopeDoc(seed, space);
+        seedStoredEnvelope(seed, {
+          space,
+          scope: "space",
+          id: withheld.getAsNormalizedFullLink().id,
+          path: [],
+        }, {
+          value: { endsAt: 0, label: "s3cr3t-label" },
+          cfc: {
+            version: 1,
+            schemaHash: SEED_ENVELOPE_SCHEMA_HASH,
+            labelMap: {
+              version: 1,
+              entries: [{
+                path: [],
+                label: { confidentiality: ["call-verb-ceiling-secret"] },
+              }],
+            },
+          },
+        });
+        expect((await seed.commit().settled).ok).toBeDefined();
+        const created = await runPatternTool.invoke(contextWith({ pieces }), {
+          sourceText: TIMER_PATTERN_SOURCE,
+        }) as RunPatternToolSuccessOutput;
+        expect(created.status).toBe("ok");
+        const ref = await hold(created.resultRef);
+        const tool = createCallVerbTool(async (...args) => {
+          const called = await callVerb(...args);
+          return called.status === "settled"
+            ? { ...called, receipt: withheld.getAsNormalizedFullLink() }
+            : called;
+        });
+
+        const output = await tool.invoke(contextWith({ pieces }, held), {
+          token: ref,
+          verb: "start",
+          event: { minutes: 5, label: "s3cr3t-label" },
+        });
+        const stopped = await callVerbTool.invoke(
+          contextWith({ pieces }, held),
+          { token: ref, verb: "stop" },
+        );
+
+        expect(output).toEqual({
+          outputId: expect.any(String),
+          status: "ok",
+          verb: "start",
+          resultRef: createLLMFriendlyLink(
+            withheld.getAsNormalizedFullLink(),
+            space,
+          ),
+          message: "the verb ran, and its result could not be returned: " +
+            "the runtime read ceiling withholds this value",
+        });
+        expect(stopped).toMatchObject({ status: "ok", verb: "stop" });
+        expect(stopped).not.toHaveProperty("message");
+      } finally {
+        await ceilingRuntime.dispose();
+        await ceilingStorage.close();
+      }
     });
 
     it("returns the receipt and why the result could not be returned when the verb's result breaks its declared shape", async () => {

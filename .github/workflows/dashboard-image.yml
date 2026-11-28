@@ -15,8 +15,11 @@ on:
       # The packages the dashboard and `test-support` import.
       - "base/bytes/**"
       - "base/collections/**"
+      - "base/github-webhooks/**"
       - "base/js-values/**"
       - "base/text/**"
+      - "runtime/runner/deno.jsonc"
+      - "runtime/runner/src/storage/array-edit-script.ts"
       - "scripts/ci-gantt.ts"
       - "deno.jsonc"
       - "deno.lock"
@@ -38,8 +41,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
-      # A manual run can name any ref. Publishing moves the `latest` tag that
-      # the deployment follows, so a run on another ref stops here, before
+      # A manual run can name any ref. Publishing pushes the commit's image
+      # tag and moves `latest`, so a run on another ref stops here, before
       # anything from that ref is checked out or run.
       - name: 🔎 Verify the run is on main
         if: ${{ github.ref != 'refs/heads/main' }}

@@ -432,8 +432,8 @@ by any repo test.
 | `Record<K,V>` with finite literal-union `K` | expands to concrete `properties`, in the order `K` is written (a mapped type's properties follow its written key union, numeric keys by the property names they make, `-1` and `1.0` naming `"-1"` and `"1"`, else their declarations; JavaScript lists integer-like keys of `properties` in ascending order whatever order they are added in, so for those the order shows in `required`: `Omit<T, K>` lists `T`'s in `T`'s order; §8 says why the checker's order is not used) | via `ObjectFormatter`; `propertiesInSourceOrder()` in `source-order.ts`; fixture `record-union-keys` | record-mapped-types.test.ts; schema-order.test.ts |
 | Functions / callables / constructables | property skipped entirely (not in `properties`, not in `required`) — **except** callable properties whose call signature returns `Stream`/`Cell`/`SqliteDb` (ModuleFactory/HandlerFactory shapes): kept as `{ asCell: ["stream"/"cell"/"sqlite"] }`, they participate in `required`, and they carry the property's JSDoc description. Stream-valued properties also carry the `deprecated` annotation. Generic members, including nested type literals, union/intersection arms and array elements, use their instantiated type or bound argument to classify callability | classification: `object-formatter.ts`; member paths: `object-formatter.ts`, `schema-generator.ts` (only those three kinds; capability cells like `ReadonlyCell` returns are *not* kept) | pattern-with-types fixtures; object-formatter.test.ts |
 | `FabricPrimitive` class (`FabricBytes`, `FabricDurationDay`, `FabricDurationNsec`, `FabricEpochDay`, `FabricEpochNsec`, `FabricHash`, `FabricKeyPair`, `FabricUnavailable` carrying the `FabricPrimitive` brand) | `{ type: "<Name>" }` — the fabric-primitive schema vocabulary (§5.2); a leaf, not hoisted, matched by prototype at validation time | `native-type-formatter.ts` | fixture `fabric-special-object-brand`; end-to-end: ts-transformers `schema-transform/fabric-special-object-brand` |
-| `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
-| `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `shouldSkipInternalProperty`, `object-formatter.ts` | fixture `fabric-special-object-brand` |
+| `FabricInstancePlus` nominal brand (`FABRIC_INSTANCE_PLUS_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`), which `FabricInstance` declares at `never` | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as `FabricInstance` emits `{ type: "object", properties: {} }` | `isInternalMemberName` on the escaped name, `object-formatter.ts` | fixture `fabric-special-object-brand` |
+| `FabricPrimitive` nominal brand (`FABRIC_PRIMITIVE_BRAND` in `base/data-model/src/api.ts`, an interned `unique symbol`) on a type outside the fabric-primitive vocabulary | property skipped entirely (not in `properties`, not in `required`) — a symbol-keyed member, which the generator skips as it skips every symbol-keyed member; a field typed as the `FabricPrimitive` base still emits `{ type: "object", properties: {} }` | `isInternalMemberName` on the escaped name, `object-formatter.ts` | fixture `fabric-special-object-brand` |
 | TS `enum` declaration | hoisted under the enum name with **no `type` key** (all-literal union path, §8): numeric → `$defs: { Color: { enum: [0,1,2] } }` + `$ref`; string → `$defs: { Mode: { enum: ["on","off"] } }` | union path `union-formatter.ts`; hoisting §5 | `test/enum-schema-rows.test.ts` |
 | Single enum member type (`Mode.On`) | inline literal schema, e.g. `{ type: "string", enum: ["on"] }`; enum-member symbols are excluded from named-type hoisting so same-named members and unrelated named types cannot collide in `$defs` | `getNamedTypeKey`, `type-utils.ts`; pinned by `test/enum-member-hoisting.test.ts` | — |
 | `SqliteDatabase` (the `SqliteDb` handle's value, carrying the `SQLITE_DB_BRAND` unique symbol) | the handle descriptor `{ id, tables, rev }` with `additionalProperties: true` (§5.2), hoisted under `SqliteDatabase`; the brand's own members describe nothing, so a structural schema would shape a handle read down to `{}` | `native-type-formatter.ts` | `test/schema/cell-type.test.ts`; end-to-end: ts-transformers `handler-schema/sqlite-db-handler-state`, `schema-injection/scoped-sqlite-factory` |
@@ -472,7 +472,14 @@ union holding the symbol, the message suggests `Exclude<…, symbol>`.
 
 A symbol key is a different case. A plain object's data is its string keys, so a
 symbol-keyed member is skipped without a diagnostic (the `FabricInstancePlus`
-row above), and `Record<symbol, V>` reads as an object with no entries.
+row above), and `Record<symbol, V>` reads as an object with no entries. The
+member is told apart by its escaped name, which the checker writes as `__@`
+and the symbol's name; a string key written `__@x` escapes to `___@x`, and is
+kept, as is any other string key starting with an underscore, whether a
+declaration, a mapped type or `Record` makes it. A class's private member, such
+as `#secret`, is not data either, and is skipped the same way: its escaped name
+starts `__#`, where a string key written `#secret` or `__#x` keeps no such
+prefix.
 
 A symbol branded by intersection with a symbol-keyed member, such as `symbol & {
 readonly [brand]: true }`, reads as the symbol, because the intersection reading
@@ -588,14 +595,15 @@ still named `definitions` (`interface.ts`), and the README's `definitions`
 wording predates the migration.
 
 Whether a type gets a name is decided by `getNamedTypeKey`
-(`src/type-utils.ts`). The rule is structural plus two derived name
+(`src/type-utils.ts`). The rule is structural plus derived name
 sets — not the short name list in the README. A type is *excluded* when any of
 these holds:
 
 - the type **node** names a wrapper: `Default`, `Cell`, `Writable`,
   `ReadonlyCell`, `WriteonlyCell`, `ComparableCell`, `OpaqueCell`, `Stream`,
-  `SqliteDb` (name sets `CELL_LIKE_WRAPPER_NAMES` / `OPAQUE_WRAPPER_NAMES`;
-  `Reactive` is *not* excluded on the node axis);
+  `SqliteDb`, a cell wrapper counting only where its name resolves to the one
+  `commonfabric` declares, so a module's own type spelled `Cell` is no wrapper
+  (`wrapperKindOfReference`; `Reactive` is *not* excluded on the node axis);
 - the **aliasSymbol** is one of the above or `Reactive`;
 - the name is compiler-internal (`__type`, `__object`) or absent — with an
   aliasSymbol fallback, so **non-generic aliases to type literals
@@ -682,6 +690,15 @@ Because the claim is by brand rather than by name, this one keeps its ordinary
 `$defs` hoisting: every `SqliteDb` position emits
 `$ref: "#/$defs/SqliteDatabase"` against one descriptor.
 
+A handle type that extends `SqliteDb` and has type parameters of its own, as
+`IndexedCollections<Kinds>` has, emits the same descriptor. The payload is
+read off the reference to `SqliteDb` in the type's hierarchy
+(`getCellWrapperInfo`), and the type arguments written on the subtype are
+left unread: they are the subtype's own, and none is the value the handle
+reads as. Such a subtype is not hoisted under its own name either: the
+position that holds the handle states `asCell: ["sqlite"]` beside the
+`$ref`, as a position written `SqliteDb` does.
+
 The remaining typed arrays and the buffer types map to `true` (accept
 anything), which overclaims: none of them is representable as a `FabricValue`,
 so a value of one of those types is rejected at the storage boundary rather
@@ -697,12 +714,13 @@ only when the type carries the `FabricPrimitive` nominal brand
 unrelated user type named e.g. `FabricBytes` keeps its structural schema AND
 its normal `$defs` hoisting (fixture `fabric-primitive-name-collision`).
 `VNode`/`JSONSchemaObj`/`JSONSchema`
-have **no** such guard (untested collision). Native resolution also pierces
-type-parameter constraints/defaults and intersection constituents
-(`getNativeTypeSchema`, `type-utils.ts`) — where the `Map`/`Set`
-rejections live (§15) — and is consulted from union members, intersections,
-and object built-in lookup (`union-formatter.ts`;
-`intersection-formatter.ts`; `object-formatter.ts`).
+have **no** such guard (untested collision). The `Map`/`Set` rejections
+(§15) are a name check on the symbol of an object type
+(`rejectNonSerializableCollection`, `type-utils.ts`). `getArrayElementInfo`
+runs it on every object type the array formatter is offered, which precedes
+the object formatter in the chain, so union members and intersection
+constituents reach it as they are formatted, and a type parameter reaches it
+as the type its instantiation or constraint resolves to.
 
 ### 5.3 Root handling and pruning
 
@@ -797,11 +815,17 @@ The wrapper vocabulary is deliberately split (header comment,
   ComparableCell | ReadonlyCell | WriteonlyCell | SqliteDb | Reactive`.
 - **Brand axis** — `CellBrand` (`cell-brand.ts`): the marker strings
   `"opaque" | "cell" | "stream" | "comparable" | "readonly" | "writeonly" |
-  "sqlite"` that land in schemas.
+  "sqlite"` that land in schemas. A cell type's brand is one of them, except
+  `ReadonlyCell`'s, which is the union `"readonly" | "cell"`: its own kind and
+  the kind of the cell type assignable to it (`base/api/index.ts`).
+  `getCellBrand()` reads that union as `"readonly"` (`KINDS_ASSIGNABLE_TO`,
+  `cell-brand.ts`); a brand that is any other union names no kind
+  (`test/typescript/cell-brand.test.ts`).
 
-Cell detection is **structural, not nominal**: brand marker properties
-`CELL_BRAND`/`CELL_INNER_TYPE` (including `__@`-mangled and
-computed-property-name declarations) are found via configurable hierarchy
+Cell detection is **structural, not nominal**: brand marker properties, keyed
+by the `unique symbol`s `CELL_BRAND`/`CELL_INNER_TYPE` (named `__@` and the
+symbol's name) or declared with the computed name `[CELL_BRAND]` (a string key
+written `CELL_BRAND` is data), are found via configurable hierarchy
 traversal (apparent type, reference targets, base types —
 `cell-brand.ts`, `type-traversal.ts`), memoized per
 (checker, type) in a `TwoLevelWeakCache` (`cell-brand.ts`). Node-level
@@ -980,11 +1004,20 @@ has no source check.)
    value unresolved. Non-property type members require the complete type to
    qualify as an empty record; they cannot be silently skipped. The applicable
    type/brand fallbacks still run before an unresolved-default warning is emitted.
-2. **Type-based extraction** (both formatters): literal values, symbol value
-   declarations, empty object-literal types, and empty records. An alias of `{}`
-   yields `{}`, including through alias chains and imports, without requiring a
-   symbol value declaration. Empty interfaces, classes, and the broad `object`
-   type do not qualify as empty object-literal types. A record with no named
+2. **Type-based extraction** (both formatters, one reader:
+   `extractValueFromLiteralType`, `type-utils.ts`): string, number and boolean
+   literals, `null`, empty objects, tuples of such types, and object types
+   whose members are such types, so
+   `{ [K in "a"]: Default<string[], ["x"]> }` emits `default: ["x"]`, and
+   `Default<{ b: string }, V> | null` with `interface V { b: "x" }` emits
+   `default: { b: "x" }` as it does without `| null`. An element or member
+   left unread at any depth makes the whole value unresolved. An empty object
+   (`isEmptyObjectDefaultType`) is an object type, or an intersection of
+   them, with no properties and no call or construct signatures, each index
+   signature of which holds `never`: `{}` (including the checker's own empty
+   type literal, read by a mapped type's member), an alias of it through
+   alias chains and imports, an empty interface or class, and `{} & {}` all
+   yield `{}`. The broad `object` type does not. A record with no named
    properties or call or construct signatures, and at least one index signature,
    yields `{}` when
    every index value type is `never`. This includes `Record<string, never>`,
@@ -1036,9 +1069,14 @@ throw.
 - `DeepDefault<V>` requires an object target and an object default type (else
   **throws**). An unrecoverable object value emits `schema-default:unresolved`
   with `DeepDefault<>` in the message and attaches no defaults. A recovered value
-  applies nested per-property defaults, resolving
-  through local `$refs` and single-object-candidate `anyOf`s; unknown keys
-  **throw**.
+  applies nested per-property defaults, finding each key's target through
+  local `$ref`s and the alternatives of an `anyOf`, a member that is an alias
+  of a union offering each of its members; alternatives that declare equal
+  properties, as `Obj` and an alias of `Obj | null` do, are one target. A key
+  with no target **throws**, with a message for each reason: the one target
+  does not declare it, or declares no properties; the alternatives describe
+  objects that declare different properties; or the target is a schema outside
+  `$defs`, as `VNode`'s is.
 - Expanded empty-array arms (`[]`/`never[]`) riding along expanded
   array-Defaults are pruned when a real array member exists, preserving element
   capabilities; an explicit comment notes this is safe only while arrays carry
@@ -1051,7 +1089,7 @@ throw.
 non-required (`isDefaultNodeWithUndefined`, `property-optionality.ts`,
 consulted at `object-formatter.ts`). Plain `T | undefined` does *not*
 remove the property from `required`, but optional symbols (`?`) get
-`| undefined` stripped from checker-resolved types (`safeGetPropertyType`,
+`| undefined` stripped from checker-resolved types (`resolvePropertyType`,
 `type-utils.ts`, union-order-insensitive comparison); a union-merged
 result may still carry `type: ["number","undefined"]` (§8; fixture
 `default-with-undefined-union`). Shared-definition safety: different defaults
@@ -1430,7 +1468,11 @@ type alone would lose what only the syntax names. A member's `?` takes the
 `undefined` written beside a wrapper out of the type the member is read at, as
 in `handle?: Box<A>` with `type Box<T> = PerUser<T> | undefined`; the wrapper
 alone is then read at the member written for it, under the bindings it is
-written with, and a cell there throws as a cell beside `undefined` does. The
+written with, and a cell there throws as a cell beside `undefined` does. Two
+or more wrappers written there whose nodes read as one type, as
+`PerUser<A> | PerUser<A> | undefined` writes, are that one wrapper, as the
+checker folds them; wrappers of different types written there throw as
+above. The
 node-based analyzer hands such a union to the same reading. The
 payload of a wrapper found by name is
 the wrapper's first argument as the last alias along the chain writes it, read
@@ -2043,7 +2085,9 @@ Mechanics:
   contract that writes no `requiredEventIntegrity` requires its trusted pattern,
   and that list is checked too.
   Projection paths encode as JSON Pointers with `~0`/`~1` escaping
-  (`encodeJsonPointerPath`).
+  (`encodeJsonPointerPath`). A path that reads as neither a string nor a
+  tuple of strings, as `readonly [1]` does, lowers to no projection and is
+  reported as the `cfc-label:unread` warning, naming the path.
 - `ifc` combines with the base schema's existing `ifc` one key at a time
   (`combineIfcLabels`, `src/ifc-labels.ts`); boolean schemas become
   `{ ifc }` / `{ not: true, ifc }`. Nested wrappers
@@ -2163,7 +2207,9 @@ producing alias in this package as of this writing.
   JSDoc blocks the nearest-to-declaration wins (sorted by position descending,
   `doc-utils.ts`); conflicts keep the first + `$comment: "Conflicting
   docs across declarations; using first"` + logger warning
-  (`object-formatter.ts`).
+  (`object-formatter.ts`). A schema that already carries a `$comment`, as
+  an unsupported intersection's does (§9), keeps it; index signatures
+  documented differently are treated the same way.
 - **Declaration-file exclusion**: docs from `.d.ts` declarations are ignored
   unless the symbol also has a non-declaration-file declaration
   (`doc-utils.ts`) — lib docs do not leak into schemas.
@@ -2357,7 +2403,7 @@ Everything that throws, with source (test-pinned unless noted):
 | >1 `Default<>` member in a union | `Union types may contain at most one Default<> member.` | `union-formatter.ts` (indirectly tested) |
 | Object default widening an object member | `Default object union member is not assignable …` | `union-formatter.ts` |
 | `DeepDefault` without object target/default | `DeepDefault must be unioned with an object type …` | `union-formatter.ts` |
-| `DeepDefault` unknown key | `DeepDefault key "…" does not exist on the target object type.` | `union-formatter.ts` |
+| `DeepDefault` key with no target | `DeepDefault key "…" does not exist on the target object type` / `… has no one target object type, as the union's members describe objects that declare different properties.` / `… cannot be found on the target object type, \`…\`, which is a schema outside \`$defs\`.` | `union-formatter.ts` |
 | Nested scope wrappers | `Nested scope wrappers require a cell boundary between scopes.` | `common-fabric-formatter.ts` |
 | Scope wrapper as a union member beside a value other than `null` or `undefined` | `A scope wrapper cannot be a member of a union.` | `common-fabric-formatter.ts`, `scope-placement.ts` |
 | Scope wrapper around a cell beside anything, `null` and `undefined` included | `A scope wrapper around a cell cannot hold anything beside the cell` | `common-fabric-formatter.ts` |
@@ -2366,11 +2412,10 @@ Everything that throws, with source (test-pinned unless noted):
 | An `ifc` key other than `confidentiality` declared differently by nested wrappers, or by a `$ref` and its definition | ``One value declares `ifc.<key>` twice, as … and as ….`` | `ifc-labels.ts` |
 | Circular type alias (wrapper chain) | `Circular type alias detected: A -> B -> …` | `type-utils.ts` |
 | Circular type alias (union alias) | `Circular type alias detected: <name>` | `union-formatter.ts` |
-| Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` (untested) |
-| Internal invariants: empty union/intersection; CommonFabric claimed-but-unformattable terminal; ArrayFormatter element-info mismatch | `… received empty … type` / `Unexpected Common Fabric type: …` / `… indicates a bug in supportsType logic` | `union-formatter.ts`; `intersection-formatter.ts`; `common-fabric-formatter.ts`; `array-formatter.ts` (all untested) |
+| Wrapper/scope/CFC alias without type argument | `<Kind><T> requires type argument` | `common-fabric-formatter.ts` |
+| A wrapper's node read with a type it does not account for, as the node `Cell<string>` with the type `Cell<string> \| number` | `Unexpected Common Fabric type: …` | `common-fabric-formatter.ts` |
 
-Silent degradations: `safe*` wrappers `console.warn` and continue
-(`type-utils.ts`); type parameters / conditionals → `{}` (§4);
+Silent degradations: type parameters / conditionals → `{}` (§4);
 conditional/type-parameter wrapper-union members skipped
 (`common-fabric-formatter.ts`);
 synthetic node resolution failure → `any` → `true`

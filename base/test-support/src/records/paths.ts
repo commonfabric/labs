@@ -93,6 +93,17 @@ export function recordsDir(
 }
 
 /**
+ * Whether this process may write into the spool. Querying a permission
+ * needs no permission, so this answers before anything is attempted and
+ * without a warning for a process that was never going to record.
+ */
+export function writableSpool(spool: string | undefined): boolean {
+  if (spool === undefined) return false;
+  return Deno.permissions.querySync({ name: "write", path: spool }).state ===
+    "granted";
+}
+
+/**
  * The fixed per-user spool root. Overridable with
  * CF_TEST_RECORDS_SPOOL_ROOT; otherwise under the user's cache directory,
  * which survives reboots — the temporary directory does not, and a rebooted
@@ -103,15 +114,28 @@ export function defaultSpoolRoot(
 ): string | undefined {
   const override = readEnv(SPOOL_ROOT_VARIABLE, env);
   if (override !== undefined && override.length > 0) return override;
-  const cacheHome = readEnv("XDG_CACHE_HOME", env);
-  if (cacheHome !== undefined && cacheHome.length > 0) {
-    return join(cacheHome, "common-fabric", "test-records");
-  }
-  const home = readEnv("HOME", env) ?? readEnv("USERPROFILE", env);
-  if (home !== undefined && home.length > 0) {
-    return join(home, ".cache", "common-fabric", "test-records");
-  }
-  return undefined;
+  const cacheDir = commonFabricCacheDir(env);
+  return cacheDir === undefined ? undefined : join(cacheDir, "test-records");
+}
+
+/**
+ * The per-user directory Common Fabric's tools keep caches in:
+ * `common-fabric` under `$XDG_CACHE_HOME`, or under `.cache` in the home
+ * directory (`$HOME`, else `$USERPROFILE`) where that is unset. A variable
+ * set to the empty string counts as unset. `undefined` where the
+ * environment names no home directory.
+ */
+export function commonFabricCacheDir(
+  env: Environment = Deno.env.get,
+): string | undefined {
+  const named = (name: string) => {
+    const value = readEnv(name, env);
+    return value === "" ? undefined : value;
+  };
+  const cacheHome = named("XDG_CACHE_HOME");
+  if (cacheHome !== undefined) return join(cacheHome, "common-fabric");
+  const home = named("HOME") ?? named("USERPROFILE");
+  return home === undefined ? undefined : join(home, ".cache", "common-fabric");
 }
 
 /**

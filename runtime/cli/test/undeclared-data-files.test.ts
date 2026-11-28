@@ -5,10 +5,11 @@
  * out loud.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import { join } from "@std/path";
+import { decodeDataFile } from "@commonfabric/text/data-file";
+import { describe, it } from "@commonfabric/test-support/test";
 import { writeSourcePackage } from "../lib/piece.ts";
 import {
   undeclaredDataFiles,
@@ -63,6 +64,20 @@ describe("undeclaredDataFiles", () => {
         }, ["/data/cities.json", "/extra.txt"]),
       ),
     ).toEqual(["/extra.txt"]);
+  });
+
+  it("says nothing about an asset in a directory the source reads", () => {
+    const readsAssets = 'import { dataFile } from "commonfabric";\n' +
+      'export default () => dataFile.urls("/assets");\n';
+    expect(
+      undeclaredDataFiles(
+        program({
+          "/main.tsx": readsAssets,
+          "/assets/glaze.png": "data:image/png;base64,AA==",
+          "/assets/notes.md": "# notes",
+        }, ["/assets/glaze.png", "/assets/notes.md"]),
+      ),
+    ).toEqual(["/assets/notes.md"]);
   });
 
   it("says nothing about a program carrying no data at all", () => {
@@ -183,6 +198,44 @@ describe("writeSourcePackage", () => {
         );
       },
     );
+  });
+
+  it("writes a binary media file as the bytes it was stored from", async () => {
+    const bytes = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x00, 0xff]);
+    await written(
+      program({
+        "/main.tsx": READS_CITIES,
+        "/glaze.png": decodeDataFile(bytes, "/glaze.png"),
+      }, ["/glaze.png"]),
+      async (out) => {
+        // The package stores the image as a `data:` URL, so a `setsrc` from
+        // here attaches the same bytes only if they are written back as bytes.
+        expect(await Deno.readFile(join(out, "glaze.png"))).toEqual(bytes);
+      },
+    );
+  });
+
+  it("writes nothing for a package holding an image that is not a `data:` URL", async () => {
+    // The code comes first, so a writer that encoded each file as it wrote it
+    // would have written `main.tsx` before refusing the image.
+
+    const out = await Deno.makeTempDir({ prefix: "source-package-" });
+    try {
+      await expect(
+        writeSourcePackage(
+          program({
+            "/main.tsx": READS_CITIES,
+            "/glaze.png": "not a data URL",
+          }, ["/glaze.png"]),
+          out,
+        ),
+      ).rejects.toThrow(
+        "Data file `/glaze.png` does not hold an `image/png` `data:` URL.",
+      );
+      expect([...Deno.readDirSync(out)]).toEqual([]);
+    } finally {
+      await Deno.remove(out, { recursive: true });
+    }
   });
 
   it("refuses a name that belongs to no layout", async () => {

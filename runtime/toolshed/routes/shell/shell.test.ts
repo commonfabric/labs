@@ -1,4 +1,3 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import * as path from "@std/path";
 import { cors } from "@hono/hono/cors";
@@ -7,6 +6,12 @@ import { browserAssetBase } from "@/lib/build-info.ts";
 import createApp, { createRouter } from "@/lib/create-app.ts";
 import { generateETag } from "@commonfabric/static/etag";
 import type { DeploymentMetaContent } from "@commonfabric/runner/deployment-meta";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   experimentalPosture,
   publishExperimentalPosture,
@@ -223,26 +228,63 @@ describe("shellFrontendRouter()", () => {
     };
     return { proxied, fetch };
   };
-  const notCompiled = () => {
-    throw new Error("Only a compiled toolshed builds the compiled router");
+  // A bundle with no index.html. Building a compiled router from it throws,
+  // so these cases fail if a toolshed that is not compiled builds one.
+  const notCompiled = {
+    staticRoot: "/nonexistent/shell-frontend",
+    environment: { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+    commitSha: null,
   };
 
   it("serves the compiled bundle in a compiled toolshed, whatever SHELL_URL says", async () => {
+    const PAGE = "<!doctype html><html><head></head><body>bundle</body></html>";
+    const bundleDir = await Deno.makeTempDir();
+    await Deno.writeTextFile(path.join(bundleDir, "index.html"), PAGE);
+    await Deno.writeTextFile(path.join(bundleDir, "app.js"), APP_JS);
     const server = devServer();
     const app = createApp().route(
       "/",
       await shellFrontendRouter({
         compiled: true,
         shellUrl: "http://shell.test",
-        compiledRouter: () => Promise.resolve(createShellStaticRouter(tempDir)),
+        bundle: {
+          staticRoot: bundleDir,
+          environment: {
+            ENV: "production",
+            MEMORY_PUBLIC_URL: "https://memory.test",
+          },
+          commitSha: "commit-123",
+          posture: () => ({ sharedMemoryConnection: true }),
+        },
         fetch: server.fetch,
       }),
     );
 
-    const response = await app.request("/");
+    try {
+      const page = new TextDecoder().decode(
+        withDeploymentMeta(new TextEncoder().encode(PAGE), {
+          memoryUrl: "https://memory.test",
+          experimental: { sharedMemoryConnection: true },
+        }),
+      );
+      expect(page).not.toBe(PAGE);
+      expect(await (await app.request("/")).text()).toBe(page);
+      expect(await (await app.request("/builds/commit-123/app.js")).text())
+        .toBe(APP_JS);
+      expect(await (await app.request("/builds/another-commit/app.js")).text())
+        .toBe(page);
+      expect(server.proxied).toEqual([]);
+    } finally {
+      await Deno.remove(bundleDir, { recursive: true });
+    }
+  });
 
-    expect(await response.text()).toBe(INDEX_HTML);
-    expect(server.proxied).toEqual([]);
+  it("refuses to start a compiled toolshed whose bundle has no index.html", async () => {
+    await expect(shellFrontendRouter({
+      compiled: true,
+      shellUrl: undefined,
+      bundle: notCompiled,
+    })).rejects.toThrow(Deno.errors.NotFound);
   });
 
   it("proxies the shell's root-level resources to its dev server", async () => {
@@ -252,7 +294,7 @@ describe("shellFrontendRouter()", () => {
       await shellFrontendRouter({
         compiled: false,
         shellUrl: "http://shell.test",
-        compiledRouter: notCompiled,
+        bundle: notCompiled,
         fetch: server.fetch,
       }),
     );
@@ -283,7 +325,7 @@ describe("shellFrontendRouter()", () => {
       await shellFrontendRouter({
         compiled: false,
         shellUrl: "http://shell.test",
-        compiledRouter: notCompiled,
+        bundle: notCompiled,
         fetch: server.fetch,
       }),
     );
@@ -306,7 +348,7 @@ describe("shellFrontendRouter()", () => {
       await shellFrontendRouter({
         compiled: false,
         shellUrl: "http://shell.test",
-        compiledRouter: notCompiled,
+        bundle: notCompiled,
         fetch: () => Promise.reject(new TypeError("connection refused")),
       }),
     );
@@ -328,7 +370,7 @@ describe("shellFrontendRouter()", () => {
         await shellFrontendRouter({
           compiled: false,
           shellUrl,
-          compiledRouter: notCompiled,
+          bundle: notCompiled,
           fetch: server.fetch,
         }),
       );
@@ -454,23 +496,27 @@ describe("a compiled toolshed's shell router", () => {
     plain = createApp().route("/", createShellStaticRouter(pageDir));
     published = createApp().route(
       "/",
-      await compiledShellRouter(
-        pageDir,
-        { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
-        "commit-123",
-        undefined,
-        () => ({ sharedMemoryConnection: true, readerSchemaPrecedence: true }),
-      ),
+      await compiledShellRouter({
+        staticRoot: pageDir,
+        environment: {
+          ENV: "production",
+          MEMORY_PUBLIC_URL: "https://router.test",
+        },
+        commitSha: "commit-123",
+        posture: () => ({
+          sharedMemoryConnection: true,
+          readerSchemaPrecedence: true,
+        }),
+      }),
     );
     unpublished = createApp().route(
       "/",
-      await compiledShellRouter(
-        pageDir,
-        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
-        null,
-        undefined,
-        NO_RUNTIME,
-      ),
+      await compiledShellRouter({
+        staticRoot: pageDir,
+        environment: { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        commitSha: null,
+        posture: NO_RUNTIME,
+      }),
     );
   });
 
@@ -532,11 +578,14 @@ describe("a compiled toolshed's shell router", () => {
         publishExperimentalPosture(null);
         const served = createApp().route(
           "/",
-          await compiledShellRouter(
-            pageDir,
-            { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
-            "commit-123",
-          ),
+          await compiledShellRouter({
+            staticRoot: pageDir,
+            environment: {
+              ENV: "production",
+              MEMORY_PUBLIC_URL: "https://router.test",
+            },
+            commitSha: "commit-123",
+          }),
         );
         publishExperimentalPosture(posture);
         expect(await (await served.request("/")).text()).toBe(
@@ -555,11 +604,14 @@ describe("a compiled toolshed's shell router", () => {
     let asked = 0;
     const counted = createApp().route(
       "/",
-      await compiledShellRouter(
-        pageDir,
-        { ENV: "production", MEMORY_PUBLIC_URL: "https://router.test" },
-        "commit-123",
-        {
+      await compiledShellRouter({
+        staticRoot: pageDir,
+        environment: {
+          ENV: "production",
+          MEMORY_PUBLIC_URL: "https://router.test",
+        },
+        commitSha: "commit-123",
+        deps: {
           readFile: (filePath) => {
             const name = path.basename(filePath);
             reads.set(name, (reads.get(name) ?? 0) + 1);
@@ -567,11 +619,11 @@ describe("a compiled toolshed's shell router", () => {
           },
           generateETag,
         },
-        () => {
+        posture: () => {
           asked++;
           return { sharedMemoryConnection: true };
         },
-      ),
+      }),
     );
     // Read at startup, built on the first request.
     expect(reads.get("index.html")).toBe(1);
@@ -601,13 +653,12 @@ describe("a compiled toolshed's shell router", () => {
     let posture: Record<string, boolean> | null = null;
     const served = createApp().route(
       "/",
-      await compiledShellRouter(
-        pageDir,
-        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
-        null,
-        undefined,
-        () => posture,
-      ),
+      await compiledShellRouter({
+        staticRoot: pageDir,
+        environment: { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        commitSha: null,
+        posture: () => posture,
+      }),
     );
     expect(await (await served.request("/")).text()).toBe(
       pageWith({ memoryUrl: null, experimental: null }),
@@ -626,19 +677,19 @@ describe("a compiled toolshed's shell router", () => {
     let failures = 1;
     const served = createApp().route(
       "/",
-      await compiledShellRouter(
-        pageDir,
-        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
-        null,
-        {
+      await compiledShellRouter({
+        staticRoot: pageDir,
+        environment: { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+        commitSha: null,
+        deps: {
           readFile: Deno.readFile,
           generateETag: (content) =>
             failures-- > 0
               ? Promise.reject(new Error("no digest"))
               : generateETag(content),
         },
-        () => ({ sharedMemoryConnection: true }),
-      ),
+        posture: () => ({ sharedMemoryConnection: true }),
+      }),
     );
     expect((await served.request("/")).status).toBe(500);
     const second = await served.request("/");
@@ -655,13 +706,14 @@ describe("a compiled toolshed's shell router", () => {
     const bare = await Deno.makeTempDir();
     try {
       await Deno.writeTextFile(path.join(bare, "index.html"), INDEX_HTML);
-      await expect(compiledShellRouter(
-        bare,
-        { ENV: "production", MEMORY_PUBLIC_URL: undefined },
-        null,
-        undefined,
-        NO_RUNTIME,
-      )).rejects.toThrow("no </head>");
+      await expect(
+        compiledShellRouter({
+          staticRoot: bare,
+          environment: { ENV: "production", MEMORY_PUBLIC_URL: undefined },
+          commitSha: null,
+          posture: NO_RUNTIME,
+        }),
+      ).rejects.toThrow("no </head>");
     } finally {
       await Deno.remove(bare, { recursive: true });
     }
@@ -868,10 +920,14 @@ describe("advertised browser asset namespace", () => {
       it(`serves the advertised namespace for ${mode} with ${commitSha}`, async () => {
         const app = createApp().route(
           "/",
-          await compiledShellRouter(pageDir, {
-            ENV: mode,
-            MEMORY_PUBLIC_URL: undefined,
-          }, commitSha),
+          await compiledShellRouter({
+            staticRoot: pageDir,
+            environment: {
+              ENV: mode,
+              MEMORY_PUBLIC_URL: undefined,
+            },
+            commitSha: commitSha,
+          }),
         );
         const base = browserAssetBase(true, commitSha, mode);
         const response = await app.request(`${base}app.js`);

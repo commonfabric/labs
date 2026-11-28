@@ -48,6 +48,7 @@ import {
 import { faviconPng, faviconStatus } from "./favicon.ts";
 import type { FaviconStatus } from "./favicon.ts";
 import { renderTile, shell } from "./render.ts";
+import { type SentText, textToSend } from "./sent-text.ts";
 import {
   type Ctx,
   type Run,
@@ -58,6 +59,13 @@ import {
   type TileView,
 } from "./types.ts";
 import { livePages } from "./live-page.ts";
+import { dashboardRunnersGitHub, RunnersFeed } from "./runners-feed.ts";
+import { runnersPage } from "./runners-page.ts";
+import {
+  RUNNERS_KEY_PATH,
+  RUNNERS_PATH,
+  RUNNERS_SOCKET_PATH,
+} from "./runners-paths.ts";
 import { type Board, repoPagesRoute } from "./repo-page.ts";
 import { SERVING_VERSION, withVersionHeader } from "./version.ts";
 import {
@@ -69,6 +77,12 @@ import {
 const ctx = makeCtx(
   greenBranchOf,
   new RunLists(dashboardCacheFile("fabric-wall-run-lists-tiles.json")),
+);
+// The runners page's feed, which `start()` binds to the relay it follows.
+let runnersFeed = new RunnersFeed(
+  dashboardRunnersGitHub(),
+  githubWebhooks,
+  SERVING_VERSION,
 );
 const views = new Map<string, TileView>();
 const lastRun = new Map<string, number>();
@@ -169,27 +183,61 @@ async function refreshDashboardMessage(): Promise<boolean> {
   }
 }
 
-export const clients = new Set<ReadableStreamDefaultController<Uint8Array>>();
+/**
+ * A `DashboardUpdate` as the event stream carries it: its markup as the edits
+ * from the markup the same stream carried before.
+ */
+export interface DashboardEvent extends Omit<DashboardUpdate, "gridHtml" | "wideHtml"> {
+  gridHtml: SentText;
+  wideHtml: SentText;
+}
+
+type Client = ReadableStreamDefaultController<Uint8Array>;
+export const clients = new Set<Client>();
+// The update each client was last sent, which its next one is sent as edits
+// to. A client that has been sent none is sent the whole markup.
+const sentTo = new WeakMap<Client, DashboardUpdate>();
 const enc = new TextEncoder();
-const encodeUpdate = (update: DashboardUpdate) =>
-  enc.encode(`event: update\ndata: ${JSON.stringify(update)}\n\n`);
-const send = (event: Uint8Array) => {
+const encodeUpdate = (before: DashboardUpdate | undefined, update: DashboardUpdate) => {
+  const event: DashboardEvent = {
+    ...update,
+    gridHtml: textToSend(before?.gridHtml, update.gridHtml),
+    wideHtml: textToSend(before?.wideHtml, update.wideHtml),
+  };
+  return enc.encode(`event: update\ndata: ${JSON.stringify(event)}\n\n`);
+};
+// Sends `event(c)` to each client `c`, dropping a dead controller so the set
+// cannot grow forever.
+const send = (event: (c: Client) => Uint8Array) => {
   for (const c of clients) {
     try {
-      c.enqueue(event);
+      c.enqueue(event(c));
     } catch {
-      clients.delete(c); // drop a dead controller so the set can't grow forever
+      clients.delete(c);
     }
   }
 };
-export const broadcast = (update: DashboardUpdate) => send(encodeUpdate(update));
+export const broadcast = (update: DashboardUpdate) => {
+  // Clients sent the same update before share one encoding of this one.
+  const events = new Map<DashboardUpdate | undefined, Uint8Array>();
+  send((c) => {
+    const before = sentTo.get(c);
+    const event = events.get(before) ?? encodeUpdate(before, update);
+    events.set(before, event);
+    sentTo.set(c, update);
+    return event;
+  });
+};
 // A tick that collects nothing publishes nothing, so a browser cannot read
 // silence as a fault unless the server speaks on its own schedule. The
 // heartbeat is that schedule: a browser that stops hearing it replaces its
 // stream. The SSE data field carries the tick count because an event with no
 // data is not delivered to the page.
 let beats = 0;
-export const heartbeat = () => send(enc.encode(`event: ping\ndata: ${++beats}\n\n`));
+export const heartbeat = () => {
+  const ping = enc.encode(`event: ping\ndata: ${++beats}\n\n`);
+  send(() => ping);
+};
 
 const runSourceTileKey = (source: RunSource, tile: Tile): string => `${runSourceKey(source)} ${tile.label}`;
 
@@ -801,15 +849,38 @@ export async function handle(req: Request): Promise<Response> {
     const stream = new ReadableStream<Uint8Array>({
       start(c) {
         controller = c;
+        const update = dashboardUpdate();
         clients.add(c);
+        sentTo.set(c, update);
         c.enqueue(enc.encode(": connected\n\n"));
-        c.enqueue(encodeUpdate(dashboardUpdate()));
+        c.enqueue(encodeUpdate(undefined, update));
       },
       cancel() {
         if (controller) clients.delete(controller);
       },
     });
     return new Response(stream, { headers: { "content-type": "text/event-stream", "cache-control": "no-cache" } });
+  }
+  if (url.pathname === RUNNERS_KEY_PATH) {
+    return new Response(runnersFeed.key, {
+      headers: {
+        "content-type": "text/plain; charset=utf-8",
+        "cache-control": "no-store",
+      },
+    });
+  }
+  if (url.pathname === RUNNERS_SOCKET_PATH) {
+    if (req.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+      return new Response("Expected a WebSocket upgrade", { status: 426 });
+    }
+    return runnersFeed.open(req);
+  }
+  if (url.pathname === RUNNERS_PATH) {
+    return withVersionHeader(
+      new Response(runnersPage(SERVING_VERSION), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      }),
+    );
   }
   if (url.pathname === "/healthz") return Response.json({ ok: views.size > 0, at: lastChange });
   for (const r of routes) {
@@ -832,14 +903,23 @@ export async function serveTick(
   await Promise.all([collect(), pages.tick()]);
 }
 
-// The side effects: collect once, keep collecting, follow the GitHub webhook
-// relay, and serve. Running the file starts them; importing it does not. A
-// relay connection that cannot be opened is tried again on each tick.
+// The side effects: serve, collect once, keep collecting, and follow the
+// GitHub webhook relay. Running the file starts them; importing it does not.
+// Serving comes first, so a port that cannot be bound stops the dashboard
+// before it reaches any source. A relay connection that cannot be opened is
+// tried again on each tick.
 export function start(
   serve: typeof Deno.serve = Deno.serve,
   collect: () => void | Promise<void> = tick,
   webhooks: GitHubWebhooks = githubWebhooks,
 ) {
+  const server = serve({
+    port: PORT,
+    onListen: () => console.log(`\n  Dashboard LIVE:  http://localhost:${PORT}\n  ${TILES.length} tiles registered.\n`),
+  }, handle);
+  if (webhooks !== githubWebhooks) {
+    runnersFeed = new RunnersFeed(dashboardRunnersGitHub(), webhooks, SERVING_VERSION);
+  }
   // Taken in once every other listener, the run lists among them, has taken
   // the delivery in.
   webhooks.listen((delivery) =>
@@ -855,13 +935,12 @@ export function start(
   // Returned so a caller can run one turn of the clock on demand.
   const onTick = () => {
     void webhooks.connect();
+    runnersFeed.tick().catch((error) =>
+      console.error("runners page: keeping it current failed:", error)
+    );
     return serveTick(collect);
   };
   const timer = setInterval(onTick, TICK_MS);
-  const server = serve({
-    port: PORT,
-    onListen: () => console.log(`\n  Dashboard LIVE:  http://localhost:${PORT}\n  ${TILES.length} tiles registered.\n`),
-  }, handle);
   return { timer, server, onTick };
 }
 

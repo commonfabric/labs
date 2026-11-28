@@ -1,8 +1,9 @@
 /**
  * The compiled-module cache every toolshed process on a host shares, and every
- * serving worker in each of them: a directory of compiled modules, one file per
- * module, and the claims that keep two of them from compiling the same modules
- * at once. Deno-only: it reads, writes and locks files.
+ * serving worker in each of them, and that the connections of every `cf`
+ * process share in a directory of their own: a directory of compiled modules,
+ * one file per module, and the claims that keep two of them from compiling the
+ * same modules at once. Deno-only: it reads, writes and locks files.
  *
  * The directory holds two trees. `modules/<version>/<identity>.json` is one
  * module as `ProcessModuleByteCache.serialized()` writes it, under the hashes
@@ -34,6 +35,7 @@ import { getLogger } from "@commonfabric/logger";
 import {
   type CompiledModuleArtifact,
   ProcessModuleByteCache,
+  writeTextFileAtomicSync,
 } from "@commonfabric/test-support/compile-byte-cache";
 import {
   type CompileClaims,
@@ -170,19 +172,14 @@ export class DiskModuleByteCache implements ModuleByteCache {
       this.#versionDir(runtimeVersion),
       `${hashStringOf(identity)}.json`,
     );
-    let text: string;
-    try {
-      text = Deno.readTextFileSync(path);
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return undefined;
-      throw error;
-    }
+    const text = ifThere(() => Deno.readTextFileSync(path));
+    if (text === undefined) return undefined;
     let parsed: unknown;
     try {
       parsed = JSON.parse(text);
-    } catch (error) {
-      if (!(error instanceof SyntaxError)) throw error;
-      parsed = undefined;
+    } catch {
+      // `JSON.parse()` throws only for text that is not JSON, as a file cut
+      // short is; `restore()` skips the `undefined` left in its place.
     }
     this.#memory.restore([parsed]);
     const artifact = this.#memory.get(runtimeVersion, identity);
@@ -211,9 +208,8 @@ export class DiskModuleByteCache implements ModuleByteCache {
     }
     this.#usedAt.set(versionDir, now.getTime());
     try {
-      Deno.utimeSync(versionDir, now, now);
+      ifThere(() => Deno.utimeSync(versionDir, now, now));
     } catch (error) {
-      if (error instanceof Deno.errors.NotFound) return;
       // The read this follows succeeded; a tree left unmarked is at worst
       // pruned and compiled again.
       logger.error("shared-compile-cache-mark-failed", () => [
@@ -308,34 +304,33 @@ export class FileCompileClaims implements CompileClaims {
  * that numbers no files, any file at `path` counts as it.
  */
 function isFileAt(info: Deno.FileInfo, path: string): boolean {
-  let at: Deno.FileInfo;
+  const at = ifThere(() => Deno.statSync(path));
+  return at !== undefined && at.ino === info.ino && at.dev === info.dev;
+}
+
+/**
+ * What `operation` returns, or `undefined` where what it acts on is not
+ * there, which another process may have removed first.
+ *
+ * @throws Error when `operation` fails for any other reason.
+ */
+function ifThere<T>(operation: () => T): T | undefined {
   try {
-    at = Deno.statSync(path);
+    return operation();
   } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
+    if (error instanceof Deno.errors.NotFound) return undefined;
     throw error;
   }
-  return at.ino === info.ino && at.dev === info.dev;
 }
 
 /** Whether `path` names something, telling a missing path from a failed look. */
 function exists(path: string): boolean {
-  try {
-    Deno.lstatSync(path);
-    return true;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
+  return ifThere(() => Deno.lstatSync(path)) !== undefined;
 }
 
 /** Removes the file at `path`, which another process may remove first. */
 function removeIfThere(path: string): void {
-  try {
-    Deno.removeSync(path, { recursive: true });
-  } catch (error) {
-    if (!(error instanceof Deno.errors.NotFound)) throw error;
-  }
+  ifThere(() => Deno.removeSync(path, { recursive: true }));
 }
 
 /**
@@ -348,62 +343,43 @@ function removeIfThere(path: string): void {
 function removeVersionsUnusedSince(dir: string, cutoff: number): void {
   for (const entry of Deno.readDirSync(dir)) {
     const path = join(dir, entry.name);
-    let modified: Date | null;
-    try {
-      modified = Deno.lstatSync(path).mtime;
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) continue;
-      throw error;
-    }
-    if (modified !== null && modified.getTime() < cutoff) removeIfThere(path);
+    const modified = ifThere(() => Deno.lstatSync(path))?.mtime;
+    if (modified && modified.getTime() < cutoff) removeIfThere(path);
   }
 }
 
 /**
  * Helper for `openSharedCompileCache()`, which removes each claim file in
  * `dir` last taken before `cutoff`, in epoch milliseconds, that no turn
- * holds. It removes a file only while holding the file's own lock, so a turn
- * that holds or is about to mark the claim keeps its file, and a turn that
- * opened the file before it was removed finds on taking the lock that the
- * file is gone (`FileCompileClaims`).
+ * holds. A claim file another process removes first is already gone.
  */
 function removeClaimsUnusedSince(dir: string, cutoff: number): void {
   for (const entry of Deno.readDirSync(dir)) {
     const path = join(dir, entry.name);
-    let file: Deno.FsFile;
-    try {
-      file = Deno.openSync(path, { read: true, write: true });
-    } catch (error) {
-      if (error instanceof Deno.errors.NotFound) continue;
-      throw error;
-    }
-    try {
-      if (!file.tryLockSync(true)) continue;
-      const info = file.statSync();
-      if (
-        info.mtime !== null && info.mtime.getTime() < cutoff &&
-        isFileAt(info, path)
-      ) {
-        removeIfThere(path);
-      }
-    } finally {
-      file.close();
-    }
+    ifThere(() => removeClaimIfUnusedSince(path, cutoff));
   }
 }
 
-/** Writes `text` to `path` whole: to a temporary name, then renamed. */
-function writeTextFileAtomicSync(path: string, text: string): void {
-  const temporary = `${path}.${crypto.randomUUID()}.tmp`;
+/**
+ * Helper for `removeClaimsUnusedSince()`, which removes the claim file at
+ * `path` if it was last taken before `cutoff` and no turn holds it. It removes
+ * the file only while holding the file's own lock, so a turn that holds or is
+ * about to mark the claim keeps its file, and a turn that opened the file
+ * before it was removed finds on taking the lock that the file is gone
+ * (`FileCompileClaims`).
+ */
+function removeClaimIfUnusedSince(path: string, cutoff: number): void {
+  const file = Deno.openSync(path, { read: true, write: true });
   try {
-    Deno.writeTextFileSync(temporary, text);
-    Deno.renameSync(temporary, path);
-  } catch (error) {
-    try {
-      Deno.removeSync(temporary);
-    } catch (cleanup) {
-      if (!(cleanup instanceof Deno.errors.NotFound)) throw cleanup;
+    if (!file.tryLockSync(true)) return;
+    const info = file.statSync();
+    if (
+      info.mtime !== null && info.mtime.getTime() < cutoff &&
+      isFileAt(info, path)
+    ) {
+      removeIfThere(path);
     }
-    throw error;
+  } finally {
+    file.close();
   }
 }

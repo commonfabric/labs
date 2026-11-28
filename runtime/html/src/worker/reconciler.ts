@@ -117,6 +117,28 @@ import {
 /** Sentinel key in propSubscriptions for the Cell<Props> subscription itself. */
 const CELL_PROPS_KEY = "__cellProps__";
 
+/** A node as `#sanitizeNode()` returns it, which always has props and children. */
+type SanitizedVNode = WorkerVNode & {
+  props: WorkerProps | Cell<WorkerProps>;
+  children: NonNullable<WorkerVNode["children"]>;
+};
+
+/** Whether `node` already has what `#sanitizeNode()` gives a node. */
+function isSanitized(node: WorkerVNode): node is SanitizedVNode {
+  const { name, props, children } = node;
+  return !!name && (isCell(props) || isObjectOrArray(props)) &&
+    (isCell(children) || Array.isArray(children));
+}
+
+/** The children a node's render policy admits it to render. */
+interface PolicyChildren {
+  children: SanitizedVNode["children"];
+  /** Whether the policy put a placeholder in place of the children. */
+  blocked: boolean;
+  /** The cell whose label the block was decided on, when one was. */
+  blockedBy?: Cell<unknown>;
+}
+
 const CFC_RENDER_BOUNDARY_TAG = "cf-cfc-render-boundary";
 const CFC_AUTHORSHIP_TAG = "cf-cfc-authorship";
 const CFC_BLOCKED_PLACEHOLDER_TAG = "cf-cfc-blocked";
@@ -196,6 +218,10 @@ export const REMOTE_LOAD_PROPS: ReadonlyMap<string, ReadonlySet<string>> =
     ["cf-cfc-authorship", new Set(["avatar"])],
     ["cf-oauth", new Set(["auth"])],
     ["cf-profile-badge", new Set(["profile"])],
+    // A blob reference names the space whose host the image is fetched from,
+    // and the id the request's path carries.
+    ["cf-avatar", new Set(["blob"])],
+    ["cf-image", new Set(["blob"])],
     ["cf-render", new Set(["cell"])],
     ["cf-picker", new Set(["items"])],
     // The sandbox admits same-origin images, and a same-origin relay
@@ -392,6 +418,22 @@ function stationaryPositions(
 }
 
 /**
+ * The children `value` renders: its entries when it is a list, none when it
+ * is `null` or `undefined`, and itself alone otherwise.
+ */
+function childList(
+  value:
+    | WorkerRenderNode
+    | WorkerRenderNode[]
+    | Readonly<WorkerRenderNode | WorkerRenderNode[]>
+    | null
+    | undefined,
+) {
+  if (Array.isArray(value)) return value;
+  return value === null || value === undefined ? [] : [value];
+}
+
+/**
  * Main reconciler class for worker-side VDOM rendering.
  */
 export class WorkerReconciler {
@@ -514,13 +556,9 @@ export class WorkerReconciler {
     };
   }
 
-  /** Best-effort space of a cell; undefined when it can't name one. */
+  /** The space of a cell; undefined while it names none. */
   #spaceOfCell(cell: Cell<unknown>): string | undefined {
-    try {
-      return cell.space;
-    } catch {
-      return undefined;
-    }
+    return cell.space;
   }
 
   /**
@@ -811,9 +849,6 @@ export class WorkerReconciler {
   }
 
   #retireHandlerId(handlerId: number): void {
-    if (!this.#handlers.has(handlerId)) {
-      return;
-    }
     if (
       !this.#retiredHandlers.has(handlerId) &&
       !this.#pendingRetiredHandlers.has(handlerId)
@@ -996,10 +1031,7 @@ export class WorkerReconciler {
       return undefined;
     }
     const value = props[key];
-    if (isCell(value) || typeof value === "function") {
-      return undefined;
-    }
-    if (value === undefined) {
+    if (isCell(value) || value === undefined) {
       return undefined;
     }
     if (Array.isArray(value)) {
@@ -1037,9 +1069,6 @@ export class WorkerReconciler {
   ): boolean | undefined {
     for (const key of keys) {
       const rawValue = this.#nodePropForRenderPolicy(node, key);
-      if (typeof rawValue === "function") {
-        continue;
-      }
       const value = isCell(rawValue)
         ? this.#readCellPolicyValue(rawValue as Cell<unknown>)
         : rawValue;
@@ -1064,9 +1093,6 @@ export class WorkerReconciler {
   ): readonly CfcAtom[] | undefined {
     for (const key of keys) {
       const value = this.#nodePropForRenderPolicy(node, key);
-      if (typeof value === "function") {
-        continue;
-      }
       const resolved = isCell(value)
         ? this.#readCellPolicyValue(value as Cell<unknown>)
         : value;
@@ -1917,20 +1943,9 @@ export class WorkerReconciler {
   }
 
   #childrenForRenderPolicy(
-    node: WorkerVNode,
+    node: SanitizedVNode,
     policy: RenderPolicy,
-  ): {
-    children:
-      | WorkerRenderNode[]
-      | Cell<WorkerRenderNode | WorkerRenderNode[]>
-      | undefined;
-    blocked: boolean;
-    /** The cell whose label the block was decided on, when one was. */
-    blockedBy?: Cell<unknown>;
-  } {
-    if (node.children === undefined) {
-      return { children: undefined, blocked: false };
-    }
+  ): PolicyChildren {
     if (policy.remoteLoadsBlocked && node.name.toLowerCase() === "style") {
       return { children: [this.#blockedPlaceholderVNode()], blocked: true };
     }
@@ -2332,13 +2347,9 @@ export class WorkerReconciler {
     return false;
   }
 
-  #markTextIntegrityBlocked(
-    policy: RenderPolicy,
-  ): ReadonlySet<number> | undefined {
-    const boundaryNodeIds = policy.textIntegrity?.boundaryNodeIds;
-    if (boundaryNodeIds === undefined || boundaryNodeIds.size === 0) {
-      return undefined;
-    }
+  #markTextIntegrityBlocked(policy: RenderPolicy): ReadonlySet<number> {
+    const boundaryNodeIds = policy.textIntegrity?.boundaryNodeIds ??
+      new Set<number>();
     // Attribute the block to EVERY enclosing boundary, not just the nearest, so
     // an outer boundary cannot stay "ok" over content that failed its bar.
     this.#queueOps(
@@ -2354,12 +2365,8 @@ export class WorkerReconciler {
 
   #canRenderCellTextUnderPolicy(
     cell: Cell<unknown>,
-    policy: RenderPolicy,
+    textIntegrity: NonNullable<RenderPolicy["textIntegrity"]>,
   ): boolean {
-    const textIntegrity = policy.textIntegrity;
-    if (textIntegrity === undefined) {
-      return true;
-    }
     if (!textIntegrity.admitsCellText) {
       return false;
     }
@@ -2380,23 +2387,16 @@ export class WorkerReconciler {
   }
 
   #readCellPolicyValue(cell: Cell<unknown>): unknown {
-    const readableCell = cell as Cell<unknown> & {
-      get?: (options?: { traverseCells?: boolean }) => unknown;
-      getRawUntyped?: (options?: { frozen?: false }) => unknown;
-    };
     try {
-      return readableCell.getRawUntyped?.({ frozen: false });
+      return cell.getRawUntyped({ frozen: false });
     } catch {
       // Fall back to the schema-shaped read below.
     }
     try {
-      if (typeof readableCell.get === "function") {
-        return readableCell.get({ traverseCells: true });
-      }
+      return cell.get({ traverseCells: true });
     } catch {
       return undefined;
     }
-    return undefined;
   }
 
   #shouldBlockLiteralText(
@@ -2415,14 +2415,15 @@ export class WorkerReconciler {
     cell: Cell<unknown>,
     policy: RenderPolicy,
   ): boolean {
-    if (policy.textIntegrity === undefined) {
+    const textIntegrity = policy.textIntegrity;
+    if (textIntegrity === undefined) {
       return false;
     }
     if (isWorkerVNode(value) || this.#isRenderableObject(value)) {
       return false;
     }
     if (!this.#hasVisibleTextValue(value)) return false;
-    return !this.#canRenderCellTextUnderPolicy(cell, policy);
+    return !this.#canRenderCellTextUnderPolicy(cell, textIntegrity);
   }
 
   #isRenderableObject(value: unknown): boolean {
@@ -2625,15 +2626,13 @@ export class WorkerReconciler {
       } else {
         this.#denyLiteralText(state.renderPolicy, key);
       }
-      const boundaryNodeIds = this.#markTextIntegrityBlocked(
-        state.renderPolicy,
-      );
-      if (boundaryNodeIds !== undefined) {
-        if (state.textIntegrityBlockedProps === undefined) {
-          state.textIntegrityBlockedProps = new Map();
-        }
-        state.textIntegrityBlockedProps.set(key, boundaryNodeIds);
+      if (state.textIntegrityBlockedProps === undefined) {
+        state.textIntegrityBlockedProps = new Map();
       }
+      state.textIntegrityBlockedProps.set(
+        key,
+        this.#markTextIntegrityBlocked(state.renderPolicy),
+      );
       this.#queueOps([{
         op: "set-prop",
         nodeId: state.nodeId,
@@ -2783,16 +2782,15 @@ export class WorkerReconciler {
     policy: RenderPolicy,
   ): boolean {
     const newVNode = this.#extractVNode(node);
+    const sanitized = newVNode === null ? null : this.#sanitizeNode(newVNode);
     const oldTagName = "tagName" in oldState ? oldState.tagName : null;
-    const newTagName = newVNode?.name ?? null;
     if (
-      !oldTagName || !newTagName || oldTagName !== newTagName ||
+      !oldTagName || !newVNode?.name || oldTagName !== newVNode.name ||
+      !sanitized ||
       !this.#sameRemoteLoadDecision(oldState.renderPolicy, policy)
     ) {
       return false;
     }
-    const sanitized = this.#sanitizeNode(newVNode!);
-    if (!sanitized) return false;
     const childPolicy = this.#childRenderPolicyForNode(
       sanitized,
       policy,
@@ -2815,22 +2813,20 @@ export class WorkerReconciler {
     this.#updatePropsInPlace(ctx, oldState, sanitized.props);
 
     // Update children in place with proper diffing
-    if (policyChildren.children !== undefined) {
-      const childrenSame = this.#areChildrenSame(
-        oldState,
-        policyChildren.children,
-      );
-      this.#updateChildrenInPlace(
-        ctx,
-        oldState,
-        policyChildren.children,
-        new Set(),
-        childPolicy,
-        policyChanged,
-      );
-      if (!childrenSame || policyChanged) {
-        this.#refreshTextIntegrityBoundaryState(oldState, childPolicy);
-      }
+    const childrenSame = this.#areChildrenSame(
+      oldState,
+      policyChildren.children,
+    );
+    this.#updateChildrenInPlace(
+      ctx,
+      oldState,
+      policyChildren.children,
+      new Set(),
+      childPolicy,
+      policyChanged,
+    );
+    if (!childrenSame || policyChanged) {
+      this.#refreshTextIntegrityBoundaryState(oldState, childPolicy);
     }
     return true;
   }
@@ -2844,7 +2840,7 @@ export class WorkerReconciler {
   #updatePropsInPlace(
     ctx: ReconcileContext,
     state: NodeState,
-    newProps: WorkerProps | Cell<WorkerProps> | null | undefined,
+    newProps: SanitizedVNode["props"],
   ): void {
     // Handle Cell<Props> - if same cell, do nothing; otherwise re-subscribe
     if (isCell(newProps)) {
@@ -2862,23 +2858,16 @@ export class WorkerReconciler {
       return;
     }
 
-    // Handle static props object
-    if (!newProps || typeof newProps !== "object") {
-      // No props - remove all existing
-      this.#removeAllProps(state);
-      return;
-    }
-
     const newPropKeys = new Set(Object.keys(newProps));
 
-    // Find props to remove (exist in old but not in new)
+    // Find props to remove (exist in old but not in new), and the Cell<Props>
+    // subscription static props replace, which sets no prop of its own
     for (const [key, propState] of state.propSubscriptions) {
-      if (key === CELL_PROPS_KEY) continue;
       if (!newPropKeys.has(key)) {
         // Prop removed - cancel subscription and remove from DOM
         propState.cancel();
         state.propSubscriptions.delete(key);
-        this.#removeSingleProp(state, key);
+        if (key !== CELL_PROPS_KEY) this.#removeSingleProp(state, key);
       }
     }
 
@@ -3478,19 +3467,60 @@ export class WorkerReconciler {
   #refreshBoundaryPolicyFromProps(
     ctx: ReconcileContext,
     state: NodeState,
-    props: WorkerVNode["props"],
+    props: SanitizedVNode["props"],
   ): void {
-    if (
-      state.tagName !== CFC_RENDER_BOUNDARY_TAG &&
-      state.tagName !== CFC_AUTHORSHIP_TAG
-    ) {
-      return;
+    const applied = this.#applyBoundaryPolicyFromProps(state, props);
+    if (applied === undefined) return;
+    const { childPolicy, policyChildren, policyChanged } = applied;
+    const childrenSame = this.#areChildrenSame(state, policyChildren.children);
+    if (!childrenSame || policyChanged) {
+      this.#updateChildrenInPlace(
+        ctx,
+        state,
+        policyChildren.children,
+        new Set(),
+        childPolicy,
+        policyChanged,
+      );
+      this.#refreshTextIntegrityBoundaryState(state, childPolicy);
     }
-    if (state.sourceChildren === undefined) {
-      return;
+  }
+
+  #refreshInitialBoundaryPolicyFromProps(
+    state: NodeState,
+    props: SanitizedVNode["props"],
+  ): void {
+    const applied = this.#applyBoundaryPolicyFromProps(state, props);
+    if (applied === undefined) return;
+    this.#initializeTextIntegrityBoundary(applied.childPolicy, state.nodeId);
+  }
+
+  /**
+   * Recomputes from `props` the policy a boundary element's children render
+   * under and records it, with `props`, on `state`. Returns that policy, the
+   * children it admits, and whether it changed what the children render
+   * under; undefined, recording nothing, for an element that is not a
+   * boundary.
+   */
+  #applyBoundaryPolicyFromProps(
+    state: NodeState,
+    props: SanitizedVNode["props"],
+  ):
+    | {
+      childPolicy: RenderPolicy;
+      policyChildren: PolicyChildren;
+      policyChanged: boolean;
+    }
+    | undefined {
+    if (
+      (state.tagName !== CFC_RENDER_BOUNDARY_TAG &&
+        state.tagName !== CFC_AUTHORSHIP_TAG) ||
+      state.sourceChildren === undefined
+    ) {
+      return undefined;
     }
 
-    const node: WorkerVNode = {
+    const node: SanitizedVNode = {
       type: "vnode",
       name: state.tagName,
       props,
@@ -3510,55 +3540,7 @@ export class WorkerReconciler {
     state.sourceProps = props;
     state.childRenderPolicy = childPolicy;
     this.#setChildrenBlocked(state, policyChildren, childPolicy);
-    if (policyChildren.children === undefined) {
-      return;
-    }
-
-    const childrenSame = this.#areChildrenSame(state, policyChildren.children);
-    if (!childrenSame || policyChanged) {
-      this.#updateChildrenInPlace(
-        ctx,
-        state,
-        policyChildren.children,
-        new Set(),
-        childPolicy,
-        policyChanged,
-      );
-      this.#refreshTextIntegrityBoundaryState(state, childPolicy);
-    }
-  }
-
-  #refreshInitialBoundaryPolicyFromProps(
-    state: NodeState,
-    props: WorkerVNode["props"],
-  ): void {
-    if (
-      state.tagName !== CFC_RENDER_BOUNDARY_TAG &&
-      state.tagName !== CFC_AUTHORSHIP_TAG
-    ) {
-      return;
-    }
-    if (state.sourceChildren === undefined) {
-      return;
-    }
-
-    const node: WorkerVNode = {
-      type: "vnode",
-      name: state.tagName,
-      props,
-      children: state.sourceChildren,
-    };
-    const childPolicy = this.#childRenderPolicyForNode(
-      node,
-      state.renderPolicy,
-      state.nodeId,
-    );
-    const policyChildren = this.#childrenForRenderPolicy(node, childPolicy);
-
-    state.sourceProps = props;
-    state.childRenderPolicy = childPolicy;
-    this.#setChildrenBlocked(state, policyChildren, childPolicy);
-    this.#initializeTextIntegrityBoundary(childPolicy, state.nodeId);
+    return { childPolicy, policyChildren, policyChanged };
   }
 
   #resolveTextPropSourceCell(
@@ -3599,11 +3581,9 @@ export class WorkerReconciler {
     const link = base
       ? parseLink(rawValue, base) ?? parseLink(value, base)
       : parseLink(rawValue) ?? parseLink(value);
+    // A `value` that is a cell parses to its own full link.
     if (link?.id && link.space) {
       return cellRuntime(propsCell).getCellFromLink(link);
-    }
-    if (isCell(value)) {
-      return value as Cell<unknown>;
     }
     return propCell.resolveAsCell();
   }
@@ -3693,9 +3673,7 @@ export class WorkerReconciler {
         (resolvedChildren) => {
           logger.debug("children-update", () => ({
             nodeId: state.nodeId,
-            count: Array.isArray(resolvedChildren)
-              ? resolvedChildren.length
-              : 1,
+            count: childList(resolvedChildren).length,
           }));
           this.#updateChildren(
             ctx,
@@ -3782,18 +3760,13 @@ export class WorkerReconciler {
       );
     }
 
-    // Handle Cell<VNode> - this path should be unreachable in practice
-    // since Cell children go through renderChild → renderCellChild
+    // A Cell child goes through renderChild → renderCellChild, which tracks
+    // its position. One reached by following a [UI] chain has no position to
+    // track, and is refused.
     if (isCell(node)) {
       throw new Error(
-        "Unexpected Cell in renderNode - this code path was thought to be unreachable. " +
-          "Please report this issue.",
+        "Unexpected Cell in renderNode - a [UI] chain ending at a cell cannot be rendered.",
       );
-    }
-
-    // Now node must be an object (WorkerVNode)
-    if (typeof node !== "object") {
-      return null;
     }
 
     // Check for cycles
@@ -3869,15 +3842,13 @@ export class WorkerReconciler {
       activePolicyChildren,
       state.childRenderPolicy,
     );
-    if (activePolicyChildren.children !== undefined) {
-      this.#bindChildren(
-        ctx,
-        state,
-        activePolicyChildren.children,
-        visited,
-        state.childRenderPolicy,
-      );
-    }
+    this.#bindChildren(
+      ctx,
+      state,
+      activePolicyChildren.children,
+      visited,
+      state.childRenderPolicy,
+    );
 
     return state;
   }
@@ -4068,31 +4039,19 @@ export class WorkerReconciler {
   /**
    * Sanitize a VNode, ensuring it has valid structure.
    */
-  #sanitizeNode(node: WorkerVNode): WorkerVNode | null {
+  #sanitizeNode(node: WorkerVNode): SanitizedVNode | null {
     if (node.type !== "vnode" || node.name === "script") {
       return null;
     }
-
-    // Fragments appear as VNodes with no name property
-    let result = node;
-    if (!result.name) {
-      result = { ...result, name: "cf-fragment" };
-    }
-
-    // Ensure props is an object or Cell
-    if (
-      !isCell(result.props) &&
-      !isObjectOrArray(result.props)
-    ) {
-      result = { ...result, props: {} };
-    }
-
-    // Ensure children is an array or Cell
-    if (!isCell(result.children) && !Array.isArray(result.children)) {
-      result = { ...result, children: [] };
-    }
-
-    return result;
+    if (isSanitized(node)) return node;
+    const { props, children } = node;
+    return {
+      ...node,
+      // Fragments appear as VNodes with no name property
+      name: node.name || "cf-fragment",
+      props: isCell(props) || isObjectOrArray(props) ? props : {},
+      children: isCell(children) || Array.isArray(children) ? children : [],
+    };
   }
 
   /**
@@ -4151,10 +4110,8 @@ export class WorkerReconciler {
   #bindProps(
     ctx: ReconcileContext,
     state: NodeState,
-    props: WorkerProps | Cell<WorkerProps> | null | undefined,
+    props: SanitizedVNode["props"],
   ): void {
-    if (!props) return;
-
     // Handle Cell<Props>
     if (isCell(props)) {
       this.#bindCellProps(
@@ -4162,11 +4119,6 @@ export class WorkerReconciler {
         state,
         props as Cell<WorkerProps>,
       );
-      return;
-    }
-
-    // Handle static props
-    if (typeof props !== "object") {
       return;
     }
 
@@ -4382,12 +4334,7 @@ export class WorkerReconciler {
     policy: RenderPolicy,
     forceReplace = false,
   ): void {
-    // Normalize to array
-    const newChildren = Array.isArray(childrenValue)
-      ? childrenValue
-      : (childrenValue === null || childrenValue === undefined)
-      ? []
-      : [childrenValue];
+    const newChildren = childList(childrenValue);
 
     // Generate keys for new children
     const newKeys = generateChildKeys(newChildren);
@@ -4595,25 +4542,23 @@ export class WorkerReconciler {
 
     this.#updatePropsInPlace(ctx, childState.elementState, sanitized.props);
 
-    if (policyChildren.children !== undefined) {
-      const childrenSame = this.#areChildrenSame(
+    const childrenSame = this.#areChildrenSame(
+      childState.elementState,
+      policyChildren.children,
+    );
+    this.#updateChildrenInPlace(
+      ctx,
+      childState.elementState,
+      policyChildren.children,
+      new Set(visited),
+      childPolicy,
+      policyChanged,
+    );
+    if (!childrenSame || policyChanged) {
+      this.#refreshTextIntegrityBoundaryState(
         childState.elementState,
-        policyChildren.children,
-      );
-      this.#updateChildrenInPlace(
-        ctx,
-        childState.elementState,
-        policyChildren.children,
-        new Set(visited),
         childPolicy,
-        policyChanged,
       );
-      if (!childrenSame || policyChanged) {
-        this.#refreshTextIntegrityBoundaryState(
-          childState.elementState,
-          childPolicy,
-        );
-      }
     }
     return true;
   }
@@ -4940,25 +4885,23 @@ export class WorkerReconciler {
                 sanitized.props,
               );
 
-              if (policyChildren.children !== undefined) {
-                const childrenSame = this.#areChildrenSame(
+              const childrenSame = this.#areChildrenSame(
+                childState.elementState,
+                policyChildren.children,
+              );
+              this.#updateChildrenInPlace(
+                ctx,
+                childState.elementState,
+                policyChildren.children,
+                new Set(),
+                childPolicy,
+                policyChanged,
+              );
+              if (!childrenSame || policyChanged) {
+                this.#refreshTextIntegrityBoundaryState(
                   childState.elementState,
-                  policyChildren.children,
-                );
-                this.#updateChildrenInPlace(
-                  ctx,
-                  childState.elementState,
-                  policyChildren.children,
-                  new Set(),
                   childPolicy,
-                  policyChanged,
                 );
-                if (!childrenSame || policyChanged) {
-                  this.#refreshTextIntegrityBoundaryState(
-                    childState.elementState,
-                    childPolicy,
-                  );
-                }
               }
               return;
             }
@@ -5116,56 +5059,29 @@ export class WorkerReconciler {
     visited: Set<object>,
     policy: RenderPolicy,
   ): ChildNodeState | null {
-    // Handle arrays - wrap in a span with display:contents
-    if (Array.isArray(child)) {
-      const wrapperVNode: WorkerVNode = {
-        type: "vnode",
-        name: "span",
-        props: { style: "display:contents" },
-        children: child,
-      };
-      const state = this.#renderNode(
-        ctx,
-        wrapperVNode,
-        new Set(visited),
-        policy,
-      );
-      if (!state) return null;
-      state.isArrayWrapper = true;
-
-      return {
-        nodeId: state.nodeId,
-        isText: false,
-        cancel: state.cancel,
-        elementState: state,
-      };
-    }
-
-    // Handle VNode
-    if (isWorkerVNode(child)) {
-      const state = this.#renderNode(ctx, child, new Set(visited), policy);
-      if (!state) return null;
-
-      return {
-        nodeId: state.nodeId,
-        isText: false,
-        cancel: state.cancel,
-        elementState: state,
-      };
-    }
-
-    // Handle objects with [UI] property (pattern outputs)
-    // deno-lint-ignore no-explicit-any
+    // An array renders wrapped in a span with display:contents; a VNode and an
+    // object with a [UI] property (a pattern output) render as themselves.
+    const isArray = Array.isArray(child);
     if (
-      child && typeof child === "object" && UI in child && (child as any)[UI]
+      isArray || isWorkerVNode(child) ||
+      // deno-lint-ignore no-explicit-any
+      (child && typeof child === "object" && UI in child && (child as any)[UI])
     ) {
       const state = this.#renderNode(
         ctx,
-        child as WorkerRenderNode,
+        isArray
+          ? {
+            type: "vnode",
+            name: "span",
+            props: { style: "display:contents" },
+            children: child,
+          }
+          : child as WorkerRenderNode,
         new Set(visited),
         policy,
       );
       if (!state) return null;
+      if (isArray) state.isArrayWrapper = true;
 
       return {
         nodeId: state.nodeId,

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path/from-file-url";
 import { join } from "@std/path/join";
@@ -16,6 +15,7 @@ import {
   patternRoot,
   PATTERNS_DIR,
 } from "./pattern-files.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isPatternSource", () => {
   it("accepts authored .ts and .tsx entries", () => {
@@ -281,6 +281,24 @@ describe("collectAllPatternFiles", () => {
 });
 
 describe("collectBaselineKeys", () => {
+  it("returns the sorted pattern directories at any depth, and no files", async () => {
+    const dir = await Deno.makeTempDir({ prefix: "pattern-files-" });
+    try {
+      await Deno.mkdir(`${dir}/system/home/home.tsx`, { recursive: true });
+      await Deno.writeTextFile(`${dir}/system/home/home.tsx/a.json`, "");
+      await Deno.mkdir(`${dir}/counter.ts`);
+      await Deno.writeTextFile(`${dir}/README.md`, "");
+      await Deno.writeTextFile(`${dir}/system/stray.tsx`, "");
+
+      expect(await collectBaselineKeys(dir)).toEqual([
+        "counter.ts",
+        "system/home/home.tsx",
+      ]);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
   it("returns no keys for an absent tree, and throws for one it cannot read", async () => {
     const dir = await Deno.makeTempDir({ prefix: "pattern-files-" });
     try {

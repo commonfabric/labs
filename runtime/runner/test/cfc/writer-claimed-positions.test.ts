@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../../src/builder/types.ts";
 import { prepareBoundaryCommit } from "../../src/cfc/prepare.ts";
@@ -93,5 +93,16 @@ describe("prepareBoundaryCommit()", () => {
     const { reasons, entries } = await persist(true, true);
     expect(reasons).toEqual([]);
     expect(entries).toEqual([adminEntry]);
+  });
+
+  it("persists no declared entry at a union a branch of which refers to the unconstrained schema", async () => {
+    // That branch admits any value without a claim, as `true` does.
+
+    const { reasons, entries } = await persist(
+      { $ref: "#/$defs/Anything" } as JSONSchema,
+      5,
+    );
+    expect(reasons).toEqual([]);
+    expect(entries).toEqual([]);
   });
 });

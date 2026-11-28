@@ -5,6 +5,7 @@ import {
   assertRejects,
   assertThrows,
 } from "@std/assert";
+import { expect } from "@std/expect";
 import {
   acceptedCoverageDebt,
   type Artifact,
@@ -22,9 +23,11 @@ import {
   isNotFound,
   measuredSetCoverageMetric,
 } from "./ci-check-lib.ts";
+import { dirname, join } from "@std/path";
 import { buildZip } from "./zip-testing.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("acceptedCoverageDebt reads a name's line increment", () => {
+test("acceptedCoverageDebt reads a name's line increment", () => {
   assertEquals(
     acceptedCoverageDebt(
       "ACCEPT_COVERAGE_DEBT: runtime/runner  +123 lines\n" +
@@ -34,14 +37,14 @@ Deno.test("acceptedCoverageDebt reads a name's line increment", () => {
   );
 });
 
-Deno.test("acceptedCoverageDebt reads a one-line increment", () => {
+test("acceptedCoverageDebt reads a one-line increment", () => {
   assertEquals(
     acceptedCoverageDebt("ACCEPT_COVERAGE_DEBT: tasks +1 line"),
     new Map([["tasks", 1]]),
   );
 });
 
-Deno.test("acceptedCoverageDebt rejects a total in place of an increment", () => {
+test("acceptedCoverageDebt rejects a total in place of an increment", () => {
   // An acceptance naming a total says nothing about how much debt the pull
   // request adds, and means something different against every baseline, so it
   // is rejected rather than read as though it were an increment.
@@ -54,7 +57,7 @@ Deno.test("acceptedCoverageDebt rejects a total in place of an increment", () =>
   );
 });
 
-Deno.test("acceptedCoverageDebt rejects a metric name in place of a name", () => {
+test("acceptedCoverageDebt rejects a metric name in place of a name", () => {
   assertThrows(
     () =>
       acceptedCoverageDebt(
@@ -65,7 +68,7 @@ Deno.test("acceptedCoverageDebt rejects a metric name in place of a name", () =>
   );
 });
 
-Deno.test("acceptedCoverageDebt rejects a name nothing could measure", () => {
+test("acceptedCoverageDebt rejects a name nothing could measure", () => {
   // Only a package's directory splits below its top level, so a path below
   // any other top-level directory cannot name a member.
   assertThrows(
@@ -75,7 +78,7 @@ Deno.test("acceptedCoverageDebt rejects a name nothing could measure", () => {
   );
 });
 
-Deno.test("two acceptances of one name are refused", () => {
+test("two acceptances of one name are refused", () => {
   // The author meant one number and would be given the other, with
   // nothing saying which.
   assertThrows(
@@ -89,7 +92,7 @@ Deno.test("two acceptances of one name are refused", () => {
   );
 });
 
-Deno.test("acceptedCoverageDebt reads a workspace member nested below its package's directory", () => {
+test("acceptedCoverageDebt reads a workspace member nested below its package's directory", () => {
   const name = "connectors/github/connector";
   assertEquals(
     acceptedCoverageDebt(`ACCEPT_COVERAGE_DEBT: ${name} +7 lines`).get(name),
@@ -97,7 +100,7 @@ Deno.test("acceptedCoverageDebt reads a workspace member nested below its packag
   );
 });
 
-Deno.test("acceptedCoverageDebt reads only a marker starting a line", () => {
+test("acceptedCoverageDebt reads only a marker starting a line", () => {
   // A description explaining the mechanism carries no acceptance, and is not a
   // malformed one either.
   const prose =
@@ -124,7 +127,7 @@ Deno.test("acceptedCoverageDebt reads only a marker starting a line", () => {
   );
 });
 
-Deno.test("coverageGroupsForChangedFiles names the source group of each changed source file", () => {
+test("coverageGroupsForChangedFiles names the source group of each changed source file", () => {
   const groups = coverageGroupsForChangedFiles([
     "runtime/runner/src/cell.ts",
     "patterns/README.md",
@@ -136,7 +139,7 @@ Deno.test("coverageGroupsForChangedFiles names the source group of each changed 
   assertEquals([...groups].sort(), ["runtime/runner", "runtime/ui", "tasks"]);
 });
 
-Deno.test("fetchIssueComments reads every page of a pull request's comments", async () => {
+test("fetchIssueComments reads every page of a pull request's comments", async () => {
   const originalFetch = globalThis.fetch;
   const requestedUrls: string[] = [];
   try {
@@ -178,7 +181,7 @@ Deno.test("fetchIssueComments reads every page of a pull request's comments", as
   }
 });
 
-Deno.test("githubGet retries transient GitHub responses", async () => {
+test("githubGet retries transient GitHub responses", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   try {
@@ -212,7 +215,7 @@ Deno.test("githubGet retries transient GitHub responses", async () => {
   }
 });
 
-Deno.test("githubGet does not retry non-transient GitHub responses", async () => {
+test("githubGet does not retry non-transient GitHub responses", async () => {
   const originalFetch = globalThis.fetch;
   let calls = 0;
   try {
@@ -269,7 +272,7 @@ function primaryRateLimitResponse(): Response {
   });
 }
 
-Deno.test("githubGet reports a spent request window as a rate limit, not a refusal", async () => {
+test("githubGet reports a spent request window as a rate limit, not a refusal", async () => {
   // The refusal is worded in the response body, which is cancelled unread, so
   // the headers are the only thing that can tell this from a permission error.
   const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
@@ -287,7 +290,7 @@ Deno.test("githubGet reports a spent request window as a rate limit, not a refus
   assertEquals(calls, 1);
 });
 
-Deno.test("githubGet reports a secondary rate limit once its retries are spent", async () => {
+test("githubGet reports a secondary rate limit once its retries are spent", async () => {
   const calls = await withFetchAnswering(
     () =>
       new Response("slow down", {
@@ -308,7 +311,7 @@ Deno.test("githubGet reports a secondary rate limit once its retries are spent",
   assertEquals(calls, 4);
 });
 
-Deno.test("githubGet stops retrying a spent window answered as a busy signal", async () => {
+test("githubGet stops retrying a spent window answered as a busy signal", async () => {
   // 429 is the status a slow-down is retried for, and the spent window is the
   // one case behind it that no retry inside this job can clear.
   const calls = await withFetchAnswering(
@@ -329,7 +332,7 @@ Deno.test("githubGet stops retrying a spent window answered as a busy signal", a
   assertEquals(calls, 1);
 });
 
-Deno.test("githubGet reads a busy signal carrying no headers as a rate limit", async () => {
+test("githubGet reads a busy signal carrying no headers as a rate limit", async () => {
   // GitHub documents the rate-limit headers as optional, and 429 means too
   // many requests whatever it sends beside it. Read as an ordinary failure it
   // would reach the coverage walk as a run that measured nothing.
@@ -350,7 +353,7 @@ Deno.test("githubGet reads a busy signal carrying no headers as a rate limit", a
   assertEquals(calls, 4);
 });
 
-Deno.test("githubGet waits out a secondary limit that arrives as a refusal", async () => {
+test("githubGet waits out a secondary limit that arrives as a refusal", async () => {
   // The same condition spelled 403 rather than 429. Retrying is what can still
   // hold the pull request to its baseline, so the status it arrives under must
   // not decide whether the wait is observed.
@@ -372,7 +375,7 @@ Deno.test("githubGet waits out a secondary limit that arrives as a refusal", asy
   assertEquals(calls, 4);
 });
 
-Deno.test("githubGet reads a secondary limit out of a refusal that sends no headers", async () => {
+test("githubGet reads a secondary limit out of a refusal that sends no headers", async () => {
   // GitHub documents a secondary limit as arriving with neither rate-limit
   // header, and its message as what tells it from a permission failure. Read
   // as a permission failure it would reach the coverage walk as absent data.
@@ -399,7 +402,7 @@ Deno.test("githubGet reads a secondary limit out of a refusal that sends no head
   assertEquals(calls, 4);
 });
 
-Deno.test("githubGet classifies a refusal that carries no body from its headers", async () => {
+test("githubGet classifies a refusal that carries no body from its headers", async () => {
   // Nothing to read, so the headers are the whole of the evidence — and they
   // are enough here.
   const calls = await withFetchAnswering(
@@ -420,7 +423,7 @@ Deno.test("githubGet classifies a refusal that carries no body from its headers"
   assertEquals(calls, 1);
 });
 
-Deno.test("githubGet reports the status when a refusal's body fails mid-read", async () => {
+test("githubGet reports the status when a refusal's body fails mid-read", async () => {
   // Reading the body is how a refusal is classified, never how it is
   // reported, so a body that breaks costs the classification its evidence and
   // the failure nothing.
@@ -447,7 +450,7 @@ Deno.test("githubGet reports the status when a refusal's body fails mid-read", a
   );
 });
 
-Deno.test("githubGet does not call an ordinary refusal a rate limit", async () => {
+test("githubGet does not call an ordinary refusal a rate limit", async () => {
   await withFetchAnswering(
     () => new Response("forbidden", { status: 403, statusText: "Forbidden" }),
     async () => {
@@ -460,7 +463,7 @@ Deno.test("githubGet does not call an ordinary refusal a rate limit", async () =
   );
 });
 
-Deno.test("downloadAndExtractArtifact raises a rate limit rather than reporting no artifact", async () => {
+test("downloadAndExtractArtifact raises a rate limit rather than reporting no artifact", async () => {
   // Reported as `null` the limit would read as an artifact that is not
   // there, which is a claim about the run rather than about GitHub.
   const calls = await withFetchAnswering(primaryRateLimitResponse, async () => {
@@ -474,7 +477,7 @@ Deno.test("downloadAndExtractArtifact raises a rate limit rather than reporting 
   assertEquals(calls, 1);
 });
 
-Deno.test("GitHub REST errors include status text and omit response bodies", async (t) => {
+test("GitHub REST errors include status text and omit response bodies", async (t) => {
   const responseBody =
     "upstream request: data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB";
   const cases: {
@@ -540,7 +543,7 @@ Deno.test("GitHub REST errors include status text and omit response bodies", asy
   }
 });
 
-Deno.test("GitHub REST errors do not wait for response cancellation", async () => {
+test("GitHub REST errors do not wait for response cancellation", async () => {
   const originalFetch = globalThis.fetch;
   try {
     globalThis.fetch = ((_input, _init) =>
@@ -568,7 +571,7 @@ Deno.test("GitHub REST errors do not wait for response cancellation", async () =
   }
 });
 
-Deno.test("fetchArtifactsForRun reads every artifact page", async () => {
+test("fetchArtifactsForRun reads every artifact page", async () => {
   const originalFetch = globalThis.fetch;
   const requestedPages: string[] = [];
   const artifact = (id: number, name: string): Artifact => ({
@@ -610,7 +613,7 @@ Deno.test("fetchArtifactsForRun reads every artifact page", async () => {
   }
 });
 
-Deno.test("fetchArtifactsForRun stops at a short or an empty page when GitHub gives no total", async () => {
+test("fetchArtifactsForRun stops at a short or an empty page when GitHub gives no total", async () => {
   const artifacts = (count: number): Artifact[] =>
     Array.from({ length: count }, (_, index) => ({
       id: index + 1,
@@ -641,12 +644,12 @@ Deno.test("fetchArtifactsForRun stops at a short or an empty page when GitHub gi
   }
 });
 
-Deno.test("coverageMetricGroupName returns null for a name that is not a coverage metric", () => {
+test("coverageMetricGroupName returns null for a name that is not a coverage metric", () => {
   assertEquals(coverageMetricGroupName("job: Check"), null);
   assertEquals(coverageMetricGroupName("coverage-debt: tasks"), null);
 });
 
-Deno.test("isNotFound tells a thing that is not there from an interface that could not answer", () => {
+test("isNotFound tells a thing that is not there from an interface that could not answer", () => {
   assertEquals(
     isNotFound(new Error("GitHub API GET 404 Not Found: /repos/o/r/pulls/1")),
     true,
@@ -666,7 +669,7 @@ Deno.test("isNotFound tells a thing that is not there from an interface that cou
   assertEquals(isNotFound("404"), false);
 });
 
-Deno.test("a measured set's metric is not one of its member's source groups", () => {
+test("a measured set's metric is not one of its member's source groups", () => {
   const metric = measuredSetCoverageMetric("workspace-unit/runtime/memory");
   assertEquals(
     coverageMetricMeasuredSet(metric),
@@ -685,7 +688,7 @@ Deno.test("a measured set's metric is not one of its member's source groups", ()
   );
 });
 
-Deno.test("two suites over one member are two metrics", () => {
+test("two suites over one member are two metrics", () => {
   const unit = measuredSetCoverageMetric("workspace-unit/runtime/memory");
   const integration = measuredSetCoverageMetric(
     "memory-integration/runtime/memory",
@@ -697,7 +700,7 @@ Deno.test("two suites over one member are two metrics", () => {
   );
 });
 
-Deno.test("downloadAndExtractArtifact retries transient artifact downloads", async () => {
+test("downloadAndExtractArtifact retries transient artifact downloads", async () => {
   const originalFetch = globalThis.fetch;
   const originalWarn = console.warn;
   const warnings: string[] = [];
@@ -764,7 +767,7 @@ async function withArtifactZip<T>(
   }
 }
 
-Deno.test("downloadAndExtractArtifact unpacks the artifact it downloads", async () => {
+test("downloadAndExtractArtifact unpacks the artifact it downloads", async () => {
   const zip = await buildZip(
     "records.json",
     new TextEncoder().encode('{"ok":true}'),
@@ -834,7 +837,7 @@ function okJson(body: unknown): Promise<Response> {
   );
 }
 
-Deno.test("githubGet retries a request that fails to send, doubling the delay each time", async () => {
+test("githubGet retries a request that fails to send, doubling the delay each time", async () => {
   const { delays, sleep } = recordingSleep();
   const { result, calls } = await withFetch(
     (call) =>
@@ -846,7 +849,7 @@ Deno.test("githubGet retries a request that fails to send, doubling the delay ea
   assertEquals(delays, [250, 500]);
 });
 
-Deno.test("githubGet throws the send failure once its attempts are spent", async () => {
+test("githubGet throws the send failure once its attempts are spent", async () => {
   const { delays, sleep } = recordingSleep();
   const { result, calls } = await withFetch(
     () => Promise.reject(new TypeError("reset")),
@@ -857,7 +860,7 @@ Deno.test("githubGet throws the send failure once its attempts are spent", async
   assertEquals(delays, [250, 500, 1000]);
 });
 
-Deno.test("githubGet waits as long as a `Retry-After` date says, within the cap", async () => {
+test("githubGet waits as long as a `Retry-After` date says, within the cap", async () => {
   const { delays, sleep } = recordingSleep();
   const retryAfter = [
     "Wed, 21 Oct 2015 07:28:00 GMT",
@@ -882,7 +885,7 @@ Deno.test("githubGet waits as long as a `Retry-After` date says, within the cap"
   assertEquals(delays, [0, 500, 5000]);
 });
 
-Deno.test("downloadAndExtractArtifact retries a download that fails to send", async () => {
+test("downloadAndExtractArtifact retries a download that fails to send", async () => {
   const { delays, sleep } = recordingSleep();
   const { result, calls, warnings } = await withFetch(
     (call) =>
@@ -903,7 +906,7 @@ Deno.test("downloadAndExtractArtifact retries a download that fails to send", as
   );
 });
 
-Deno.test("downloadAndExtractArtifact gives up on a download that never sends", async () => {
+test("downloadAndExtractArtifact gives up on a download that never sends", async () => {
   const { delays, sleep } = recordingSleep();
   const { result, calls, warnings } = await withFetch(
     () => Promise.reject(new TypeError("reset")),
@@ -920,7 +923,7 @@ Deno.test("downloadAndExtractArtifact gives up on a download that never sends", 
   );
 });
 
-Deno.test("downloadAndExtractArtifact retries an artifact whose body breaks off", async () => {
+test("downloadAndExtractArtifact retries an artifact whose body breaks off", async () => {
   const { delays, sleep } = recordingSleep();
   const broken = () =>
     new Response(
@@ -946,7 +949,7 @@ Deno.test("downloadAndExtractArtifact retries an artifact whose body breaks off"
   );
 });
 
-Deno.test("downloadAndExtractArtifact retries an artifact that does not unzip", async () => {
+test("downloadAndExtractArtifact retries an artifact that does not unzip", async () => {
   const { delays, sleep } = recordingSleep();
   const { result, calls, warnings } = await withFetch(
     (call) =>
@@ -965,4 +968,110 @@ Deno.test("downloadAndExtractArtifact retries an artifact that does not unzip", 
       .test(warnings[1] ?? ""),
     true,
   );
+});
+
+/**
+ * A response whose body, when read, first does `sabotage` to each directory
+ * named with `prefix` under the temporary root, then breaks off.
+ */
+function breakingOffAfter(
+  prefix: string,
+  sabotage: (directory: string) => Promise<void>,
+): Response {
+  return new Response(
+    new ReadableStream({
+      async pull(controller) {
+        for (const directory of await artifactDirectories(prefix)) {
+          await sabotage(directory);
+        }
+        controller.error(new Error("connection reset"));
+      },
+    }, { highWaterMark: 0 }),
+    { status: 200 },
+  );
+}
+
+/** The directories named with `prefix` under the temporary root. */
+async function artifactDirectories(prefix: string): Promise<string[]> {
+  const probe = await Deno.makeTempDir();
+  await Deno.remove(probe);
+  const tempRoot = dirname(probe);
+  const directories: string[] = [];
+  for await (const entry of Deno.readDir(tempRoot)) {
+    if (entry.name.startsWith(prefix)) {
+      directories.push(join(tempRoot, entry.name));
+    }
+  }
+  return directories;
+}
+
+test("downloadAndExtractArtifact keeps only the directory of an artifact it unpacked", async () => {
+  const prefix = `artifact-cleanup-test-${crypto.randomUUID()}-`;
+  const { sleep } = recordingSleep();
+  const { result } = await withFetch(
+    () => Promise.resolve(new Response("not a zip", { status: 200 })),
+    () => downloadAndExtractArtifact(9, prefix, { sleep }),
+  );
+  assertEquals(result, null);
+  assertEquals(await artifactDirectories(prefix), []);
+
+  const directory = await withArtifactZip(
+    await buildZip("records.json", new TextEncoder().encode("{}"), 0),
+    () => downloadAndExtractArtifact(9, prefix),
+  );
+  assertExists(directory);
+  try {
+    assertEquals(await artifactDirectories(prefix), [directory]);
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});
+
+test("downloadAndExtractArtifact retries a download whose directory is already gone", async () => {
+  const prefix = `artifact-vanishing-test-${crypto.randomUUID()}-`;
+  const { sleep } = recordingSleep();
+  const { result, calls } = await withFetch(
+    () =>
+      Promise.resolve(
+        breakingOffAfter(
+          prefix,
+          (directory) => Deno.remove(directory, { recursive: true }),
+        ),
+      ),
+    () => downloadAndExtractArtifact(10, prefix, { sleep }),
+  );
+  expect(result).toBeNull();
+  expect(calls).toBe(4);
+  expect(await artifactDirectories(prefix)).toEqual([]);
+});
+
+test("downloadAndExtractArtifact retries a download whose directory cannot be removed, naming both failures", async () => {
+  const prefix = `artifact-unremovable-test-${crypto.randomUUID()}-`;
+  const refusal = new Deno.errors.PermissionDenied("removal refused");
+  const refused: string[] = [];
+  const removeDirectory = (path: string) => {
+    refused.push(path);
+    return Promise.reject(refusal);
+  };
+
+  const { sleep } = recordingSleep();
+  try {
+    const { result, calls, warnings } = await withFetch(
+      () => Promise.resolve(breakingOffAfter(prefix, () => Promise.resolve())),
+      () => downloadAndExtractArtifact(11, prefix, { sleep, removeDirectory }),
+    );
+    expect(result).toBeNull();
+    expect(calls).toBe(4);
+    expect(warnings.join("\n")).toMatch(
+      /: Error: connection reset, and .+ could not be removed: PermissionDenied: removal refused/,
+    );
+    expect(refused.toSorted()).toEqual(
+      (await artifactDirectories(prefix)).toSorted(),
+    );
+    expect(refused).toHaveLength(4);
+  } finally {
+    for (const directory of await artifactDirectories(prefix)) {
+      await Deno.remove(directory, { recursive: true });
+    }
+  }
 });

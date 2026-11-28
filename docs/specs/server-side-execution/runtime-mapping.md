@@ -287,18 +287,50 @@ nothing in the runtime derives. A piece whose output the opened piece's
 argument links to, as `cf piece link` wires one, is not started by the open;
 an event's auto-load of a piece that is not running starts it. An open
 that follows the opened piece's origin follows each enclosing piece's
-origin first. The opened piece
-is started in its own right after them, so it keeps running when one of them
-stops; each enclosing piece is started in its own right too, and runs until
-it is stopped itself or the runtime ends, as a piece an event's auto-load
-starts does. That start is best effort: an enclosing
-piece that cannot start, one whose origin's follow cannot be settled, and an
+origin first. The opened piece is instantiated after them, in its own right,
+so it keeps running when one of them stops. Its start loads its root, its
+pattern, and the documents the pattern reads while the walk runs, and
+instantiates its graph once the walk is done
+(`RunnerStartOptions.instantiateAfter`). Each enclosing piece is started in its
+own right too, and runs until it is stopped itself or the runtime ends, as a
+piece an event's auto-load starts does. That start is best effort: an enclosing
+piece that cannot start and an
 argument whose links cannot be read leave the opened piece to start alone,
 with a warning naming it, so an open fails only where the piece's own start
-does. A serving runtime's demand start passes no
-`startInputSources`: the demand a session hands it reaches the documents
-upstream of what the session watches, the enclosing instance's among them,
-so the demand pass starts that instance itself.
+does. A serving runtime's demand start walks the same restricted chain before
+it starts a piece a demand reaches (`#attemptStructureLoad()` in
+`space-server.ts`): a session's demand can reach a nested instance's documents
+without reaching any of the enclosing instance's that the demand pass starts a
+piece from, as when the session reads through a link that names the nested
+instance's result and never opens the enclosing instance, and the nested
+instance would then run alone. Unlike an open's, the walk there is not best
+effort (`EnsurePieceOptions.sourcesRequired`): an enclosing piece that does not
+start holds the demanded root back, as an enclosing piece owed its origin's
+follow does (serving-loop.md §3e), and an error starting that piece or reading
+the links that name it is the demanded root's error, so the demand pass
+retries, parks and reports it as it does a piece of its own. An enclosing piece
+that can never start leaves the demanded root pending for good, with the stuck
+warning a root deferred that long gets. A link whose `result` chain cycles or
+runs too deep names no source and is passed over, as it is for an open. The
+pieces the walk finds enclosing a piece are recorded for the tenure
+(`EnsurePieceOptions.onSourceRoot`), and every key resolving to that piece is
+indexed under them, whenever it arrives: the runs of an enclosing piece, and of
+every piece nested in it, are supplied that key's demanders, as a demand of the
+enclosing piece itself would supply them, each computing only the demanders'
+own instances, a demander arriving later re-arms them, and a failed start
+commit of an enclosing piece parks the key. A nested node the enclosing piece's
+graph sets up runs as that graph's child and lives as long as that piece does,
+where an opened one is started in its own right; an instance a builtin such as
+`map` builds starts in its own right after the piece that built it, and its
+keys are indexed under the piece of the callback that builds it alone, not the
+pieces enclosing that one; each enclosing piece runs for the rest of the
+tenure. Two routes still start a nested instance alone on a serving runtime: a
+demand of a piece the walk finds no enclosing piece for, as for a child a
+handler made, and an event's auto-load (`startEventPiece()`), which is best
+effort, so an event to a nested instance whose enclosing piece cannot start
+runs its handler alone. A key whose owning piece started some other way than
+through a walk, by an event or as the child of an enclosing piece demanded
+itself, is indexed under nothing.
 The derivation path needs no analog: a commit dirtying docs read by
 unmaterialized nodes leaves them dirty-unmaterialized until a
 value-granular client pull (a subscription) demands them and their

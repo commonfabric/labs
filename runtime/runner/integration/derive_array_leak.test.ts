@@ -32,6 +32,7 @@
  * out. The server reading covers whatever else the server is doing.
  */
 
+import { toCompactDebugString } from "@commonfabric/data-model";
 import { MockDoc } from "@commonfabric/html/mock-doc";
 import { renderInProcess } from "@commonfabric/html/in-process";
 import { createSession, Identity } from "@commonfabric/identity";
@@ -45,6 +46,7 @@ import { createTestSpace, env } from "@commonfabric/integration";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { defer, type Deferred } from "@commonfabric/async/defer";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   type CollectedMemory,
@@ -163,7 +165,7 @@ async function runTest() {
     const container = mock.document.getElementById("root");
     if (container === null) throw new Error("The mock document has no root");
     // Runs whenever the counter changes or the view applies a batch.
-    let onChange = () => {};
+    let onChange = (_source: "counter" | "applied") => {};
     const render = renderInProcess(
       container,
       result.asSchema(uiSchema).key(UI),
@@ -171,10 +173,10 @@ async function runTest() {
         document: mock.document,
         setProp: mock.renderOptions.setProp,
         onError: fail,
-        onApplied: () => onChange(),
+        onApplied: () => onChange("applied"),
       },
     );
-    const cancelValueSink = piece.key("value").sink(() => onChange());
+    const cancelValueSink = piece.key("value").sink(() => onChange("counter"));
     try {
       // Sends one click, and waits until the counter is `expected` and the
       // view shows that many elements. Where the server runs the handler,
@@ -190,10 +192,20 @@ async function runTest() {
           `derive array leak: ${cycle}, ${stream}, expected ${expected}`;
         let stage = "send";
         const wait = shown = defer();
-        onChange = () => {
+        // Keep only the last notifications for this click, using the reads
+        // already needed to recognize its completion.
+        const notifications: {
+          source: "counter" | "applied";
+          value: number;
+          items: number | undefined;
+        }[] = [];
+        onChange = (source) => {
           const items = mock.document.getElementById("items")
             ?.getElementsByTagName("i").length;
-          if (piece.get().value === expected && items === expected) {
+          const value = piece.get().value;
+          notifications.push({ source, value, items });
+          if (notifications.length > 16) notifications.shift();
+          if (value === expected && items === expected) {
             wait.resolve();
           }
         };
@@ -216,13 +228,66 @@ async function runTest() {
         } catch (error) {
           // Read diagnostic state only on failure: cell reads can take
           // document holds and affect the memory this test measures.
-          const readDiagnostic = (read: () => unknown): unknown => {
+          const readDiagnostic = <T>(read: () => T): T | string => {
             try {
               return read();
             } catch (error) {
               return `Diagnostic unavailable: ${String(error)}`;
             }
           };
+          // Capture demand and pending work before diagnostic cell reads
+          // can start loading documents. Nothing here waits for settlement.
+          const scheduler = readDiagnostic(() => runtime.scheduler.getStats());
+          const schedulerSizes = readDiagnostic(() =>
+            runtime.scheduler.getSizes()
+          );
+          const graph = readDiagnostic(() =>
+            runtime.scheduler.getGraphSnapshot()
+          );
+          const storage = readDiagnostic(() => storageManager.getDiagnostics());
+          const mappedItems = readDiagnostic(() => {
+            // The fixture's second div contains its mapped array. Resolve
+            // that slot to identify the publication its renderer sink reads.
+            const cell = result.asSchema(true).key(UI).key("children").key(1)
+              .key("children").key(0).resolveAsCell();
+            const value = cell.getRawUntyped();
+            return {
+              link: cell.getAsNormalizedFullLink(),
+              length: Array.isArray(value) ? value.length : undefined,
+              value,
+            };
+          });
+          const mapActions = readDiagnostic(() => {
+            if (typeof graph === "string" || typeof mappedItems === "string") {
+              return "Map actions unavailable without graph and mapped items";
+            }
+            const id = mappedItems.link.id;
+            return graph.nodes.filter((node) =>
+              node.id.includes(id) ||
+              [
+                ...node.reads ?? [],
+                ...node.shallowReads ?? [],
+                ...node.writes ?? [],
+              ].some((address) => address.includes(id))
+            ).map((node) => ({
+              ...node,
+              // A list sink also reads each rendered row. Keep its reads
+              // of the list itself in this excerpt; the full graph follows.
+              reads: node.reads?.filter((address) => address.includes(id)),
+              shallowReads: node.shallowReads?.filter((address) =>
+                address.includes(id)
+              ),
+            }));
+          });
+          // Large snapshots are bounded separately so the graph cannot
+          // crowd the map publication or rendered view out of the report.
+          const snapshot = (value: unknown, limit: number) =>
+            toCompactDebugString(value, {
+              maxLength: limit,
+              maxDepth: 12,
+              maxArrayLength: 1000,
+              maxStringLength: 16_384,
+            });
           // Print before disposal, which can itself wait on the scheduler.
           console.error(label, {
             error: failure ?? error,
@@ -232,9 +297,18 @@ async function runTest() {
               mock.document.getElementById("items")
                 ?.getElementsByTagName("i").length
             ),
-            scheduler: readDiagnostic(() => runtime.scheduler.getStats()),
-            storage: readDiagnostic(() => storageManager.getDiagnostics()),
+            notifications,
+            scheduler,
+            schedulerSizes,
+            storage,
           });
+          console.error("Mapped items:", snapshot(mappedItems, 16_384));
+          console.error("Map actions:", snapshot(mapActions, 32_768));
+          console.error(
+            "Rendered view:",
+            snapshot(readDiagnostic(() => container.innerHTML), 16_384),
+          );
+          console.error("Scheduler graph:", snapshot(graph, 262_144));
           throw failure ?? error;
         } finally {
           shown = undefined;
@@ -301,7 +375,7 @@ async function runTest() {
 
 // The test runs without a per-test deadline. See
 // docs/development/waiting-in-tests.md.
-Deno.test({
+test({
   name: "derive array leak test",
   fn: runTest,
   sanitizeResources: false,

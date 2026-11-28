@@ -1,5 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   clientsFromEnv,
@@ -8,6 +9,35 @@ import {
   leaseAction,
   runJanitor,
 } from "./test-records-janitor.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+
+const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
+
+// Runs the janitor the way its workflow does, minus network access, with
+// `token` as the broker token, and returns what it wrote to stderr.
+async function runScript(token: string): Promise<{
+  success: boolean;
+  stderr: string;
+}> {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: REPO_ROOT,
+    args: (lockPath) => [
+      "run",
+      "--config",
+      join(REPO_ROOT, "deno.jsonc"),
+      "--lock",
+      lockPath,
+      "--allow-read",
+      "--allow-env",
+      join(REPO_ROOT, "tasks/test-records-janitor.ts"),
+    ],
+    env: { TEST_RECORDS_GCP_TOKEN: token, GH_TOKEN: "", GITHUB_TOKEN: "" },
+  });
+  return {
+    success: output.success,
+    stderr: new TextDecoder().decode(output.stderr),
+  };
+}
 
 function searchFetch(payload: unknown): typeof fetch {
   return (() =>
@@ -295,6 +325,25 @@ describe("test-records-janitor", () => {
           return Promise.resolve(new Response("unexpected", { status: 500 }));
         }) as typeof fetch,
       })).rejects.toThrow("enable of");
+    });
+  });
+
+  describe("as a script", () => {
+    it("fails before any request without the broker token", async () => {
+      const { success, stderr } = await runScript("");
+      expect(success).toBe(false);
+      expect(stderr).toContain("TEST_RECORDS_GCP_TOKEN is not set");
+      expect(stderr).not.toContain("iam.googleapis.com");
+    });
+
+    it("fails at its first request, to `iam.googleapis.com`, given the broker token", async () => {
+      // The script runs without network access, so the request listing the
+      // service accounts is refused, and Deno's refusal names its host.
+
+      const { success, stderr } = await runScript("probe");
+      expect(success).toBe(false);
+      expect(stderr).toContain("iam.googleapis.com");
+      expect(stderr).not.toContain("TEST_RECORDS_GCP_TOKEN is not set");
     });
   });
 });

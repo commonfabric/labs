@@ -12,14 +12,6 @@ link-resolved and never registered, with one exception described below: a
 combinator the value's type does not settle is evaluated whole at the position
 where it is accessed.
 
-What that buys is pinned where it is largest.
-`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
-Topics board's per-topic backlink lookup, which reads a pivot table declared
-with a default, to re-running only for the topics whose row a mention edit
-changed. A runtime change that materializes a defaulted or nullable subtree
-whole under a view fails it, however faithfully the result matches an eager
-read.
-
 ## Where a view comes from
 
 The transaction decides, not the call site. `tx.markLazyMaterialize(true)` puts
@@ -146,7 +138,6 @@ eager read".
 The first four share one reason: deciding a fallback by evaluating a present
 subtree registers every read below it, and a pattern's optional inputs are
 declared with defaults, so that rule would make every such input read eagerly.
-The Topics test named above is what holds the line.
 
 ## Returning "nothing is there" still owes a read
 
@@ -305,6 +296,21 @@ takes the same path whether it escapes synchronously or as the rejection of an
 async body. A run that could not proceed on the data available is a non-event.
 The reads it took stay registered, including the one that failed, so it runs
 again when the data changes and may then find it valid.
+
+A refusal over an input that has arrived clears the node's previous result,
+since the input then holds nothing the computation can use
+([derived-state correction decision](../history/development/2026-09-14-derived-state-correction.md)).
+A refusal over an input still in transit does not: where the read that refused
+found a document this replica has never examined and the store has not reported
+absent, and the node already holds a result, the run writes nothing and runs
+again once that document's load settles, so a client starting cold never
+replaces a stored result with one read from data that had not arrived. The same
+holds for an argument that did not resolve because a document it reads is in
+transit. A document whose load has settled is no longer in transit, whether the
+load failed or ended without delivering it, as a load from a space that refuses
+this replica ends, so the run after that clears the result.
+[`speculation.md`](../specs/server-side-execution/speculation.md) §2 states the
+rule and the decision behind it.
 
 The view withdraws the record for a refusal it catches itself — the optional
 property, a property default, or an array-item substitute. It clears only

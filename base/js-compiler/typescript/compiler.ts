@@ -392,9 +392,10 @@ export class TypeScriptCompiler {
    * Per-file emit is equivalent to the whole-program `emit(undefined)`: the
    * files are emitted in the same program order, through the same transformer
    * factories (one pipeline instance, so cross-file transformer state and
-   * collected diagnostics behave identically), and the emit diagnostics are
-   * aggregated across files before being checked — matching the single-call
-   * shape. Only the event-loop yield points differ.
+   * collected diagnostics behave identically). Emit's own diagnostics are
+   * not read: with `noEmitOnError` off it refuses no file, and with
+   * declaration emit disabled it has nothing of its own to report. Only the
+   * event-loop yield points differ.
    */
   *#compileToModulesSteps(
     program: Program,
@@ -412,10 +413,10 @@ export class TypeScriptCompiler {
     // to type-check authored code, so skip checking the declaration libs
     // themselves.
     tsOptions.skipLibCheck = true;
-    // Stored-source reloads drop authoring-hygiene codes (TS2578) at the
-    // checker; TypeScript's own emit veto would re-block exactly what was
-    // filtered, so the explicit gates below are the only gates in this mode.
-    if (storedSource) tsOptions.noEmitOnError = false;
+    // The explicit gates below are the only gates. TypeScript's own emit veto
+    // would run the type check `noCheck` skips, and would re-block the
+    // authoring-hygiene codes (TS2578) a stored-source reload drops.
+    tsOptions.noEmitOnError = false;
 
     const host = new TypeScriptHost(
       program,
@@ -437,9 +438,9 @@ export class TypeScriptCompiler {
     const checker = checkerFor(tsProgram);
     // Parse and program-level errors are fatal unconditionally — `noCheck`
     // skips type-checking, never parsing, and stored-source mode filters
-    // only semantic hygiene codes. On stored-source compiles this gate
-    // replaces TypeScript's own `noEmitOnError` veto: without it, malformed
-    // source would EMIT malformed JavaScript.
+    // only semantic hygiene codes. This gate replaces TypeScript's own
+    // `noEmitOnError` veto: without it, malformed source would EMIT
+    // malformed JavaScript.
     {
       const errors = checker.collectProgramErrors();
       for (const sourceFile of checker.checkableSources()) {
@@ -524,14 +525,11 @@ export class TypeScriptCompiler {
 
     // Emit ALL source files (not just main), so every module gets a body —
     // one emit call per file (in program order) so the driver can interleave
-    // between modules; diagnostics aggregate across the calls exactly as the
-    // single whole-program emit call reported them.
-    const emitDiagnostics = [];
-    let emitSkipped = false;
+    // between modules.
     for (const sourceFile of tsProgram.getSourceFiles()) {
       if (sourceFile.fileName.endsWith(".d.ts")) continue;
       const emitStart = performance.now();
-      const emitResult = tsProgram.emit(
+      tsProgram.emit(
         sourceFile,
         undefined,
         undefined,
@@ -539,13 +537,8 @@ export class TypeScriptCompiler {
         { before: beforeTransformers },
       );
       compileTimingLogger.time(emitStart, "phase", "emitFile");
-      for (const diagnostic of emitResult.diagnostics) {
-        emitDiagnostics.push(diagnostic);
-      }
-      emitSkipped ||= emitResult.emitSkipped;
       yield;
     }
-    checker.check(emitDiagnostics);
 
     if (getDiagnostics) {
       const transformerDiagnostics = getDiagnostics();
@@ -567,10 +560,6 @@ export class TypeScriptCompiler {
         );
       }
     }
-    if (emitSkipped) {
-      throw new Error("Emit skipped. Check diagnostics.");
-    }
-
     if (sourceCollector && inputOptions.getTransformedProgram) {
       inputOptions.getTransformedProgram({
         main: program.main,
@@ -578,43 +567,12 @@ export class TypeScriptCompiler {
       });
     }
 
-    // Map emitted `<name>.js` outputs back to their original source names.
-    const sourceByStem = new Map<string, string>();
-    for (const name of sourceNames) {
-      if (name.endsWith(".d.ts")) continue;
-      const stem = name.replace(/\.[^./]+$/, "");
-      const existing = sourceByStem.get(stem);
-      if (existing !== undefined) {
-        // Two sources emit to the same `<stem>.js` (e.g. `/a.ts` and `/a.tsx`).
-        // The output→source mapping would be ambiguous; fail loudly.
-        throw new Error(
-          `Ambiguous emit target: '${existing}' and '${name}' both compile to '${stem}.js'`,
-        );
-      }
-      sourceByStem.set(stem, name);
-    }
-    const writes = host.getWrites();
-    const builderSourceSites = getBuilderSourceSites?.();
-    const policyManifests = getPolicyManifests?.();
-    const result = new Map<string, CompiledTypeScriptModule>();
-    for (const [outName, contents] of Object.entries(writes)) {
-      if (!outName.endsWith(".js")) continue;
-      const stem = outName.replace(/\.js$/, "");
-      const sourceName = sourceByStem.get(stem);
-      if (sourceName === undefined) continue;
-      const sourceSites = builderSourceSites?.get(sourceName);
-      result.set(sourceName, {
-        js: contents,
-        sourceMap: parseSourceMap(writes[`${outName}.map`]),
-        ...(sourceSites === undefined
-          ? {}
-          : { builderSourceSites: sourceSites }),
-        ...(policyManifests?.get(sourceName)?.length
-          ? { policyManifests: policyManifests.get(sourceName) }
-          : {}),
-      });
-    }
-    return result;
+    return emittedModules(
+      sourceNames,
+      host.getWrites(),
+      getBuilderSourceSites?.(),
+      getPolicyManifests?.(),
+    );
   }
 
   /**
@@ -676,9 +634,9 @@ export class TypeScriptCompiler {
       }
     };
 
-    // Program-level (options + global) diagnostics first — with noEmitOnError
-    // off these no longer surface through emit, so omitting them here would
-    // return `diagnostics: []` for a program the throwing path refuses.
+    // Program-level (options + global) diagnostics first, which no per-file
+    // check below reports, so omitting them here would return
+    // `diagnostics: []` for a program the throwing path refuses.
     for (const d of tsProgram.getOptionsDiagnostics()) pushTs(d);
     for (const d of tsProgram.getGlobalDiagnostics()) pushTs(d);
 
@@ -714,21 +672,21 @@ export class TypeScriptCompiler {
       inputOptions,
     );
     // One emit call per file, as `compileToModules()` makes them, so that
-    // the time each file takes is the file's own. Diagnostics aggregate
-    // across the calls the same way they do there. The authored set is
-    // the emittable one: everything else the program holds is a
-    // declaration lib, which emits nothing.
+    // the time each file takes is the file's own. `noEmitOnError` skips the
+    // emit of a file with an error, and the diagnostics that emit returns
+    // then are the ones collected above, so they are not collected again.
+    // The authored set is the emittable one: everything else the program
+    // holds is a declaration lib, which emits nothing.
     for (const sourceFile of tsProgram.getSourceFiles()) {
       if (!authored.has(sourceFile.fileName)) continue;
       const at = performance.now();
-      const { diagnostics: emitDiagnostics } = tsProgram.emit(
+      tsProgram.emit(
         sourceFile,
         undefined,
         undefined,
         undefined,
         { before: beforeTransformers },
       );
-      for (const d of emitDiagnostics) pushTs(d);
       charge(sourceFile.fileName, at);
     }
     if (getDiagnostics) {
@@ -748,41 +706,12 @@ export class TypeScriptCompiler {
       }
     }
 
-    const sourceByStem = new Map<string, string>();
-    for (const name of sourceNames) {
-      if (name.endsWith(".d.ts")) continue;
-      const stem = name.replace(/\.[^./]+$/, "");
-      const existing = sourceByStem.get(stem);
-      if (existing !== undefined) {
-        // Two sources emit to the same `<stem>.js` (e.g. `/a.ts` and `/a.tsx`).
-        // The output→source mapping would be ambiguous; fail loudly rather than
-        // silently drop one (parity with compileToModules).
-        throw new Error(
-          `Ambiguous emit target: '${existing}' and '${name}' both compile to '${stem}.js'`,
-        );
-      }
-      sourceByStem.set(stem, name);
-    }
-    const writes = host.getWrites();
-    const builderSourceSites = getBuilderSourceSites?.();
-    const policyManifests = getPolicyManifests?.();
-    const modules = new Map<string, CompiledTypeScriptModule>();
-    for (const [outName, contents] of Object.entries(writes)) {
-      if (!outName.endsWith(".js")) continue;
-      const sourceName = sourceByStem.get(outName.replace(/\.js$/, ""));
-      if (sourceName === undefined) continue;
-      const sourceSites = builderSourceSites?.get(sourceName);
-      modules.set(sourceName, {
-        js: contents,
-        sourceMap: parseSourceMap(writes[`${outName}.map`]),
-        ...(sourceSites === undefined
-          ? {}
-          : { builderSourceSites: sourceSites }),
-        ...(policyManifests?.get(sourceName)?.length
-          ? { policyManifests: policyManifests.get(sourceName) }
-          : {}),
-      });
-    }
+    const modules = emittedModules(
+      sourceNames,
+      host.getWrites(),
+      getBuilderSourceSites?.(),
+      getPolicyManifests?.(),
+    );
     return { modules, diagnostics, durations };
   }
 }
@@ -791,6 +720,44 @@ function validateSource(artifact: Program) {
   if (!artifact.files.some(({ name }) => name === artifact.main)) {
     throw new Error(`No main module "${artifact.main}" in source.`);
   }
+}
+
+/**
+ * The module each authored source emitted, keyed by source name, in program
+ * order. A source compiles to `<stem>.js`; one TypeScript wrote no such file
+ * for has no entry. Two sources sharing a stem (e.g. `/a.ts` and `/a.tsx`)
+ * would make the output's source ambiguous, so that throws.
+ */
+function emittedModules(
+  sourceNames: readonly string[],
+  writes: Readonly<Record<string, string>>,
+  builderSourceSites: ReadonlyMap<string, BuilderSourceSitesV1> | undefined,
+  policyManifests: ReadonlyMap<string, readonly unknown[]> | undefined,
+): Map<string, CompiledTypeScriptModule> {
+  const sourceByOutput = new Map<string, string>();
+  const modules = new Map<string, CompiledTypeScriptModule>();
+  for (const name of sourceNames) {
+    if (name.endsWith(".d.ts")) continue;
+    const outName = name.replace(/\.[^./]+$/, ".js");
+    const existing = sourceByOutput.get(outName);
+    if (existing !== undefined) {
+      throw new Error(
+        `Ambiguous emit target: '${existing}' and '${name}' both compile to '${outName}'`,
+      );
+    }
+    sourceByOutput.set(outName, name);
+    const js = writes[outName];
+    if (js === undefined) continue;
+    const sourceSites = builderSourceSites?.get(name);
+    const manifests = policyManifests?.get(name);
+    modules.set(name, {
+      js,
+      sourceMap: parseSourceMap(writes[`${outName}.map`]),
+      ...(sourceSites === undefined ? {} : { builderSourceSites: sourceSites }),
+      ...(manifests?.length ? { policyManifests: manifests } : {}),
+    });
+  }
+  return modules;
 }
 
 function createTransformers(

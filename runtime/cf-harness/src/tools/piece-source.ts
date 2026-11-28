@@ -39,6 +39,14 @@
  * `cf-render` gives every host, which lists the recorded revisions and offers
  * an earlier one; a session that could revert could discard a person's change
  * without them asking, and what it would buy is a button that already exists.
+ *
+ * A binary media file in the source — an image, a font, a sound — is stored
+ * as a base64 `data:` URL (`@commonfabric/text/data-file`). The read leaves
+ * each such file out and lists it by name, media type, and size, and a
+ * revision carries every one over from the current source unchanged. So
+ * those bytes never reach the model's context, and a revision cannot drop or
+ * corrupt one. A revision sends only the entry's source, so it carries a text
+ * data file over unchanged too.
  */
 
 import type { JSONSchema } from "@commonfabric/api";
@@ -66,6 +74,11 @@ import {
   createLLMFriendlyLink,
   parseLLMFriendlyLink,
 } from "@commonfabric/runner/shared";
+import {
+  dataFileMediaType,
+  encodeDataFile,
+  isStoredAsDataUrl,
+} from "@commonfabric/text/data-file";
 import {
   type DisclosedCfcLabel,
   disclosedCfcLabels,
@@ -102,10 +115,14 @@ export interface ReadPieceSourceToolSuccessOutput {
   /** The canonical entry filename among {@link files}. */
   entry?: string;
 
+  /** The source's files, less those {@link omittedFiles} lists. */
   files: { name: string; contents: string }[];
 
   /** Names among {@link files} that carry data rather than code. */
   dataFiles?: string[];
+
+  /** The binary media files left out of {@link files}, when there are any. */
+  omittedFiles?: OmittedPieceSourceFiles;
 
   /**
    * The revision these files are the source of. Pass it back as
@@ -128,6 +145,30 @@ export interface ReadPieceSourceToolSuccessOutput {
    * boundary that withholds something.
    */
   labels: DisclosedCfcLabel[];
+}
+
+/**
+ * The binary media files `read_piece_source` leaves out of the source it
+ * returns, with the reason it gives the model for leaving them out.
+ */
+export interface OmittedPieceSourceFiles {
+  /** Why the files were left out, and what a revision does with them. */
+  reason: string;
+
+  /** One entry per file left out, in the order the source lists them. */
+  files: OmittedPieceSourceFile[];
+}
+
+/** One binary media file `read_piece_source` leaves out. */
+export interface OmittedPieceSourceFile {
+  /** The file's name in the source, as the source reads it. */
+  name: string;
+
+  /** The media type its `data:` URL carries. */
+  mediaType: string;
+
+  /** The size of the file, in bytes. */
+  bytes: number;
 }
 
 export interface PieceSourceToolErrorOutput {
@@ -201,7 +242,7 @@ export const readPieceSourceToolDescriptor: HarnessToolDescriptor = {
   toolId: "read_piece_source",
   title: "Read Piece Source",
   description:
-    "Read the current authored source of a piece behind a handle token, so you can revise a piece that already exists rather than write a replacement blind. Returns the source files, their revision, an inputRef to the piece's bound arguments, where the source came from, and its CFC labels. Wire inputRef into run_pattern for a before/after check against the actual inputs; it is a reference, not their contents. Reading source puts this context under its labels. Pass sourceRevisionId back to revise_piece so a piece that moved in the meantime refuses the write. To run a revised copy as a new piece instead, pass this token as run_pattern's revises.",
+    "Read the current authored source of a piece behind a handle token, so you can revise a piece that already exists rather than write a replacement blind. Returns the source files, their revision, an inputRef to the piece's bound arguments, where the source came from, and its CFC labels. Binary media files (images, fonts, sounds) are listed under omittedFiles by name, media type, and size rather than returned. revise_piece keeps every data file, binary or text, unchanged. Wire inputRef into run_pattern for a before/after check against the actual inputs; it is a reference, not their contents. Reading source puts this context under its labels. Pass sourceRevisionId back to revise_piece so a piece that moved in the meantime refuses the write. To run a revised copy as a new piece instead, pass this token as run_pattern's revises.",
   effectClass: "read",
   inputSchema: {
     type: "object",
@@ -234,6 +275,27 @@ export const readPieceSourceToolDescriptor: HarnessToolDescriptor = {
         },
       },
       dataFiles: { type: "array", items: { type: "string" } },
+      omittedFiles: {
+        type: "object",
+        properties: {
+          reason: { type: "string" },
+          files: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                name: { type: "string" },
+                mediaType: { type: "string" },
+                bytes: { type: "integer" },
+              },
+              required: ["name", "mediaType", "bytes"],
+              additionalProperties: false,
+            },
+          },
+        },
+        required: ["reason", "files"],
+        additionalProperties: false,
+      },
       sourceRevisionId: { type: "string" },
       inputRef: { type: "string" },
       provenance: {
@@ -257,7 +319,7 @@ export const revisePieceToolDescriptor: HarnessToolDescriptor = {
   toolId: "revise_piece",
   title: "Revise Piece",
   description:
-    "Replace the source of a piece behind a handle token with a revised program, keeping the piece's data. The candidate is checked against what the piece holds before it is applied — its argument and result schemas, the links it retains, and the CFC envelope on its argument — and a candidate that does not fit is refused with every reason at once rather than applied and left broken. Returns the new revision's id and a reference to the refreshed result, never source. Use it after read_piece_source when someone asks for a piece they already have to work differently; use run_pattern when there is no such piece. A change that needs a rehearsal against a copy of the space is refused, because that is a person's judgement to make and not this tool's.",
+    "Replace the source of a piece behind a handle token with a revised program, keeping the piece's data. The piece's data files, the binary ones read_piece_source lists under omittedFiles included, are carried over unchanged at the same paths, so the revised source reads them as the current one does; a piece whose source the space does not hold is refused. The candidate is checked against what the piece holds before it is applied — its argument and result schemas, the links it retains, and the CFC envelope on its argument — and a candidate that does not fit is refused with every reason at once rather than applied and left broken. Returns the new revision's id and a reference to the refreshed result, never source. Use it after read_piece_source when someone asks for a piece they already have to work differently; use run_pattern when there is no such piece. A change that needs a rehearsal against a copy of the space is refused, because that is a person's judgment to make and not this tool's.",
   effectClass: "side-effect",
   inputSchema: {
     type: "object",
@@ -330,6 +392,85 @@ const provenanceOf = (state: PieceSourceState): PieceSourceProvenance => {
 };
 
 /**
+ * What `read_piece_source` tells the model about the files it leaves out. It
+ * travels in the output rather than only in the tool's description, so a
+ * reader of the output alone knows the list is not the whole program.
+ */
+const OMITTED_FILES_REASON =
+  "Binary media files (images, fonts, sounds) are stored as base64 data: " +
+  "URLs, so they are listed here instead of returned in files. The source " +
+  "reads each one by its path. revise_piece carries them over unchanged; " +
+  "a revision does not send them.";
+
+/**
+ * Splits `files`, for `read_piece_source`, into the files it returns and a
+ * description, without contents, of each binary media file it leaves out.
+ * Throws, naming the file, for a binary media file whose contents are not a
+ * `data:` URL of its media type. A program built without `decodeDataFile()`
+ * can hold one, and `cf piece getsrc` refuses it the same way.
+ */
+const withoutBinaryMedia = (
+  files: readonly { name: string; contents: string }[],
+): {
+  files: { name: string; contents: string }[];
+  omitted: OmittedPieceSourceFile[];
+} => {
+  const kept: { name: string; contents: string }[] = [];
+  const omitted: OmittedPieceSourceFile[] = [];
+  for (const file of files) {
+    const mediaType = dataFileMediaType(file.name);
+    if (mediaType === undefined || !isStoredAsDataUrl(file.name)) {
+      kept.push({ ...file });
+      continue;
+    }
+    omitted.push({
+      name: file.name,
+      mediaType,
+      bytes: encodeDataFile(file.contents, file.name).byteLength,
+    });
+  }
+  return { files: kept, omitted };
+};
+
+/**
+ * The program a revision writes: `sourceText` as `main.tsx`, beside every
+ * data file of `current`, the piece's current source, carried over unchanged.
+ *
+ * A revision sends only its source, so no caller can send a data file back:
+ * not a binary media file, which `read_piece_source` leaves out, and not a
+ * text one either. A data file is read by a path relative to the module
+ * reading it, so `sourceText` is placed in the directory of the entry it
+ * replaces, where each path the current source reads names the same file.
+ * Code modules other than the entry are not carried over.
+ */
+const revisedProgram = (
+  sourceText: string,
+  current: PieceSourceState,
+): {
+  main: string;
+  files: { name: string; contents: string }[];
+  dataFiles?: string[];
+} => {
+  const entry = current.entry ?? "/main.tsx";
+  const main = `${entry.slice(0, entry.lastIndexOf("/"))}/main.tsx`;
+  // A binary media file is always data, whether or not the source lists it.
+  const data = new Set(current.dataFiles);
+  const carried = current.files.filter((file) =>
+    file.name !== main && (data.has(file.name) || isStoredAsDataUrl(file.name))
+  );
+  return {
+    main,
+    files: [
+      { name: main, contents: sourceText },
+      ...carried.map((file) => ({ ...file })),
+    ],
+    ...(carried.length === 0
+      ? {}
+      : { dataFiles: carried.map((file) => file.name) }),
+  };
+};
+
+/**
  * The piece a handle token names, or the refusal that says why it names none.
  *
  * Every check here is one `assign_slug` already makes of the same kind of
@@ -393,7 +534,7 @@ export const resolvePiece = async (
     };
   }
   const id = pieceId(cell);
-  if (getPatternIdentityRef(cell) === undefined || id === undefined) {
+  if (getPatternIdentityRef(cell) === undefined) {
     return {
       ok: false,
       message: `${toolId} token does not refer to a piece`,
@@ -459,12 +600,14 @@ export const readPieceSourceTool: HarnessToolDefinition<
     if (!piece.ok) return fail(piece.message);
     let state: PieceSourceState;
     let inputRef: string;
+    let source: ReturnType<typeof withoutBinaryMedia>;
     try {
       state = await readPieceSourceState(session.pieces.runtime, piece.cell);
       inputRef = createLLMFriendlyLink(
         session.pieces.getArgument(piece.cell).getAsNormalizedFullLink(),
         session.pieces.getSpace(),
       );
+      source = withoutBinaryMedia(state.files);
     } catch (error) {
       return fail(
         `read_piece_source could not read the piece's source: ${
@@ -481,14 +624,19 @@ export const readPieceSourceTool: HarnessToolDefinition<
         "read_piece_source found no authored source retained for this piece",
       );
     }
+    const dataFiles =
+      state.dataFiles?.filter((name) => !isStoredAsDataUrl(name)) ?? [];
     return {
       outputId,
       status: "ok",
       inputRef,
       ...(state.entry !== undefined ? { entry: state.entry } : {}),
-      files: state.files.map((file) => ({ ...file })),
-      ...(state.dataFiles !== undefined
-        ? { dataFiles: [...state.dataFiles] }
+      files: source.files,
+      ...(dataFiles.length > 0 ? { dataFiles } : {}),
+      ...(source.omitted.length > 0
+        ? {
+          omittedFiles: { reason: OMITTED_FILES_REASON, files: source.omitted },
+        }
         : {}),
       ...(state.currentRevisionId !== undefined
         ? { sourceRevisionId: state.currentRevisionId }
@@ -528,7 +676,7 @@ const stageRevisedVersion = async (
   context: HarnessToolContext,
   input: RevisePieceToolInput,
   revision: {
-    program: { main: string; files: { name: string; contents: string }[] };
+    program: ReturnType<typeof revisedProgram>;
     space: string;
     pieceId: string;
     identity: string;
@@ -573,7 +721,13 @@ const stageRevisedVersion = async (
         : description !== undefined && description !== ""
         ? { directQuery: description }
         : {}),
-      dependencies: patternIndexDependencies(revision.program.files),
+      // A data file is stored uninterpreted, so an import its text spells is
+      // no dependency, as the index reads the same program.
+      dependencies: patternIndexDependencies(
+        revision.program.files.filter((file) =>
+          !revision.program.dataFiles?.includes(file.name)
+        ),
+      ),
       nonDiscoverable: {
         reason: PATTERN_DISCOVERABILITY_REASONS["recorded-automatically"],
       },
@@ -607,10 +761,6 @@ export const revisePieceTool: HarnessToolDefinition<
     const piece = await resolvePiece("revise_piece", pieces, ref);
     if (!piece.ok) return fail(piece.message);
 
-    const program = {
-      main: "/main.tsx",
-      files: [{ name: "/main.tsx", contents: input.sourceText }],
-    };
     const previousPattern = getPatternIdentityRef(piece.cell);
     let controller: PieceController;
     try {
@@ -621,31 +771,43 @@ export const revisePieceTool: HarnessToolDefinition<
       );
     }
 
+    // The current source holds the files the revision carries over, and the
+    // revision the caller's precondition names.
+    let current: PieceSourceState;
+    try {
+      current = await readPieceSourceState(pieces.runtime, piece.cell);
+    } catch (error) {
+      return fail(
+        `revise_piece could not read the piece's current source: ${
+          describeFailure(error)
+        }`,
+      );
+    }
+
     // The caller's precondition, checked before anything is compiled: a
     // piece that moved since the read this revision was written against is a
     // different piece to revise, and saying so costs nothing here.
     if (
       typeof input.expectedRevisionId === "string" &&
-      input.expectedRevisionId.length > 0
+      input.expectedRevisionId.length > 0 &&
+      current.currentRevisionId !== input.expectedRevisionId
     ) {
-      let current: PieceSourceState;
-      try {
-        current = await readPieceSourceState(pieces.runtime, piece.cell);
-      } catch (error) {
-        return fail(
-          `revise_piece could not read the piece's current revision: ${
-            describeFailure(error)
-          }`,
-        );
-      }
-      if (current.currentRevisionId !== input.expectedRevisionId) {
-        return fail(
-          "revise_piece refused: the piece has been revised since the " +
-            "source you are editing was read. Read it again and rewrite " +
-            "your change against what it holds now.",
-        );
-      }
+      return fail(
+        "revise_piece refused: the piece has been revised since the " +
+          "source you are editing was read. Read it again and rewrite " +
+          "your change against what it holds now.",
+      );
     }
+    // With no authored source to read, the files a revision carries over are
+    // unknown, so writing one could drop a picture the piece shows. The read
+    // refuses the same piece.
+    if (current.files.length === 0) {
+      return fail(
+        "revise_piece refused: the space holds no authored source for this " +
+          "piece, so the files a revision carries over from it cannot be read",
+      );
+    }
+    const program = revisedProgram(input.sourceText, current);
 
     // Preflight, so an incompatible candidate is refused with every reason at
     // once rather than with whichever low-level assertion fires first. The

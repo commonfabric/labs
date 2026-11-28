@@ -1,3 +1,9 @@
+/**
+ * A gallery of four untrusted host patterns that embed trusted surfaces
+ * for processes rather than single release buttons: recording a derived song
+ * ID without keeping raw audio, a scoped calendar-availability policy, and
+ * visible long-running photo-upload and document-export jobs.
+ */
 import {
   computed,
   handler,

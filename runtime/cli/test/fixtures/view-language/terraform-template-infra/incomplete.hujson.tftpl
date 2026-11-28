@@ -1,0 +1,7 @@
+{
+	"tagOwners": {
+		// Per-person cloud CFS hosts: generated from cfs_hosts in prod.tfvars
+		// (tofu/tailnet). Add or change a host there, not here.
+%{ for h in hosts ~}
+		"tag:cloud-cfs-${h}": ${jsonencode(cfs_tag_owners)},
+%{ endfor

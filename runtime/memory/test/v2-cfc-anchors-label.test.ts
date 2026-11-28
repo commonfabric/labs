@@ -1,8 +1,8 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/api";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   anchorsEnvelopeWith,
   AnchorsLabelError,

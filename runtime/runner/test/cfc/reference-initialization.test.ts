@@ -1,9 +1,14 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { linkRefFrom, linkRefPayload } from "@commonfabric/data-model/cell-rep";
 import { Identity } from "@commonfabric/identity";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema, JSONSchemaObj } from "../../src/builder/types.ts";
 import { recordNewProtectedDefaults } from "../../src/cfc/default-initialization.ts";
@@ -12,6 +17,7 @@ import { readStoredCfcMetadata } from "../../src/cfc/metadata.ts";
 import {
   recordCapturedArgumentFields,
   recordReferencedArgumentFields,
+  recordReplayedArgumentSlots,
 } from "../../src/cfc/reference-initialization.ts";
 import type { NormalizedFullLink } from "../../src/link-types.ts";
 import { areLinksSame } from "../../src/link-equality.ts";
@@ -209,6 +215,78 @@ describe("reference-initialization", () => {
           input.kind === "initialization"
         ),
       ).toEqual([]);
+    });
+  });
+
+  describe("recordReplayedArgumentSlots()", () => {
+    /** The replay records `tx` holds, as `[path, value]` pairs. */
+    function replayed(tx: ReturnType<Runtime["edit"]>) {
+      const recorded = tx.getCfcState().writePolicyInputs.filter((input) =>
+        input.kind === "initialization"
+      );
+      expect(recorded.every((input) => tx.isRuntimeWritePolicyInput(input)))
+        .toBe(true);
+      expect(recorded.every((input) => input.mode === "replay")).toBe(true);
+      return recorded.map((input) => [input.target.path, input.value]);
+    }
+
+    it("records each stored slot the caller does not name, with the bytes it holds", () => {
+      const tx = runtime.edit();
+      const argument = runtime.getCell(space, "argument", undefined, tx)
+        .key("inner");
+      const stored = { topic: "lunch", frozen: { seat: 1 }, entries: [2] };
+
+      recordReplayedArgumentSlots(
+        tx,
+        argument.getAsNormalizedFullLink(),
+        { topic: "dinner" },
+        stored,
+      );
+
+      expect(replayed(tx)).toEqual([
+        [["inner", "frozen"], { seat: 1 }],
+        [["inner", "entries"], [2]],
+      ]);
+    });
+
+    it("records every stored slot when the caller supplies no record", () => {
+      for (
+        const supplied of [
+          undefined,
+          "a whole value",
+          entryCell(runtime.edit(), "entry", "a").getAsLink(),
+        ]
+      ) {
+        const tx = runtime.edit();
+        recordReplayedArgumentSlots(
+          tx,
+          runtime.getCell(space, "argument", undefined, tx)
+            .getAsNormalizedFullLink(),
+          supplied,
+          { topic: "lunch", frozen: { seat: 1 } },
+        );
+
+        expect(replayed(tx)).toEqual([
+          [["topic"], "lunch"],
+          [["frozen"], { seat: 1 }],
+        ]);
+      }
+    });
+
+    it("records nothing when the stored document is no record", () => {
+      const link = entryCell(runtime.edit(), "entry", "a").getAsLink();
+      for (const stored of [undefined, "a whole value", [1, 2], link]) {
+        const tx = runtime.edit();
+        recordReplayedArgumentSlots(
+          tx,
+          runtime.getCell(space, "argument", undefined, tx)
+            .getAsNormalizedFullLink(),
+          {},
+          stored,
+        );
+
+        expect(replayed(tx)).toEqual([]);
+      }
     });
   });
 

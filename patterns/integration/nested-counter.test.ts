@@ -11,7 +11,6 @@ import {
   waitForSettledText,
   waitForText,
 } from "./cfc-browser-helpers.ts";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { assertEquals } from "@std/assert";
 import { type DID, Identity } from "@commonfabric/identity";
@@ -22,6 +21,12 @@ import {
   PiecesController,
 } from "./pieces-controller.ts";
 import { defer, type Deferred } from "@commonfabric/async/defer";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const { API_URL, FRONTEND_URL } = env;
 
@@ -79,7 +84,7 @@ describe("nested counter integration test", () => {
       "..",
       "examples",
       "nested-counter",
-      "nested-counter.tsx",
+      "main.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

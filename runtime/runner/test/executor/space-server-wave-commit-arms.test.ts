@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
@@ -10,6 +9,8 @@ import {
 } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import type * as MemoryServer from "@commonfabric/memory/v2/server";
+import { describe, it } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { EngineWaveCommitSink } from "../../src/executor/engine-wave-sink.ts";
 import type { HostMemoryServer } from "../../src/executor/host-memory-server.ts";

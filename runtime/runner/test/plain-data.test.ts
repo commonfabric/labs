@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   FabricDurationNsec,
   FabricEpochNsec,
 } from "@commonfabric/data-model/fabric-primitives";
 import { FrozenMap, FrozenSet } from "@commonfabric/data-model/frozen-builtins";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   assertPlainData,
   freezeVerifiedPlainData,

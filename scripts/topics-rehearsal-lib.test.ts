@@ -2,7 +2,6 @@
  * live halves are exercised by the rehearsal drill
  * (`runtime/cli/integration/topics-restore-drill.sh`). */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   buildRestoreDocument,
@@ -10,12 +9,20 @@ import {
   deepEqual,
   findLink,
   isAbsentPathError,
+  isStoredLink,
   normalizeFid,
+  type ProgressLine,
   publishedBoardSources,
+  recreatedDocument,
+  type RecreateSteps,
+  recreateTopics,
   retiredKeys,
+  storedLink,
+  type TopicExportRow,
   WHOLE_VALUE,
   withoutKeys,
 } from "./topics-rehearsal-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("topics-rehearsal-lib", () => {
   describe("retiredKeys", () => {
@@ -161,6 +168,36 @@ describe("topics-rehearsal-lib", () => {
     });
   });
 
+  describe("isStoredLink", () => {
+    // What tells a bound structural field from an absent one, which a read
+    // of the field and a `<field>@` selection cannot.
+
+    it("returns true for a link as a whole-document read prints it", () => {
+      expect(isStoredLink({
+        "/": {
+          "link@1": {
+            id: "of:fid1:board",
+            path: ["board"],
+            space: "did:key:z6Mkspace",
+            scope: "space",
+          },
+        },
+      })).toBe(true);
+    });
+
+    it("returns false for an address a selection answers with", () => {
+      expect(isStoredLink({ $link: "/of:fid1:topic-argument/board" })).toBe(
+        false,
+      );
+    });
+
+    it("returns false for a value and for nothing", () => {
+      expect(isStoredLink({ "/": "not a link" })).toBe(false);
+      expect(isStoredLink([])).toBe(false);
+      expect(isStoredLink(undefined)).toBe(false);
+    });
+  });
+
   describe("findLink", () => {
     it("returns null for plain scalars and objects", () => {
       expect(findLink("body text")).toBe(null);
@@ -235,6 +272,7 @@ describe("topics-rehearsal-lib", () => {
         {
           title: "t",
           mentionable: link,
+          board: link,
           boardCrossrefs: link,
           boardCrossrefIndex: link,
           boardNames: link,
@@ -242,11 +280,18 @@ describe("topics-rehearsal-lib", () => {
         },
         resolved,
       );
-      expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
+      expect(structural).toEqual(["mentionable"]);
       // In the raw argument's own order, which is what the walk follows. All
-      // three are retired here because this target declares none of them.
-      expect(legacy).toEqual(["boardCrossrefIndex", "boardNames", "myName"]);
+      // five are retired here because this target declares none of them.
+      expect(legacy).toEqual([
+        "board",
+        "boardCrossrefs",
+        "boardCrossrefIndex",
+        "boardNames",
+        "myName",
+      ]);
       expect(doc.mentionable).toBeUndefined();
+      expect(doc.board).toBeUndefined();
       expect(doc.boardCrossrefs).toBeUndefined();
       expect(doc.boardCrossrefIndex).toBeUndefined();
       expect(doc.boardNames).toBeUndefined();
@@ -277,7 +322,10 @@ describe("topics-rehearsal-lib", () => {
         const { doc, structural, legacy, unpublished } = buildRestoreDocument(
           newerExport,
           resolved,
-          { declaredLinks: ["boardCrossrefIndex"], publishedSources: board },
+          {
+            declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
+            publishedSources: board,
+          },
         );
         expect(structural).toEqual([
           "mentionable",
@@ -296,7 +344,10 @@ describe("topics-rehearsal-lib", () => {
         const { structural, legacy } = buildRestoreDocument(
           olderExport,
           resolved,
-          { declaredLinks: ["boardCrossrefIndex"], publishedSources: board },
+          {
+            declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
+            publishedSources: board,
+          },
         );
         expect(structural).toEqual([
           "mentionable",
@@ -310,7 +361,7 @@ describe("topics-rehearsal-lib", () => {
         const { structural, legacy, unpublished } = buildRestoreDocument(
           newerExport,
           resolved,
-          { declaredLinks: [], publishedSources: board },
+          { declaredLinks: ["boardCrossrefs"], publishedSources: board },
         );
         expect(structural).toEqual(["mentionable", "boardCrossrefs"]);
         expect(legacy).toEqual(["boardCrossrefIndex"]);
@@ -327,7 +378,7 @@ describe("topics-rehearsal-lib", () => {
             exported,
             resolved,
             {
-              declaredLinks: ["boardCrossrefIndex"],
+              declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
               publishedSources: olderBoard,
             },
           );
@@ -340,7 +391,7 @@ describe("topics-rehearsal-lib", () => {
 
       it("decides the same whatever order the raw argument holds its fields in", () => {
         const target = {
-          declaredLinks: ["boardCrossrefIndex"],
+          declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
           publishedSources: olderBoard,
         };
         const first = buildRestoreDocument(
@@ -362,10 +413,58 @@ describe("topics-rehearsal-lib", () => {
       it("refuses, before the apply, a link that cannot be retired and whose board path is missing", () => {
         expect(() =>
           buildRestoreDocument(newerExport, resolved, {
-            declaredLinks: ["boardCrossrefIndex"],
-            publishedSources: ["mentionable", "crossrefIndex"],
+            declaredLinks: ["boardCrossrefs", "boardCrossrefIndex"],
+            publishedSources: ["crossrefs", "crossrefIndex"],
           })
-        ).toThrow("crossrefs");
+        ).toThrow("mentionable");
+      });
+
+      it("retires both for a topic that asks the board's collection, and relinks `board`", () => {
+        // A topic on the collection-backed pattern declares neither graph
+        // input. An export taken from it before it moved still names both.
+
+        const { structural, legacy } = buildRestoreDocument(
+          { ...newerExport, board: link },
+          resolved,
+          { declaredLinks: ["board"], publishedSources: [...board, "board"] },
+        );
+        expect(structural).toEqual(["mentionable", "board"]);
+        expect(legacy).toEqual(["boardCrossrefs", "boardCrossrefIndex"]);
+      });
+    });
+
+    describe("a topic's `board` link", () => {
+      // `board` is declared by the topics that ask the board's collection for
+      // their backlinks and by no topic before them, and a restore runs
+      // against targets of both. Each case here is one pairing of an export
+      // and a target.
+
+      const published = ["mentionable", "board"];
+
+      it("relinks it from an export that predates it, onto a target holding one", async () => {
+        const declaredLinks = await declaredRetirableLinks((field) =>
+          Promise.resolve(
+            field === "board" ? { id: "fid1:collection" } : undefined,
+          )
+        );
+        const { structural, legacy } = buildRestoreDocument(
+          { title: "t", mentionable: link },
+          resolved,
+          { declaredLinks, publishedSources: published },
+        );
+        expect(structural).toEqual(["mentionable", "board"]);
+        expect(legacy).toEqual([]);
+      });
+
+      it("retires it for a target that predates it, rather than relinking a path the target lacks", () => {
+        const { doc, structural, legacy } = buildRestoreDocument(
+          { title: "t", mentionable: link, board: link },
+          resolved,
+          { declaredLinks: [], publishedSources: published },
+        );
+        expect(structural).toEqual(["mentionable"]);
+        expect(legacy).toEqual(["board"]);
+        expect(doc.board).toBeUndefined();
       });
     });
 
@@ -474,6 +573,302 @@ describe("topics-rehearsal-lib", () => {
     });
   });
 
+  describe("recreatedDocument", () => {
+    const recreated = new Map([["of:fid1:old-2", "of:fid1:new-2"]]);
+    const linkTo = (id: string, space?: string) => ({
+      $link: { id, ...(space ? { space } : {}) },
+    });
+
+    /** An exported topic whose raw argument holds `raw` besides its body. */
+    const exported = (raw: Record<string, unknown>): TopicExportRow => ({
+      fid: "of:fid1:old-1",
+      patternIdentity: "pattern",
+      argumentId: "argument",
+      content: { title: "t", body: "b", comments: [], links: [] },
+      rawArgument: { title: "t", body: "b", ...raw },
+    });
+
+    it("points a mention of an exported topic at the topic recreated from it, and keeps any other", () => {
+      const doc = recreatedDocument(
+        exported({
+          mentioned: [
+            linkTo("of:fid1:old-2"),
+            linkTo("of:fid1:elsewhere", "did:key:z"),
+          ],
+        }),
+        "1",
+        recreated,
+      );
+      expect(doc.mentioned).toEqual([
+        storedLink("of:fid1:new-2"),
+        storedLink("of:fid1:elsewhere", [], "did:key:z"),
+      ]);
+    });
+
+    it("points each reference's destination at the topic recreated from it, keeping its wording flag", () => {
+      const doc = recreatedDocument(
+        exported({
+          references: {
+            "0": { destination: linkTo("of:fid1:old-2"), modifiedTitle: true },
+          },
+        }),
+        "1",
+        recreated,
+      );
+      expect(doc.references).toEqual({
+        "0": { destination: storedLink("of:fid1:new-2"), modifiedTitle: true },
+      });
+    });
+
+    it("keeps a reference to a piece outside the exported board as it was", () => {
+      const doc = recreatedDocument(
+        exported({
+          references: {
+            pr: {
+              destination: linkTo("of:fid1:elsewhere", "did:key:z"),
+              modifiedTitle: false,
+            },
+          },
+        }),
+        "1",
+        recreated,
+      );
+      expect(doc.references).toEqual({
+        pr: {
+          destination: storedLink("of:fid1:elsewhere", [], "did:key:z"),
+          modifiedTitle: false,
+        },
+      });
+    });
+
+    it("throws for a reference whose destination is not a link", () => {
+      expect(() =>
+        recreatedDocument(
+          exported({
+            references: { "0": { destination: "#2", modifiedTitle: false } },
+          }),
+          "1",
+          recreated,
+        )
+      ).toThrow("of:fid1:old-1 references.0 is not a link");
+    });
+
+    it("writes the exported author over the one the create stored", () => {
+      const author = { kind: "person", name: "Ada" };
+      const doc = recreatedDocument(
+        {
+          ...exported({ createdBy: author }),
+          content: {
+            title: "t",
+            body: "b",
+            createdBy: author,
+            comments: [],
+            links: [],
+          },
+        },
+        "1",
+        recreated,
+      );
+      expect(doc.createdBy).toEqual(author);
+    });
+
+    it("clears the author the create stored for a topic exported with none", () => {
+      const doc = recreatedDocument(
+        exported({ createdByName: "someone" }),
+        "1",
+        recreated,
+      );
+      expect(Object.hasOwn(doc, "createdBy")).toBe(true);
+      expect(doc.createdBy).toBeUndefined();
+    });
+
+    it("writes the state version a topic was exported at", () => {
+      const doc = recreatedDocument(
+        exported({ topicStateVersion: 1 }),
+        "1",
+        recreated,
+      );
+      expect(doc.topicStateVersion).toBe(1);
+    });
+
+    it("writes state version zero for a topic exported with none", () => {
+      // The create stamped the current version, which would skip the upgrades
+      // that rebuild such a topic's authors and activity scalars from its
+      // records.
+
+      const doc = recreatedDocument(exported({}), "1", recreated);
+      expect(doc.topicStateVersion).toBe(0);
+    });
+  });
+
+  describe("recreateTopics", () => {
+    /** The export's topics `old-1` to `old-<count>`, numbered from 1. */
+    const exportOf = (count: number): [string, TopicExportRow][] =>
+      Array.from({ length: count }, (_, at) => [String(at + 1), {
+        fid: `of:fid1:old-${at + 1}`,
+        patternIdentity: "pattern",
+        argumentId: "argument",
+        content: { title: `t${at + 1}`, comments: [], links: [] },
+        rawArgument: { title: `t${at + 1}` },
+      }]);
+
+    /**
+     * A fresh board, which numbers each topic it creates one past the topics
+     * it holds, and a progress file. `steps` records each create and write in
+     * `calls`. With `interrupted`, the first create lands on the board and
+     * then fails before its progress line is written, as an interrupted run
+     * does.
+     */
+    function freshBoard({ interrupted = false } = {}) {
+      const held = new Map<string, string>();
+      const progress = new Map<string, string>();
+      const lines: ProgressLine[] = [];
+      const calls: string[] = [];
+      let interrupt = interrupted;
+      const steps: RecreateSteps = {
+        create: (name) => {
+          const number = String(held.size + 1);
+          if (number !== name) {
+            return Promise.reject(new Error(`numbered ${number}, not ${name}`));
+          }
+          const id = `of:fid1:new-${number}`;
+          held.set(number, id);
+          calls.push(`create ${name}`);
+          if (interrupt) {
+            interrupt = false;
+            return Promise.reject(new Error("interrupted"));
+          }
+          return Promise.resolve(id);
+        },
+        record: (line) => {
+          lines.push(line);
+          progress.set(line.from, line.to);
+          return Promise.resolve();
+        },
+        write: (id) => {
+          calls.push(`write ${id}`);
+          return Promise.resolve();
+        },
+      };
+      return { held, progress, lines, calls, steps };
+    }
+
+    it("records a topic an interrupted run created, rather than creating it again", async () => {
+      const topics = exportOf(2);
+      const board = freshBoard({ interrupted: true });
+      await expect(
+        recreateTopics(
+          topics,
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("interrupted");
+      board.calls.length = 0;
+
+      const counts = await recreateTopics(
+        topics,
+        board.progress,
+        board.held,
+        Infinity,
+        board.steps,
+      );
+      expect(counts).toEqual({ reconciled: 1, created: 1, written: 2 });
+      expect(board.calls).toEqual([
+        "create 2",
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+      ]);
+      expect(board.lines).toEqual([
+        { name: "1", from: "of:fid1:old-1", to: "of:fid1:new-1" },
+        { name: "2", from: "of:fid1:old-2", to: "of:fid1:new-2" },
+      ]);
+    });
+
+    it("bounds both passes to the topics numbered up to the limit, so a rerun goes on from there", async () => {
+      const topics = exportOf(4);
+      const board = freshBoard();
+      const run = async (limit: number) => {
+        board.calls.length = 0;
+        await recreateTopics(
+          topics,
+          board.progress,
+          board.held,
+          limit,
+          board.steps,
+        );
+        return [...board.calls];
+      };
+      expect(await run(2)).toEqual([
+        "create 1",
+        "create 2",
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+      ]);
+      expect(await run(2)).toEqual([
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+      ]);
+      expect(await run(4)).toEqual([
+        "create 3",
+        "create 4",
+        "write of:fid1:new-1",
+        "write of:fid1:new-2",
+        "write of:fid1:new-3",
+        "write of:fid1:new-4",
+      ]);
+    });
+
+    it("throws, before any write, for a board holding a number the export lacks", async () => {
+      const board = freshBoard();
+      board.held.set("1", "of:fid1:new-1");
+      board.held.set("2", "of:fid1:other");
+      await expect(
+        recreateTopics(
+          exportOf(1),
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("2");
+      expect(board.calls).toEqual([]);
+      expect(board.lines).toEqual([]);
+    });
+
+    it("throws, before any write, for a progress file the board disagrees with", async () => {
+      const board = freshBoard();
+      board.held.set("1", "of:fid1:new-1");
+      board.progress.set("of:fid1:old-1", "of:fid1:elsewhere");
+      await expect(
+        recreateTopics(
+          exportOf(1),
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("of:fid1:elsewhere");
+      expect(board.calls).toEqual([]);
+    });
+
+    it("throws, before any write, for a recorded topic the board does not hold", async () => {
+      const board = freshBoard();
+      board.progress.set("of:fid1:old-1", "of:fid1:new-1");
+      await expect(
+        recreateTopics(
+          exportOf(1),
+          board.progress,
+          board.held,
+          Infinity,
+          board.steps,
+        ),
+      ).rejects.toThrow("of:fid1:new-1");
+      expect(board.calls).toEqual([]);
+    });
+  });
+
   describe("declaredRetirableLinks", () => {
     // No export fixture here on purpose: the probe asks the TARGET, and what
     // the export holds is not a parameter of the question.
@@ -524,7 +919,13 @@ describe("topics-rehearsal-lib", () => {
       expect(
         await declaredRetirableLinks(counted),
       ).toEqual(["boardNames"]);
-      expect(asked).toEqual(["myName", "boardNames", "boardCrossrefIndex"]);
+      expect(asked).toEqual([
+        "myName",
+        "boardNames",
+        "boardCrossrefs",
+        "boardCrossrefIndex",
+        "board",
+      ]);
     });
   });
 
@@ -544,6 +945,7 @@ describe("topics-rehearsal-lib", () => {
         "crossrefs",
       ]);
       expect([...asked].sort()).toEqual([
+        "board",
         "crossrefIndex",
         "crossrefs",
         "mentionable",

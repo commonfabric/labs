@@ -2,7 +2,6 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
@@ -14,6 +13,12 @@ import {
 } from "../../test-utils/mock-cell-handle.ts";
 import { StandInAudioContext } from "../../test-utils/audio-context.ts";
 import { CFVoiceInput, type TranscriptionData } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A microphone track, which records whether it was stopped. */
 class StandInTrack {

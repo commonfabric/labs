@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
   buildObjectBody,
   ciObjectName,
   datePartition,
+  enclosingNames,
   isMainRun,
   localObjectName,
   objectNameSlug,
@@ -18,6 +18,7 @@ import {
   testIdentityOfKey,
   type TestRecord,
 } from "./schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const RECORD: TestRecord = {
   line: "record",
@@ -42,6 +43,20 @@ const CONTEXT: RunContext = {
 };
 
 describe("schema", () => {
+  describe("enclosingNames()", () => {
+    it("returns each enclosing name, outermost first", () => {
+      expect(enclosingNames("a > b > c")).toEqual(["a", "a > b"]);
+    });
+
+    it("returns nothing for a name nothing encloses", () => {
+      expect(enclosingNames("a")).toEqual([]);
+    });
+
+    it("cuts at every separator, overlapping ones included", () => {
+      expect(enclosingNames("a > > b")).toEqual(["a", "a >"]);
+    });
+  });
+
   describe("serializeRecordLine()", () => {
     it("returns one newline-terminated JSON line", () => {
       const line = serializeRecordLine(RECORD);

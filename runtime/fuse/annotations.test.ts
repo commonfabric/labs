@@ -6,7 +6,6 @@ import {
   assertThrows,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { buildCallableScript } from "./callables.ts";
 import {
   canonicalCfcJsonStringify,
@@ -20,6 +19,7 @@ import {
 } from "./annotations.ts";
 import { FsTree } from "./tree.ts";
 import { buildJsonTree } from "./tree-builder.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 const decoder = new TextDecoder();
 
@@ -94,7 +94,7 @@ function annotationText(
   return decoder.decode(value);
 }
 
-Deno.test("CFC annotations use stable refs independent of transient inodes", () => {
+test("CFC annotations use stable refs independent of transient inodes", () => {
   const data = { items: [{ text: "one" }] };
   const labels = [
     { path: ["items", "0", "text"], label: TITLE_LABEL },
@@ -139,7 +139,7 @@ Deno.test("CFC annotations use stable refs independent of transient inodes", () 
   assertEquals(firstRef, secondRef);
 });
 
-Deno.test("CFC aggregate JSON annotations join descendant labels", () => {
+test("CFC aggregate JSON annotations join descendant labels", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree, [
     { path: ["title"], label: TITLE_LABEL },
@@ -166,7 +166,7 @@ Deno.test("CFC aggregate JSON annotations join descendant labels", () => {
   ]);
 });
 
-Deno.test("CFC directory entries include child refs and entry labels", () => {
+test("CFC directory entries include child refs and entry labels", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree, [
     { path: ["title"], label: TITLE_LABEL },
@@ -196,7 +196,7 @@ Deno.test("CFC directory entries include child refs and entry labels", () => {
   assertExists(titleEntry.metadataLabels.size);
 });
 
-Deno.test("CFC symlink annotations include link text and target metadata", () => {
+test("CFC symlink annotations include link text and target metadata", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree, [
     { path: ["ref"], label: LINK_LABEL },
@@ -226,7 +226,7 @@ Deno.test("CFC symlink annotations include link text and target metadata", () =>
   );
 });
 
-Deno.test("CFC callable annotations separate descriptor bytes from invocation authority", () => {
+test("CFC callable annotations separate descriptor bytes from invocation authority", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree);
   const resultIno = tree.addDir(tree.rootIno, "result", "object");
@@ -265,7 +265,7 @@ Deno.test("CFC callable annotations separate descriptor bytes from invocation au
   assertEquals(annotation.callable?.schemaLabel, SCHEMA_LABEL);
 });
 
-Deno.test("CFC annotations fail closed when runner path metadata is missing", () => {
+test("CFC annotations fail closed when runner path metadata is missing", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree);
 
@@ -289,7 +289,7 @@ Deno.test("CFC annotations fail closed when runner path metadata is missing", ()
   );
 });
 
-Deno.test("CFC xattr compatibility namespace is opt-in", () => {
+test("CFC xattr compatibility namespace is opt-in", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree, [
     { path: ["title"], label: TITLE_LABEL },
@@ -323,7 +323,7 @@ Deno.test("CFC xattr compatibility namespace is opt-in", () => {
   assertEquals((ref as { projection?: string }).projection, "value");
 });
 
-Deno.test("CFC projection generation is deterministic over value, labels, and profile version", () => {
+test("CFC projection generation is deterministic over value, labels, and profile version", () => {
   const base = {
     space: "did:key:zSpace",
     entity: "of:entity-123",
@@ -367,7 +367,7 @@ Deno.test("CFC projection generation is deterministic over value, labels, and pr
   assertNotEquals(first, profileChanged);
 });
 
-Deno.test("CFC golden xattr contract covers namespaces, value formats, and optional fields", () => {
+test("CFC golden xattr contract covers namespaces, value formats, and optional fields", () => {
   const tree = new FsTree();
   const value = {
     title: "hello",
@@ -597,7 +597,7 @@ Deno.test("CFC golden xattr contract covers namespaces, value formats, and optio
   assertEquals(manifestRef.generation, generation);
 });
 
-Deno.test("CFC generation changes on value or label metadata changes without inode-sensitive refs", () => {
+test("CFC generation changes on value or label metadata changes without inode-sensitive refs", () => {
   const labels = [{ path: ["title"], label: TITLE_LABEL }];
   const build = (value: unknown, labelEntries = labels) => {
     const tree = new FsTree();
@@ -642,7 +642,7 @@ Deno.test("CFC generation changes on value or label metadata changes without ino
   assertNotEquals(original.generation, labelChanged.generation);
 });
 
-Deno.test("subtree labels cover nesting deeper than the call stack", () => {
+test("subtree labels cover nesting deeper than the call stack", () => {
   // A label walk that recurses per level overflows well before this depth.
   const depth = 20_000;
   let chain: Record<string, unknown> = { title: "bottom" };
@@ -665,7 +665,7 @@ Deno.test("subtree labels cover nesting deeper than the call stack", () => {
   );
 });
 
-Deno.test("an unlabeled leaf fails a deep subtree label closed", () => {
+test("an unlabeled leaf fails a deep subtree label closed", () => {
   const depth = 20_000;
   let chain: Record<string, unknown> = { title: "bottom" };
   for (let level = 0; level < depth; level++) chain = { next: chain };
@@ -684,7 +684,7 @@ Deno.test("an unlabeled leaf fails a deep subtree label closed", () => {
   );
 });
 
-Deno.test("a value met twice fails its second subtree label closed", () => {
+test("a value met twice fails its second subtree label closed", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree, [
     { path: ["first", "text"], label: TITLE_LABEL },
@@ -709,7 +709,7 @@ Deno.test("a value met twice fails its second subtree label closed", () => {
   );
 });
 
-Deno.test("an empty container takes the label of its own path", () => {
+test("an empty container takes the label of its own path", () => {
   const tree = new FsTree();
   const annotator = makeAnnotator(tree, [
     { path: ["items"], label: TITLE_LABEL },

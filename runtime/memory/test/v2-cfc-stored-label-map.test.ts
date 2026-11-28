@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   resolveStoredLabel,
   storedConfidentiality,
   storedLabelMapEntries,
 } from "../v2/cfc-stored-label-map.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("cfc-stored-label-map", () => {
   describe("storedLabelMapEntries()", () => {

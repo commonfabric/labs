@@ -6,19 +6,15 @@ export const emitPrefixUnaryExpression: Emitter = ({
   expression,
   dataFlows,
   context,
-  inSafeContext,
   preferInputBoundWrappers,
 }) => {
-  if (!ts.isPrefixUnaryExpression(expression)) return undefined;
-
-  // Skip lift-applied wrapping in safe contexts - they don't need it
-  if (inSafeContext) return undefined;
-
-  if (expression.operator !== ts.SyntaxKind.ExclamationToken) {
+  if (
+    !ts.isPrefixUnaryExpression(expression) ||
+    expression.operator === ts.SyntaxKind.PlusPlusToken ||
+    expression.operator === ts.SyntaxKind.MinusMinusToken
+  ) {
     return undefined;
   }
-  if (dataFlows.length === 0) return undefined;
-
   return createReactiveWrapperForExpression(
     expression,
     dataFlows,

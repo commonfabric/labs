@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -9,12 +8,21 @@ import type {
   Server,
   SessionLifecycleEvent,
 } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
 import {
   ServingPlane,
   servingPlaneEndpoint,
 } from "../../src/executor/serving-port-plane.ts";
-import { ServingPortBridge } from "../../src/executor/serving-port-bridge.ts";
+import {
+  ServingPortBridge,
+  type ServingPortBridgeOptions,
+} from "../../src/executor/serving-port-bridge.ts";
 import {
   isPlaceCompileFailure,
   markPlaceCompileFailure,
@@ -73,9 +81,15 @@ describe("ServingPortBridge", () => {
 
   /**
    * Builds the bridge over a server whose store is at `store`, compiling for
-   * its worker in `moduleCompiler` where one is given.
+   * its worker in `moduleCompiler` where one is given, and reporting what the
+   * worker names to `onRunNamed` and what it forgets to `onRunsForgotten`.
    */
-  const start = (store?: URL, moduleCompiler?: ModuleCompiler) => {
+  const start = (
+    store?: URL,
+    moduleCompiler?: ModuleCompiler,
+    onRunNamed?: ServingPortBridgeOptions["onRunNamed"],
+    onRunsForgotten?: ServingPortBridgeOptions["onRunsForgotten"],
+  ) => {
     server = newSharedServer({
       subscriptionRefreshDelayMs: 0,
       ...(store === undefined ? {} : { store }),
@@ -84,6 +98,8 @@ describe("ServingPortBridge", () => {
       server,
       port: channel.port2,
       ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
+      ...(onRunNamed === undefined ? {} : { onRunNamed }),
+      ...(onRunsForgotten === undefined ? {} : { onRunsForgotten }),
     });
   };
 
@@ -238,6 +254,72 @@ describe("ServingPortBridge", () => {
       expect(await changes.promise).toBe(`${space} a`);
     });
 
+    it("carries the server's currency changes to the worker's observer, for the space each names", async () => {
+      start();
+      const other = "did:key:z6MkServingPortBridgeOther";
+      const changed: string[] = [];
+      const views = Promise.withResolvers<void>();
+      plane.observer = {
+        currencyChanged: (space) => changed.push(space),
+        viewsChanged: () => views.resolve(),
+      };
+      bridge.observer.currencyChanged(space);
+      bridge.observer.currencyChanged(other);
+      // The port delivers in order, so the currency changes have arrived
+      // once the view change has.
+      bridge.observer.viewsChanged(space, "a");
+      await views.promise;
+      expect(changed).toEqual([space, other]);
+    });
+
+    it("replaces the demand a space carries through the server, which refuses a row of a serving session of the excluded principal", async () => {
+      start();
+      const client = await MemoryClient.connect({
+        instanceNames: namesInstancesByDefault(),
+        transport: MemoryClient.loopback(server),
+      });
+      try {
+        await client.mount(
+          space,
+          { sessionId: "alice-session" },
+          (_space, _session, context) => ({
+            invocation: {
+              aud: context.audience,
+              challenge: context.challenge.value,
+            },
+            authorization: { principal: alice },
+          }),
+        );
+        const rows = [{
+          id: "of:far",
+          scope: "space" as const,
+          scopeKey: "space" as const,
+          origin: { space, sessionId: "alice-session" },
+        }];
+        const absent = [{
+          ...rows[0],
+          origin: { space, sessionId: "absent-session" },
+        }];
+
+        expect(await plane.server.setCarriedDemand(space, space, rows))
+          .toEqual({ refused: 0 });
+        expect(
+          await plane.server.setCarriedDemand(space, space, rows, {
+            excludePrincipal: bob,
+          }),
+        ).toEqual({ refused: 0 });
+        expect(
+          await plane.server.setCarriedDemand(space, space, rows, {
+            excludePrincipal: alice,
+          }),
+        ).toEqual({ refused: 1 });
+        expect(await plane.server.setCarriedDemand(space, space, absent))
+          .toEqual({ refused: 1 });
+      } finally {
+        await client.close();
+      }
+    });
+
     describe("access-list changes", () => {
       const change = {
         space,
@@ -358,6 +440,32 @@ describe("ServingPortBridge", () => {
       await expect(
         worker.request("loopback.send", { transport: 7, payload: "frame" }),
       ).rejects.toThrow("loopback connection 7 is not open");
+    });
+
+    it("sends the worker an event to fail, with its reason", async () => {
+      start();
+      const failed = Promise.withResolvers<unknown>();
+      worker.onNotice("host.failEvent", (params) => failed.resolve(params));
+      const event = { sidecarId, eventId: "evt-held", seq: 2 };
+      bridge.failEvent(space, event, "ended");
+      expect(await failed.promise).toEqual({ space, event, reason: "ended" });
+    });
+
+    it("hands `onRunNamed` what each number on the worker's run beacon stands for", async () => {
+      const named: unknown[] = [];
+      start(undefined, undefined, (identity) => named.push(identity));
+      const identity = { run: 1, space, action: "total" };
+      worker.notify("worker.runNamed", identity);
+      await worker.request("server.idle", null);
+      expect(named).toEqual([identity]);
+    });
+
+    it("hands `onRunsForgotten` the numbers on the worker's run beacon whose actions its realm collected", async () => {
+      const forgotten: (readonly number[])[] = [];
+      start(undefined, undefined, undefined, (runs) => forgotten.push(runs));
+      worker.notify("worker.runsForgotten", { runs: [1, 4] });
+      await worker.request("server.idle", null);
+      expect(forgotten).toEqual([[1, 4]]);
     });
 
     it("logs a notice it has no handler for as a port fault, and keeps serving", async () => {

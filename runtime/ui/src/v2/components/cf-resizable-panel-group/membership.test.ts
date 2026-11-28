@@ -2,7 +2,6 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import { CFResizablePanel } from "../cf-resizable-panel/index.ts";
 import {
@@ -12,6 +11,7 @@ import {
   leaveGroup,
   type PanelGroupMembers,
 } from "./membership.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A group that records which members join and leave it. */
 function recordingGroup(log: string[], name: string): PanelGroupMembers {

@@ -1,5 +1,5 @@
 /**
- * Charts the historical wall-clock duration of every job in the labs and loom
+ * Charts the historical wall-clock duration of every job in the labs and cfs
  * CI workflows. The page samples successful main runs, persists each completed
  * attempt's jobs, and uses the same trailing-parenthesis grouping as
  * scripts/ci-gantt.ts.
@@ -17,7 +17,7 @@ import {
   isDrawableGanttJob,
 } from "./ci-job-cache.ts";
 import { CiGanttDetailStore, ganttDetailDirectory } from "./ci-gantt-detail.ts";
-import { CI_WORKFLOW, LOOM_CI_WORKFLOW, LOOM_REPO, REPO } from "./config.ts";
+import { CFS_CI_WORKFLOW, CFS_REPO, CI_WORKFLOW, REPO } from "./config.ts";
 import {
   clampInt,
   dashboardGitHubCredential,
@@ -284,7 +284,7 @@ class CiJobCacheWriteError extends Error {
   }
 }
 
-export type CiHistorySourceKey = "labs" | "loom";
+export type CiHistorySourceKey = "labs" | "cfs";
 
 export interface CiHistorySource {
   key: CiHistorySourceKey;
@@ -295,11 +295,11 @@ export interface CiHistorySource {
 
 export const CI_HISTORY_SOURCES: Record<CiHistorySourceKey, CiHistorySource> = {
   labs: { key: "labs", label: "labs", repo: REPO, workflow: CI_WORKFLOW },
-  loom: {
-    key: "loom",
-    label: "loom",
-    repo: LOOM_REPO,
-    workflow: LOOM_CI_WORKFLOW,
+  cfs: {
+    key: "cfs",
+    label: "cfs",
+    repo: CFS_REPO,
+    workflow: CFS_CI_WORKFLOW,
   },
 };
 
@@ -417,8 +417,14 @@ export function ciHistoryDays(value: string | null): number {
   );
 }
 
+/**
+ * Returns the source a `repo` parameter names, labs when it names none. The
+ * repository's former name, `loom`, names cfs as well.
+ */
 export function ciHistorySource(value: string | null): CiHistorySource {
-  return value === "loom" ? CI_HISTORY_SOURCES.loom : CI_HISTORY_SOURCES.labs;
+  return value === "cfs" || value === "loom"
+    ? CI_HISTORY_SOURCES.cfs
+    : CI_HISTORY_SOURCES.labs;
 }
 
 export function ciGanttOptions(
@@ -3189,9 +3195,9 @@ ${DASHBOARD_THEME_HEAD}
       : ""
   }<label class="field">repository <select id="repo" name="repo" autocomplete="off"><option value="labs"${
     source.key === "labs" ? " selected" : ""
-  }>labs</option><option value="loom"${
-    source.key === "loom" ? " selected" : ""
-  }>loom</option></select></label><label class="field" for="days">window <output id="daysv" for="days">${days} day${
+  }>labs</option><option value="cfs"${
+    source.key === "cfs" ? " selected" : ""
+  }>cfs</option></select></label><label class="field" for="days">window <output id="daysv" for="days">${days} day${
     days === 1 ? "" : "s"
   }</output><input type="range" id="days" name="days" min="${CI_HISTORY_MIN_DAYS}" max="${CI_HISTORY_DAYS}" step="1" value="${days}" autocomplete="off"></label><nav class="choice-group" aria-label="Sort CI history"><span class="lbl">sort</span><a class="${
     sort === "job" ? "on" : ""

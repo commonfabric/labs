@@ -24,7 +24,8 @@
  * and a `.jsonl` file of the directory's name beside it, holds aliases
  * that nothing reads, and fails.
  *
- * Usage: check-test-aliases.ts [base-ref]   (default: origin/main)
+ * Usage: check-test-aliases.ts [base-ref]
+ *        (default: upstream/main where that exists, and origin/main otherwise)
  */
 
 import { existsSync } from "@std/fs/exists";
@@ -38,7 +39,7 @@ import {
   parseAliasLine,
   readAliasDirectory,
 } from "@commonfabric/test-support/records";
-import { git } from "./repository-files.ts";
+import { defaultBase, git } from "./repository-files.ts";
 
 /** What the gate compares: the alias directory now, and at the merge base. */
 export type AliasDirectoryState = {
@@ -140,7 +141,7 @@ export function aliasDirectoryProblems(
 }
 
 async function main(): Promise<void> {
-  const base = Deno.args[0] ?? "origin/main";
+  const base = Deno.args[0] ?? await defaultBase(git);
   let mergeBase: string;
   try {
     mergeBase = (await git("merge-base", base, "HEAD")).trim();

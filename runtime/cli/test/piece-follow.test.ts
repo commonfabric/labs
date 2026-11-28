@@ -5,11 +5,11 @@
  * reports are covered without a server.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { ValidationError } from "@cliffy/command";
 
 import { PieceSourceChangedError } from "@commonfabric/piece/ops";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   FOLLOW_PIN_REFUSED_EXIT_CODE,
   followPieceSourceAction,

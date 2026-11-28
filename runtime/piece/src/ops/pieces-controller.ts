@@ -1,10 +1,5 @@
 import type { CellScope } from "@commonfabric/api";
 import {
-  type EntityRef,
-  entityRefToString,
-  isEntityRef,
-} from "@commonfabric/data-model/cell-rep";
-import {
   homeSchema,
   siteTableCause,
   siteTableSchema,
@@ -35,7 +30,6 @@ import {
   type EntityIdListResult,
   type EnvReader,
   type ExperimentalOptions,
-  getEntityId,
   getMetaLink,
   getPatternIdentityRef,
   getPatternSetupIdentityRef,
@@ -73,10 +67,10 @@ import {
   type Schema,
   sendEvent,
   setPatternRepository,
-  setPatternSource,
   settingsForDeployedClient,
   type SpaceCellContents,
   SpaceNotFoundError,
+  stampCreatedFromOrigin,
   startWithInputSources,
 } from "@commonfabric/runner";
 import type {
@@ -104,6 +98,7 @@ import { getLogger } from "@commonfabric/logger";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
+import type { CellLink } from "../../../runner/src/link-utils.ts";
 import { getResultCellWithSourceSchema } from "../../../runner/src/piece-helpers.ts";
 import { pieceId } from "../piece-id.ts";
 // System space-root pattern refs, their derivation, and the source→URL
@@ -139,6 +134,7 @@ import {
   advertisedSystemRelease,
   reconcilePieceSource,
 } from "./piece-origin.ts";
+import { timePiecePhase } from "./piece-phase-timing.ts";
 import { ensurePrivateInboxOf } from "./private-inbox.ts";
 import { repairProfileRootsOf } from "./profile-space-root.ts";
 import { type ShareIntake, startShareIntakeOf } from "./share-intake.ts";
@@ -150,9 +146,6 @@ export {
 };
 
 ensureNotRenderThread();
-
-const PIECE_TRACE_TIMINGS = typeof Deno !== "undefined" &&
-  Deno.env.get("CF_CLI_TRACE_TIMINGS") === "1";
 
 /**
  * What opening a piece does beyond resolving its cell.
@@ -171,30 +164,10 @@ export type PieceOpen = { reconcile: boolean; start: boolean };
 const normalizePieceOpen = (open: boolean | PieceOpen): PieceOpen =>
   typeof open === "boolean" ? { reconcile: open, start: open } : open;
 
-// Timing stats record even while the logger is disabled, so every phase is
-// visible in the load summaries (browser worker included, where the
-// CF_CLI_TRACE_TIMINGS console path cannot run) as `piece/phase/<label>`.
-const pieceTimingLogger = getLogger("piece", { enabled: false });
 const pieceUpdateLogger = getLogger("piece.update", {
   enabled: true,
   level: "warn",
 });
-
-async function timePiecePhase<T>(
-  label: string,
-  run: () => T | Promise<T>,
-): Promise<T> {
-  const start = performance.now();
-  try {
-    return await run();
-  } finally {
-    pieceTimingLogger.time(start, "phase", label);
-    if (PIECE_TRACE_TIMINGS) {
-      const elapsed = Math.round(performance.now() - start);
-      console.error(`[piece-phase] ${elapsed}ms :: ${label}`);
-    }
-  }
-}
 
 /**
  * Filters an array of pieces by removing any that match the target cell
@@ -210,7 +183,7 @@ function filterOutCell(
 }
 
 // This module can load outside Deno (browser-safe storage import above), so
-// env reads are guarded like PIECE_TRACE_TIMINGS: absent env ⇒ defaults.
+// env reads are guarded: absent env ⇒ defaults.
 const readEnv: EnvReader = (key) =>
   typeof Deno !== "undefined" ? Deno.env.get(key) : undefined;
 
@@ -657,11 +630,9 @@ export class PiecesController<T = unknown> {
       "getDefaultPattern.spaceCell.sync",
       () => this.#spaceCell.key("defaultPattern").sync(),
     );
+    // The slot reads as a cell whether or not anything is linked there; an
+    // empty one holds neither contents nor a pattern identity.
     const defaultPattern = cell.get();
-    if (!defaultPattern) {
-      return undefined;
-    }
-
     await timePiecePhase(
       "getDefaultPattern.defaultPattern.sync",
       () => defaultPattern.sync(),
@@ -672,8 +643,8 @@ export class PiecesController<T = unknown> {
     ) {
       return undefined;
     }
-    try {
-      return await timePiecePhase(
+    const openRoot = () =>
+      timePiecePhase(
         `getDefaultPattern.get(reconcile=${reconcile},start=${start})`,
         () =>
           this.getPieceCell(
@@ -682,6 +653,11 @@ export class PiecesController<T = unknown> {
             nameSchema,
           ),
       );
+    // Only a start can fail for want of a loadable pattern, so an open that
+    // does not start has nothing to heal.
+    if (!start) return await openRoot();
+    try {
+      return await openRoot();
     } catch (error) {
       // An unopenable root takes every consumer down with it — piece registry
       // listings, `cf piece ls`, FUSE, the shell's list cells all resolve the
@@ -693,7 +669,6 @@ export class PiecesController<T = unknown> {
       // runtime cannot load. Roll that one forward to the space's official
       // system root and retry the start ONCE. Every other failure rethrows
       // untouched.
-      if (!start) throw error;
       let healed: Cell<NameSchema>;
       try {
         const root = await this.getPieceCell(defaultPattern, false, nameSchema);
@@ -1111,16 +1086,15 @@ export class PiecesController<T = unknown> {
     if (start && !viewScoped) {
       // start() handles pattern loading and running. It's idempotent - no
       // effect if already running. The pieces that enclose the piece start
-      // first, each following its origin where this open follows the
-      // piece's, so that a nested instance opened on its own runs against
-      // what its enclosing instance derives.
+      // before it is instantiated, each following its origin where this open
+      // follows the piece's, so that a nested instance opened on its own runs
+      // against what its enclosing instance derives.
       await timePiecePhase(
         "get.runtime.start",
         () =>
           startWithInputSources(
             this.runtime,
             piece,
-            () => this.runtime.start(piece),
             { followOrigins: reconcile },
           ),
       );
@@ -1172,159 +1146,42 @@ export class PiecesController<T = unknown> {
    * @returns Array of registered pieces that are read from
    */
   async getReadingFrom(piece: Cell<unknown>): Promise<Cell<unknown>[]> {
-    // Get registered pieces that might be referenced
-    const piecesCell = await this.getPieceRegistry();
-    const registeredPieces = piecesCell.get();
-    const result: Cell<unknown>[] = [];
-    const seenEntityIds = new Set<string>(); // Track entities we've already processed
-    const maxDepth = 10; // Prevent infinite recursion
-    const maxResults = 50; // Prevent too many results from overwhelming the UI
+    const registeredPieces = (await this.getPieceRegistry()).get();
     const resolvedPiece = piece.resolveAsCell();
+    const result: Cell<unknown>[] = [];
+
+    // Lists the registered piece whose document is `id`, unless it is `piece`
+    // itself or is listed already, while the list has room.
+    const addMatchingPiece = (id: string) => {
+      const matchingPiece = registeredPieces.find((c) => c.sourceURI === id);
+      if (matchingPiece === undefined) return;
+      const resolvedMatching = matchingPiece.resolveAsCell();
+      if (
+        !resolvedMatching.equals(resolvedPiece) &&
+        result.length < MAX_REFERENCE_RESULTS &&
+        !result.some((c) => c.resolveAsCell().equals(resolvedMatching))
+      ) {
+        result.push(matchingPiece);
+      }
+    };
 
     try {
-      // Get the argument data - this is where references to other pieces are stored
-      const argumentCell = await this.#syncedArgument(piece);
-
-      // Get the raw argument value
-      let argumentValue;
-
-      try {
-        argumentValue = argumentCell.getRaw();
-      } catch (err) {
-        this.#diagnosticConsole.debug("Error getting argument value:", err);
-        return result;
-      }
-
-      // Helper function to add a matching piece to the result
-      const addMatchingPiece = (docId: EntityRef) => {
-        if (!isEntityRef(docId)) return;
-
-        const entityIdStr = entityRefToString(docId);
-
-        // Skip if we've already processed this entity
-        if (seenEntityIds.has(entityIdStr)) return;
-        seenEntityIds.add(entityIdStr);
-
-        // Find matching piece by entity ID
-        const matchingPiece = registeredPieces.find((c) => {
-          const cId = getEntityId(c);
-          return isEntityRef(cId) && entityRefToString(cId) === entityIdStr;
-        });
-
-        if (matchingPiece) {
-          const resolvedMatching = matchingPiece.resolveAsCell();
-          const isNotSelf = !resolvedMatching.equals(resolvedPiece);
-          const notAlreadyInResult = !result.some((c) =>
-            c.resolveAsCell().equals(resolvedMatching)
-          );
-
-          if (isNotSelf && notAlreadyInResult && result.length < maxResults) {
-            result.push(matchingPiece);
-          }
-        }
-      };
-
-      // Find references in the argument structure
-      const processValue = (
-        value: unknown,
-        parent: Cell<unknown>,
-        visited = new Set<unknown>(), // Track objects directly, not string representations
-        depth = 0,
-      ) => {
-        // The argument here is `argumentCell.getRaw()`, a raw `FabricValue`.
-        // A `FabricPrimitive` is not decomposed by this walk -- nothing is
-        // rebuilt, and a leaf holds no link to find, so the empty `Object.keys`
-        // ends the descent with nothing lost.
-        //
-        // TODO(danfuzz): a link nested in a `FabricInstance`'s codec contents
-        // is missed, so a piece referenced only from inside a wrapper does not
-        // appear in the result. Unlike the sibling walks in the runner, this
-        // one does _not_ refuse such a value: every path out of here is wrapped
-        // in a `catch` that reports to `diagnosticConsole` and returns an empty
-        // result by design (the outer handler says so in as many words), so a
-        // throw would be swallowed rather than surfaced. A tripwire that cannot
-        // fire is worse than a marker that says so, because it reads as a guard
-        // while being incapable of acting as one. Refusing here needs that
-        // error handling changed first.
-        if (!isObjectOrArray(value) || depth > maxDepth) return;
-
-        // Prevent cycles in our traversal by tracking object references directly
-        if (visited.has(value)) return;
-        visited.add(value);
-
-        try {
-          // Handle values that are themselves cells, docs, or cell links
-          if (isLink(value)) {
-            const link = parseLink(value, parent);
-            if (link.id) {
-              addMatchingPiece(getEntityId(link.id)!);
-            }
-
-            const resultCell = followCellToResult(
-              this.runtime.getCellFromLink(link),
-              this.#diagnosticConsole,
-              new Set(),
-              0,
-            );
-            if (resultCell !== undefined) addMatchingPiece(resultCell.entityId);
-          } else if (Array.isArray(value)) {
-            // Safe recursive processing of arrays
-            for (let i = 0; i < value.length; i++) {
-              try {
-                processValue(
-                  value[i],
-                  parent,
-                  new Set([...visited]),
-                  depth + 1,
-                );
-              } catch (err) {
-                this.#diagnosticConsole.debug(
-                  `Error processing array item at index ${i}:`,
-                  err,
-                );
-              }
-            }
-          } else if (typeof value === "object") {
-            // Process regular object properties
-            const keys = Object.keys(value);
-            for (let i = 0; i < keys.length; i++) {
-              const key = keys[i];
-
-              try {
-                processValue(
-                  value[key],
-                  parent,
-                  new Set([...visited]),
-                  depth + 1,
-                );
-              } catch (err) {
-                this.#diagnosticConsole.debug(
-                  `Error processing object property '${key}':`,
-                  err,
-                );
-              }
-            }
-          }
-        } catch (err) {
-          this.#diagnosticConsole.debug("Error in processValue:", err);
-        }
-      };
-
-      // Start processing from the argument value
-      if (argumentValue && typeof argumentValue === "object") {
-        processValue(
-          argumentValue,
-          argumentCell,
-          new Set(),
-          0,
+      const { argument, links } = await this.#argumentLinks(piece);
+      for (const value of links) {
+        const link = parseLink(value, argument);
+        addMatchingPiece(link.id);
+        const resultCell = followCellToResult(
+          this.runtime.getCellFromLink(link),
+          this.#diagnosticConsole,
         );
+        if (resultCell !== undefined) addMatchingPiece(resultCell.sourceURI);
       }
     } catch (error) {
+      // A piece whose argument cannot be read reads from nothing.
       this.#diagnosticConsole.debug(
         "Error finding references in piece arguments:",
         error,
       );
-      // Don't throw the error - return an empty result instead
     }
 
     return result;
@@ -1337,176 +1194,45 @@ export class PiecesController<T = unknown> {
    * @returns Array of registered pieces that read from this piece
    */
   async getReadByPieces(piece: Cell<unknown>): Promise<Cell<unknown>[]> {
-    // Get registered pieces to check
-    const piecesCell = await this.getPieceRegistry();
-    const registeredPieces = piecesCell.get();
-    const result: Cell<unknown>[] = [];
-    const seenEntityIds = new Set<string>(); // Track entities we've already processed
-    const maxDepth = 10; // Prevent infinite recursion
-    const maxResults = 50; // Prevent too many results from overwhelming the UI
-
-    const pieceEntityId = getEntityId(piece);
-    if (!pieceEntityId) return result;
-
     const resolvedPiece = piece.resolveAsCell();
+    const others = (await this.getPieceRegistry()).get().filter((
+      otherPiece,
+    ) => !otherPiece.resolveAsCell().equals(resolvedPiece));
 
-    // Helper function to add a matching piece to the result
-    const addReadingPiece = (otherPiece: Cell<unknown>) => {
-      const otherPieceId = getEntityId(otherPiece);
-      if (!isEntityRef(otherPieceId)) return;
-
-      const entityIdStr = entityRefToString(otherPieceId);
-
-      // Skip if we've already processed this entity
-      if (seenEntityIds.has(entityIdStr)) return;
-      seenEntityIds.add(entityIdStr);
-
-      const resolvedOther = otherPiece.resolveAsCell();
-      const notAlreadyInResult = !result.some((c) =>
-        c.resolveAsCell().equals(resolvedOther)
+    // Whether `link`, read against `base`, names `piece`'s document or one
+    // whose result back-links lead to it.
+    const refersToPiece = (link: CellLink, base: Cell<unknown>): boolean => {
+      const parsed = parseLink(link, base);
+      if (parsed.id === piece.sourceURI) return true;
+      const resultCell = followCellToResult(
+        this.runtime.getCellFromLink(parsed),
+        this.#diagnosticConsole,
       );
-
-      if (notAlreadyInResult && result.length < maxResults) {
-        result.push(otherPiece);
-      }
+      return resultCell?.sourceURI === piece.sourceURI;
     };
 
-    // Helper to check if a document refers to our target piece
-    const checkRefersToTarget = (
-      value: unknown,
-      parent: Cell<unknown>,
-      visited = new Set<unknown>(), // Track objects directly, not string representations
-      depth = 0,
-    ): boolean => {
-      // Same shape as `processValue` above, and the same account applies: a
-      // `FabricPrimitive` costs this walk nothing, while a link inside a
-      // `FabricInstance` is missed.
-      //
-      // TODO(danfuzz): refusing one here waits on the same thing -- this walk's
-      // `catch` swallows, so a throw would not surface.
-      if (!isObjectOrArray(value) || depth > maxDepth) return false;
-
-      // Prevent cycles in our traversal by tracking object references directly
-      if (visited.has(value)) return false;
-      visited.add(value);
-
-      try {
-        if (isLink(value)) {
-          try {
-            const link = parseLink(value, parent);
-
-            // Check if the cell link's doc is our target
-            if (link.id === piece.sourceURI) return true;
-
-            // Check if cell link's source chain leads to our target
-            const resultCell = followCellToResult(
-              this.runtime.getCellFromLink(link),
-              this.#diagnosticConsole,
-              new Set(),
-              0,
-            );
-            if (resultCell?.sourceURI === piece.sourceURI) return true;
-          } catch (err) {
-            this.#diagnosticConsole.debug(
-              "Error handling cell link in checkRefersToTarget:",
-              err,
-            );
-          }
-          return false; // Don't traverse runtime metadata link contents
-        }
-
-        // Safe recursive processing of arrays
-        if (Array.isArray(value)) {
-          for (let i = 0; i < value.length; i++) {
-            try {
-              if (
-                checkRefersToTarget(
-                  value[i],
-                  parent,
-                  new Set([...visited]),
-                  depth + 1,
-                )
-              ) {
-                return true;
-              }
-            } catch (err) {
-              this.#diagnosticConsole.debug(
-                `Error checking array item at index ${i}:`,
-                err,
-              );
-            }
-          }
-        } else if (isObjectOrArray(value)) {
-          // Process regular object properties
-          const keys = Object.keys(value);
-          for (let i = 0; i < keys.length; i++) {
-            const key = keys[i];
-
-            try {
-              if (
-                checkRefersToTarget(
-                  value[key],
-                  parent,
-                  new Set([...visited]),
-                  depth + 1,
-                )
-              ) {
-                return true;
-              }
-            } catch (err) {
-              this.#diagnosticConsole.debug(
-                `Error checking object property '${key}':`,
-                err,
-              );
-            }
-          }
-        }
-      } catch (err) {
-        this.#diagnosticConsole.debug("Error in checkRefersToTarget:", err);
-      }
-
-      return false;
-    };
-
-    const others = registeredPieces.filter((otherPiece) =>
-      !otherPiece.resolveAsCell().equals(resolvedPiece)
-    );
-    // The arguments, where references are commonly found, are synced all at
-    // once, and a piece whose argument cannot be read is passed over alone.
-    const argumentCells = await Promise.all(
+    // A piece reads `piece` when it is itself a link to it, or when its
+    // argument, where references are commonly found, holds one. The arguments
+    // are synced all at once, and a piece whose argument cannot be read is
+    // passed over alone.
+    const reads = await Promise.all(
       others.map((otherPiece) =>
-        this.#syncedArgument(otherPiece).catch(() => undefined)
+        refersToPiece(otherPiece, otherPiece) ||
+        this.#argumentLinks(otherPiece).then(({ argument, links }) =>
+          links.some((link) => refersToPiece(link, argument))
+        ).catch(() => false)
       ),
     );
 
-    // Check each piece to see if it references this piece
+    const result: Cell<unknown>[] = [];
     for (const [index, otherPiece] of others.entries()) {
-      if (checkRefersToTarget(otherPiece, otherPiece, new Set(), 0)) {
-        addReadingPiece(otherPiece);
-        continue; // Skip additional checks for this piece
-      }
-
-      // Also specifically check the argument data
-      const argumentCell = argumentCells[index];
-      if (argumentCell === undefined) continue;
-      try {
-        const argumentValue = argumentCell.getRaw();
-
-        // Check if the argument references our target
-        if (argumentValue && typeof argumentValue === "object") {
-          if (
-            checkRefersToTarget(
-              argumentValue,
-              argumentCell,
-              new Set(),
-              0,
-            )
-          ) {
-            addReadingPiece(otherPiece);
-          }
-        }
-      } catch (_) {
-        // Error checking argument references for piece
+      if (!reads[index]) continue;
+      const resolvedOther = otherPiece.resolveAsCell();
+      if (
+        result.length < MAX_REFERENCE_RESULTS &&
+        !result.some((c) => c.resolveAsCell().equals(resolvedOther))
+      ) {
+        result.push(otherPiece);
       }
     }
 
@@ -2030,15 +1756,16 @@ export class PiecesController<T = unknown> {
    * retained root watch demands server execution, while mounted renderers
    * own local graph registration.
    *
-   * The pieces that enclose the piece start first (`startWithInputSources()`),
-   * each following its origin with `followOrigins`, as an open that reconciles
-   * the piece follows its own. With `awaitSetupCommit`, the start waits for the
-   * commit of the setup writes of the graph it instantiates, and this rejects
-   * when that commit failed, which leaves the piece stopped. Otherwise such a
-   * failure reaches only the runtime's log; see `Runner.startWithCommit()`. A
-   * piece an enclosing piece sets up as its child is running when the start
-   * begins, so the start installs nothing and waits for nothing, as for any
-   * piece already running.
+   * The pieces that enclose the piece start before it is instantiated
+   * (`startWithInputSources()`), each following its origin with
+   * `followOrigins`, as an open that reconciles the piece follows its own.
+   * With `awaitSetupCommit`, the start waits for the commit of the setup writes
+   * of the graph it instantiates, and this rejects when that commit failed,
+   * which leaves the piece stopped. Otherwise such a failure reaches only the
+   * runtime's log; see `Runner.startWithCommit()`. A piece an enclosing piece
+   * sets up as its child is running by the time the start would instantiate
+   * it, so the start installs nothing and waits for nothing, as for any piece
+   * already running.
    */
   async startPiece<T = unknown>(
     pieceOrId: string | Cell<T>,
@@ -2064,11 +1791,10 @@ export class PiecesController<T = unknown> {
         startWithInputSources(
           this.runtime,
           piece,
-          () =>
-            options.awaitSetupCommit
-              ? this.runtime.startWithCommit(piece)
-              : this.runtime.start(piece),
-          { followOrigins: options.followOrigins === true },
+          {
+            followOrigins: options.followOrigins === true,
+            awaitSetupCommit: options.awaitSetupCommit === true,
+          },
         ),
     );
     await timePiecePhase(
@@ -2283,11 +2009,7 @@ export class PiecesController<T = unknown> {
     }
 
     if (targetIsPiece && start) {
-      await startWithInputSources(
-        this.runtime,
-        targetCell,
-        () => this.runtime.start(targetCell),
-      );
+      await startWithInputSources(this.runtime, targetCell);
       await this.getResult(targetCell).pull();
     }
     await this.synced();
@@ -2431,12 +2153,9 @@ export class PiecesController<T = unknown> {
       );
     }
 
-    // Create new piece cell
-    let pieceCell: Cell<NameSchema>;
-
-    const { error } = await this.runtime.editWithRetry((tx) => {
+    const created = await this.runtime.editWithRetry((tx) => {
       // Create piece cell within this transaction
-      pieceCell = this.runtime.getCell<NameSchema>(
+      const pieceCell = this.runtime.getCell<NameSchema>(
         this.getSpace(),
         patternConfig.cause,
         nameSchema,
@@ -2454,7 +2173,12 @@ export class PiecesController<T = unknown> {
       // when supplied, is recorded via setPatternRepository below, so a custom
       // root without a repository intentionally stays unstamped.
       if (options?.customProgram === undefined) {
-        setPatternSource(pieceCell, tx, patternConfig.source);
+        stampCreatedFromOrigin(
+          pieceCell,
+          tx,
+          patternConfig.source,
+          getPatternIdentityRef(pieceCell.withTx(tx)),
+        );
       }
 
       if (options?.repository !== undefined) {
@@ -2465,19 +2189,23 @@ export class PiecesController<T = unknown> {
       const spaceCellWithTx = spaceCellContents.withTx(tx);
       const defaultPatternCell = spaceCellWithTx.key("defaultPattern");
       defaultPatternCell.set(pieceCell.withTx(tx));
+      return pieceCell;
     });
-    if (error) {
+    if (created.error) {
+      const { error } = created;
       throw new Error(
         `Updating the default pattern failed because storage returned ${error.name}: ${error.message}`,
         { cause: error },
       );
     }
 
-    // Fetch the final result
-    const finalPattern = await this.getDefaultPattern(false);
-    if (!finalPattern) {
-      throw new Error("Failed to create default pattern");
-    }
+    // The root the commit linked, read apart from the transaction that wrote
+    // it.
+    const finalPattern = await this.getPieceCell(
+      created.ok.withTx(),
+      false,
+      nameSchema,
+    );
 
     // Start the piece
     await this.startPiece(finalPattern);
@@ -3536,18 +3264,21 @@ export class PiecesController<T = unknown> {
   }
 
   /**
-   * Helper for `getReadingFrom()` and `getReadByPieces()`, which read
-   * `piece`'s argument raw: its argument cell, synced. The replica need not
-   * hold either the piece's own document, whose metadata names the argument,
-   * or the argument's, whether because nothing here loaded them or because a
-   * release pass dropped them (`docs/features/document-release.md`), so both
-   * are synced before they are read.
+   * Helper for `getReadingFrom()` and `getReadByPieces()`: the links
+   * `piece`'s argument holds, read raw, and the argument cell they are read
+   * against. The replica need not hold either the piece's own document, whose
+   * metadata names the argument, or the argument's, whether because nothing
+   * here loaded them or because a release pass dropped them
+   * (`docs/features/document-release.md`), so both are synced before they
+   * are read.
    */
-  async #syncedArgument(piece: Cell<unknown>): Promise<Cell<unknown>> {
+  async #argumentLinks(
+    piece: Cell<unknown>,
+  ): Promise<{ argument: Cell<unknown>; links: CellLink[] }> {
     await piece.asSchema(undefined).sync();
     const argument = this.getArgument(piece);
     await argument.sync();
-    return argument;
+    return { argument, links: linksIn(argument.getRaw()) };
   }
 }
 
@@ -3600,12 +3331,9 @@ async function getCellByIdOrPiece(
       // Check whether this cell is registered as a piece.
       const piecesCell = await pieces.getPieceRegistry();
       const registered = piecesCell.get();
-      const isRegisteredPiece = registered.some((piece: Cell<unknown>) => {
-        const id = pieceId(piece);
-        // An entry without a piece ID cannot establish registration.
-        if (!id) return false;
-        return id === hashString;
-      });
+      const isRegisteredPiece = registered.some((piece: Cell<unknown>) =>
+        pieceId(piece) === hashString
+      );
       return { cell, isPiece: isRegisteredPiece };
     } catch (_) {
       throw new Error(`${label} "${cellId}" not found as piece or cell`);
@@ -3613,46 +3341,55 @@ async function getCellByIdOrPiece(
   }
 }
 
-// Helper function to follow alias chain to its source
-const MAX_DEPTH = 10;
+/** How deep a reference walk descends into a raw value. */
+const MAX_REFERENCE_DEPTH = 10;
+
+/** How many pieces a reference listing names at most. */
+const MAX_REFERENCE_RESULTS = 50;
+
+/**
+ * The links `value` holds, found by walking its arrays and objects at most
+ * {@link MAX_REFERENCE_DEPTH} levels down. A link's own contents are not
+ * walked.
+ *
+ * `value` is a raw `FabricValue`. A `FabricPrimitive` holds no link, and its
+ * empty `Object.values` ends the descent with nothing lost.
+ *
+ * TODO(danfuzz): a link nested in a `FabricInstance`'s codec contents is
+ * missed, so a piece referenced only from inside a wrapper is not found.
+ * Unlike the sibling walks in the runner, this one does _not_ refuse such a
+ * value: both callers go on without a walk that throws by design, one
+ * reporting it to `diagnosticConsole` and the other passing the piece over,
+ * so a throw would be swallowed rather than surfaced. Refusing here needs
+ * that error handling changed first.
+ */
+function linksIn(value: unknown, depth = 0): CellLink[] {
+  if (!isObjectOrArray(value) || depth > MAX_REFERENCE_DEPTH) return [];
+  if (isLink(value)) return [value];
+  return Object.values(value).flatMap((child) => linksIn(child, depth + 1));
+}
+
+/**
+ * The cell that `cell`'s `result` back-links lead to: the first that names
+ * no result, or `undefined` when the back-links return to a cell they passed.
+ * A back-link that cannot be read ends the walk at the cell that holds it.
+ */
 function followCellToResult(
   cell: Cell<unknown>,
   diagnosticConsole: RuntimeConsole,
-  visited = new Set<string>(),
-  depth = 0,
 ): Cell<unknown> | undefined {
-  if (depth > MAX_DEPTH) return undefined; // Prevent infinite recursion
-
-  try {
-    const docId = cell.entityId;
-    if (!isEntityRef(docId)) return undefined;
-
-    const docIdStr = entityRefToString(docId);
-
-    // Prevent cycles
-    if (visited.has(docIdStr)) return undefined;
-    visited.add(docIdStr);
-
+  const visited = new Set<string>();
+  let current = cell;
+  while (!visited.has(current.sourceURI)) {
+    visited.add(current.sourceURI);
     try {
-      // If document has result metadata, follow it to the owning result cell.
-      const resultLink = getMetaLink(cell, "result");
-      if (resultLink !== undefined) {
-        const resultCell = cellRuntime(cell).getCellFromLink(resultLink);
-        return followCellToResult(
-          resultCell,
-          diagnosticConsole,
-          visited,
-          depth + 1,
-        );
-      }
+      const resultLink = getMetaLink(current, "result");
+      if (resultLink === undefined) return current;
+      current = cellRuntime(current).getCellFromLink(resultLink);
     } catch (err) {
-      // Ignore errors getting doc value
       diagnosticConsole.debug("Error getting doc value:", err);
+      return current;
     }
-
-    return cell; // Return the current document's ID if no further references
-  } catch (err) {
-    diagnosticConsole.debug("Error in followCellToResult:", err);
-    return undefined;
   }
+  return undefined;
 }

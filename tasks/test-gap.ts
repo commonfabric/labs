@@ -60,6 +60,7 @@ import {
   spoolRecords,
   stopOnSignals,
 } from "./ci-lane.ts";
+import { defaultBase, gitIn } from "./repository-files.ts";
 import {
   finishRunRecording,
   type RunRecording,
@@ -139,21 +140,6 @@ export function parseGapArgs(args: readonly string[]): GapOptions | undefined {
     }
   }
   return options;
-}
-
-/**
- * What a change is measured against where the command line names
- * nothing: `upstream/main` in a checkout of a fork, which is where a pull
- * request's base lives, and `origin/main` otherwise.
- */
-export async function defaultBase(root: string): Promise<string> {
-  const upstream = await new Deno.Command("git", {
-    args: ["rev-parse", "--verify", "--quiet", "upstream/main"],
-    cwd: root,
-    stdout: "null",
-    stderr: "null",
-  }).output();
-  return upstream.success ? "upstream/main" : "origin/main";
 }
 
 /**
@@ -982,7 +968,7 @@ export async function main(
     console.error(USAGE);
     return 2;
   }
-  const base = options.base ?? await defaultBase(root);
+  const base = options.base ?? await defaultBase(gitIn(root));
   const changed = await localChanges(root, base);
   const suites = await (deps.topology ?? loadTopology)(root);
   const fetched = await resolveManifest({ root }, deps);

@@ -11,6 +11,7 @@ import {
 import { CONNECTOR_PATTERN_SOURCES } from "../connectors/pattern-sources.ts";
 import { CF_PERMISSION_FLAGS } from "../runtime/cli/lib/cf-permissions.ts";
 import type { TreeSitterGrammar } from "../runtime/cli/lib/view/languages/treesitter/adapter.ts";
+import type { CompilerOutputVersionOptions } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
 import { treeSitterGrammars } from "../runtime/cli/lib/view/languages/treesitter/grammars.ts";
 import { BASELINES_DIR, isIframeGuestSource } from "./pattern-files.ts";
 import { PACKAGE_ROOTS } from "./package-layout.ts";
@@ -93,16 +94,17 @@ export const BUILD_HOST_VARIABLES = [
  * Loaded when a build asks for it: the corpus compile brings the whole
  * runtime with it, and this module is imported by the test topology and by a
  * build that takes the compiler-input fingerprint, neither of which loads a
- * runtime.
+ * runtime. `options` are handed to the corpus compile; a build gives none.
  */
 export async function computeShippedCompileCacheVersion(
   root: string,
+  options?: CompilerOutputVersionOptions,
 ): Promise<string> {
   // deno-lint-ignore cf-imports/no-inline-module-import -- the corpus compile brings the whole runtime with it, which the test topology and an inputs-only build never load
   const { computeCompilerOutputVersion } = await import(
     "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts"
   );
-  return await computeCompilerOutputVersion(root);
+  return await computeCompilerOutputVersion(root, options);
 }
 
 export function requestedBinaries(args: readonly string[]): BinaryName[] {
@@ -276,6 +278,22 @@ export class BuildConfig {
     return this.#path("runtime", "cli", "lib", "multi-user-test-worker.ts");
   }
 
+  cliParseWorkerPath() {
+    return this.#path("runtime", "cli", "lib", "view", "parseworker.ts");
+  }
+
+  cliProgramWorkerPath() {
+    return this.#path(
+      "runtime",
+      "cli",
+      "lib",
+      "view",
+      "languages",
+      "typescript",
+      "programworker.ts",
+    );
+  }
+
   fusePackagePath() {
     return this.#path("runtime", "fuse");
   }
@@ -304,6 +322,8 @@ export class BuildConfig {
       this.docsCommonPath(),
       this.cliEntryPath(),
       this.cliMultiUserTestWorkerPath(),
+      this.cliParseWorkerPath(),
+      this.cliProgramWorkerPath(),
       this.fusePackagePath(),
       ...COMPILE_FINGERPRINT_INPUTS.map((input) =>
         this.#path(...input.split("/"))
@@ -341,6 +361,12 @@ export class BuildConfig {
           // The worker `cf test` spawns in multi-user mode. The compile does
           // not follow a worker's module, so it is named here.
           this.cliMultiUserTestWorkerPath(),
+          // The worker `cf view` parses a diff's large files in, which the
+          // compile does not follow either.
+          this.cliParseWorkerPath(),
+          // The worker `cf view` builds its TypeScript program in, which the
+          // compile does not follow either.
+          this.cliProgramWorkerPath(),
           // The build metadata `runtime/cli/lib/build-info.ts` reads.
           this.cliEnvPath(),
         ];
@@ -585,27 +611,32 @@ export function embedArgs(config: BuildConfig, binary: BinaryName): string[] {
  * never reads, which the `cf` binary leaves out: every directory in the
  * package but the one holding its compiled parser, such as generated C source
  * and native builds. The packages are in Deno's npm cache rather than in the
- * repository. `grammars` are the grammars the pager loads.
+ * repository. `grammars` are the grammars the pager loads. Each directory is
+ * listed once, though grammars may share a package.
  */
 export function unusedGrammarDirectories(
   grammars: readonly Pick<TreeSitterGrammar, "id" | "wasmUrl">[] =
     treeSitterGrammars,
 ): string[] {
-  return grammars.flatMap((grammar) => {
-    const parser = path.fromFileUrl(grammar.wasmUrl());
-    let root = path.dirname(parser);
-    while (!existsSync(path.join(root, "package.json"))) {
-      if (path.dirname(root) === root) {
-        throw new Error(`No package holds the ${grammar.id} grammar ${parser}`);
+  return [
+    ...new Set(grammars.flatMap((grammar) => {
+      const parser = path.fromFileUrl(grammar.wasmUrl());
+      let root = path.dirname(parser);
+      while (!existsSync(path.join(root, "package.json"))) {
+        if (path.dirname(root) === root) {
+          throw new Error(
+            `No package holds the ${grammar.id} grammar ${parser}`,
+          );
+        }
+        root = path.dirname(root);
       }
-      root = path.dirname(root);
-    }
-    const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
-    return Array.from(Deno.readDirSync(root))
-      .filter((entry) => entry.isDirectory && entry.name !== kept)
-      .map((entry) => path.join(root, entry.name))
-      .sort();
-  });
+      const kept = path.relative(root, parser).split(path.SEPARATOR)[0];
+      return Array.from(Deno.readDirSync(root))
+        .filter((entry) => entry.isDirectory && entry.name !== kept)
+        .map((entry) => path.join(root, entry.name))
+        .sort();
+    })),
+  ];
 }
 
 /** Returns the dependency-resolution arguments shared by every binary build. */
@@ -793,7 +824,13 @@ export async function runBuildBinaries(
       // to see what it runs (2026-11-14, toolshed 8020 on Estuary). The map
       // grows with each function compiled and is never trimmed; these come
       // off once that investigation is done.
-      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack",
+      //
+      // `--perf-basic-prof-only-functions` also switches on V8's event log,
+      // which V8 otherwise writes to an `isolate-<address>-<pid>-v8.log` file
+      // in the working directory for each isolate. `--no-logfile-per-isolate`
+      // and `--logfile=+` give each isolate's log an unnamed temporary file
+      // instead, which the system frees when that isolate ends.
+      "--v8-flags=--max-old-space-size=16384,--perf-basic-prof-only-functions,--interpreted-frames-native-stack,--no-logfile-per-isolate,--logfile=+",
     ],
     binaries: requestedBinaries(args),
     cachedOnly: Deno.env.get("CF_DENO_DEPENDENCIES_INSTALLED") === "1",
@@ -814,6 +851,4 @@ export async function runBuildBinaries(
 // Only run the build when invoked directly (`deno task build-binaries`), not
 // when imported by tests, which exercise BuildConfig / prepareWorkspace /
 // revertWorkspace against a temporary tree.
-if (import.meta.main) {
-  await runBuildBinaries(Deno.args);
-}
+if (import.meta.main) await runBuildBinaries(Deno.args);

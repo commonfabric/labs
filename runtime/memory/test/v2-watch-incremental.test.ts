@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { ChangeSet } from "@codemirror/state";
 
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   decodeMemoryBoundary,
@@ -13,7 +13,7 @@ import {
   type WatchSpec,
 } from "../v2.ts";
 import { connect, loopback, type Transport } from "../v2/client.ts";
-import { createBranch } from "../v2/engine.ts";
+import { createBranch, serverSeq } from "../v2/engine.ts";
 import {
   CODEMIRROR_CHANGESET_CODEC,
   operationBaselineHash,
@@ -1125,6 +1125,37 @@ describe("Server", () => {
           expect(fixture.state.trackedIds.has(toDirtyKey("of:y"))).toBe(
             false,
           );
+        } finally {
+          await fixture.close();
+        }
+      });
+
+      it("delivers, at the next refresh, a covered root written before the watch covering it was removed", async () => {
+        // The release walks the covered watch to settle what it reaches, not
+        // to deliver versions, so the write is the refresh's to deliver.
+
+        const fixture = await openCoveredFixture();
+        try {
+          await fixture.writer.transact({
+            localSeq: 3,
+            reads: { confirmed: [], pending: [] },
+            operations: [{
+              op: "set",
+              id: "of:a",
+              value: { value: { child: link(fixture.space, "of:x") } },
+            }],
+          });
+          await fixture.reader.watchRemoveSync(["of:a:all"]);
+          await fixture.server.flushSessions();
+          const engine = await fixture.server.engineForSpace(fixture.space);
+          const delivered = [...fixture.state.entities.values()].find((
+            entry,
+          ) => entry.id === "of:a")!;
+          expect(delivered.seq).toBe(serverSeq(engine));
+          expect(ids([...fixture.state.entities.values()])).toEqual([
+            "of:a",
+            "of:x",
+          ]);
         } finally {
           await fixture.close();
         }

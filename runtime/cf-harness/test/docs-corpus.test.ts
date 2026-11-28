@@ -6,7 +6,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   CFC_HARNESS_ATOM_CLASS,
@@ -20,12 +19,19 @@ import {
   loadHarnessDocsCorpus,
   MAX_CORPUS_BYTES,
   MAX_CORPUS_FILE_BYTES,
+  readAtMost,
   resolveHarnessDocsCorpus,
 } from "../src/docs-corpus/corpus.ts";
 import {
   rankSections,
   splitMarkdownSections,
 } from "../src/docs-corpus/sections.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const document = {
   path: "docs/example.md",
@@ -110,6 +116,72 @@ describe("docs-corpus", () => {
       );
 
       expect(rankSections(sections, "how should you use this")).toEqual([]);
+    });
+  });
+
+  describe("readAtMost()", () => {
+    /**
+     * A reader over `text` that hands out at most `chunk` bytes per read,
+     * answers `end` once it has handed out all of them, and reports how many
+     * bytes it has handed out and how many reads it has answered.
+     */
+    const chunkedReader = (
+      text: string,
+      chunk: number,
+      end: null | 0 = null,
+    ) => {
+      const source = new TextEncoder().encode(text);
+      let position = 0;
+      let reads = 0;
+      return {
+        get position() {
+          return position;
+        },
+        get reads() {
+          return reads;
+        },
+        read(into: Uint8Array): Promise<number | null> {
+          reads += 1;
+          if (position === source.length) {
+            return Promise.resolve(end);
+          }
+          const piece = source.subarray(
+            position,
+            position + Math.min(chunk, into.length),
+          );
+          into.set(piece);
+          position += piece.length;
+          return Promise.resolve(piece.length);
+        },
+      };
+    };
+    const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+    it("returns every byte of a reader that ends before the size, as a file that shrank does", async () => {
+      const reader = chunkedReader("Dip once.", 4);
+
+      const bytes = await readAtMost(reader, 20);
+
+      expect(decode(bytes)).toBe("Dip once.");
+      expect(bytes.length).toBe(9);
+    });
+
+    it("returns every byte of a reader that reports its end as zero, reading once past the last byte", async () => {
+      const reader = chunkedReader("Dip once.", 4, 0);
+
+      const bytes = await readAtMost(reader, 20);
+
+      expect(decode(bytes)).toBe("Dip once.");
+      expect(reader.reads).toBe(4);
+    });
+
+    it("returns the first size bytes of a reader holding more, without reading past them", async () => {
+      const reader = chunkedReader("Dip once. Then fire.", 4);
+
+      const bytes = await readAtMost(reader, 9);
+
+      expect(decode(bytes)).toBe("Dip once.");
+      expect(reader.position).toBe(9);
     });
   });
 

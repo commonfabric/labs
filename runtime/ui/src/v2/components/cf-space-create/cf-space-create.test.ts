@@ -1,9 +1,9 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { RuntimeClient } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { CFSpaceCreate } from "./index.ts";
 
 const SPACE = "did:key:z6MkCreatedSpace";

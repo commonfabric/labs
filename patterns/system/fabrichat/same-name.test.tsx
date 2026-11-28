@@ -275,6 +275,9 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
         },
         trustedUi: startGesture,
       },
+      // The people are read once the session asks for them, as opening the
+      // group control's picker does.
+      { action: manager.askForPeople, event: {} },
       // One Ada and Grace: no name is shared, so neither is marked.
       {
         assertion: assert(() =>

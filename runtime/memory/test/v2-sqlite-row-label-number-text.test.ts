@@ -17,7 +17,6 @@
 
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   all,
   constant,
@@ -31,9 +30,15 @@ import {
   whenMatches,
 } from "../v2/sqlite/row-label.ts";
 import { table } from "../v2/sqlite/schema.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const OWNER = "did:key:zOwner";
 const GATED = "did:mailto:seven@example.com";
+// principal() names a reader as the CFC `User{subject}` atom.
+const user = (subject: string) => ({
+  type: "https://commonfabric.org/cfc/atom/User",
+  subject,
+});
 
 /** A rule whose only data-dependent clause is a gate on column `v`. */
 function gateSpec(re: RegExp, sqlType = "integer"): RowLabelSpec {
@@ -204,7 +209,7 @@ describe("row-label numeric regex input", () => {
     });
 
     it("extracts from a zero, which is a value and not an absence", () => {
-      expect(extract(/\d+/, 0)).toEqual({ atoms: ["did:acct:0"] });
+      expect(extract(/\d+/, 0)).toEqual({ atoms: [user("did:acct:0")] });
     });
 
     it("extracts from a number the same text a gate compares", () => {
@@ -222,7 +227,7 @@ describe("row-label numeric regex input", () => {
         { dbOwner: OWNER },
       );
       expect(res).toEqual({
-        confidentiality: ["did:mailbox:7"],
+        confidentiality: [user("did:mailbox:7")],
         integrity: [],
       });
     });

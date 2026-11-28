@@ -6,13 +6,18 @@ import {
   withWaitForConditionTimeout,
 } from "@commonfabric/integration";
 import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   assert,
   assertEquals,
   assertRejects,
   assertStringIncludes,
 } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import {
   armSenderEcho,
   type CfInputProbe,
@@ -28,6 +33,7 @@ import {
   PRESENT_IDS_MAX,
   readCfInputProbe,
   readSenderEchoReport,
+  readTrustedActionProbe,
   submitViaEnter,
   waitForSettledText,
 } from "./cfc-browser-helpers.ts";
@@ -72,6 +78,49 @@ describe("CFC browser helpers", () => {
 
   afterAll(async () => {
     await browser.close();
+  });
+
+  it("records submitted text before the control clears it", async () => {
+    await page.evaluate(() => {
+      document.body.replaceChildren();
+      const host = document.createElement("div");
+      host.dataset.uiAction = "ChatStart";
+      Object.assign(host, { value: "did:key:counterpart" });
+      const root = host.attachShadow({ mode: "open" });
+      const button = document.createElement("button");
+      button.dataset.cfButton = "";
+      button.textContent = "Chat";
+      root.append(button);
+      host.addEventListener("click", () => {
+        Object.assign(host, { value: "" });
+      });
+      document.body.append(host);
+      Object.assign(globalThis, {
+        commonfabric: { viewSettled: () => Promise.resolve() },
+      });
+    });
+    await clickTrustedAction(page, "ChatStart");
+    const probe = await readTrustedActionProbe(page, "ChatStart");
+    expect(probe.lastClick?.trusted).toBe(true);
+    expect(
+      probe.lastClick?.path.find(({ dataset }) =>
+        dataset.uiAction === "ChatStart"
+      )?.value,
+    ).toBe("did:key:counterpart");
+    expect(
+      probe.lastClick?.path.find(({ tagName }) => tagName === "button")?.value,
+    ).toBe("");
+    expect(
+      probe.lastClick?.path.find(({ tagName }) => tagName === "body")?.value,
+    ).toBeUndefined();
+    expect(
+      await page.evaluate(() =>
+        Reflect.get(
+          document.querySelector('[data-ui-action="ChatStart"]')!,
+          "value",
+        )
+      ),
+    ).toBe("");
   });
 
   it("reports the main-thread half when the worker never answers", async () => {

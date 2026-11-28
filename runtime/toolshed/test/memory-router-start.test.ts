@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
@@ -6,9 +5,14 @@ import { fromFileUrl } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { RoutedMemoryHost } from "@commonfabric/memory/v2/routed-host";
 import { Server } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { identity } from "@/lib/identity.ts";
 import { connects } from "@/test/support/connects.ts";
-import { freePort } from "@/test/support/free-port.ts";
 import {
   MemoryRouterPolicy,
   type Repeat,
@@ -24,7 +28,6 @@ describe("MemoryRouterPolicy", () => {
       let space: string;
       let router: string;
       let server: Server;
-      let port: number;
       const configured = (certificate: string): MemoryRouterPolicy => {
         const path = `${root}/config.json`;
         Deno.writeTextFileSync(
@@ -33,7 +36,7 @@ describe("MemoryRouterPolicy", () => {
             version: 1,
             deployment: "test",
             hostname: "127.0.0.1",
-            port,
+            port: 0,
             certificate,
             key: fromFileUrl(new URL("localhost.key", TLS)),
             directory,
@@ -57,7 +60,6 @@ describe("MemoryRouterPolicy", () => {
 
       beforeEach(async () => {
         root = Deno.makeTempDirSync();
-        port = freePort();
         directory = `${root}/directory.json`;
         router = (await Identity.fromRaw(new Uint8Array(32).fill(17))).did();
         space = (await Identity.fromRaw(new Uint8Array(32).fill(18))).did();
@@ -80,9 +82,11 @@ describe("MemoryRouterPolicy", () => {
       it("listens on the configured private address until closed", async () => {
         const listener = await configured(certificate).start(server);
 
-        expect(await connects(port)).toBe(true);
+        expect(listener.port).toBeGreaterThan(0);
+        expect(listener.port).toBeLessThanOrEqual(65535);
+        expect(await connects(listener.port)).toBe(true);
         await listener.close();
-        expect(await connects(port)).toBe(false);
+        expect(await connects(listener.port)).toBe(false);
       });
 
       it("fences the host's contexts only when this toolshed's ownership changes", async () => {
@@ -121,6 +125,99 @@ describe("MemoryRouterPolicy", () => {
           configured(`${root}/missing.crt`).start(server, repeat),
         ).rejects.toThrow(Deno.errors.NotFound);
         expect(scheduled).toBe(false);
+      });
+    });
+
+    describe("listsToolshed()", () => {
+      let root: string;
+      let directory: string;
+      let router: string;
+      let peer: string;
+      let stranger: string;
+      const list = (toolsheds: string[]) =>
+        Deno.writeTextFileSync(
+          directory,
+          JSON.stringify({
+            version: 1,
+            deployment: "test",
+            toolsheds: toolsheds.map((did) => ({ did })),
+            spaces: {},
+          }),
+        );
+      const configured = (): MemoryRouterPolicy => {
+        const path = `${root}/config.json`;
+        Deno.writeTextFileSync(
+          path,
+          JSON.stringify({
+            version: 1,
+            deployment: "test",
+            hostname: "127.0.0.1",
+            port: 8444,
+            certificate: `${root}/public.crt`,
+            key: `${root}/key`,
+            directory,
+            epochLedger: `${root}/epochs`,
+            routers: { [router]: ["127.0.0.1"] },
+          }),
+        );
+        return new MemoryRouterPolicy(path);
+      };
+
+      beforeEach(async () => {
+        root = Deno.makeTempDirSync();
+        directory = `${root}/directory.json`;
+        router = (await Identity.fromRaw(new Uint8Array(32).fill(17))).did();
+        peer = (await Identity.fromRaw(new Uint8Array(32).fill(19))).did();
+        stranger = (await Identity.fromRaw(new Uint8Array(32).fill(20))).did();
+      });
+
+      afterEach(() => {
+        Deno.removeSync(root, { recursive: true });
+      });
+
+      it("returns `true` for each toolshed the directory lists and `false` for any other DID", () => {
+        list([identity.did(), peer]);
+        const policy = configured();
+
+        expect(policy.listsToolshed(identity.did())).toBe(true);
+        expect(policy.listsToolshed(peer)).toBe(true);
+        expect(policy.listsToolshed(stranger)).toBe(false);
+        expect(policy.listsToolshed(router)).toBe(false);
+      });
+
+      it("follows the directory as toolsheds are added and removed", () => {
+        list([identity.did()]);
+        const policy = configured();
+        expect(policy.listsToolshed(peer)).toBe(false);
+
+        list([identity.did(), peer]);
+        expect(policy.listsToolshed(peer)).toBe(true);
+
+        list([identity.did()]);
+        expect(policy.listsToolshed(peer)).toBe(false);
+      });
+
+      it("returns `false` for every DID while the directory lists a router as a toolshed", () => {
+        using _logged = stub(console, "error");
+        list([identity.did(), peer]);
+        const policy = configured();
+
+        list([identity.did(), peer, router]);
+
+        expect(policy.listsToolshed(router)).toBe(false);
+        expect(policy.listsToolshed(peer)).toBe(false);
+        expect(policy.available).toBe(false);
+      });
+
+      it("returns `false` for every DID while the directory cannot be read", () => {
+        using _logged = stub(console, "error");
+        list([identity.did(), peer]);
+        const policy = configured();
+
+        Deno.removeSync(directory);
+
+        expect(policy.listsToolshed(peer)).toBe(false);
+        expect(policy.listsToolshed(identity.did())).toBe(false);
       });
     });
   });

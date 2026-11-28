@@ -1,12 +1,19 @@
 import { assert, assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
 import ts from "typescript";
 
 import { createLiftAppliedCall } from "../../src/transformers/builtins/lift-applied.ts";
 import { CFHelpers } from "../../src/core/cf-helpers.ts";
-import { CrossStageState } from "../../src/core/mod.ts";
-import { callsNamed, parseModule } from "../transformed-ast.ts";
+import { CrossStageState, TransformationContext } from "../../src/core/mod.ts";
+import {
+  calleeName,
+  callsNamed,
+  collect,
+  parseModule,
+} from "../transformed-ast.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
-Deno.test("createLiftAppliedCall keeps fallback refs synced when names collide", () => {
+test("createLiftAppliedCall keeps fallback refs synced when names collide", () => {
   const source = ts.createSourceFile(
     "test.tsx",
     "",
@@ -123,4 +130,110 @@ Deno.test("createLiftAppliedCall keeps fallback refs synced when names collide",
     ts.isIdentifier(callback.body) && callback.body.text === "_v1_1",
     "expected the callback body to return the renamed binding",
   );
+});
+
+describe("createLiftAppliedCall()", () => {
+  /**
+   * Calls `createLiftAppliedCall` on the initializer of `const result` in a
+   * small program, passing the identifiers named by `refNames` as refs, and
+   * returns the printed result. With `parentless`, the initializer comes from
+   * a copy of the source parsed without parent pointers, which the checker
+   * cannot type, and every ref is a synthesized identifier.
+   */
+  function liftOf(
+    refNames: readonly string[],
+    { parentless = false } = {},
+  ): string | undefined {
+    const fileName = "/test.ts";
+    const source = `import { __cfHelpers } from "commonfabric";
+declare const value: number;
+const result = value + 1;
+`;
+    const options: ts.CompilerOptions = {
+      target: ts.ScriptTarget.ESNext,
+      module: ts.ModuleKind.ESNext,
+      strict: true,
+      noLib: true,
+    };
+    const sourceFile = ts.createSourceFile(
+      fileName,
+      source,
+      ts.ScriptTarget.ESNext,
+      true,
+    );
+    const host = ts.createCompilerHost(options, true);
+    host.getSourceFile = (name) => name === fileName ? sourceFile : undefined;
+    host.fileExists = (name) => name === fileName;
+    const program = ts.createProgram([fileName], options, host);
+
+    let printed: string | undefined;
+    const transformer: ts.TransformerFactory<ts.SourceFile> =
+      (tsContext) => (file) => {
+        const context = new TransformationContext({
+          program,
+          sourceFile: file,
+          tsContext,
+          options: { state: new CrossStageState() },
+        });
+        const expressionFile = parentless
+          ? ts.createSourceFile(fileName, source, ts.ScriptTarget.ESNext)
+          : file;
+        const declaration = expressionFile.statements
+          .filter(ts.isVariableStatement)
+          .at(-1)?.declarationList.declarations[0];
+        const expression = declaration?.initializer;
+        if (!expression || !ts.isBinaryExpression(expression)) {
+          throw new Error("Expected `const result = value + 1`");
+        }
+        const refs = refNames.map((name) => {
+          if (!ts.isIdentifier(expression.left)) {
+            throw new Error("Expected an identifier operand");
+          }
+          return !parentless && name === expression.left.text
+            ? expression.left
+            : tsContext.factory.createIdentifier(name);
+        });
+        const call = createLiftAppliedCall(expression, refs, {
+          factory: tsContext.factory,
+          tsContext,
+          cfHelpers: context.cfHelpers,
+          context,
+        });
+        printed = call &&
+          ts.createPrinter().printNode(ts.EmitHint.Unspecified, call, file);
+        return file;
+      };
+    ts.transform(sourceFile, [transformer]).dispose();
+    return printed;
+  }
+
+  it("returns `undefined` for an empty refs array", () => {
+    expect(liftOf([])).toBeUndefined();
+  });
+
+  it("returns a lift applied to an object holding each ref", () => {
+    const printed = liftOf(["value"]);
+    if (printed === undefined) throw new Error("Expected a lift call");
+
+    const root = parseModule(printed);
+    const applied = collect(root, ts.isCallExpression).find((call) =>
+      ts.isCallExpression(call.expression) &&
+      calleeName(call.expression) === "lift"
+    );
+    expect(applied?.arguments.map((arg) => arg.getText(root))).toEqual([
+      "{ value: value }",
+    ]);
+  });
+
+  it("types the result `unknown` when the checker cannot type the expression", () => {
+    const resultTypeOf = (printed: string | undefined) => {
+      if (printed === undefined) throw new Error("Expected a lift call");
+      const root = parseModule(printed);
+      return callsNamed(root, "lift").at(0)?.typeArguments?.[1]?.getText(root);
+    };
+    expect(resultTypeOf(liftOf(["value"]))).toBe("number");
+    expect(resultTypeOf(liftOf(["value"], { parentless: true }))).toBe(
+      "unknown",
+    );
+  });
 });

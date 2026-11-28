@@ -34,6 +34,7 @@ import {
 } from "./contracts/run-manifest.ts";
 import type {
   HarnessAllowedSkillScript,
+  HarnessReviewedSkills,
   HarnessSkillScriptExecutionTarget,
   HarnessSkillsRootRecord,
 } from "./contracts/skill.ts";
@@ -193,9 +194,9 @@ export interface HarnessPatternIndexConfig {
    * Who a published pattern was made for. `"agent"` says the run is a
    * person's own agent making it for them in their loom: each version names
    * that origin and the piece it was deployed to, so the index shares it,
-   * under the person's sharing setting, once they use it in a loom. Absent
-   * (any other run) names no origin, and the index never shares it on its
-   * own.
+   * under the person's sharing setting, once they have used it in a loom for
+   * a day with no newer version. Absent (any other run) names no origin, and
+   * the index never shares it on its own.
    */
   origin?: "agent";
 }
@@ -253,6 +254,14 @@ interface HarnessCommonConfig {
   allowSkillScripts?: boolean;
 
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
+
+  /**
+   * The skill bundles this run accepts as reviewed, with the verifiers it
+   * accepts them from. A child handed an acquired skill that one of them
+   * fully covers keeps its parent's prompt-slot binding instead of running
+   * as `quote` (`skills/reviewed-skills.ts`). Absent, no skill is reviewed.
+   */
+  reviewedSkills?: HarnessReviewedSkills;
   skillScriptExecutionTarget: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
 
@@ -334,6 +343,7 @@ export interface ResolveHarnessConfigOptions {
   docsCorpus?: HarnessDocsCorpusRecord;
   allowSkillScripts?: boolean;
   allowedSkillScripts?: readonly HarnessAllowedSkillScript[];
+  reviewedSkills?: HarnessReviewedSkills;
   skillScriptExecutionTarget?: HarnessSkillScriptExecutionTarget;
   browserAccess?: HarnessBrowserAccessLease;
   handleValueOrigins?: readonly string[];
@@ -805,6 +815,9 @@ export const resolveHarnessConfig = (
     ...(options.allowSkillScripts === true ? { allowSkillScripts: true } : {}),
     ...(options.allowedSkillScripts !== undefined
       ? { allowedSkillScripts: options.allowedSkillScripts }
+      : {}),
+    ...(options.reviewedSkills !== undefined
+      ? { reviewedSkills: options.reviewedSkills }
       : {}),
     skillScriptExecutionTarget: options.skillScriptExecutionTarget ?? "sandbox",
     ...(options.browserAccess !== undefined

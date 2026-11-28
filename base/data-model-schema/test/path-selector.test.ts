@@ -1,11 +1,12 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { JSONSchemaObj, SchemaPathSelector } from "@commonfabric/api";
 
 import { isDeepFrozen } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   DEFAULT_SELECTOR,
+  deleteDeadRefs,
   internPathSelector,
   REJECTING_SELECTOR,
 } from "@/path-selector.ts";
@@ -268,6 +269,37 @@ describe("path-selector", () => {
       expect(Object.isFrozen(dup)).toBe(true);
       expect(Object.isFrozen(dup.path)).toBe(true);
       expect(dup.schema).toBe(canonical.schema);
+    });
+  });
+
+  describe("deleteDeadRefs()", () => {
+    // A ref whose target has been collected, without waiting on the collector.
+    const dead = { deref: () => undefined };
+
+    it("deletes the entries whose refs are dead and keeps the live ones", () => {
+      const target = { held: true };
+      const live = new WeakRef(target);
+      const map = new Map<string, { deref(): unknown }>([
+        ["dead1", dead],
+        ["live", live],
+        ["dead2", dead],
+        ["dead3", dead],
+      ]);
+
+      deleteDeadRefs(map);
+
+      expect([...map.keys()]).toEqual(["live"]);
+      expect(map.get("live")?.deref()).toBe(target);
+    });
+
+    it("leaves a map with no dead refs unchanged", () => {
+      const targets = [{ n: 1 }, { n: 2 }];
+      const map = new Map(targets.map((t) => [`${t.n}`, new WeakRef(t)]));
+
+      deleteDeadRefs(map);
+
+      expect([...map.keys()]).toEqual(["1", "2"]);
+      expect([...map.values()].map((ref) => ref.deref())).toEqual(targets);
     });
   });
 

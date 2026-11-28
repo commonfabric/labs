@@ -8,7 +8,13 @@ import "../cf-chip/index.ts";
 
 import { CFC_POLICY_PLACEHOLDER_TEXT } from "@commonfabric/html/client";
 import type { DID } from "@commonfabric/identity/did";
-import { navigate, openInNewTab } from "@commonfabric/navigation";
+import {
+  navigate,
+  type NavigationCommand,
+  NEW_TAB_RESERVE_AFTER_MS,
+  openInNewTab,
+  openInNewTabWhenReady,
+} from "@commonfabric/navigation";
 import {
   type CellHandle,
   CellRef,
@@ -29,6 +35,16 @@ import { LinkTargetWatch } from "../../core/link-target-watch.ts";
 import { runtimeContext, spaceContext } from "../../runtime-context.ts";
 
 /**
+ * A press on a labelled link: the pointer that began it, what it resolves,
+ * and what it resolved.
+ */
+type LinkPress = {
+  readonly pointerId: number;
+  readonly resolution: Promise<CellHandle | undefined>;
+  target?: CellHandle;
+};
+
+/**
  * CFCellLink - Renders a link or cell as a clickable, draggable pill
  *
  * Every cell link is a drag source by default. Set `static` to suppress
@@ -38,10 +54,20 @@ import { runtimeContext, spaceContext } from "../../runtime-context.ts";
  * link moves to another cell, the pill names and navigates to the new target
  * though `cell` itself is unchanged.
  *
+ * A link given a `label` shows that label and never its target's name, so it
+ * reads nothing of its target while it is only on screen. It resolves where it
+ * points when it is pressed or clicked, or when `resolveTarget()` is called,
+ * and a click navigates to where it points at that moment. Following every
+ * shown link would make a list of N labelled links read N targets for each
+ * viewer, and under server execution a read of a piece's result document
+ * starts that piece for the reader.
+ *
  * @element cf-cell-link
  *
  * @property {string} link - The serialized path to a cell (e.g. /of:fid1:abc.../path)
  * @property {CellHandle} cell - The live Cell reference
+ * @property {string} label - Text shown in place of the target's name; a
+ *   labelled link resolves only when acted on
  * @property {boolean} static - Suppress drag behavior
  *
  * @example
@@ -50,6 +76,20 @@ import { runtimeContext, spaceContext } from "../../runtime-context.ts";
  * <cf-cell-link .cell=${myCell} static></cf-cell-link>
  */
 export class CFCellLink extends BaseElement {
+  /**
+   * How long a labelled link's Cmd- or Ctrl-click waits for its target before
+   * it reserves the new tab (`openInNewTabWhenReady`). A target found sooner
+   * opens while the click still allows a host to open a tab of its own.
+   */
+  static newTabReserveAfterMs = NEW_TAB_RESERVE_AFTER_MS;
+
+  /**
+   * How long a released press is kept for the click that ends it. A touch
+   * screen dispatches that click a while after the release; a press no click
+   * follows is let go after this.
+   */
+  static releasedPressHoldMs = 1000;
+
   static override styles = [
     BaseElement.baseStyles,
     css`
@@ -107,6 +147,63 @@ export class CFCellLink extends BaseElement {
   private _subscribedCell: CellHandle | undefined = undefined;
   private _subscribedCellKey: string | undefined = undefined;
   private _resolveCellGeneration = 0;
+
+  /**
+   * The press in progress on a labelled link: the resolution it started, and
+   * its target once that lands. Only the click that ends the press uses the
+   * resolution, and a drag moves only its target. A press that ends without
+   * a click, cancelled or released elsewhere, leaves nothing for a later one.
+   */
+  private _press: LinkPress | undefined = undefined;
+
+  /**
+   * Whether the link resolves only when acted on: a labelled link shows its
+   * label, never its target's name, so nothing is read while it is shown.
+   */
+  private get _resolvesOnDemand(): boolean {
+    return !!this.label;
+  }
+
+  /**
+   * Resolves where the link points now, records it as the resolved cell, and
+   * returns it: `undefined` when the link names nothing readable, or when the
+   * element's input changes or it is detached before the resolution lands. An
+   * unlabelled link follows its target from the moment it is shown, so this
+   * returns the target it already follows.
+   */
+  resolveTarget(): Promise<CellHandle | undefined> {
+    if (!this._resolvesOnDemand) return Promise.resolve(this._resolvedCell);
+    const generation = this._resolveCellGeneration;
+    const superseded = () =>
+      generation !== this._resolveCellGeneration || !this.isConnected;
+    let source: CellHandle | undefined;
+    try {
+      source = this.cell ?? this._cellForLink();
+    } catch (e) {
+      console.error("Failed to resolve link:", e);
+      return Promise.resolve(undefined);
+    }
+    if (!source) return Promise.resolve(undefined);
+    const resolving = source;
+    // A click navigates to the answer at once, so it waits for the documents
+    // the links pass through rather than take the first one still to arrive.
+    return resolving.resolveAsCell({ loaded: true }).then(
+      (resolved) => {
+        if (superseded()) return undefined;
+        this._setResolvedCell(resolved);
+        return resolved;
+      },
+      (e) => {
+        // A disposal race (logout, runtime swap) cancels the resolve, as it
+        // does for a followed link.
+        if (superseded() || resolving.runtime().signal.aborted) {
+          return undefined;
+        }
+        console.error("Failed to resolve cell:", e);
+        return undefined;
+      },
+    );
+  }
 
   /**
    * Follows the target of a cell holding a link, so that the pill names and
@@ -169,6 +266,8 @@ export class CFCellLink extends BaseElement {
       endDrag();
       this.classList.remove("dragging");
       suppressClickAfterDrag(this);
+      // The press ended in a drag, so no click will use what it resolved.
+      this._press = undefined;
     }
 
     this._isDragging = false;
@@ -182,7 +281,8 @@ export class CFCellLink extends BaseElement {
 
     if (
       changedProperties.has("cell") || changedProperties.has("link") ||
-      changedProperties.has("runtime") || changedProperties.has("space")
+      changedProperties.has("runtime") || changedProperties.has("space") ||
+      changedProperties.has("label")
     ) {
       this._resolveCell();
     }
@@ -210,7 +310,16 @@ export class CFCellLink extends BaseElement {
     const cell = this.cell;
     const link = this.link;
     const runtime = this.runtime;
-    const space = this.space;
+
+    if (this._resolvesOnDemand) {
+      // A labelled link reads nothing until it is acted on; whatever an
+      // earlier input resolved or followed no longer applies.
+      this._press = undefined;
+      this.#linkTarget.cancel();
+      this._prepareSubscriptionTarget(undefined);
+      this._setResolvedCell(undefined);
+      return;
+    }
 
     if (cell) {
       this._prepareSubscriptionTarget(this._cellKey(cell));
@@ -233,14 +342,7 @@ export class CFCellLink extends BaseElement {
 
     if (link && runtime) {
       try {
-        // TODO(runtime-worker-refactor): Making some changes here, but
-        // `this.space` will be Shell's active space, not necessarily the
-        // space for `this.link`.
-        const parsedLink = parseLLMFriendlyLink(link, space);
-        if (!parsedLink.space) {
-          throw new Error("Link missing space.");
-        }
-        const linkedCell = runtime.getCellFromRef(parsedLink as CellRef);
+        const linkedCell = this._cellForLink()!;
         this._prepareSubscriptionTarget(this._cellKey(linkedCell));
         const followed = await this.#linkTarget.follow(linkedCell, superseded);
         if (followed) this._setResolvedCell(followed.cell);
@@ -262,6 +364,26 @@ export class CFCellLink extends BaseElement {
     }
   }
 
+  /**
+   * The cell `link` names, in the space the element is shown in: `undefined`
+   * with no link or no runtime to resolve it in.
+   *
+   * @throws when the link names no space.
+   */
+  private _cellForLink(): CellHandle | undefined {
+    const link = this.link;
+    const runtime = this.runtime;
+    if (!link || !runtime) return undefined;
+    // TODO(runtime-worker-refactor): Making some changes here, but
+    // `this.space` will be Shell's active space, not necessarily the
+    // space for `this.link`.
+    const parsedLink = parseLLMFriendlyLink(link, this.space);
+    if (!parsedLink.space) {
+      throw new Error("Link missing space.");
+    }
+    return runtime.getCellFromRef(parsedLink as CellRef);
+  }
+
   private _updateSubscription() {
     if (!this.isConnected) {
       this._cleanupSubscription();
@@ -280,7 +402,8 @@ export class CFCellLink extends BaseElement {
 
     this._cleanupSubscription();
 
-    if (cell) {
+    // A labelled link never shows its target's name, so it does not ask for it.
+    if (cell && !this._resolvesOnDemand) {
       // Subscribe with a minimal schema that only resolves $NAME.
       // Without this, cells from $cell bindings arrive with schema: {}
       // (stripped from the VDOM prop's asCell wrapper), causing
@@ -358,7 +481,12 @@ export class CFCellLink extends BaseElement {
   }
 
   private _onPointerDown(e: PointerEvent) {
-    if (this.isStatic || !this._resolvedCell) return;
+    // A press is the first sign of intent, so a labelled link starts resolving
+    // here, for the click or the drag that follows.
+    if (this._resolvesOnDemand) this._beginPress(e.pointerId);
+    if (this.isStatic || (!this._resolvedCell && !this._resolvesOnDemand)) {
+      return;
+    }
 
     // Prevent parent cf-drag-source elements from also starting a drag
     e.stopPropagation();
@@ -373,15 +501,52 @@ export class CFCellLink extends BaseElement {
     document.addEventListener("pointercancel", this._boundPointerUp);
   }
 
+  /**
+   * Helper for `_onPointerDown()`, which starts resolving a labelled link's
+   * target for the press that has begun, and lets the press go once it ends.
+   * Only the pointer that began the press, `pointerId`, ends it. A cancelled
+   * press ends no click and is let go at once. A released one is kept for the
+   * click that ends it, which a mouse dispatches right after its `pointerup`
+   * and a touch screen a while later, and is let go after
+   * `releasedPressHoldMs` if no click comes. A later press replaces it.
+   */
+  private _beginPress(pointerId: number) {
+    const press: LinkPress = {
+      pointerId,
+      resolution: this.resolveTarget().then((target) => {
+        if (this._press === press) press.target = target;
+        return target;
+      }),
+    };
+    this._press = press;
+    const end = (event: PointerEvent) => {
+      if (event.pointerId !== pointerId) return;
+      document.removeEventListener("pointerup", end);
+      document.removeEventListener("pointercancel", end);
+      const letGo = () => {
+        if (this._press === press) this._press = undefined;
+      };
+      if (event.type === "pointercancel") letGo();
+      else setTimeout(letGo, CFCellLink.releasedPressHoldMs);
+    };
+    document.addEventListener("pointerup", end);
+    document.addEventListener("pointercancel", end);
+  }
+
   private _onPointerMove(e: PointerEvent) {
     if (!this._isTracking || e.pointerId !== this._pointerId) return;
 
     const dx = e.clientX - this._dragStartX;
     const dy = e.clientY - this._dragStartY;
 
-    if (!this._isDragging && Math.sqrt(dx * dx + dy * dy) > 5) {
+    // A labelled link drags only what this press resolved, which may still be
+    // on its way; the drag starts on the first move after it lands.
+    const target = this._resolvesOnDemand
+      ? this._press?.target
+      : this._resolvedCell;
+    if (!this._isDragging && target && Math.sqrt(dx * dx + dy * dy) > 5) {
       this._isDragging = true;
-      this._beginDrag(e);
+      this._beginDrag(e, target);
     }
 
     if (this._isDragging && this._preview) {
@@ -396,12 +561,11 @@ export class CFCellLink extends BaseElement {
     this._endDrag();
   }
 
-  private _beginDrag(e: PointerEvent) {
-    if (!this._resolvedCell) return;
-
+  /** Starts dragging `target`, the cell the link resolved to. */
+  private _beginDrag(e: PointerEvent, target: CellHandle) {
     this.classList.add("dragging");
 
-    const { preview, cleanup } = createDragPreview(this._resolvedCell);
+    const { preview, cleanup } = createDragPreview(target);
     document.body.appendChild(preview);
 
     preview.style.left = `${e.clientX + 10}px`;
@@ -409,7 +573,7 @@ export class CFCellLink extends BaseElement {
     this._preview = preview;
 
     startDrag({
-      cell: this._resolvedCell,
+      cell: target,
       type: "cell-link",
       sourceElement: this,
       preview,
@@ -421,30 +585,98 @@ export class CFCellLink extends BaseElement {
 
   private _handleClick(e: MouseEvent) {
     e.stopPropagation();
-    const target = this._resolvedCell;
-    if (!target) {
-      // The pill shows its label whether or not the link resolved, so a click
-      // that opens nothing says which link it could not follow.
-      console.warn(
-        "cf-cell-link: the click opens nothing: the link names no cell to open.",
-        this._unfollowedLinkSummary(),
-      );
+    const newTab = e.metaKey || e.ctrlKey;
+    if (this._resolvesOnDemand) {
+      // Only a click the press's own pointer made ends the press. A click the
+      // keyboard makes (no detail, no pointer) resolves on its own, and
+      // leaves a press another pointer holds to the click that ends it.
+      const pointerId = (e as Partial<PointerEvent>).pointerId;
+      const press = this._press !== undefined && e.detail > 0 &&
+          (pointerId === undefined || pointerId === this._press.pointerId)
+        ? this._press
+        : undefined;
+      if (press !== undefined) this._press = undefined;
+      // A target the press this click ends has already resolved opens now,
+      // within the click.
+      if (press?.target !== undefined) {
+        this._open(press.target, newTab);
+        return;
+      }
+      // Otherwise where the link points at the click: what that press is
+      // resolving, or, for a click with no press of its own (the keyboard's,
+      // or one after a press was let go), a resolution now. A press survives
+      // only while the link's input is unchanged, so its resolution started
+      // in the generation the click sees.
+      const generation = this._resolveCellGeneration;
+      const resolving = press?.resolution ?? this.resolveTarget();
+      // A link taken off the page, or whose input changed, before its target
+      // arrived was cancelled, not left unfollowable, so it neither opens nor
+      // warns. A target that did arrive for the link as clicked still opens.
+      const cancelled = (target: CellHandle | undefined) =>
+        !this.isConnected ||
+        (target === undefined && generation !== this._resolveCellGeneration);
+      if (newTab) {
+        // A browser opens a tab only close to the gesture that asked for it.
+        // A target found soon opens as usual; a slow one gets a tab reserved
+        // for it while the gesture still allows one.
+        void openInNewTabWhenReady(
+          resolving.then((target) => {
+            if (cancelled(target)) return undefined;
+            if (!target) this._warnUnfollowed();
+            return target && this._viewOf(target);
+          }),
+          { reserveAfterMs: CFCellLink.newTabReserveAfterMs },
+        );
+        return;
+      }
+      void resolving.then((target) => {
+        if (cancelled(target)) return;
+        this._open(target, false);
+      });
       return;
     }
+    this._open(this._resolvedCell, newTab);
+  }
+
+  /**
+   * Helper for `_handleClick()`, which shows `target` in this tab, or in a new
+   * one when `newTab` is set, and says which link it could not follow when
+   * there is no target.
+   */
+  private _open(target: CellHandle | undefined, newTab: boolean) {
+    if (!target) {
+      this._warnUnfollowed();
+      return;
+    }
+    const view = this._viewOf(target);
+    // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
+    if (newTab) {
+      openInNewTab(view);
+    } else {
+      navigate(view);
+    }
+  }
+
+  /** The view a click on a link that lands on `target` navigates to. */
+  private _viewOf(target: CellHandle): NavigationCommand {
     const { scope, path } = target.ref();
-    const view = {
+    return {
       spaceDid: target.space(),
       pieceId: target.id(),
       ...(scope === "space" ? {} : { pieceScope: scope }),
       ...(path.length === 0 ? {} : { piecePath: [...path] }),
     };
+  }
 
-    // Cmd (Mac) or Ctrl (Windows/Linux) opens in new tab
-    if (e.metaKey || e.ctrlKey) {
-      openInNewTab(view);
-    } else {
-      navigate(view);
-    }
+  /**
+   * Says which link a click could not follow. The pill shows its label
+   * whether or not the link resolved, so a click that opens nothing says so.
+   */
+  private _warnUnfollowed() {
+    console.warn(
+      "cf-cell-link: the click opens nothing: the link names no cell to open.",
+      this._unfollowedLinkSummary(),
+    );
   }
 
   /**

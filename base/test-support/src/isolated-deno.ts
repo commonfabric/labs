@@ -1,11 +1,19 @@
 import { join } from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
+import { RECORDS_DIR_VARIABLE } from "./records/paths.ts";
+import { SKIP_LIST_VARIABLE } from "./records/skip-list.ts";
 
 export interface DenoCommandWithTemporaryLockOptions {
   root: string;
   cwd?: string;
   args: (lockPath: string) => string[];
   env?: Record<string, string>;
+
+  /**
+   * Whether the child's environment holds only `env` and the run-record
+   * variables set for it, rather than this process's environment as well.
+   */
+  clearEnv?: boolean;
 
   /**
    * Where the child's stderr goes. `"piped"`, the default, collects it into
@@ -60,7 +68,15 @@ export async function readDenoConfig(
   return parseJsonc(await Deno.readTextFile(path)) as Record<string, any>;
 }
 
-async function removeIfPresent(path: string, options?: Deno.RemoveOptions) {
+/**
+ * Removes `path`, as `Deno.remove()` does given `options`, and returns
+ * quietly when it is already absent. Throws when it is present and cannot be
+ * removed.
+ */
+export async function removeIfPresent(
+  path: string,
+  options?: Deno.RemoveOptions,
+): Promise<void> {
   try {
     await Deno.remove(path, options);
   } catch (error) {
@@ -88,16 +104,21 @@ export async function runDenoCommandWithTemporaryLock(
 
   try {
     await Deno.copyFile(join(options.root, "deno.lock"), tempLock);
-    const commandOptions: Deno.CommandOptions = {
+    return await new Deno.Command(Deno.execPath(), {
       cwd: options.cwd ?? options.root,
       args: options.args(tempLock),
       stdout: "piped",
       stderr: options.stderr ?? "piped",
-    };
-    if (options.env) {
-      commandOptions.env = options.env;
-    }
-    return await new Deno.Command(Deno.execPath(), commandOptions).output();
+      clearEnv: options.clearEnv ?? false,
+      // The child's tests are the caller's fixtures, so they record nothing
+      // into the caller's run and skip nothing its skip list names, unless
+      // the caller names those variables itself.
+      env: {
+        [RECORDS_DIR_VARIABLE]: "",
+        [SKIP_LIST_VARIABLE]: "",
+        ...options.env,
+      },
+    }).output();
   } finally {
     await removeIfPresent(tempDir, { recursive: true });
   }

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import {
@@ -7,6 +6,13 @@ import {
   decodeTrustedMemoryBoundary,
 } from "@commonfabric/memory/v2";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import { namesInstancesByDefault } from "../src/builder/instance-name.ts";
 import {
@@ -19,6 +25,13 @@ import {
   RemoteSessionFactory,
 } from "../src/storage/v2-remote-session.ts";
 import { drivableSockets } from "./storage/drivable-web-socket.ts";
+
+// This file runs on the real clock because it uses real WebSockets.
+// Auto-advance treats I/O in flight as idle time and can jump to the next lease
+// renewal, 58 minutes away, which can expire a challenge or an authenticated
+// principal before the request reaches the server. The tests wait on socket
+// events and round trips.
+useRealClock();
 
 const SPACES = [
   "did:key:z6Mk-shared-connection-one",
@@ -233,11 +246,14 @@ describe("RemoteSessionFactory connection sharing", () => {
     it("dials one socket for a host that does not advertise `connectionAuth`", async () => {
       const server = startServer({ connectionAuth: false });
       const { factory, dialed } = harnessFor(server, { shared: true });
-      await Promise.all(SPACES.map((space) => factory.create(space)));
+      const opened = await Promise.all(
+        SPACES.map((space) => factory.create(space)),
+      );
       expect(dialed).toHaveLength(1);
       for (const space of SPACES) {
         expect(principalsIn(server, space)).toEqual([user.did()]);
       }
+      expect(opened[0].client.serverFlags?.connectionAuth).toBe(false);
     });
 
     it("opens sessions as two signers on the one socket", async () => {
@@ -284,6 +300,24 @@ describe("RemoteSessionFactory connection sharing", () => {
 
       await factory.create(SPACES[2]);
       expect(dialed).toHaveLength(1);
+    });
+
+    it("reports the shared connection's state to each session on it", async () => {
+      const server = startServer({ connectionAuth: true });
+      const { factory } = harnessFor(server, { shared: true });
+      const closing = await factory.create(SPACES[0]);
+      const staying = await factory.create(SPACES[1]);
+      expect(closing.client.connectionState).toBe("connected");
+      expect(staying.client.connectionState).toBe("connected");
+      expect(staying.client.serverFlags?.connectionAuth).toBe(true);
+
+      // Ending one session leaves the connection up for the other.
+      await closing.client.close();
+      expect(staying.client.connectionState).toBe("connected");
+
+      // Closing the factory closes the connection under every session.
+      await factory.close();
+      expect(staying.client.connectionState).toBe("closed");
     });
 
     it("closes while a dial is still opening, and refuses a create whose signal aborts meanwhile", async () => {

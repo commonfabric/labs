@@ -1,6 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import { getLogger } from "@commonfabric/logger";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { NormalizedFullLink } from "../../src/link-utils.ts";
 import type { EnsurePieceVerdict } from "../../src/ensure-piece-running.ts";
 import { EventDroppedError } from "../../src/scheduler/backpressure.ts";
@@ -309,6 +316,35 @@ describe("events", () => {
       const timings = capture.messagesOf("action-timing");
       expect(timings.length).toBe(1);
       expect(String(timings[0][0])).toMatch(/^Action .* completed in /);
+    });
+
+    // The handler spends `ms` of logical time by awaiting the package's fake
+    // clock, so the run's measured duration is exactly `ms` on every machine.
+    async function warningsForHandlerTaking(ms: number): Promise<string[]> {
+      const ref = streamLink(`events-handler-taking-${ms}`);
+      let ran = 0;
+      env.runtime.scheduler.addEventHandler(async () => {
+        await clock.tick(ms);
+        ran++;
+      }, ref);
+      const warnings: string[] = [];
+      using _warn = stub(console, "warn", (...args: unknown[]) => {
+        warnings.push(String(args[0]));
+      });
+      env.runtime.scheduler.queueEvent(ref, 1);
+      await env.runtime.idle();
+      expect(ran).toBe(1);
+      return warnings.filter((warning) => warning.startsWith("Slow action"));
+    }
+
+    it("warns about a handler that runs longer than ten seconds", async () => {
+      expect(await warningsForHandlerTaking(10_500)).toEqual([
+        "Slow action: 10.500s",
+      ]);
+    });
+
+    it("does not warn about a handler that runs for ten seconds", async () => {
+      expect(await warningsForHandlerTaking(10_000)).toEqual([]);
     });
 
     it("logs an error thrown by the event's commit callback and still runs the handler's commit", async () => {

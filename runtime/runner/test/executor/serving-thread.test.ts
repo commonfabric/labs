@@ -1,15 +1,28 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
+import {
+  newRunBeaconBuffer,
+  readRunBeacon,
+} from "../../src/executor/run-beacon.ts";
 import {
   MIN_SERVING_THREAD_HEAP_LIMIT_MB,
   type ServingThread,
   type ServingThreadFailure,
   startServingThread,
 } from "../../src/executor/serving-thread.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const ECHO = new URL("../fixtures/serving-thread-echo.ts", import.meta.url);
 const HOG = new URL("../fixtures/serving-thread-hog.ts", import.meta.url);
+const BEACON = new URL(
+  "../fixtures/serving-thread-beacon.ts",
+  import.meta.url,
+);
 const GROWS = new URL(
   "../fixtures/serving-thread-that-grows.ts",
   import.meta.url,
@@ -69,6 +82,52 @@ describe("startServingThread()", () => {
       thread.port.postMessage({ n: 1 });
 
       expect(await answer).toEqual({ echo: { n: 1 } });
+    });
+
+    it(`registers a listener once however often it is added, and removes only listeners it holds ${kind}`, async () => {
+      const thread = start(ECHO, heapLimitMb);
+      expect(await nextMessage(thread)).toBe("listening");
+      const heard: unknown[] = [];
+      const listener = (event: MessageEvent) => heard.push(event.data);
+      thread.port.addEventListener("message", listener);
+      thread.port.addEventListener("message", listener);
+
+      // Listeners hear a message in the order they were added, so `heard`
+      // holds what `listener` heard of a message once `nextMessage` has it.
+      const first = nextMessage(thread);
+      thread.port.postMessage(1);
+      expect(await first).toEqual({ echo: 1 });
+      expect(heard).toEqual([{ echo: 1 }]);
+
+      thread.port.removeEventListener("message", () => {});
+      const second = nextMessage(thread);
+      thread.port.postMessage(2);
+      expect(await second).toEqual({ echo: 2 });
+      expect(heard).toEqual([{ echo: 1 }, { echo: 2 }]);
+
+      thread.port.removeEventListener("message", listener);
+      const third = nextMessage(thread);
+      thread.port.postMessage(3);
+      expect(await third).toEqual({ echo: 3 });
+      expect(heard).toEqual([{ echo: 1 }, { echo: 2 }]);
+    });
+
+    it(`shares a run beacon with the thread, and takes the post a run makes before its body holds the thread, while it does ${kind}`, async () => {
+      const thread = start(BEACON, heapLimitMb);
+      expect(await nextMessage(thread)).toBe("listening");
+      const beacon = newRunBeaconBuffer();
+      const gate = new Int32Array(new SharedArrayBuffer(4));
+
+      const named = nextMessage(thread);
+      thread.port.postMessage({ beacon, gate: gate.buffer });
+      expect(await named).toMatchObject({ run: 1, action: "held" });
+      expect(readRunBeacon(beacon)).toEqual({ epoch: 1, run: 1, reads: 0 });
+
+      const released = nextMessage(thread);
+      Atomics.store(gate, 0, 1);
+      Atomics.notify(gate, 0);
+      expect(await released).toBe("released");
+      expect(readRunBeacon(beacon)).toBeUndefined();
     });
 
     it(`reports no failure for a thread terminate() ends ${kind}`, async () => {

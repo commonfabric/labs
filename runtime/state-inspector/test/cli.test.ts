@@ -14,7 +14,9 @@ import {
   operationBaselineHash,
 } from "@commonfabric/memory/v2/operation-codec";
 import { toValuePath } from "@commonfabric/memory/v2";
-import { toFileUrl } from "@std/path";
+import { test } from "@commonfabric/test-support/test";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import { main } from "../cli.ts";
 
@@ -94,7 +96,7 @@ function run(argv: string[]): { code: number; out: string; err: string } {
   return { code, out: out.join("\n"), err: err.join("\n") };
 }
 
-Deno.test("cli: single-space commands dispatch over a seeded DB", async (t) => {
+test("cli: single-space commands dispatch over a seeded DB", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-cli-" });
   const db = `${dir}/space.sqlite`;
   try {
@@ -877,4 +879,34 @@ Deno.test("cli: single-space commands dispatch over a seeded DB", async (t) => {
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
+});
+
+test("cli: as a program, exits with the status main returns", async () => {
+  // The entry point runs only as a program, so this spawns it, once: a
+  // spawned Deno is slow to start. An unknown command is refused before any
+  // database is opened, with a non-zero status that the exit must carry.
+  const root = fromFileUrl(new URL("../../..", import.meta.url));
+  const output = await runDenoCommandWithTemporaryLock({
+    root,
+    args: (lock) => [
+      "run",
+      "--allow-read",
+      "--allow-ffi",
+      "--allow-env",
+      "--allow-net",
+      `--lock=${lock}`,
+      "--frozen",
+      "--cached-only",
+      join(root, "runtime/state-inspector/cli.ts"),
+      "no-such-command",
+    ],
+  });
+  const decoder = new TextDecoder();
+  expect(output.code).toBe(1);
+  expect(decoder.decode(output.stderr)).toContain(
+    "unknown command: no-such-command",
+  );
+  expect(decoder.decode(output.stdout)).toContain(
+    "cf state-inspector (prototype)",
+  );
 });

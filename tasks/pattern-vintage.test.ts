@@ -1,9 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs/exists";
 import { Identity } from "@commonfabric/identity";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import {
   collectVintages,
+  relativeToRepo,
   reportCaptureRefusedOnRed,
   reportDropsApplied,
   reportEmptyReplay,
@@ -16,6 +22,8 @@ import {
 import type { GateRoots } from "./pattern-vintage-run.ts";
 import type { AcceptedStateDrop } from "./pattern-vintage-accepted-drops.ts";
 import { runPatternVintage } from "./pattern-vintage.ts";
+import { REPO_ROOT } from "./pattern-files.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 const signer = await Identity.fromPassphrase("pattern vintage shell test");
 
@@ -122,8 +130,10 @@ const drop = (
 describe("pattern-vintage", () => {
   let dir = "";
   let roots: GateRoots;
+  let progress: string[] = [];
 
   beforeEach(async () => {
+    progress = [];
     dir = await Deno.makeTempDir({ prefix: "vintage-shell-" });
     await Deno.mkdir(`${dir}/patterns`, { recursive: true });
     roots = {
@@ -140,7 +150,10 @@ describe("pattern-vintage", () => {
     await Deno.remove(dir, { recursive: true });
   });
 
-  /** Run the shell over the temporary tree, requiring only the subject. */
+  /**
+   * Run the shell over the temporary tree, requiring only the subject, and
+   * collect its progress lines into `progress`.
+   */
   const run = (
     args: readonly string[],
     acceptedDrops: readonly AcceptedStateDrop[] = [],
@@ -149,7 +162,12 @@ describe("pattern-vintage", () => {
       roots,
       systemPatternUrls: [SUBJECT_URL],
       acceptedDrops,
+      progress: (line) => progress.push(line),
     });
+
+  /** The progress lines that announce a capture. */
+  const captureLines = () =>
+    progress.filter((line) => line.startsWith("capture "));
 
   describe("runPatternVintage()", () => {
     describe("a run refused before any replay", () => {
@@ -194,7 +212,9 @@ describe("pattern-vintage", () => {
 
     describe("`--update`", () => {
       it("captures a vintage for the named test, then reports it already pinned", async () => {
-        const captured = await run(["--update", TEST_KEY]);
+        const captured = await run(["--update", TEST_KEY, TEST_KEY]);
+
+        expect(progress).toEqual([`capture 1/1: ${TEST_KEY}`]);
 
         expect(captured.err).toBeUndefined();
         expect(captured.code).toBe(0);
@@ -204,16 +224,19 @@ describe("pattern-vintage", () => {
           `  + ${vintage.path.slice(dir.length + 1)}`,
         );
 
+        progress = [];
         expect(await run(["--update", TEST_KEY])).toEqual({
           out: `Already pinned: ${TEST_KEY}.`,
           code: 0,
         });
+        expect(progress).toEqual([]);
       });
 
       it("fails, naming the problem, when the named test does not pass", async () => {
         await Deno.writeTextFile(`${dir}/patterns/${TEST_KEY}`, FAILING_TEST);
         const shown = await run(["--update", TEST_KEY]);
 
+        expect(progress).toEqual([`capture 1/1: ${TEST_KEY}`]);
         expect(shown.code).toBe(1);
         expect(shown.out).toBeUndefined();
         expect(shown.err).toMatch(/^\n1 vintage\(s\) could not be captured:\n/);
@@ -229,6 +252,26 @@ describe("pattern-vintage", () => {
         expect(shown.err).toBeUndefined();
         expect(shown.code).toBe(0);
         expect(shown.out).toMatch(/^Replayed 1 vintage\(s\): /);
+      });
+
+      it("hands the caller a line as its fixture and each target begins", async () => {
+        await run(["--update", TEST_KEY]);
+        const [vintage] = await collectVintages(roots.vintagesRoot);
+        progress = [];
+
+        expect((await run([])).code).toBe(0);
+
+        expect(progress[0]).toBe(
+          `fixture 1/1: ${relativeToRepo(vintage.path, dir)}`,
+        );
+        expect(progress.slice(1)).not.toEqual([]);
+        expect(progress.slice(1)).toEqual(
+          progress.slice(1).map((_, index) =>
+            expect.stringMatching(
+              new RegExp(`^  target ${index + 1}/${progress.length - 1}: `),
+            )
+          ),
+        );
       });
 
       it("fails, naming the uncovered pattern, when nothing was replayed", async () => {
@@ -301,12 +344,15 @@ describe("pattern-vintage", () => {
     describe("`--capture-changed` and `--pin`", () => {
       it("captures nothing when every generation is current", async () => {
         await run(["--update", TEST_KEY]);
+        progress = [];
         const shown = await run(["--capture-changed"]);
 
         expect(shown).toEqual({
           out: reportEveryGenerationCurrent(1),
           code: 0,
         });
+        expect(progress[0]).toMatch(/^fixture 1\/1: /);
+        expect(captureLines()).toEqual([]);
         expect(await collectVintages(roots.vintagesRoot)).toHaveLength(1);
       });
 
@@ -324,7 +370,9 @@ describe("pattern-vintage", () => {
       const captureGeneration = async () => {
         await run(["--update", TEST_KEY]);
         await Deno.writeTextFile(`${dir}/patterns/${KEY}`, GROWN);
+        progress = [];
         const captured = await run(["--capture-changed"]);
+        expect(captureLines()).toEqual([`capture 1/1: ${TEST_KEY}`]);
         expect(captured.err).toBeUndefined();
         expect(captured.code).toBe(0);
         const auto = (await collectVintages(roots.vintagesRoot))
@@ -374,5 +422,45 @@ describe("pattern-vintage", () => {
         );
       });
     });
+  });
+});
+
+describe("the pattern-vintage command", () => {
+  /** Run the task as `deno task pattern-vintage` does, over this checkout. */
+  const runTask = async (args: readonly string[]) => {
+    const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+      root: REPO_ROOT,
+      args: (lock) => [
+        "run",
+        "-A",
+        "--lock",
+        lock,
+        `${REPO_ROOT}/tasks/pattern-vintage.ts`,
+        ...args,
+      ],
+    });
+    const decoder = new TextDecoder();
+    return {
+      code,
+      out: decoder.decode(stdout),
+      err: decoder.decode(stderr),
+    };
+  };
+
+  it("prints a refusal to standard error and exits 1", async () => {
+    expect(await runTask(["--frobnicate"])).toEqual({
+      code: 1,
+      out: "",
+      err: `${reportUnknownFlags(["--frobnicate"])}\n`,
+    });
+  });
+
+  it("prints each step to standard error as it begins", async () => {
+    const key = "no-such-vintage-subject.test.tsx";
+    const { code, err } = await runTask(["--update", key]);
+
+    expect(code).toBe(1);
+    expect(err).toMatch(new RegExp(`^capture 1/1: ${key}\n`));
+    expect(err).toContain("\n1 vintage(s) could not be captured:\n");
   });
 });

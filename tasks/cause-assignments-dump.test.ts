@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
 import {
   buildAssignment,
@@ -10,6 +10,12 @@ import {
   runDump,
 } from "./cause-assignments-dump.ts";
 import { movedCells } from "./cause-assignments-lib.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 // Each child pattern sits in a module of its own, which every parent below
 // imports unchanged, so that a child is known by one pattern identity in
@@ -230,14 +236,14 @@ describe("cause-assignments-dump", () => {
         ROOT,
         "--out",
         out,
-        "patterns/examples/clock/clock.tsx",
+        "patterns/examples/clock/main.tsx",
         "patterns/system/social-space/short-did.ts",
         "patterns/examples/no-such-pattern.tsx",
       ]);
 
       const dumped: DumpOutput = JSON.parse(await Deno.readTextFile(out));
       expect(dumped.assignments.map(({ pattern }) => pattern)).toEqual([
-        "examples/clock/clock.tsx",
+        "examples/clock/main.tsx",
       ]);
       expect(dumped.assignments[0].levels.length).toBeGreaterThan(0);
       expect(dumped.unassigned).toEqual([{
@@ -255,10 +261,46 @@ describe("cause-assignments-dump", () => {
         runDump([
           "--out",
           join(scratch, "dump.json"),
-          "patterns/examples/clock/clock.tsx",
+          "patterns/examples/clock/main.tsx",
         ]),
       ).rejects.toThrow("usage: cause-assignments-dump.ts --root <dir>");
       expect([...Deno.readDirSync(scratch)]).toEqual([]);
+    });
+
+    it("runs as a program, dumping the files its command line names", async () => {
+      const out = join(scratch, "dump.json");
+
+      const { code, stderr } = await runDenoCommandWithTemporaryLock({
+        root: ROOT,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(ROOT, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "-A",
+          join(ROOT, "tasks/cause-assignments-dump.ts"),
+          "--root",
+          ROOT,
+          "--out",
+          out,
+          "patterns/system/social-space/short-did.ts",
+          "patterns/examples/no-such-pattern.tsx",
+        ],
+        env: { LOG_LEVEL: "error" },
+      });
+
+      expect(code, new TextDecoder().decode(stderr)).toBe(0);
+      const dumped: DumpOutput = JSON.parse(await Deno.readTextFile(out));
+      expect(dumped.assignments).toEqual([]);
+      expect(dumped.unassigned).toEqual([{
+        pattern: "system/social-space/short-did.ts",
+        source: expect.stringMatching(/^[0-9a-f]{64}$/),
+      }]);
+      expect(dumped.errors).toEqual([{
+        pattern: "examples/no-such-pattern.tsx",
+        error: expect.any(String),
+      }]);
     });
   });
 });

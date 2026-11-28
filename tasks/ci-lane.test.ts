@@ -1,16 +1,18 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { dirname, fromFileUrl } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
 import {
-  NAME_MAP_PREFIX,
-  NAME_MAP_SUFFIX,
+  type RegisteredLine,
+  type ResultLine,
+  RESULTS_PREFIX,
+  RESULTS_SUFFIX,
   type TestIdentity,
   testIdentityKey,
   type TestRecord,
 } from "@commonfabric/test-support/records";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { maxOf } from "@commonfabric/collections/math";
 import {
   type Capability,
@@ -95,11 +97,10 @@ import {
 } from "./test-selection/census.ts";
 import type { CoverageGateSelection } from "./test-selection/coverage.ts";
 import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
-import {
-  type CommandContext,
-  denoTestCommand,
-  type Suite,
-  type UnitRequest,
+import type {
+  CommandContext,
+  Suite,
+  UnitRequest,
 } from "./test-topology/suite.ts";
 import {
   plan,
@@ -133,6 +134,28 @@ import { duration } from "./test-selection/duration.ts";
  * directory, and the paths the topology reads are the repository's.
  */
 const REPOSITORY = dirname(dirname(fromFileUrl(import.meta.url)));
+
+/**
+ * A command that writes `lines` into the spool it is handed as one test
+ * file's results, as a test process does, and then exits with `code`.
+ */
+function writingResults(
+  lines: readonly (RegisteredLine | ResultLine)[],
+  code = 0,
+): string[] {
+  const text = lines.map((line) => JSON.stringify(line) + "\n").join("");
+  return [
+    Deno.execPath(),
+    "eval",
+    `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
+     Deno.mkdirSync(dir, { recursive: true });
+     Deno.writeTextFileSync(
+       \`\${dir}/${RESULTS_PREFIX}\${crypto.randomUUID()}${RESULTS_SUFFIX}\`,
+       ${JSON.stringify(text)},
+     );
+     Deno.exit(${code});`,
+  ];
+}
 
 /** How many lanes `runLanes` counts for a run. */
 async function lanesOf(options: LaneOptions, deps: LaneDeps): Promise<number> {
@@ -535,7 +558,7 @@ describe("turning a lane's selections into batches", () => {
 
   it("keeps the describes around a chosen test off the skip list", () => {
     // A describe that failed as a whole is recorded under its title. The
-    // preload ignores the outermost describe by that title, which would
+    // test module skips the outermost describe by that title, which would
     // ignore every test inside it, the chosen ones included.
     const manifest = manifestOf([
       { test: { k: "unit", s: "bakery", n: "glaze" }, cost: 1 },
@@ -1130,6 +1153,27 @@ describe("how many lanes a run asks for", () => {
     expect(await lanesOf(options, deps)).toBe(4);
   });
 
+  it("splits a full run past forty lanes without overfilling them", async () => {
+    const deps = corpus(120, FULL_LANE_BUDGET_SECONDS * 0.45);
+    const full = await saying(deps);
+    expect(full.lanes).toBe(60);
+    expect(full.said).not.toContain("needs more than");
+    const { laid } = await lanePlan(
+      { ...options, of: full.lanes },
+      await deps.topology(),
+      deps,
+    );
+    const placed = laid.lanes.flatMap((lane) =>
+      lane.selections.map((selection) => testIdentityKey(selection.entry.test))
+    );
+    expect(placed.length).toBe(120);
+    expect(new Set(placed).size).toBe(120);
+    expect(laid.overBudgetSeconds).toBe(0);
+    const selected = await saying(deps, { ...options, full: false });
+    expect(selected.lanes).toBe(1);
+    expect(selected.said).not.toContain("needs more than");
+  });
+
   /**
    * What `lanesOf` answers for the full run, or for `run`, and what it said
    * on the error stream.
@@ -1302,6 +1346,28 @@ describe("how many lanes a run asks for", () => {
     }
     expect(lanes).toBe(2);
     expect(errors.join("\n")).toContain("measured");
+  });
+
+  it("allocates fallback lanes for test work rather than coverage verdicts", async () => {
+    const suites = [
+      suite({ id: "workspace-unit", units: ["a.test.ts"] }),
+      suite({
+        id: "coverage-gates",
+        units: ["bakery"],
+        judges: new Map([["bakery", {
+          suite: "workspace-unit",
+          units: ["a.test.ts"],
+          identity: { k: "gate", s: "bakery", n: "coverage" },
+        }]]),
+      }),
+    ];
+    const { lanes, said } = await saying({
+      topology: () => Promise.resolve(suites),
+      manifest: () =>
+        Promise.resolve({ absent: "the store holds no manifest" }),
+    });
+    expect(lanes).toBe(1);
+    expect(said).toContain("1 suites with anything to run");
   });
 
   it("grows the fallback with the units, not only with the suites", async () => {
@@ -1800,16 +1866,18 @@ describe("running a lane's work", () => {
 
     const workDir = await Deno.makeTempDir({ prefix: "lane-repeats-" });
     const file = "runtime/bakery/glaze.test.ts";
-    const registered = Object.fromEntries(
-      [
-        "glaze",
-        "glaze > sets",
-        "glaze > browns",
-        "glaze > cools",
-        "proof",
-        "proof > rises",
-      ].map((name) => [name, file]),
-    );
+    const registered: RegisteredLine = {
+      line: "registered",
+      file,
+      names: [
+        ["glaze"],
+        ["glaze", "sets"],
+        ["glaze", "browns"],
+        ["glaze", "cools"],
+        ["proof"],
+        ["proof", "rises"],
+      ],
+    };
     const handed: (readonly string[])[] = [];
     const bakery = suite({
       id: "workspace-unit",
@@ -1817,15 +1885,7 @@ describe("running a lane's work", () => {
       command: (units, context) => {
         for (const unit of units) handed.push(unit.skip);
         return Promise.resolve([{
-          command: [
-            Deno.execPath(),
-            "eval",
-            `const dir = Deno.env.get("CF_TEST_RECORDS_DIR");
-             Deno.writeTextFileSync(
-               \`\${dir}/names-\${crypto.randomUUID()}.json\`,
-               ${JSON.stringify(JSON.stringify({ names: registered }))},
-             );`,
-          ],
+          command: writingResults([registered]),
           cwd: context.root,
         }]);
       },
@@ -1886,23 +1946,21 @@ describe("running a lane's work", () => {
       }).spawn();
     const waited = stop.wait(hanging());
     stop.receive("SIGTERM");
-    const first = await waited;
-    expect(first.status.signal).toBe("SIGTERM");
-    expect(first.interrupted).toBe(true);
+    expect((await waited).signal).toBe("SIGTERM");
     expect(stop.signal).toBe("SIGTERM");
     // A command started once the lane was told to stop is sent the
     // signal the lane was sent, and a later signal changes nothing.
     stop.receive("SIGINT");
-    expect((await stop.wait(hanging())).status.signal).toBe("SIGTERM");
+    expect((await stop.wait(hanging())).signal).toBe("SIGTERM");
     expect(stop.signal).toBe("SIGTERM");
-    // A command that has exited already has nothing left to stop, and
-    // was not interrupted.
+    // A command that has exited already has nothing left to stop.
     const exited = new Deno.Command(Deno.execPath(), { args: ["eval", "0"] })
       .spawn();
     await exited.status;
     expect(await stop.wait(exited)).toEqual({
-      status: { success: true, code: 0, signal: null },
-      interrupted: false,
+      success: true,
+      code: 0,
+      signal: null,
     });
   });
 
@@ -1936,30 +1994,33 @@ describe("running a lane's work", () => {
   });
 
   it("keeps what a stopped execution recorded, and starts nothing after it", async () => {
-    // A lane that reaches its step's bound is sent SIGINT. The test
-    // runner it passes that on to writes its report before it exits, so
-    // what it finished is kept, and the test it was in the middle of
-    // neither passed nor failed.
+    // A lane that reaches its step's bound is sent SIGINT and passes it on.
+    // The results a test process wrote before then are kept, the test it
+    // was in the middle of wrote none, and the invocation after it never
+    // starts.
     const workDir = await Deno.makeTempDir({ prefix: "lane-stop-" });
-    // The hanging test connects here once it is under way.
+    // The hanging process connects here once its first test has finished.
     const started = Deno.listen({
       transport: "unix",
       path: `${workDir}/started`,
     });
     const after = `${workDir}/after`;
-    const fixture = `${workDir}/hang.test.ts`;
-    await Deno.writeTextFile(
-      fixture,
-      `Deno.test("probe", async (t) => {
-        await t.step("passes", () => {});
-        await t.step("hangs", async () => {
-          await Deno.connect({
-            transport: "unix",
-            path: ${JSON.stringify(`${workDir}/started`)},
-          });
-          await new Promise(() => setInterval(() => {}, 1000));
-        });
-      });`,
+    const [execPath, evalWord, writing] = writingResults([
+      {
+        line: "result",
+        file: "hang.test.ts",
+        name: ["probe", "passes"],
+        outcome: "pass",
+        durationMs: 1,
+      },
+    ]);
+    const hanging = writing!.replace(
+      /Deno\.exit\(0\);$/,
+      `await Deno.connect({
+         transport: "unix",
+         path: ${JSON.stringify(`${workDir}/started`)},
+       });
+       await new Promise(() => setInterval(() => {}, 1000));`,
     );
     const stop = new LaneStop();
     const result = runBatch(
@@ -1969,24 +2030,11 @@ describe("running a lane's work", () => {
           recordSurfaces: [{ kind: "unit", scope: "probe" }],
           units: ["hang.test.ts"],
           locate: () => ({ level: "unit", unit: "hang.test.ts" }),
-          command: (_units, context) =>
+          command: () =>
             Promise.resolve([{
-              command: [
-                Deno.execPath(),
-                "test",
-                "--no-config",
-                "--no-lock",
-                "--no-check",
-                "--allow-all",
-                `--junit-path=${context.outputDir}/report.xml`,
-                fixture,
-              ],
+              command: [execPath!, evalWord!, hanging],
               cwd: workDir,
-              junit: [{
-                path: `${context.outputDir}/report.xml`,
-                kind: "unit",
-                scope: "probe",
-              }],
+              results: { kind: "unit", scope: "probe" },
             }, {
               command: [
                 Deno.execPath(),
@@ -2011,12 +2059,8 @@ describe("running a lane's work", () => {
     stop.receive("SIGINT");
     const { ok, records } = await result;
     expect(ok).toBe(false);
-    expect(
-      records.map((record) => [record.test.n, record.outcome]).sort(),
-    ).toEqual([
-      ["probe > hangs", "skip"],
+    expect(records.map((record) => [record.test.n, record.outcome])).toEqual([
       ["probe > passes", "pass"],
-      ["probe", "skip"],
     ]);
     expect(await exists(after)).toBe(false);
     connection.close();
@@ -4158,34 +4202,33 @@ describe("the lane's own housekeeping", () => {
   const unit = "runtime/bakery/glaze.test.ts";
 
   it("ends with each failing test, its error, and how to run it again", async () => {
-    const report = `<testsuites><testsuite name="./glaze.test.ts">
-  <testcase name="glaze" classname="./glaze.test.ts"/>
-  <testcase name="glaze &gt; sets" classname="./glaze.test.ts">
-    <failure message="Uncaught Error: still runny">stack</failure>
-  </testcase>
-</testsuite></testsuites>`;
     const { ok, summary } = await closingSummary([suite({
       id: "workspace-unit",
       units: [unit],
       locate: () => ({ level: "unit" as const, unit }),
-      command: (_units, context) => {
-        const at = `${context.outputDir}/report.xml`;
-        return Promise.resolve([{
-          command: [
-            Deno.execPath(),
-            "eval",
-            `Deno.writeTextFileSync(${JSON.stringify(at)}, ` +
-            `${JSON.stringify(report)}); Deno.exit(1)`,
-          ],
+      command: (_units, context) =>
+        Promise.resolve([{
+          command: writingResults([
+            {
+              line: "result",
+              file: unit,
+              name: ["glaze", "sets"],
+              outcome: "fail",
+              durationMs: 1,
+              failure: "Error: still runny",
+            },
+            {
+              line: "result",
+              file: unit,
+              name: ["glaze"],
+              outcome: "pass",
+              durationMs: 2,
+              container: true,
+            },
+          ], 1),
           cwd: context.root,
-          junit: [{
-            kind: "unit",
-            scope: "bakery",
-            path: at,
-            filePrefix: "runtime/bakery",
-          }],
-        }]);
-      },
+          results: { kind: "unit", scope: "bakery" },
+        }]),
     })]);
 
     expect(ok).toBe(false);
@@ -4267,31 +4310,20 @@ describe("what a lane records about itself", () => {
     // than an alternate execution of a test.
     const workDir = await Deno.makeTempDir({ prefix: "lane-timing-" });
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
-    const report = `${workDir}/report.xml`;
     const suiteUnderTest = suite({
       id: "workspace-unit",
       units: ["one"],
       command: (_units, context) =>
         Promise.resolve([{
-          command: [
-            Deno.execPath(),
-            "eval",
-            `Deno.writeTextFileSync(${JSON.stringify(report)}, ${
-              JSON.stringify(
-                '<?xml version="1.0"?><testsuites><testsuite name="s" ' +
-                  'tests="1" failures="0"><testcase name="bakes" ' +
-                  'classname="test/bake.test.ts" time="0.25"/></testsuite>' +
-                  "</testsuites>",
-              )
-            })`,
-          ],
+          command: writingResults([{
+            line: "result",
+            file: "runtime/bakery/test/bake.test.ts",
+            name: ["bakes"],
+            outcome: "pass",
+            durationMs: 250,
+          }]),
           cwd: context.root,
-          junit: [{
-            path: report,
-            kind: "unit",
-            scope: "bakery",
-            filePrefix: "runtime/bakery",
-          }],
+          results: { kind: "unit", scope: "bakery" },
         }]),
     });
     const result = await runBatch(
@@ -4302,7 +4334,7 @@ describe("what a lane records about itself", () => {
       {},
     );
     expect(result.ok).toBe(true);
-    // The report's case reaches the lane's records with its file joined on.
+    // The test's result reaches the lane's records with its file.
     expect(result.records.map((record) => record.test.n)).toEqual(["bakes"]);
     expect(result.records[0]!.file).toBe("runtime/bakery/test/bake.test.ts");
 
@@ -4326,7 +4358,6 @@ describe("what a lane records about itself", () => {
     // and one it knows from another unit is another test.
     const recorded = async (bakeIn?: string) => {
       const workDir = await Deno.makeTempDir({ prefix: "lane-known-" });
-      const report = `${workDir}/report.xml`;
       const suiteUnderTest = suite({
         id: "workspace-unit",
         units: ["one", "two"],
@@ -4336,22 +4367,22 @@ describe("what a lane records about itself", () => {
             : undefined,
         command: (_units, context) =>
           Promise.resolve([{
-            command: [
-              Deno.execPath(),
-              "eval",
-              `Deno.writeTextFileSync(${JSON.stringify(report)}, ${
-                JSON.stringify(
-                  '<?xml version="1.0"?><testsuites><testsuite name="s" ' +
-                    'tests="2" failures="0"><testcase name="bake" ' +
-                    'classname="test/bake.test.ts" time="0.75"/>' +
-                    '<testcase name="bake &gt; rises" ' +
-                    'classname="test/bake.test.ts" time="0.25"/>' +
-                    "</testsuite></testsuites>",
-                )
-              })`,
-            ],
+            command: writingResults([{
+              line: "result",
+              file: "test/bake.test.ts",
+              name: ["bake", "rises"],
+              outcome: "pass",
+              durationMs: 250,
+            }, {
+              line: "result",
+              file: "test/bake.test.ts",
+              name: ["bake"],
+              outcome: "pass",
+              durationMs: 750,
+              container: true,
+            }]),
             cwd: context.root,
-            junit: [{ path: report, kind: "unit", scope: "bakery" }],
+            results: { kind: "unit", scope: "bakery" },
           }]),
       });
       const manifest = manifestOf([
@@ -4516,14 +4547,6 @@ describe("what a lane records about itself", () => {
     // them, and the publisher reads them by unit from a record of their own.
     const workDir = await Deno.makeTempDir({ prefix: "lane-hooks-" });
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
-    const report = `<testsuites>
-  <testsuite name="./oven.test.ts">
-    <testcase name="oven" classname="./oven.test.ts" time="5.000"/>
-  </testsuite>
-  <testsuite name="ext:cli/40_test.js">
-    <testcase name="oven &gt; bakes" classname="ext:cli/40_test.js" time="1.500"/>
-  </testsuite>
-</testsuites>`;
     try {
       await runBatch(
         {
@@ -4537,21 +4560,22 @@ describe("what a lane records about itself", () => {
                 : { level: "unit", unit: record.file },
             command: (_units, context) =>
               Promise.resolve([{
-                command: [
-                  Deno.execPath(),
-                  "eval",
-                  `Deno.writeTextFileSync(
-                    ${JSON.stringify(`${context.outputDir}/report.xml`)},
-                    ${JSON.stringify(report)},
-                  )`,
-                ],
+                command: writingResults([{
+                  line: "result",
+                  file: "runtime/bakery/oven.test.ts",
+                  name: ["oven", "bakes"],
+                  outcome: "pass",
+                  durationMs: 1500,
+                }, {
+                  line: "result",
+                  file: "runtime/bakery/oven.test.ts",
+                  name: ["oven"],
+                  outcome: "pass",
+                  durationMs: 5000,
+                  container: true,
+                }]),
                 cwd: context.root,
-                junit: [{
-                  path: `${context.outputDir}/report.xml`,
-                  kind: "integration",
-                  scope: "bakery",
-                  filePrefix: "runtime/bakery",
-                }],
+                results: { kind: "integration", scope: "bakery" },
               }]),
           }),
           units: [{ unit: "runtime/bakery/oven.test.ts", skip: [] }],
@@ -4598,18 +4622,6 @@ describe("what a lane records about itself", () => {
     // there is no unit to charge what its hooks took to.
     const workDir = await Deno.makeTempDir({ prefix: "lane-hooks-" });
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
-    const report = `<testsuites>
-  <testsuite name="./oven.test.ts">
-    <testcase name="oven" classname="./oven.test.ts" time="5.000"/>
-  </testsuite>
-  <testsuite name="./stray.test.ts">
-    <testcase name="stray" classname="./stray.test.ts" time="4.000"/>
-  </testsuite>
-  <testsuite name="ext:cli/40_test.js">
-    <testcase name="oven &gt; bakes" classname="ext:cli/40_test.js" time="1.500"/>
-    <testcase name="stray &gt; rises" classname="ext:cli/40_test.js" time="1.000"/>
-  </testsuite>
-</testsuites>`;
     const oven = "runtime/bakery/oven.test.ts";
     try {
       await runBatch(
@@ -4622,21 +4634,35 @@ describe("what a lane records about itself", () => {
               record.file === oven ? { level: "unit", unit: oven } : undefined,
             command: (_units, context) =>
               Promise.resolve([{
-                command: [
-                  Deno.execPath(),
-                  "eval",
-                  `Deno.writeTextFileSync(
-                    ${JSON.stringify(`${context.outputDir}/report.xml`)},
-                    ${JSON.stringify(report)},
-                  )`,
-                ],
+                command: writingResults([{
+                  line: "result",
+                  file: "runtime/bakery/oven.test.ts",
+                  name: ["oven", "bakes"],
+                  outcome: "pass",
+                  durationMs: 1500,
+                }, {
+                  line: "result",
+                  file: "runtime/bakery/oven.test.ts",
+                  name: ["oven"],
+                  outcome: "pass",
+                  durationMs: 5000,
+                  container: true,
+                }, {
+                  line: "result",
+                  file: "runtime/bakery/stray.test.ts",
+                  name: ["stray", "rises"],
+                  outcome: "pass",
+                  durationMs: 1000,
+                }, {
+                  line: "result",
+                  file: "runtime/bakery/stray.test.ts",
+                  name: ["stray"],
+                  outcome: "pass",
+                  durationMs: 4000,
+                  container: true,
+                }]),
                 cwd: context.root,
-                junit: [{
-                  path: `${context.outputDir}/report.xml`,
-                  kind: "integration",
-                  scope: "bakery",
-                  filePrefix: "runtime/bakery",
-                }],
+                results: { kind: "integration", scope: "bakery" },
               }]),
           }),
           units: [{ unit: oven, skip: [] }],
@@ -4822,66 +4848,68 @@ describe("what a lane records about itself", () => {
   it("ships no record of a test its own skip list named, and still hears the unit", async () => {
     // A unit the lane opened for one test registers the rest of it as
     // ignored. Those tests are another lane's share, so only the skip a
-    // test registers itself reaches the store.
+    // test registers itself, or one a configuration declares, reaches the
+    // store.
     const workDir = await Deno.makeTempDir({ prefix: "lane-skips-" });
-    const record = (n: string, outcome: string) =>
-      JSON.stringify({
-        line: "record",
-        test: { k: "unit", s: "bakery", n },
-        outcome,
-        durationMs: 1,
-      }) + "\n";
-    const unitOf: Record<string, string> = {
-      bakes: "a-unit",
-      glazes: "a-unit",
-      frosts: "a-unit",
-      sugars: "b-unit",
-    };
-    // "frosts" is on b-unit's list and is a skip in a-unit, so only a
-    // list keyed by unit as well as by name keeps it.
+    const result = (
+      name: string[],
+      outcome: ResultLine["outcome"],
+      listed = false,
+    ): ResultLine => ({
+      line: "result",
+      file: "a.test.ts",
+      name,
+      outcome,
+      durationMs: 1,
+      ...(listed ? { listed: true as const } : {}),
+    });
     try {
       const batch = {
         suite: suite({
           id: "workspace-unit",
-          units: ["a-unit", "b-unit"],
-          locate: (located) => ({
-            level: "unit",
-            unit: unitOf[located.test.n]!,
-          }),
+          units: ["a-unit"],
+          locate: () => ({ level: "unit", unit: "a-unit" }),
           command: (_units, context) =>
             Promise.resolve([{
-              command: [
-                Deno.execPath(),
-                "eval",
-                `Deno.writeTextFileSync(
-                  Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
-                  ${
-                  JSON.stringify(
-                    record("bakes", "pass") + record("glazes", "skip") +
-                      record("frosts", "skip") + record("sugars", "skip"),
-                  )
-                },
-                )`,
-              ],
+              command: writingResults([
+                result(["bakes"], "pass"),
+                result(["glazes"], "skip", true),
+                result(["pantry", "stocks"], "skip", true),
+                result(["frosts"], "skip"),
+                result(["proofs"], "skip", true),
+                // A step runs with its test even where the list names it.
+                result(["delivery", "drives"], "pass", true),
+              ]),
               cwd: context.root,
+              results: { kind: "unit", scope: "bakery" },
             }]),
         }),
-        units: [
-          { unit: "a-unit", skip: ["glazes"] },
-          { unit: "b-unit", skip: ["sugars", "frosts"] },
-        ],
-        runs: new Map([["a-unit", 1], ["b-unit", 1]]),
+        units: [{
+          unit: "a-unit",
+          skip: ["glazes", "pantry", "delivery > drives"],
+        }],
+        runs: new Map([["a-unit", 1]]),
         projected: 0,
       };
-      const result = await runBatch(batch, lane, workDir, undefined, {});
-      expect(result.records.map((kept) => kept.test.n)).toEqual([
+      const result_ = await runBatch(batch, lane, workDir, undefined, {});
+      // `proofs` is on the list but not in the plan's skips: a leaf the
+      // configuration declares unavailable.
+      expect(result_.records.map((kept) => kept.test.n).sort()).toEqual([
         "bakes",
         "frosts",
+        "proofs",
       ]);
       // What the lane skipped stays in the pass's records, for accounting.
-      expect(result.executions[0]!.records.map((kept) => kept.test.n))
-        .toEqual(["bakes", "glazes", "frosts", "sugars"]);
-      expect(accountFor(batch, [], result.executions, new Set()).silent)
+      expect(result_.executions[0]!.records.map((kept) => kept.test.n).sort())
+        .toEqual([
+          "bakes",
+          "delivery > drives",
+          "frosts",
+          "glazes",
+          "pantry > stocks",
+          "proofs",
+        ]);
+      expect(accountFor(batch, [], result_.executions, new Set()).silent)
         .toEqual([]);
     } finally {
       await Deno.remove(workDir, { recursive: true });
@@ -4893,13 +4921,19 @@ describe("what a lane records about itself", () => {
     // not a test this batch ran. A skip a test registers itself is.
     const workDir = await Deno.makeTempDir({ prefix: "lane-skip-ran-" });
     const spool = await Deno.makeTempDir({ prefix: "lane-spool-" });
-    const record = (n: string, outcome: string, durationMs: number) =>
-      JSON.stringify({
-        line: "record",
-        test: { k: "unit", s: "bakery", n },
-        outcome,
-        durationMs,
-      }) + "\n";
+    const result = (
+      name: string,
+      outcome: ResultLine["outcome"],
+      durationMs: number,
+      listed = false,
+    ): ResultLine => ({
+      line: "result",
+      file: "a.test.ts",
+      name: [name],
+      outcome,
+      durationMs,
+      ...(listed ? { listed: true as const } : {}),
+    });
     try {
       await runBatch(
         {
@@ -4909,21 +4943,13 @@ describe("what a lane records about itself", () => {
             locate: () => ({ level: "unit", unit: "a-unit" }),
             command: (_units, context) =>
               Promise.resolve([{
-                command: [
-                  Deno.execPath(),
-                  "eval",
-                  `Deno.writeTextFileSync(
-                    Deno.env.get("CF_TEST_RECORDS_DIR") + "/fragment-a.ndjson",
-                    ${
-                    JSON.stringify(
-                      record("bakes", "pass", 250) +
-                        record("glazes", "skip", 4000) +
-                        record("frosts", "skip", 30),
-                    )
-                  },
-                  )`,
-                ],
+                command: writingResults([
+                  result("bakes", "pass", 250),
+                  result("glazes", "skip", 4000, true),
+                  result("frosts", "skip", 30),
+                ]),
                 cwd: context.root,
+                results: { kind: "unit", scope: "bakery" },
               }]),
           }),
           units: [{ unit: "a-unit", skip: ["glazes"] }],
@@ -5548,8 +5574,8 @@ describe("reading a batch's records against what it was asked to run", () => {
 
     it("judges each pass by what that pass registered", () => {
       // The first pass's processes said the tree holds no `glaze > cools`.
-      // The second pass left no name map, as a process that stopped before
-      // its module loaded leaves none, so it cannot say the same.
+      // The second pass wrote no registered names, as a process that stopped
+      // before its module loaded writes none, so it cannot say the same.
       const found = accountFor(
         batch(2),
         [...asked("glaze > sets"), ...asked("glaze > cools")],
@@ -5618,7 +5644,8 @@ describe("reading a batch's records against what it was asked to run", () => {
 
     it("keeps it unaccounted for where its unit registered nothing", () => {
       // A process that stopped before its module loaded wrote no
-      // registrations, and a suite without the preload writes none at all.
+      // registrations, and a suite whose tests write no results writes none
+      // at all.
       const found = reading("glaze > cools", undefined);
       expect([names(found.unaccounted), found.absent]).toEqual([
         [key("glaze > cools")],
@@ -5660,37 +5687,14 @@ describe("reading a batch's records against what it was asked to run", () => {
     });
 
     it("keeps a step unaccounted for beneath a test its unit registered", async () => {
-      // A test names its steps as its body runs, and the registration
-      // preload sees only the test. Here the first step is withheld as
-      // flaky and fails, the test returns before the second, and the
-      // second is still in the tree. A real `deno test` under the real
-      // preload is what decides what the name map holds, so the run is
-      // one; a sibling the tree does not hold is asked for beside it.
+      // A test names its steps as its body runs, so a test process
+      // registers the test and none of its steps. Here the first step is
+      // withheld as flaky and fails, the test returns before the second,
+      // and the second is still in the tree. A sibling the tree does not
+      // hold is asked for beside it.
       const dir = await Deno.makeTempDir({ prefix: "lane-registrations-" });
       const file = "glaze.test.ts";
       try {
-        // The `.git` marker is what the preload climbs to for the root its
-        // file names are relative to. The file runs under this tree's own
-        // config, since Deno keys its emit cache on the config it resolves:
-        // compiled under any other, the preload's modules would replace
-        // the emit the lane's coverage report reads them back from. The
-        // lockfile is a copy, so the run writes nothing into this tree.
-        await Deno.mkdir(`${dir}/.git`);
-        await Deno.copyFile(`${REPOSITORY}/deno.lock`, `${dir}/deno.lock`);
-        await Deno.writeTextFile(
-          `${dir}/${file}`,
-          `import { describe, it } from "@std/testing/bdd";
-describe("glaze", () => {
-  it("sets", async (t) => {
-    const completed = await t.step("first", () => {
-      throw new Error("flaky first step");
-    });
-    if (!completed) return;
-    await t.step("second", () => {});
-  });
-});
-`,
-        );
         const real = {
           suite: suite({
             id: "workspace-unit",
@@ -5699,40 +5703,42 @@ describe("glaze", () => {
               record.test.s === "bakery" && record.file === file
                 ? { level: "unit" as const, unit: file }
                 : undefined,
-            command: (_units, context) => {
-              const junit = `${context.outputDir}/report.xml`;
-              return Promise.resolve([{
-                // The run fails on purpose, and what it prints would read
-                // in this suite's log as a failure of its own.
-                command: [
-                  "sh",
-                  "-c",
-                  '"$@" >/dev/null 2>&1',
-                  "sh",
-                  ...denoTestCommand(
-                    [
-                      "--allow-read",
-                      "--allow-write",
-                      "--allow-env",
-                      `--config=${REPOSITORY}/deno.jsonc`,
-                      `--lock=${dir}/deno.lock`,
-                    ],
-                    context,
-                    junit,
-                    [file],
-                  ),
-                ],
+            command: () =>
+              Promise.resolve([{
+                command: writingResults([
+                  {
+                    line: "registered",
+                    file,
+                    names: [["glaze"], ["glaze", "sets"]],
+                  },
+                  {
+                    line: "result",
+                    file,
+                    name: ["glaze", "sets", "first"],
+                    outcome: "fail",
+                    durationMs: 1,
+                    failure: "Error: flaky first step",
+                  },
+                  {
+                    line: "result",
+                    file,
+                    name: ["glaze", "sets"],
+                    outcome: "pass",
+                    durationMs: 2,
+                    container: true,
+                  },
+                  {
+                    line: "result",
+                    file,
+                    name: ["glaze"],
+                    outcome: "pass",
+                    durationMs: 3,
+                    container: true,
+                  },
+                ], 1),
                 cwd: dir,
-                // A lane running this file hands it a skip list of its
-                // own, which this run must not read, and a coverage
-                // directory, whose measured set this run is no part of.
-                env: {
-                  CF_TEST_SKIP_LIST: "",
-                  DENO_COVERAGE_DIR: `${dir}/coverage`,
-                },
-                junit: [{ path: junit, kind: "unit", scope: "bakery" }],
-              }]);
-            },
+                results: { kind: "unit", scope: "bakery" },
+              }]),
           }),
           units: [{ unit: file, skip: [] }],
           runs: new Map([[file, 1]]),
@@ -6610,15 +6616,18 @@ describe("what a lane does with the batches it was given", () => {
     }
 
     /**
-     * Writes the name map a test process of the unit leaves once its
-     * module has loaded, holding `names`, and then exits as a failing run
-     * does.
+     * Writes the names a test process of the unit registers once its
+     * module has loaded, `names`, and then exits as a failing run does.
      */
     function registering(names: readonly string[]): string {
-      const map = { names: Object.fromEntries(names.map((n) => [n, UNIT])) };
+      const line: RegisteredLine = {
+        line: "registered",
+        file: UNIT,
+        names: names.map((name) => name.split(" > ")),
+      };
       return `Deno.writeTextFileSync(
-         \`\${dir}/${NAME_MAP_PREFIX}\${crypto.randomUUID()}${NAME_MAP_SUFFIX}\`,
-         ${JSON.stringify(JSON.stringify(map))},
+         \`\${dir}/${RESULTS_PREFIX}\${crypto.randomUUID()}${RESULTS_SUFFIX}\`,
+         ${JSON.stringify(JSON.stringify(line) + "\n")},
        );
        Deno.exit(1);`;
     }
@@ -7867,8 +7876,8 @@ describe("the summary a lane ends with", () => {
   });
 
   it("takes a failure's message from whichever of its records carries one", () => {
-    // A producer's spool can record a failure the JUnit report records
-    // again, and only the report's record carries the message.
+    // A producer's spool can record a failure its test's results record
+    // again, and only the results' record carries the message.
     const tests = new Map();
     const spooled = record("unit", "runner", "breaks", "fail");
     const reported = record("unit", "runner", "breaks", "fail");

@@ -626,8 +626,10 @@ async function gatheredCommit(dir: string): Promise<string | undefined> {
     // from. The store half is what refuses them when they say nothing.
     return undefined;
   }
-  if (typeof facts !== "object" || facts === null) return undefined;
-  const commit = (facts as Record<string, unknown>).commit;
+  if (typeof facts !== "object" || facts === null || !("commit" in facts)) {
+    return undefined;
+  }
+  const commit = facts.commit;
   return typeof commit === "string" && commit.length > 0 ? commit : undefined;
 }
 
@@ -711,49 +713,50 @@ export class UsageError extends Error {
 }
 
 /**
- * Reads the command line into what the check should do. An argument it
- * does not understand raises, rather than being passed over: a dropped
- * record file leaves the store half judging part of a run and reporting
- * that the topology accounts for everything.
+ * Reads the command line into what the check should do, or into the
+ * reason it cannot. An argument it does not understand is refused,
+ * rather than being passed over: a dropped record file leaves the store
+ * half judging part of a run and reporting that the topology accounts
+ * for everything.
  */
 export function parseCheckArgs(
   args: readonly string[],
   root: string,
-): CheckOptions {
+): CheckOptions | UsageError {
   const records: string[] = [];
   let commit: string | undefined;
   let asked = false;
   for (let at = 0; at < args.length; at++) {
     const arg = args[at]!;
     if (arg === "--commit") {
-      if (commit !== undefined) throw new UsageError("--commit twice");
+      if (commit !== undefined) return new UsageError("--commit twice");
       const named = args[at + 1];
       if (named === undefined || named.length === 0 || named.startsWith("-")) {
-        throw new UsageError("--commit takes the commit the records name");
+        return new UsageError("--commit takes the commit the records name");
       }
       commit = named;
       at += 1;
       continue;
     }
     if (arg === "--records") {
-      if (asked) throw new UsageError("--records twice");
+      if (asked) return new UsageError("--records twice");
       asked = true;
       continue;
     }
     if (!asked || arg.startsWith("-")) {
-      throw new UsageError(`unknown argument ${arg}`);
+      return new UsageError(`unknown argument ${arg}`);
     }
     records.push(arg);
   }
   if (!asked && commit === undefined) return { root };
   if (!asked) {
-    throw new UsageError("--commit names the commit --records were made at");
+    return new UsageError("--commit names the commit --records were made at");
   }
   if (records.length === 0) {
-    throw new UsageError("--records takes a file or a directory of them");
+    return new UsageError("--records takes a file or a directory of them");
   }
   if (commit === undefined) {
-    throw new UsageError("--records needs --commit, the commit they name");
+    return new UsageError("--records needs --commit, the commit they name");
   }
   return { root, store: { records, commit } };
 }
@@ -862,19 +865,13 @@ export async function main(
   args: readonly string[] = Deno.args,
   root: string = Deno.cwd(),
 ): Promise<number> {
-  let options: CheckOptions;
-  try {
-    options = parseCheckArgs(args, root);
-  } catch (error) {
-    if (!(error instanceof UsageError)) throw error;
-    console.error(`${error.message}\n${USAGE}`);
+  const options = parseCheckArgs(args, root);
+  if (options instanceof UsageError) {
+    console.error(`${options.message}\n${USAGE}`);
     return 2;
   }
   const { findings, suites } = await check(options);
   return report(findings, suites) ? 0 : 1;
 }
 
-// `Deno.exitCode` rather than `Deno.exit`, which would end the process
-// before the unload handlers run — and one of those is what writes a
-// test run's name map into its spool.
 if (import.meta.main) Deno.exitCode = await main();

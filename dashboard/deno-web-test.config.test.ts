@@ -1,4 +1,5 @@
-import { assertEquals } from "@std/assert";
+import { expect } from "@std/expect";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * The config a fresh evaluation of `deno-web-test.config.ts` gives with `CI`
@@ -17,10 +18,15 @@ async function configWith(ci: string | undefined): Promise<{ args: string[] }> {
   }
 }
 
-Deno.test("dashboard browser tests disable the Chromium sandbox in CI", async () => {
-  assertEquals((await configWith("1")).args, ["--no-sandbox"]);
+test("dashboard browser tests disable the Chromium sandbox in CI", async () => {
+  expect((await configWith("1")).args).toContain("--no-sandbox");
 });
 
-Deno.test("dashboard browser tests keep the Chromium sandbox outside CI", async () => {
-  assertEquals((await configWith(undefined)).args, []);
+test("dashboard browser tests keep the Chromium sandbox outside CI", async () => {
+  expect((await configWith(undefined)).args).not.toContain("--no-sandbox");
+});
+
+test("dashboard browser tests draw 2D canvases on the CPU in CI and outside it", async () => {
+  expect((await configWith("1")).args).toContain("--disable-accelerated-2d-canvas");
+  expect((await configWith(undefined)).args).toContain("--disable-accelerated-2d-canvas");
 });

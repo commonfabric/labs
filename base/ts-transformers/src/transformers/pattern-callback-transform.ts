@@ -19,8 +19,8 @@ import {
 } from "./pattern-body-reactive-root-lowering.ts";
 import { uniquePaths } from "../utils/path-serialization.ts";
 
-/** Property names that correspond to reactive data in map callback params. */
-const MAP_REACTIVE_PROPERTIES = new Set(["element", "index", "array"]);
+/** The parameter a destructured pattern callback's input is rebound to. */
+const PATTERN_INPUT_NAME = "__cf_pattern_input";
 
 /**
  * Check if a map callback binding is for a non-reactive capture.
@@ -35,26 +35,9 @@ function isNonReactiveCapture(
   binding: DestructureBinding,
   nonReactiveCaptures?: ReadonlySet<string>,
 ): boolean {
-  if (!nonReactiveCaptures || nonReactiveCaptures.size === 0) return false;
-  if (binding.path.length < 2) return false;
-  if (binding.path[0] !== "params") return false;
-  const captureName = binding.path[1];
-  return typeof captureName === "string" &&
-    nonReactiveCaptures.has(captureName);
-}
-
-function isReactiveArrayMethodBinding(
-  binding: DestructureBinding,
-  nonReactiveCaptures?: ReadonlySet<string>,
-): boolean {
-  if (binding.path.length === 0) return false;
-  const rootProp = binding.path[0];
-  if (typeof rootProp !== "string") return false;
-  if (MAP_REACTIVE_PROPERTIES.has(rootProp)) return true;
-  if (rootProp === "params") {
-    return !isNonReactiveCapture(binding, nonReactiveCaptures);
-  }
-  return true;
+  const [root, captureName] = binding.path;
+  return root === "params" && typeof captureName === "string" &&
+    (nonReactiveCaptures?.has(captureName) ?? false);
 }
 
 function buildPlainCaptureAccessExpression(
@@ -62,13 +45,6 @@ function buildPlainCaptureAccessExpression(
   binding: DestructureBinding,
   factory: ts.NodeFactory,
 ): ts.Expression {
-  if (binding.directKeyExpression) {
-    return factory.createElementAccessExpression(
-      root,
-      cloneKeyExpression(binding.directKeyExpression, factory),
-    );
-  }
-
   let current = root;
   for (const segment of binding.path) {
     current = typeof segment === "string"
@@ -95,11 +71,11 @@ export interface CapabilitySummaryRegistration {
    */
   readonly patternCallback?: boolean;
 
-  /** Static destructuring defaults to merge in, by parameter name. */
-  readonly defaultsByParamName?: ReadonlyMap<
-    string,
-    readonly CapabilityParamDefault[]
-  >;
+  /** Static destructuring defaults to merge into one parameter's summary. */
+  readonly defaults?: {
+    readonly paramName: string;
+    readonly entries: readonly CapabilityParamDefault[];
+  };
 }
 
 /**
@@ -109,8 +85,7 @@ export interface CapabilitySummaryRegistration {
 export function registerCapabilitySummary(
   callback: ts.ArrowFunction | ts.FunctionExpression,
   context: TransformationContext,
-  { interprocedural, patternCallback, defaultsByParamName }:
-    CapabilitySummaryRegistration,
+  { interprocedural, patternCallback, defaults }: CapabilitySummaryRegistration,
 ): void {
   const summary = analyzeFunctionCapabilities(callback, {
     checker: context.checker,
@@ -119,25 +94,23 @@ export function registerCapabilitySummary(
     patternCallback,
   });
 
-  if (!defaultsByParamName || defaultsByParamName.size === 0) {
+  if (!defaults) {
     context.recordCapabilitySummary(callback, summary);
     return;
   }
 
+  const defaultPaths = defaults.entries.map((entry) => entry.path);
   context.recordCapabilitySummary(callback, {
     ...summary,
-    params: summary.params.map((param) => {
-      const defaults = defaultsByParamName.get(param.name);
-      if (!defaults || defaults.length === 0) {
-        return param;
-      }
-      const defaultPaths = defaults.map((entry) => entry.path);
-      return {
-        ...param,
-        readPaths: uniquePaths([...param.readPaths, ...defaultPaths]),
-        defaults,
-      };
-    }),
+    params: summary.params.map((param) =>
+      param.name === defaults.paramName
+        ? {
+          ...param,
+          readPaths: uniquePaths([...param.readPaths, ...defaultPaths]),
+          defaults: defaults.entries,
+        }
+        : param
+    ),
   });
 }
 
@@ -154,7 +127,6 @@ export function transformPatternCallback(
   const diagnostics: string[] = [];
   const extractedDefaults: DefaultDestructureBinding[] = [];
   let hasUnsupportedDestructuring = false;
-  let summaryParamName: string | undefined;
 
   let updatedParameters = callback.parameters;
   let prologue: ts.Statement[] = [];
@@ -166,11 +138,7 @@ export function transformPatternCallback(
       if (symbol) {
         opaqueRootSymbols.add(symbol);
       }
-      summaryParamName = firstParam.name.text;
-    } else if (
-      ts.isObjectBindingPattern(firstParam.name) ||
-      ts.isArrayBindingPattern(firstParam.name)
-    ) {
+    } else {
       const bindings: DestructureBinding[] = [];
       collectDestructureBindings(
         firstParam.name,
@@ -187,12 +155,8 @@ export function transformPatternCallback(
         hasUnsupportedDestructuring = true;
       }
 
-      const inputIdentifier = factory.createIdentifier("__cf_pattern_input");
+      const inputIdentifier = factory.createIdentifier(PATTERN_INPUT_NAME);
       opaqueRoots.add(inputIdentifier.text);
-      const inputSymbol = context.checker.getSymbolAtLocation(firstParam.name);
-      if (inputSymbol) {
-        opaqueRootSymbols.add(inputSymbol);
-      }
       addBindingTargetSymbols(
         firstParam.name,
         opaqueRootSymbols,
@@ -208,7 +172,6 @@ export function transformPatternCallback(
         firstParam.type,
         firstParam.initializer,
       );
-      summaryParamName = inputIdentifier.text;
 
       updatedParameters = factory.createNodeArray([
         rewrittenFirstParam,
@@ -216,21 +179,12 @@ export function transformPatternCallback(
       ]);
 
       prologue = bindings.map((binding) => {
-        let initializer: ts.Expression;
-        if (binding.directKeyExpression) {
-          initializer = factory.createElementAccessExpression(
+        let initializer = binding.directKeyExpression
+          ? factory.createElementAccessExpression(
             factory.createIdentifier(inputIdentifier.text),
             cloneKeyExpression(binding.directKeyExpression, factory),
-          );
-        } else if (binding.path.length === 0) {
-          initializer = factory.createIdentifier(inputIdentifier.text);
-        } else {
-          initializer = createPathRead(
-            inputIdentifier,
-            binding.path,
-            factory,
-          );
-        }
+          )
+          : createPathRead(inputIdentifier, binding.path, factory);
 
         if (
           isArrayMethodCallback &&
@@ -266,19 +220,12 @@ export function transformPatternCallback(
       for (const binding of bindings) {
         if (
           isArrayMethodCallback &&
-          !isReactiveArrayMethodBinding(binding, nonReactiveCaptures)
+          isNonReactiveCapture(binding, nonReactiveCaptures)
         ) {
           continue;
         }
         opaqueRoots.add(binding.localName);
       }
-    } else {
-      reportComputationError(
-        context,
-        firstParam,
-        "Pattern parameter destructuring form is not lowerable. Use an object parameter and explicit input.key(...) bindings.",
-      );
-      hasUnsupportedDestructuring = true;
     }
   }
 
@@ -290,19 +237,15 @@ export function transformPatternCallback(
     return callback;
   }
 
-  const defaultsByParamName = new Map<
-    string,
-    readonly CapabilityParamDefault[]
-  >();
-  if (summaryParamName && extractedDefaults.length > 0) {
-    defaultsByParamName.set(
-      summaryParamName,
-      extractedDefaults.map((entry) => ({
+  const defaults = extractedDefaults.length > 0
+    ? {
+      paramName: PATTERN_INPUT_NAME,
+      entries: extractedDefaults.map((entry) => ({
         path: entry.path,
         defaultType: entry.defaultType,
       })),
-    );
-  }
+    }
+    : undefined;
 
   let body: ts.ConciseBody = callback.body;
   body = rewritePatternCallbackBody(
@@ -336,7 +279,7 @@ export function transformPatternCallback(
     registerCapabilitySummary(transformed, context, {
       interprocedural: false,
       patternCallback: true,
-      defaultsByParamName,
+      defaults,
     });
     return transformed;
   }
@@ -354,7 +297,7 @@ export function transformPatternCallback(
   registerCapabilitySummary(transformed, context, {
     interprocedural: false,
     patternCallback: true,
-    defaultsByParamName,
+    defaults,
   });
   return transformed;
 }

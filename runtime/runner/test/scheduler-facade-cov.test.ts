@@ -1,9 +1,18 @@
-/// <reference path="./clock.d.ts" />
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
-import type { SessionReport } from "@commonfabric/memory/v2";
+import {
+  resolveScopeKey,
+  type ScopeKey,
+  type SessionReport,
+} from "@commonfabric/memory/v2";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import { ECHO_TRIP_THRESHOLD } from "../src/scheduler/constants.ts";
 import type { EchoStep } from "../src/scheduler/echo-breaker.ts";
@@ -15,6 +24,7 @@ import type {
 import type {
   IExtendedStorageTransaction,
   MemorySpace,
+  URI,
 } from "../src/storage/interface.ts";
 import { captureLogs } from "./support/captured-logs.ts";
 import {
@@ -129,6 +139,81 @@ describe("scheduler facade", () => {
       runtime.scheduler.queueExecution();
       await runtime.idle();
       expect(runs.count).toBe(1);
+    });
+  });
+
+  describe("pieceCurrencySnapshot()", () => {
+    /**
+     * Registers an effect of the piece `of:piece` that read, at the instance
+     * `scopeKey`, the user-scoped document `id` of another space, and
+     * snapshots the piece's one slice before the effect runs again.
+     */
+    function foreignReadSlice(scopeKey: ScopeKey, id: URI = "of:foreign") {
+      const effect: Action = Object.assign(() => {}, {
+        schedulerObservationIdentity: {
+          pieceId: "space:of:piece",
+          pieceRootId: "of:piece",
+        },
+      });
+      runtime.scheduler.subscribe(effect, {
+        reads: [{
+          space: otherSpace,
+          id,
+          type: "application/json",
+          path: [],
+          scope: "user",
+          scopeKey,
+        }],
+        shallowReads: [],
+        writes: [],
+      }, { isEffect: true });
+      return runtime.scheduler.pieceCurrencySnapshot(space, "of:piece")
+        ?.slices.find((slice) => slice.key === "space");
+    }
+
+    it("names the seq the replica holds a user's instance of a foreign document at", async () => {
+      const write = runtime.edit();
+      const foreign = runtime.getCell<number>(
+        otherSpace,
+        "foreign document",
+        undefined,
+        write,
+        "user",
+      );
+      foreign.set(1);
+      expect((await write.commit().settled).error).toBeUndefined();
+      const { id } = foreign.getAsNormalizedFullLink();
+      const seq = runtime.storageManager.open(otherSpace).replica
+        .confirmedDocumentSeq(id, "user", runtime.scopeKeyIdentity);
+      expect(seq).toBeGreaterThan(0);
+
+      const slice = foreignReadSlice(
+        resolveScopeKey("user", runtime.scopeKeyIdentity),
+        id,
+      );
+
+      expect(slice?.reads).toEqual([{
+        space: otherSpace,
+        id,
+        scopeKey: resolveScopeKey("user", runtime.scopeKeyIdentity),
+        derived: false,
+        seq,
+      }]);
+      expect(slice?.unvouched).not.toContain("foreign-read");
+    });
+
+    it("names no seq for a foreign read whose instance key names no identity, and leaves the slice unvouched", () => {
+      // The runtime's own user instance is not the one such a read names, so
+      // its seq says nothing of the read.
+      const slice = foreignReadSlice("user:");
+
+      expect(slice?.reads).toEqual([{
+        space: otherSpace,
+        id: "of:foreign",
+        scopeKey: "user:",
+        derived: false,
+      }]);
+      expect(slice?.unvouched).toContain("foreign-read");
     });
   });
 

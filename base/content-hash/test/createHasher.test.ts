@@ -12,14 +12,15 @@
  * implementation may sit behind the buffering layer.
  */
 
-import { beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromBase64url } from "@commonfabric/bytes/base64url";
 import {
   createHasher,
   type IncrementalHasher,
 } from "@commonfabric/content-hash";
-import { createHasherDeno } from "@/sha256-deno.ts";
+import { assertExists } from "@std/assert";
+import { beforeAll, describe, it } from "@commonfabric/test-support/test";
+import { denoImplementation } from "@/sha256-deno.ts";
 import { createHasherNoble } from "@/sha256-noble.ts";
 import {
   createHasherWasm,
@@ -28,8 +29,10 @@ import {
 } from "@/sha256-wasm.ts";
 import { FIXTURES } from "./fixtures.ts";
 
+assertExists(denoImplementation);
+
 const createFuncs = [
-  createHasherDeno,
+  denoImplementation.createHasher,
   createHasherNoble,
   createHasherWasm,
   createHasherWasmCollecting,

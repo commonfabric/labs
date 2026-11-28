@@ -28,7 +28,6 @@
 //   nothing to re-derive behind it, a refused seed strands the
 //   coordinator on a container that never arrives.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -56,6 +55,13 @@ import {
 import { flushMicrotasks } from "./speculation-intent-test-utils.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   SpeculationOverlayDestination,
   stampSpeculationRunContext,
 } from "../src/speculation/overlay-destination.ts";
@@ -80,6 +86,12 @@ import type { JSONSchema, Module, Pattern } from "../src/builder/types.ts";
 import { type Cell, cellTx, sendEvent } from "../src/cell.ts";
 import { seedStoredEnvelope } from "./cfc-seed-envelope.ts";
 
+// This file runs on the real clock because it drives a live ExecutorHost whose
+// consequence-flush deadline and idle park are real-time policies; auto-advance
+// would fire those timers as fast as they arm, which changes what the test
+// observes rather than speeding it up.
+useRealClock();
+
 /**
  * The label-map entries `document`'s stored envelope holds, which a fixture
  * restating the envelope keeps: the store refuses a commit that leaves a path
@@ -91,6 +103,13 @@ const storedLabelEntries = (document: unknown): FabricValue[] => {
     .cfc?.labelMap?.entries;
   return Array.isArray(entries) ? entries as FabricValue[] : [];
 };
+/**
+ * The version of the envelope `document` stores, so a seed that copies its
+ * entries keeps them in an envelope that can hold them: a version-2 entry may
+ * hold its label by reference, which a version-1 envelope refuses.
+ */
+const storedEnvelopeVersion = (document: unknown): 1 | 2 =>
+  (document as { cfc?: { version?: unknown } }).cfc?.version === 2 ? 2 : 1;
 const spaceSigner = await Identity.fromPassphrase("speculation overlay space");
 const space = spaceSigner.did() as MemorySpace;
 const serviceSigner = await Identity.fromPassphrase(
@@ -1382,7 +1401,7 @@ describe("Phase 2 speculation overlay", () => {
       seedStoredEnvelope(seedTx, docAddress, {
         ...base,
         cfc: {
-          version: 1,
+          version: storedEnvelopeVersion(base),
           labelMap: {
             version: 1,
             entries: [
@@ -1572,7 +1591,7 @@ describe("Phase 2 speculation overlay", () => {
       seedStoredEnvelope(seedTx, docAddress, {
         ...base,
         cfc: {
-          version: 1,
+          version: storedEnvelopeVersion(base),
           labelMap: {
             version: 1,
             entries: [
@@ -1754,7 +1773,7 @@ describe("Phase 2 speculation overlay", () => {
       seedStoredEnvelope(seedTx, docAddress, {
         ...base,
         cfc: {
-          version: 1,
+          version: storedEnvelopeVersion(base),
           labelMap: {
             version: 1,
             entries: [
@@ -1936,7 +1955,7 @@ describe("Phase 2 speculation overlay", () => {
         seedStoredEnvelope(seedTx, docAddress, {
           ...base,
           cfc: {
-            version: 1,
+            version: storedEnvelopeVersion(base),
             labelMap: {
               version: 1,
               entries: [
@@ -2109,7 +2128,7 @@ describe("Phase 2 speculation overlay", () => {
     } as const;
     const pairHash = internSchemaAsTaggedHashString(pairSchema);
     const pairCfcFor = (document: unknown) => ({
-      version: 1,
+      version: storedEnvelopeVersion(document),
       labelMap: {
         version: 1,
         entries: [
@@ -2154,7 +2173,7 @@ describe("Phase 2 speculation overlay", () => {
         ...currentDoc(),
         value: { name: "fourth-frame" },
         cfc: {
-          version: 1,
+          version: storedEnvelopeVersion(currentDoc()),
           labelMap: {
             version: 1,
             entries: [

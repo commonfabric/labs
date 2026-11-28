@@ -17,6 +17,7 @@ import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import { toDocumentPath } from "@commonfabric/memory/v2";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import { test } from "@commonfabric/test-support/test";
 
 import { writeDetailValueForTarget } from "../src/cfc/prepare.ts";
 import { normalizeCellScope } from "../src/scope.ts";
@@ -75,7 +76,7 @@ const countUnsharedNodes = (orig: unknown, copy: unknown): number => {
   return n;
 };
 
-Deno.test("writeDetailValueForTarget: coarse whole-object write reconstructs as-is", () => {
+test("writeDetailValueForTarget: coarse whole-object write reconstructs as-is", () => {
   const tx = txWith([
     detail(["value"], { origin: "imported", body: "allowed" }),
   ]);
@@ -85,7 +86,7 @@ Deno.test("writeDetailValueForTarget: coarse whole-object write reconstructs as-
   });
 });
 
-Deno.test("writeDetailValueForTarget: uses document-narrowed write details when available", () => {
+test("writeDetailValueForTarget: uses document-narrowed write details when available", () => {
   const wanted = detail(["value"], { body: "bounded" });
   const tx = {
     getWriteDetails: () => {
@@ -112,7 +113,7 @@ Deno.test("writeDetailValueForTarget: uses document-narrowed write details when 
   });
 });
 
-Deno.test("writeDetailValueForTarget: granular envelope + field writes reconstruct the full object", () => {
+test("writeDetailValueForTarget: granular envelope + field writes reconstruct the full object", () => {
   // This is the shape produced when an object is written field-by-field (e.g.
   // a deep-frozen value): an empty envelope at the root plus per-field writes.
   // The pre-fix behavior returned just the `{}` envelope, dropping the fields.
@@ -127,7 +128,7 @@ Deno.test("writeDetailValueForTarget: granular envelope + field writes reconstru
   });
 });
 
-Deno.test("writeDetailValueForTarget: deeper writes win over a stale envelope field", () => {
+test("writeDetailValueForTarget: deeper writes win over a stale envelope field", () => {
   const tx = txWith([
     detail(["value"], { origin: "stale" }),
     detail(["value", "origin"], "imported"),
@@ -139,7 +140,7 @@ Deno.test("writeDetailValueForTarget: deeper writes win over a stale envelope fi
   });
 });
 
-Deno.test("writeDetailValueForTarget: descendant writes overlay onto a base (no base => undefined)", () => {
+test("writeDetailValueForTarget: descendant writes overlay onto a base (no base => undefined)", () => {
   // Composition overlays deeper field-writes onto a base write at the target;
   // it does not synthesize a base when none exists. With no write at the
   // target itself, reconstruction returns undefined (unchanged from before
@@ -152,7 +153,7 @@ Deno.test("writeDetailValueForTarget: descendant writes overlay onto a base (no 
   assertEquals(writeDetailValueForTarget(tx, target([]), "value"), undefined);
 });
 
-Deno.test("writeDetailValueForTarget: array-index granular writes reconstruct an array", () => {
+test("writeDetailValueForTarget: array-index granular writes reconstruct an array", () => {
   const tx = txWith([
     detail(["value"], []),
     detail(["value", "0"], "a"),
@@ -161,7 +162,7 @@ Deno.test("writeDetailValueForTarget: array-index granular writes reconstruct an
   assertEquals(writeDetailValueForTarget(tx, target([]), "value"), ["a", "b"]);
 });
 
-Deno.test("writeDetailValueForTarget: reconstructs nested target path", () => {
+test("writeDetailValueForTarget: reconstructs nested target path", () => {
   const tx = txWith([
     detail(["value", "item"], {}),
     detail(["value", "item", "origin"], "imported"),
@@ -171,7 +172,7 @@ Deno.test("writeDetailValueForTarget: reconstructs nested target path", () => {
   });
 });
 
-Deno.test("writeDetailValueForTarget: previousValue uses the coarse ancestor snapshot", () => {
+test("writeDetailValueForTarget: previousValue uses the coarse ancestor snapshot", () => {
   // The previousValue of the longest ancestor write already captures the whole
   // pre-write subtree, so per-field previous-values are not composed.
   const tx = txWith([
@@ -204,7 +205,7 @@ Deno.test("writeDetailValueForTarget: previousValue uses the coarse ancestor sna
   });
 });
 
-Deno.test("writeDetailValueForTarget: no matching write returns undefined", () => {
+test("writeDetailValueForTarget: no matching write returns undefined", () => {
   const tx = txWith([
     detail(["value", "other"], "x"),
   ]);
@@ -219,7 +220,7 @@ Deno.test("writeDetailValueForTarget: no matching write returns undefined", () =
   );
 });
 
-Deno.test("writeDetailValueForTarget: composition preserves large off-spine subtrees by reference (no deep copy)", () => {
+test("writeDetailValueForTarget: composition preserves large off-spine subtrees by reference (no deep copy)", () => {
   // Deliberately ginormous, synthetic-but-realistic base: a large array of
   // records plus a small sibling field, deep-frozen (as stored values are).
   // It's recorded as a coarse base write at the target PLUS a granular write
@@ -271,7 +272,7 @@ Deno.test("writeDetailValueForTarget: composition preserves large off-spine subt
 // base check does not see.
 //
 
-Deno.test("writeDetailValueForTarget: refuses an overlay onto a `FabricInstance` base", () => {
+test("writeDetailValueForTarget: refuses an overlay onto a `FabricInstance` base", () => {
   const err = FabricError.fromNativeError(new Error("boom"));
   const tx = txWith([
     detail(["value"], deepFreeze(err)),
@@ -286,7 +287,7 @@ Deno.test("writeDetailValueForTarget: refuses an overlay onto a `FabricInstance`
   assertEquals(Object.getOwnPropertyNames(err), []);
 });
 
-Deno.test("writeDetailValueForTarget: refuses an overlay through a nested `FabricInstance`", () => {
+test("writeDetailValueForTarget: refuses an overlay through a nested `FabricInstance`", () => {
   const err = FabricError.fromNativeError(new Error("boom"));
   const tx = txWith([
     detail(["value"], deepFreeze({ err })),
@@ -301,7 +302,7 @@ Deno.test("writeDetailValueForTarget: refuses an overlay through a nested `Fabri
   assertEquals(Object.getOwnPropertyNames(err), []);
 });
 
-Deno.test("writeDetailValueForTarget: overlays descendant writes onto a fresh record where the base is not a container", () => {
+test("writeDetailValueForTarget: overlays descendant writes onto a fresh record where the base is not a container", () => {
   // A leaf written at the target and then written beneath, as a value
   // replaced by a record field by field, reconstructs as the fields alone:
   // the leaf has nothing for them to land in.
@@ -314,7 +315,7 @@ Deno.test("writeDetailValueForTarget: overlays descendant writes onto a fresh re
   });
 });
 
-Deno.test("writeDetailValueForTarget: overlays index-named descendant writes onto a fresh array where the base is not a container", () => {
+test("writeDetailValueForTarget: overlays index-named descendant writes onto a fresh array where the base is not a container", () => {
   const tx = txWith([
     detail(["value", "item"], 7),
     detail(["value", "item", "0"], "a"),
@@ -326,7 +327,7 @@ Deno.test("writeDetailValueForTarget: overlays index-named descendant writes ont
   ]);
 });
 
-Deno.test("writeDetailValueForTarget: ignores a write to the same id in another scope", () => {
+test("writeDetailValueForTarget: ignores a write to the same id in another scope", () => {
   const tx = txWith([
     detail(["value"], { origin: "space-scoped" }),
     {

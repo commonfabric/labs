@@ -5,9 +5,9 @@
  * thing, and that the walk visits a tree of any depth and no byte buffer.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { approximateJsonSize } from "@commonfabric/json/approximate-json-size";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("approximateJsonSize()", () => {
   it("returns the JSON length of a value holding strings, keywords and containers", () => {

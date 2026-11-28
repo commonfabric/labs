@@ -7,7 +7,7 @@ import {
   hasText,
   sendMessage,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Factory, { Counter } from "./instantiate-pattern.tsx";
+import Factory, { Counter } from "./main.tsx";
 
 const counterText = (view: unknown, expected: string) =>
   hasExactText(findNodeById(view, "counter-result"), expected);

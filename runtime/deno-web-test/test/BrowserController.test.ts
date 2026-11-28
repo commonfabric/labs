@@ -6,11 +6,11 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { BrowserController } from "../browser.ts";
 import { applyDefaults } from "../config.ts";
 import { Manifest } from "../manifest.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // A manifest naming directories nothing here reaches: the controller holds it
 // for its configuration and its profile directory, and neither is read before

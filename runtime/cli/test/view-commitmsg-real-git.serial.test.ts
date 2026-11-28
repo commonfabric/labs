@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { type GitFileSystem, realGit } from "../lib/view/commitmsg.ts";
 import { exists } from "./utils.ts";
@@ -8,6 +7,12 @@ import {
   revParse,
   withGitShim,
 } from "./view-commitmsg-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** A filesystem that refuses the operations `refuse` selects, recording the
  * paths it refused, and performs the rest. */

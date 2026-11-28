@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { cliMain, type GeneratedAsset, runCli } from "./generated-asset.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Tests for the command line the generator scripts share.

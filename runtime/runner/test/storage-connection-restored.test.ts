@@ -8,13 +8,18 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import type { MemorySpace } from "@commonfabric/memory/interface";
 import { StandaloneMemoryServer } from "@commonfabric/memory/v2/standalone";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   createNativeMemorySocket,

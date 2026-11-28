@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { MemorySpace } from "../../../src/storage/interface.ts";
@@ -7,6 +6,7 @@ import {
   StateInconsistency,
   UnsupportedMediaTypeError,
 } from "../../../src/storage/transaction/attestation.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const space: MemorySpace = "did:key:z6Mk-attestation";
 

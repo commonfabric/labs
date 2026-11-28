@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import {
   linkProbeSubPath,
@@ -13,6 +12,12 @@ import {
   setLoggerCountObserver,
 } from "@commonfabric/logger";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import { ContextualFlowControl } from "../src/cfc.ts";
@@ -391,6 +396,49 @@ describe("link-resolution", () => {
       const parsedLink = parseLink(linkValue, sourceCell)!;
       const resolved = resolveLink(runtime, tx, parsedLink);
       expect(resolved.schema).toBeUndefined();
+    });
+
+    it("keeps a carried schema across links whose stored schema says nothing about the target", () => {
+      const carried = { type: "number", minimum: 0 } as const;
+      const arraySchema = {
+        type: "array",
+        items: { type: "number" },
+      } as const satisfies JSONSchema;
+      const targetCell = runtime.getCell<any>(space, "carried-target");
+      targetCell.withTx(tx).set({ count: 4, list: [1, 2, 3] });
+      const sourceCell = runtime.getCell<any>(space, "carried-source");
+      sourceCell.withTx(tx).setRaw({
+        // A link that stores no schema.
+        plain: targetCell.key("count").getAsLink(),
+        // A link whose stored schema names no `length`, so narrowing it
+        // through the remaining path leaves nothing.
+        typed: targetCell.key("list").asSchema(arraySchema).getAsLink({
+          includeSchema: true,
+        }),
+      });
+      tx.commit();
+      tx = runtime.edit();
+
+      const resolveFrom = (path: string[], schema?: JSONSchema) =>
+        resolveLink(runtime, tx, {
+          ...sourceCell.getAsNormalizedFullLink(),
+          path,
+          schema,
+        });
+
+      const plain = resolveFrom(["plain"], carried);
+      expect(plain.path).toEqual(["count"]);
+      expect(plain.schema).toEqual(carried);
+      expect(tx.readValueOrThrow(plain)).toBe(4);
+
+      const length = resolveFrom(["typed", "length"], carried);
+      expect(length.path).toEqual(["list", "length"]);
+      expect(length.schema).toEqual(carried);
+      expect(tx.readValueOrThrow(length)).toBe(3);
+
+      // Without a carried schema, the same resolutions carry none.
+      expect(resolveFrom(["plain"]).schema).toBeUndefined();
+      expect(resolveFrom(["typed", "length"]).schema).toBeUndefined();
     });
 
     it("should preserve schema when available", () => {

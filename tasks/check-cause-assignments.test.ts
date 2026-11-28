@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { existsSync } from "@std/fs";
 import { fromFileUrl, join, toFileUrl } from "@std/path";
@@ -6,6 +5,12 @@ import {
   readDenoConfig,
   runDenoCommandWithTemporaryLock,
 } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   acceptedInPart,
   acceptedMoveProblems,
@@ -591,9 +596,9 @@ describe("check-cause-assignments", () => {
   });
 
   describe("parseArguments()", () => {
-    it("compares every pattern against origin/main when given nothing", () => {
+    it("names no base revision and compares every pattern when given nothing", () => {
       expect(parseArguments([])).toEqual({
-        baseRef: "origin/main",
+        baseRef: undefined,
         part: { index: 0, count: 1 },
       });
     });
@@ -1044,6 +1049,8 @@ describe("check-cause-assignments", () => {
             return changed;
           case "rev-parse":
             return `${head}\n`;
+          case "for-each-ref":
+            return "refs/remotes/upstream/main\n";
           case "worktree":
             if (args[1] === "add") {
               baseTree = args[3];
@@ -1107,6 +1114,22 @@ describe("check-cause-assignments", () => {
         code: 2,
       });
       expect(asked).toEqual([["merge-base", "nowhere", "HEAD"]]);
+    });
+
+    it("measures from the default base where it is named none", async () => {
+      // The fake git has an `upstream/main`, so that is the default, and it
+      // finds no merge base with it.
+      expect(await main([], checkout(), [])).toEqual({
+        err: "Could not resolve a merge base against " +
+          "refs/remotes/upstream/main. This check needs real history — CI " +
+          "must check out with fetch-depth: 0.",
+        code: 2,
+      });
+      expect(asked).toContainEqual([
+        "merge-base",
+        "refs/remotes/upstream/main",
+        "HEAD",
+      ]);
     });
 
     it("returns 2 against a ref this checkout's own git does not know", async () => {

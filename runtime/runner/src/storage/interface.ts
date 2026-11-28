@@ -28,9 +28,12 @@ import type { RedeemReceipt } from "@commonfabric/memory/space-invites";
 import type {
   ApplyOpOperation,
   ApplyOpResolution,
+  BranchInfo,
+  BranchName,
   ClientCommit,
   CommitClass,
   CommitPrecondition,
+  CommitSummary,
   DeliveryFailureClass,
   DocumentPath,
   EntityDocument,
@@ -90,6 +93,7 @@ import type {
   CfcLabelMetadataObservation,
   CfcLabelMetadataProtectionMode,
   CfcMetadata,
+  CfcPatternReclassification,
   CfcPolicyEvaluationMode,
   CfcPreparationWork,
   CfcRefusalDetail,
@@ -384,6 +388,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * was installed). Optional, like the observer.
    */
   openedSpaces?(): MemorySpace[];
+
+  /**
+   * Whether the replica of `space` covers the document `id` names under
+   * `scope` (`IStorageProvider.hasLocalDocumentCoverage()`), or `undefined`
+   * when this manager holds no provider for `space`. Unlike `open()`, it opens
+   * nothing and is no use of the space, so a release pass under way can
+   * still release the space.
+   */
+  documentCovered?(
+    space: MemorySpace,
+    id: URI,
+    scope?: CellScope,
+  ): boolean | undefined;
 
   /**
    * Declares the read ceiling every session this manager opens carries in
@@ -869,15 +886,22 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   pendingCrossSpacePromiseCount?(): number;
 
   /**
-   * Whether a link target in `space` should be background-pulled because this
-   * replica has never seen the doc (fresh-replica read asymmetry): selector
+   * Whether a link target in `space` should be background-pulled, because
+   * nothing shows that the replica's session watches the doc. One case is a
+   * doc the replica has never seen (fresh-replica read asymmetry): selector
    * driven syncs only deliver what a schema covered, so a link can point at a
    * same-space doc no selector ever walked — without a pull such reads mask
-   * as `undefined`, indistinguishable from absence. Returns true exactly once
-   * per (space, id, scope) per manager lifetime and only when the local
-   * replica holds no state for the doc; the caller kicks the actual sync (see
-   * the link-resolution hop loop). Optional: managers without lazy remote
-   * replication (e.g. test mocks) simply don't implement it.
+   * as `undefined`, indistinguishable from absence. The other is a doc the
+   * replica holds from its own commit alone
+   * (`ISpaceReplica.lacksWatchEvidence()`): the read is served, and without
+   * a pull it keeps returning the replica's own version while other sessions
+   * change the doc. Returns true only in those two cases, and at most once
+   * per (space, id, scope) until the replica drops the doc, the kicked sync
+   * rejects and its caller retracts the reservation
+   * (`retractDocPullKick()`), or the manager releases the space; the caller
+   * kicks the actual sync (see the link-resolution hop loop). Optional: managers
+   * without lazy remote replication (e.g. test mocks) simply don't implement
+   * it.
    */
   shouldPullDoc?(
     space: MemorySpace,
@@ -934,9 +958,16 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
    * advertise `watchRemoveV1` keeps every watch. Resolves once every space's
    * session has answered, to whether some root was kept only for having been
    * loaded or read since the previous call began, which a later call may
-   * release.
+   * release. Then, unless a commit spanning several spaces is still
+   * applying, it releases each space nothing uses any more, as "Releasing a
+   * space's session" in `docs/features/document-release.md` says: it closes
+   * the space's session and forgets the space, which the next use opens
+   * again.
    */
   releaseUnreadDocuments?(options?: ReleaseOptions): Promise<boolean>;
+
+  /** Calls `observer` with each space a release pass releases. */
+  subscribeSpacesReleased?(observer: (space: MemorySpace) => void): Cancel;
 
   /**
    * How many documents this manager has dropped. A cell loaded before the
@@ -1273,6 +1304,15 @@ export interface IStorageProvider {
   presentCount?(absences: readonly UnexaminedAbsence[]): number;
 
   /**
+   * Those of `absences`, addresses {@link unexaminedAbsences} returned, this
+   * replica still holds no record of. Optional alongside
+   * {@link unexaminedAbsences}.
+   */
+  stillUnexamined?(
+    absences: readonly UnexaminedAbsence[],
+  ): readonly UnexaminedAbsence[];
+
+  /**
    * Whether the store read-through, asked for the instance `address` names
    * under `identity`, reported holding nothing there, with no write to it
    * reported since. Such an absence stays unexamined for commit to
@@ -1372,6 +1412,53 @@ export interface IStorageProvider {
 
   /** Test one live space-scoped entity identifier without loading its value. */
   entityIdExists?(id: string): Promise<boolean | undefined>;
+
+  /**
+   * Returns the commits of a branch's history, newest first: those of
+   * `options.branch` (absent, the branch this provider's session is of),
+   * then those it inherits from each ancestor up to its fork point, below
+   * `options.before`. At most `options.limit` are returned, and 500 at the
+   * most, which is also the limit when none is given. Rejects when the
+   * server serves no history.
+   */
+  listHistory?(
+    options?: { branch?: BranchName; before?: number; limit?: number },
+  ): Promise<CommitSummary[]>;
+
+  /**
+   * Observes the newest seq of the space this provider has learned of
+   * moving forward: a commit of its own being accepted, or the server
+   * pushing a commit to a document it watches. Returns the function that
+   * stops observing.
+   */
+  subscribeServerSeq?(observer: (serverSeq: number) => void): () => void;
+
+  /** Returns the space's branches, deleted ones included. */
+  listBranches?(): Promise<BranchInfo[]>;
+
+  /**
+   * Forks the branch `name` from `options.parentBranch` (absent, the
+   * default branch) as of `options.forkSeq` (absent, the parent's head).
+   */
+  createBranch?(
+    name: BranchName,
+    options?: { parentBranch?: BranchName; forkSeq?: number },
+  ): Promise<BranchInfo>;
+
+  /** Deletes the branch `name`, which then takes no further commit. */
+  deleteBranch?(name: BranchName): Promise<void>;
+
+  /**
+   * Restores the space's default branch to the state `options.source`
+   * (absent, the default branch) held as of `options.sourceSeq` (absent,
+   * its head). The space's access list, session-scoped documents, the
+   * serving loop's records and SQLite databases are left as they are.
+   * Returns the restoring commit's seq, or `undefined` when the default
+   * branch already held that state.
+   */
+  restoreBranch?(
+    options?: { source?: BranchName; sourceSeq?: number },
+  ): Promise<number | undefined>;
 
   /** Run a server-side read-only SQLite query against a cell-derived db. */
   sqliteQuery?(
@@ -1811,6 +1898,16 @@ export interface TransactionCommitReceipt {
 }
 
 /**
+ * A user- or session-scoped instance of a document
+ * (`IStorageTransaction.unproducedScopedInstance`).
+ */
+export type UnproducedScopedInstance = {
+  space: MemorySpace;
+  id: URI;
+  scope: "user" | "session";
+};
+
+/**
  * Representation of a storage transaction, which can be used to query state and
  * assert / retract while maintaining consistency guarantees. Storage ensures
  * that transactions retain consistent view of the whole storage through it's
@@ -1862,15 +1959,14 @@ export interface IStorageTransaction {
   derivedWrites?: boolean;
 
   /**
-   * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
-   * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the document
-   * and has not yet run for that instance. Set by link resolution on a serving
-   * runtime only, where such an instance is one the serving loop has not
-   * produced yet, and read by the reactive action's commit, which a run that
-   * read one does not make.
+   * The first user- or session-scoped instance that this transaction read
+   * through a link while the instance was missing and another derivation
+   * registered in the same runtime writes the document and has not yet run for
+   * that instance. Set by link resolution on a serving runtime only, where
+   * such an instance is one the serving loop has not produced yet, and read by
+   * the reactive action's commit, which a run that read one does not make.
    */
-  unproducedScopedInstance?: string;
+  unproducedScopedInstance?: UnproducedScopedInstance;
 
   /**
    * The scope INSTANCE identity this transaction's scoped reads and writes
@@ -2144,6 +2240,17 @@ export interface IStorageTransaction {
    * identity; the full journal remains available through getReadActivities.
    */
   getPotentiallyExternalReadActivities?(): Iterable<IReadActivity> | undefined;
+
+  /**
+   * Optional. Freezes every record that
+   * `getPotentiallyExternalReadActivities` lists, so that each keeps the
+   * metadata object it carries; that object stays as open to change as it
+   * was. Returns a count that advances whenever that list gains a record or
+   * is emptied, so two calls that return the same count frame a list of the
+   * same records, each with the same metadata object. Returns `undefined`
+   * where the transaction froze nothing.
+   */
+  freezeReadActivityRecords?(): number | undefined;
 
   /**
    * Optional ordered log of every applied write attempt, in transaction
@@ -2687,6 +2794,13 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   setCfcContentAddressedLabels(enabled: CfcContentAddressedLabels): void;
 
   /**
+   * Whether commit preparation stores a reclassified value's
+   * creator-releasable `User` clauses as that clause or the declared policy.
+   * Set by the runtime at creation; a change after prepare invalidates it.
+   */
+  setCfcPatternReclassification(enabled: CfcPatternReclassification): void;
+
+  /**
    * Set the exchange-rule policy evaluation dial (Epic B5, spec §4.4.5).
    * Anti-downgrade pinned: once `enforce`, weakening throws.
    */
@@ -2748,6 +2862,14 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
    * threading metadata through intermediate APIs.
    */
   runWithAmbientReadMeta<T>(meta: Metadata, fn: () => T): T;
+
+  /**
+   * Merge `meta` into every read issued until the returned scope is disposed
+   * (explicit per-read meta wins), as `runWithAmbientReadMeta()` does for the
+   * reads its function issues. Scopes nest: each is disposed before the scope
+   * it was entered within.
+   */
+  enterAmbientReadMeta(meta: Metadata): Disposable;
 
   markCfcRelevant(reason?: string): void;
 
@@ -3113,7 +3235,6 @@ export interface IExtendedStorageTransaction extends IStorageTransaction {
   resolveCfcPolicyManifest(
     reference: unknown,
     destinationSpace?: MemorySpace,
-    bindCommit?: boolean,
   ): unknown;
 
   /** Whether the exact manifest is installed for a destination space. */
@@ -3855,6 +3976,16 @@ export interface ISpaceReplica extends ISpace {
   /** Existing session progress without starting I/O or awaiting commits. */
   getDiagnostics?(): SpaceStorageDiagnostic;
 
+  /**
+   * Whether the server this replica is connected to advertised
+   * `markedSplicesV1`, so that a transaction may send a change to an array
+   * as marked splices (`V2StorageTransaction.#arraySpliceGate()`). `false`
+   * until a session exists and for a server that predates marked splices,
+   * and then the change goes index by index. Optional: a replica without it
+   * reads as `false`.
+   */
+  markedSplices?(): boolean;
+
   /** The sizes of the structures this replica holds. */
   getSizes?(): SpaceStorageSizes;
 
@@ -3906,6 +4037,21 @@ export interface ISpaceReplica extends ISpace {
   /** Whether the server this replica's session is on reports the links
    * its walks follow out of the space (`syncCrossingsV1`). */
   crossingsReported?(): boolean;
+
+  /**
+   * Whether a watch through this replica on the space's invitation ledger
+   * revision document (`SPACE_INVITES_REVISION_DOC_ID`) sees it move with
+   * every change to the ledger: the session is on the space's default branch,
+   * where the invitation service moves it, and its server advertises
+   * `spaceInvitesRevision`, as the session's latest handshake said. A session
+   * on another branch sees the document as it stood at the fork, and one that
+   * asked to fork a branch is taken to be of it, even where the server opened
+   * it on the default branch, since `session.open` does not say. A session
+   * replaced on reconnect (`IStorageManager.subscribeSpaceSessionReplaced()`)
+   * is on a server that may answer otherwise, so a reader whose watch rests on
+   * the answer asks again then.
+   */
+  invitesRevisionWatchable?(): boolean;
 
   /** Waits for session restoration before issuing fallback subscriptions. */
   whenSessionRestored?(): Promise<void>;
@@ -4004,6 +4150,26 @@ export interface ISpaceReplica extends ISpace {
     scope?: CellScope,
     instance?: ScopeKey,
   ): Promise<Error | PullError | undefined>;
+
+  /**
+   * Whether the replica holds the document from its own commit alone, with
+   * nothing to show that its session watches it: no frame has delivered the
+   * document, and no watch of the replica's is rooted at it. Where no watch
+   * reaches such a document, it stays at the replica's own version while
+   * other sessions change it, until something loads it. The replica cannot
+   * rule out that a watch rooted at another document reaches it, so this
+   * returns `true` in two such cases as well: a document a load reaches
+   * whose answer has not arrived, and one the commit created within the
+   * reach of a watch that already existed, since the refresh that follows a
+   * commit leaves the committing session's own write out of its frame.
+   * `instance` names a scoped document's instance where it is not the
+   * replica's own.
+   */
+  lacksWatchEvidence?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean;
 
   /**
    * Whether the replica holds a known stored version of the document, with

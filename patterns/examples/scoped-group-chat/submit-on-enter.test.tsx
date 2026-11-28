@@ -4,8 +4,8 @@ import {
   fireEvent,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ScopedGroupChatPlainInputs from "./main-plain-inputs.tsx";
-import ScopedGroupChatWritableInputs from "./main-with-writable-inputs.tsx";
+import ScopedGroupChatPlainInputs from "./plain-inputs/main.tsx";
+import ScopedGroupChatWritableInputs from "./writable-inputs/main.tsx";
 
 // Pressing Enter in a `cf-input` fires its `oncf-submit` with the serialized
 // custom event: the event's `type`, and the component's `detail`.

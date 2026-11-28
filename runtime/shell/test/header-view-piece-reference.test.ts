@@ -12,8 +12,8 @@
  * against the shape of a reference.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * What these tests set and read. `pieceReference` and `render` are public;

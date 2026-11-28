@@ -11,10 +11,10 @@
 // is scoped to files that actually read the gated clock/entropy (Date.now(),
 // no-argument new Date(), Math.random()), since only those can throw the gate
 // error.
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 import { initializeCapabilityGateController } from "./capability-gate-controller.ts";
 
 const ROOT = join(import.meta.dirname!, "..");

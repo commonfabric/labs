@@ -34,7 +34,7 @@ import {
  *     label (used for participant dedup and if the live cell is momentarily
  *     unresolved).
  *
- * Compare to `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`, which
+ * Compare to `patterns/examples/scoped-group-chat/plain-inputs/main.tsx`, which
  * this is modeled on — the change is sourcing identity from the shared profile
  * (cell, not just strings) and rendering it through the badge.
  * See `docs/specs/shared-profile-rosters.md`.

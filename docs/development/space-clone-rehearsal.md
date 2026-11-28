@@ -131,9 +131,11 @@ and one `--datafile` flag for every attached data file. Run `setsrc` once per
 piece with the complete flag set: a rehearsal that omits part of the source
 package does not rehearse the update you mean to make against real data.
 Deployment packages and type-checks the tests but does not run them. It reads
-each data file to store it, and refuses one that is not valid UTF-8 text, but
-never parses or executes it — a data file's bytes are stored exactly as
-authored.
+each data file to store it: a binary image, font, or sound as a base64
+`data:` URL, and any other file, an SVG image among them, as its text, refusing
+one that is not valid UTF-8. It
+never parses or executes a data file, and `cf piece getsrc` returns each one
+byte for byte.
 
 ### Stop the server before resetting
 
@@ -324,8 +326,10 @@ These are all failures that actually happened, not hypotheticals:
   this false negative. Wait before concluding the board is broken.
 - **An unstepped CLI read of a computed result looks empty.** Use `--input` for
   what durably committed and `--step` for computed results. An empty
-  `index --step` next to a non-empty `topics --input` is a
-  result-materialization problem, not an empty board.
+  `index --step` next to a non-empty `topics --input` is either a
+  result-materialization problem or a board updated in place to the Topics
+  pattern that holds its topics in an indexed collection, which never reads
+  that list (`patterns/apps/topics/README.md`), not an empty board.
 - **Never trust a fresh-replica read.** From the 2026-07-10 outage record:
   "every wrong turn in this investigation traces to trusting a fresh-replica
   read."

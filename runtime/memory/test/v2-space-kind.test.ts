@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { isSpaceKind, SPACE_KIND_MAX_LENGTH } from "../v2/space-kind.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("isSpaceKind()", () => {
   it("returns `true` for one lowercase word, or several joined by single hyphens", () => {

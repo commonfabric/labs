@@ -6,10 +6,11 @@ import {
 } from "@std/assert";
 import type { SchemaPathSelector } from "@commonfabric/api";
 import type { MIME, URI } from "@commonfabric/memory/interface";
+import { test } from "@commonfabric/test-support/test";
 import { watchIdForEntry } from "../src/storage/v2.ts";
 import { normalizeSyncSelector } from "../src/storage/v2-watch.ts";
 
-Deno.test("memory v2 watch ids include branch in the stable key", () => {
+test("memory v2 watch ids include branch in the stable key", () => {
   const address = {
     id: "of:watch-id-branch" as URI,
     type: "application/json" as MIME,
@@ -29,7 +30,7 @@ Deno.test("memory v2 watch ids include branch in the stable key", () => {
   );
 });
 
-Deno.test("memory v2 selector normalization ignores unused definitions", () => {
+test("memory v2 selector normalization ignores unused definitions", () => {
   const selectorWith = (name: string): SchemaPathSelector => ({
     path: ["value", "title"],
     schema: {
@@ -54,7 +55,7 @@ Deno.test("memory v2 selector normalization ignores unused definitions", () => {
   assertStrictEquals(left, right);
 });
 
-Deno.test("memory v2 selector normalization drops nested definitions and unused root ones", () => {
+test("memory v2 selector normalization drops nested definitions and unused root ones", () => {
   const selectorWith = (
     unusedName: string,
     usedType: "string" | "number" = "string",
@@ -102,7 +103,7 @@ Deno.test("memory v2 selector normalization drops nested definitions and unused 
   assertNotEquals(left.schema, different.schema);
 });
 
-Deno.test("memory v2 selector normalization ignores inherited definition names", () => {
+test("memory v2 selector normalization ignores inherited definition names", () => {
   const normalized = normalizeSyncSelector({
     path: [],
     schema: {
@@ -122,7 +123,7 @@ Deno.test("memory v2 selector normalization ignores inherited definition names",
 // needs no content hash per `sync()` call to tell them apart.
 //
 
-Deno.test("memory v2 selector normalization collapses schemaless reads", () => {
+test("memory v2 selector normalization collapses schemaless reads", () => {
   const first = normalizeSyncSelector({
     path: ["items", "0", "count"],
     schema: false,
@@ -141,7 +142,7 @@ Deno.test("memory v2 selector normalization collapses schemaless reads", () => {
   assertEquals(first.schema, false);
 });
 
-Deno.test("memory v2 selector normalization separates paths by identity", () => {
+test("memory v2 selector normalization separates paths by identity", () => {
   const at = (path: string[]): SchemaPathSelector =>
     normalizeSyncSelector({
       path,

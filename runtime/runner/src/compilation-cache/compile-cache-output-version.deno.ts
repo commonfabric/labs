@@ -203,14 +203,38 @@ export function outputFingerprintOf(
 }
 
 /**
+ * One corpus entry that has finished compiling, and its place in the whole
+ * compile: which variant it compiled under and which entry it is of that
+ * variant's, each counted from 1.
+ */
+export interface CorpusEntryCompiled {
+  /** The entry's corpus-relative name. */
+  readonly entry: string;
+
+  /** Which variant, of those compiled, the entry compiled under. */
+  readonly variantNumber: number;
+
+  /** How many variants the corpus compiles under. */
+  readonly variantCount: number;
+
+  /** Which entry this is of those compiled under its variant. */
+  readonly entryNumber: number;
+
+  /** How many entries compile under each variant. */
+  readonly entryCount: number;
+}
+
+/**
  * Compile every corpus entry under `root` in the modes `variant` names, as a
  * runtime in those modes compiles a pattern, and reduce the result to what
- * the output fingerprint covers.
+ * the output fingerprint covers. `onCompiled` is called with each entry as
+ * that entry finishes compiling.
  */
 export async function compileCorpus(
   root: string,
   variant: CacheVariantOptions,
   entries: readonly string[] = CORPUS_ENTRIES,
+  onCompiled?: (entry: string) => void,
 ): Promise<CompiledVariant> {
   const signer = await Identity.fromPassphrase("compile-cache version");
   const storageManager = StorageManager.emulate({ as: signer });
@@ -236,6 +260,7 @@ export async function compileCorpus(
           : { patternCoverage: runtime.patternCoverage }),
       });
       compiled.push({ entry, modules: modules.map(compiledOutputOf) });
+      onCompiled?.(entry);
     }
     return { variant: cacheVariantName(variant), entries: compiled };
   } finally {
@@ -244,31 +269,66 @@ export async function compileCorpus(
   }
 }
 
-/** The corpus under `root` compiled under every persisted cache variant. */
+/**
+ * The corpus under `root` compiled under every persisted cache variant.
+ * `onCompiled` is called as each entry finishes compiling under each variant.
+ */
 export async function compileCorpusVariants(
   root: string,
   entries: readonly string[] = CORPUS_ENTRIES,
+  onCompiled?: (compiled: CorpusEntryCompiled) => void,
 ): Promise<CompiledVariant[]> {
   const variants: CompiledVariant[] = [];
-  for (const variant of PERSISTED_CACHE_VARIANTS) {
-    variants.push(await compileCorpus(root, variant, entries));
+  for (const [index, variant] of PERSISTED_CACHE_VARIANTS.entries()) {
+    let entryNumber = 0;
+    variants.push(
+      await compileCorpus(
+        root,
+        variant,
+        entries,
+        (entry) =>
+          onCompiled?.({
+            entry,
+            variantNumber: index + 1,
+            variantCount: PERSISTED_CACHE_VARIANTS.length,
+            entryNumber: ++entryNumber,
+            entryCount: entries.length,
+          }),
+      ),
+    );
   }
   return variants;
+}
+
+/** How {@link computeCompilerOutputVersion} compiles the corpus. */
+export interface CompilerOutputVersionOptions {
+  /** The epoch folded into the version; {@link COMPILE_CACHE_EPOCH} by default. */
+  readonly epoch?: number;
+
+  /** The corpus entries compiled; {@link CORPUS_ENTRIES} by default. */
+  readonly entries?: readonly string[];
+
+  /** Called as each entry finishes compiling under each variant. */
+  readonly onCompiled?: (compiled: CorpusEntryCompiled) => void;
 }
 
 /**
  * The compile-cache version the compiler in the repository at `repoRoot`
  * earns: `cf/esm-compile/` followed by the output fingerprint of the corpus
- * `entries` under its `CORPUS_DIR`.
+ * entries under its `CORPUS_DIR`.
  */
 export async function computeCompilerOutputVersion(
   repoRoot: string,
-  epoch: number = COMPILE_CACHE_EPOCH,
-  entries: readonly string[] = CORPUS_ENTRIES,
+  {
+    epoch = COMPILE_CACHE_EPOCH,
+    entries = CORPUS_ENTRIES,
+    onCompiled,
+  }: CompilerOutputVersionOptions = {},
 ): Promise<string> {
   const compiled = await compileCorpusVariants(
     join(repoRoot, CORPUS_DIR),
     entries,
+    onCompiled,
   );
   return versionOfFingerprint(outputFingerprintOf(compiled, epoch));
 }

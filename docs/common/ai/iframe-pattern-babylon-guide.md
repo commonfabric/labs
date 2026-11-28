@@ -362,9 +362,13 @@ pattern passes in as a stream where it can; the guest sends it an event with
 pattern guide is the contract.
 
 The iframe CSP does not grant arbitrary network access. Prefer procedural
-geometry and materials in a self-contained guest. If a scene needs external
-models or textures, include them as supported pattern data rather than fetching
-from a CDN at runtime.
+geometry and materials in a self-contained guest. A texture image the pattern
+ships goes to the guest through `cf-iframe`'s `assets`: draw
+`await fabric.asset(name).image()` into a `DynamicTexture`'s context and call
+its `update()`. `dataFile.url()` and `dataFile.urls()` read no model file
+(`.glb`, `.gltf`), since their extension table holds images, fonts, and sounds
+alone; see
+[Images and other assets](./iframe-pattern-guide.md#images-and-other-assets).
 
 ## Use narrow and mergeable operations
 

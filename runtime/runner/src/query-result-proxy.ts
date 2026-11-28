@@ -1069,9 +1069,24 @@ export function isCellResult(value: any): value is CellResult<any> {
  * Query proxies deliberately reject freeze/clone traps; validation and hashing
  * boundaries use this snapshot instead of retaining a transaction-backed view.
  */
-export function snapshotQueryResult<T>(value: T): T {
+export function snapshotQueryResult<T>(
+  value: T,
+  options: {
+    /**
+     * Hand a `FabricInstance` on whole, held directly or seen through a cell
+     * read (`instanceReadThroughView`), rather than refusing it or rebuilding
+     * it by its keys as `{}`.
+     */
+    readonly keepInstances?: boolean;
+  } = {},
+): T {
   const seen = new WeakMap<object, unknown>();
   const snapshot = (current: unknown): unknown => {
+    if (options.keepInstances === true) {
+      if (current instanceof FabricInstance) return current;
+      const instance = instanceReadThroughView(current);
+      if (instance !== undefined) return instance;
+    }
     // A special object leafs through whole. It has no own properties for the
     // rebuild below to copy, so snapshotting one by its keys would return
     // `{}` and lose the value.

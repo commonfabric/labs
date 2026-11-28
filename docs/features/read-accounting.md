@@ -71,7 +71,9 @@ the cumulative counts. Document and dependency totals sum per-run cardinalities;
 they are not unions across runs. CLI output labels them as per-run sums.
 
 Each `scheduler.run.complete` telemetry marker carries the run's measurements
-when enabled. The CLI aggregates these events, so actions removed from the graph
+when enabled, and always its duration and whether a change to its inputs
+caused the run; the action's authored site where the engine verified one; and
+the result cell of the piece it belongs to, where it belongs to one. The CLI aggregates these events, so actions removed from the graph
 or evicted from the bounded statistics map still contribute to the step's
 report. It adds each run once rather than combining parent-inclusive totals with
 their children's totals.

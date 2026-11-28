@@ -17,6 +17,7 @@ import {
   StorageManager as WorkerStorageManager,
 } from "@commonfabric/runner/storage/cache";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
 
 import { openAgentStorageHost } from "../lib/agent-connections.ts";
 import { loadPieces } from "../lib/piece.ts";
@@ -93,7 +94,7 @@ async function withDeployment(
   }
 }
 
-Deno.test("loadPieces fails with `Could not connect` at the bounds when the server says nothing", async () => {
+test("loadPieces fails with `Could not connect` at the bounds when the server says nothing", async () => {
   const metaAsked = Promise.withResolvers<void>();
   const healthAsked = Promise.withResolvers<void>();
   const logger = getLogger("deployment-meta");
@@ -141,7 +142,7 @@ Deno.test("loadPieces fails with `Could not connect` at the bounds when the serv
   );
 });
 
-Deno.test("loadPieces opens Memory on the published memory URL and the rest on the API URL", async () => {
+test("loadPieces opens Memory on the published memory URL and the rest on the API URL", async () => {
   await withDeployment(
     "https://router.test",
     true,
@@ -170,7 +171,7 @@ Deno.test("loadPieces opens Memory on the published memory URL and the rest on t
   );
 });
 
-Deno.test("loadPieces opens Memory on the API URL when the deployment publishes none", async () => {
+test("loadPieces opens Memory on the API URL when the deployment publishes none", async () => {
   await withDeployment(null, true, async (observed, keyPath, identity) => {
     await loadPieces({
       apiUrl: "http://api.test:8000",
@@ -182,7 +183,7 @@ Deno.test("loadPieces opens Memory on the API URL when the deployment publishes 
   });
 });
 
-Deno.test("loadPieces opens Memory on an API URL with a path when the deployment publishes none", async () => {
+test("loadPieces opens Memory on an API URL with a path when the deployment publishes none", async () => {
   // The API URL, path and all, is the host Memory opens on, and the runtime
   // holds no memory URL rather than refusing the path.
   await withDeployment(null, true, async (observed, keyPath, identity) => {
@@ -196,7 +197,7 @@ Deno.test("loadPieces opens Memory on an API URL with a path when the deployment
   });
 });
 
-Deno.test("loadPieces names the memory host when the health check fails", async () => {
+test("loadPieces names the memory host when the health check fails", async () => {
   await withDeployment(
     "https://router.test",
     false,
@@ -216,7 +217,7 @@ Deno.test("loadPieces names the memory host when the health check fails", async 
   );
 });
 
-Deno.test("an agent record host opens Memory on the memory URL its own deployment publishes", async () => {
+test("an agent record host opens Memory on the memory URL its own deployment publishes", async () => {
   await withDeployment(
     "https://records-router.test",
     true,

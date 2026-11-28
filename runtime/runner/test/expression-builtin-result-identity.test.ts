@@ -4,10 +4,10 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { NodeFactory } from "../src/builder/types.ts";
 import { ownedResultCause } from "../src/builtins/scope-policy.ts";

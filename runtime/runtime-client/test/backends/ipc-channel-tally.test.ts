@@ -1,6 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { approximateJsonSize } from "@commonfabric/json/approximate-json-size";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   IPC_SAMPLE_STRIDE,

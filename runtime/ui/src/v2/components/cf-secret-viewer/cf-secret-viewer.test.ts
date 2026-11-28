@@ -2,10 +2,15 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { FakeTime } from "@std/testing/time";
 
 import { CFSecretViewer } from "./index.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SECRET = "https://example.invalid/hooks/wh_abc123";
 const MASK = "•".repeat(12);

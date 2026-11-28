@@ -1,5 +1,5 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { describe, it } from "@commonfabric/test-support/test";
 
 // Host-embedding contract seam 7 (docs/features/host-embedding.md §7): pinning
 // an element to a profile is authorized by OWNERSHIP, not by a trusted-UI
@@ -89,8 +89,9 @@ describe("host embedding contract: profile pinning is owner-gated", () => {
     expect(home).toContain(
       "inbox?: OwnerProtectedProfileWrite<ProfileInbox, typeof setInbox>;",
     );
-    // The picture is optional for the same reason: a profile that has never
-    // had one set, of any vintage, holds no property at all.
+    // The picture is optional for the same reason: a stored profile from
+    // before its cell had a default, that has never had one set, holds no
+    // property at all.
     expect(home).toContain(
       "picture?: OwnerProtectedProfileWrite<FabricBytes, typeof setPicture>;",
     );

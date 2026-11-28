@@ -2,7 +2,12 @@ import { createTestSpace, env } from "@commonfabric/integration";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 import {
   initializePiecesController,
@@ -44,7 +49,7 @@ describe("cfc staged publish integration test", () => {
       "..",
       "examples",
       "cfc-staged-publish",
-      "main.tsx",
+      "cfc-staged-publish.tsx",
     );
     const rootPath = join(import.meta.dirname!, "..");
     const program = await resolveLocalProgram(

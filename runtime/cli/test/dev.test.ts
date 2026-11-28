@@ -1,17 +1,33 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { describe, it } from "@commonfabric/test-support/test";
+import { stub } from "@std/testing/mock";
+import { Identity } from "@commonfabric/identity";
+import { entityIdFrom, type Runtime } from "@commonfabric/runner";
+import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
+import { slugIdForSpace } from "@commonfabric/runner/slugs";
 import { argv, bytesToLines, cf, checkStderr, stripAnsi } from "./utils.ts";
 import { InMemoryProgram } from "@commonfabric/js-compiler";
 import {
   collectLocalProgram,
+  createRuntime,
   process,
   serializeMainExport,
 } from "../lib/dev.ts";
 
 const cliPackageDir = join(import.meta.dirname!, "..");
 const repoRoot = join(cliPackageDir, "..", "..");
+
+// `@ts-expect-error` inverts the sense of the line it precedes: the type
+// check fails when that line compiles. A JSON run keeps the pattern console
+// off stdout only in the runtime `process()` makes for it, so a call handing
+// it a runtime shows up here rather than as log lines inside the JSON.
+export const jsonRunInGivenRuntimeIsRejected = (runtime: Runtime) => {
+  const options = { main: "main.ts", run: true, check: false };
+  // @ts-expect-error a JSON run takes no runtime
+  return process({ ...options, patternJson: true }, runtime);
+};
 
 describe("cli check", () => {
   it("rejects main exports that do not serialize as JSON", () => {
@@ -334,6 +350,102 @@ describe("cli check", () => {
         "source for pattern:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA not " +
           "found in space did:key:z6MkjcdxtxTiUWkPkPffhs8ENkCcJjuRCQPpJFb2xyzwHqEk",
       );
+    });
+
+    describe("in a space holding the imported pattern", () => {
+      /**
+       * Publishes a pattern exporting `x = 9` into the runtime's own space,
+       * points the slug `dep` at a piece of it, and returns the space and the
+       * pattern's entry identity.
+       */
+      async function publishDependency(runtime: Runtime) {
+        const space = (await Identity.fromPassphrase("builder")).did();
+        let entryIdentity = "";
+        await runtime.patternManager.compilePattern(
+          [
+            `import { pattern } from "commonfabric";`,
+            `export const x = 9;`,
+            `export default pattern<{ value: number }>(({ value }) => ({ value }));`,
+          ].join("\n"),
+          { space, onEntryIdentity: (identity) => entryIdentity = identity },
+        );
+        const piece = runtime.getCell(space, { space, random: "piece-dep" });
+        await runtime.editWithRetry((tx) => {
+          const pieceWithTx = piece.withTx(tx);
+          pieceWithTx.set({ name: "piece" });
+          pieceWithTx.setMetaRaw("patternIdentity", {
+            identity: entryIdentity,
+            symbol: "default",
+          }, rawMetaWriteAuthorization);
+        });
+        const slug = runtime.getCellFromEntityId(
+          space,
+          entityIdFrom(slugIdForSpace(space, "dep")),
+        );
+        await runtime.editWithRetry((tx) => {
+          const slugWithTx = slug.withTx(tx);
+          slugWithTx.setRawUntyped(
+            piece.withTx(tx).getAsWriteRedirectLink({ base: slugWithTx }),
+          );
+        });
+        return { space, entryIdentity };
+      }
+
+      /**
+       * Runs a program importing `specifier` through `process()` in `runtime`,
+       * returning its main exports and what it wrote to stderr.
+       */
+      async function runImporter(
+        runtime: Runtime,
+        space: string,
+        specifier: string,
+      ) {
+        const dir = await Deno.makeTempDir({ prefix: "dev-fabric-import-" });
+        try {
+          const main = join(dir, "main.ts");
+          await Deno.writeTextFile(
+            main,
+            `export { x } from "${specifier}";\n`,
+          );
+          const errors: string[] = [];
+          using _error = stub(console, "error", (...parts: unknown[]) => {
+            errors.push(parts.join(" "));
+          });
+          const result = await process(
+            { main, rootPath: dir, run: true, check: false, space },
+            runtime,
+          );
+          return { main: result.main, errors };
+        } finally {
+          await Deno.remove(dir, { recursive: true });
+        }
+      }
+
+      it("names the identity an unpinned import resolved to", async () => {
+        await using runtime = await createRuntime();
+        const { space, entryIdentity } = await publishDependency(runtime);
+
+        const { main, errors } = await runImporter(runtime, space, "cf:dep");
+
+        expect(main?.x).toBe(9);
+        expect(errors).toEqual([
+          `resolved cf:dep -> @${entryIdentity} (not pinned; run cf deps update to pin)`,
+        ]);
+      });
+
+      it("names nothing for an import already pinned", async () => {
+        await using runtime = await createRuntime();
+        const { space, entryIdentity } = await publishDependency(runtime);
+
+        const { main, errors } = await runImporter(
+          runtime,
+          space,
+          `cf:dep@${entryIdentity}`,
+        );
+
+        expect(main?.x).toBe(9);
+        expect(errors).toEqual([]);
+      });
     });
   });
 });

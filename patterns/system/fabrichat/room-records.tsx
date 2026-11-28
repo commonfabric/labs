@@ -60,6 +60,7 @@ import type {
 import { profileKeyOf } from "../private-inbox/private-inbox.tsx";
 import { isSharedSpaceCatalog } from "../shared-space/shared-space-catalog.ts";
 import {
+  attachRequests,
   isInMain,
   isSingleEmoji,
   type ShownIn,
@@ -90,6 +91,7 @@ import {
   type ChatContainer,
   type ChatDeletedBody,
   type ChatReaction,
+  type ChatRoomActivity,
   type ChatRoomKind,
   type ChatRoomLink,
   type ChatRoomPolicy,
@@ -925,6 +927,12 @@ export interface JoinRoomRequest {
    * `JoinedEvent` says.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands after the viewer's message, as
+   * `JoinedEvent` says; absent for any other join.
+   */
+  activity?: ChatRoomActivity;
 }
 
 /** What a room's write tells `tellManagerJoined` of how the viewer joined. */
@@ -936,6 +944,14 @@ export interface JoinedEvent {
    * title up to the room's.
    */
   messageAct?: boolean;
+
+  /**
+   * Where the conversation stands once the viewer's message is recorded: how
+   * many messages the room holds, and the message's own `sentAt`. Only a
+   * message sends it, so the viewer's manager can note the room's activity
+   * without reading the room.
+   */
+  activity?: ChatRoomActivity;
 }
 
 /**
@@ -1107,10 +1123,13 @@ export interface ManagerJoinState {
  * Tells the viewer's manager the viewer has joined the room. The manager's
  * own event checks its private catalog, so catalog reads stay in the
  * manager's event. For an already listed room it changes no membership, and
- * brings the title its catalog lists the room under up to the room's, except
- * for a join marked `messageAct`, which leaves the title as it is. A room's
- * acts send it an event once they have recorded what the viewer wrote, saying
- * whether that was a message or a reaction, which it passes on.
+ * brings the title its catalog lists the room under, and where the
+ * conversation stands, up to the room's, except for a join marked
+ * `messageAct`, which leaves the title as it is, and notes where a message
+ * leaves the conversation. A room's acts send it an event once they have
+ * recorded what the viewer wrote, saying whether that was a message or a
+ * reaction, and for a message where it leaves the conversation, which it
+ * passes on.
  *
  * The manager is read here, as a value, rather than by what the room stores:
  * a stream bound to a manager that isn't there still reads as present, so
@@ -1128,6 +1147,7 @@ export const tellManagerJoined = handler<JoinedEvent, ManagerJoinState>(
       room: self,
       ...(container !== undefined && { container }),
       ...(event?.messageAct === true ? { messageAct: true } : {}),
+      ...(event?.activity !== undefined && { activity: event.activity }),
     });
   },
 );
@@ -1427,11 +1447,12 @@ const sendInto = (
   // A message may link only a list that exists, so the list is made before
   // the message links it.
   const reactions = new Writable<ReactionsValue>([] as ReactionsValue);
+  const sentAt = now();
   messages.push({
     authorProfile: profile,
     body,
     ...(attachments.length === 0 ? {} : { attachments }),
-    sentAt: now(),
+    sentAt,
     ...(stored === undefined ? {} : { replyTo: stored }),
     reactions,
   } as SentMessage);
@@ -1439,7 +1460,10 @@ const sendInto = (
     titled.record.set(titled.value);
     threadInfo?.addUnique(titled.record);
   }
-  joined?.send({ messageAct: true });
+  joined?.send({
+    messageAct: true,
+    activity: { count: (messages.get() ?? []).length, newestAt: sentAt },
+  });
 };
 
 /**
@@ -1540,7 +1564,8 @@ const isRemoved = (outcome: FileRequestOutcome): boolean =>
  * nothing, and one whose removal is done, or found no entry, is removed, and
  * neither is kept. One whose `add` or `remove` has yet to answer is kept, and
  * so is one whose `remove` was refused otherwise, which the composer shows
- * and never sends again. Each request's outcome is read by its id alone.
+ * and never sends again, and with no store, which answers nothing, every file
+ * is kept. Each request's outcome is read by its id alone.
  */
 const settleTakenOut = (
   composer: ComposerCell,
@@ -1548,15 +1573,10 @@ const settleTakenOut = (
   takenOut: readonly TakenOutAttachment[],
 ): void => {
   const target = store?.resolveAsCell();
-  if (target === undefined) {
-    composer.key("takenOut").set(
-      takenOut.length === 0 ? undefined : [...takenOut],
-    );
-    return;
-  }
-  const requests = target.key("requests");
   const outcomeOf = (requestId: string) =>
-    requests.key(requestId).get() as FileRequestOutcome | undefined;
+    target?.key("requests").key(requestId).get() as
+      | FileRequestOutcome
+      | undefined;
   const kept = takenOut.flatMap((file): TakenOutAttachment[] => {
     const removalId = removalRequestId(file.requestId);
     if (file.removing === true) {
@@ -1564,7 +1584,7 @@ const settleTakenOut = (
       return removal !== undefined && isRemoved(removal) ? [] : [file];
     }
     const added = outcomeOf(file.requestId);
-    if (added === undefined) return [file];
+    if (target === undefined || added === undefined) return [file];
     if (added.status !== "done") return [];
     target.key("remove").send({ requestId: removalId, entry: added.entry });
     return [{ ...file, removing: true }];
@@ -1707,8 +1727,8 @@ export const prepareAttach = handler<unknown, PrepareAttachState>(
  * store has answered, whose file was sent, taken out or refused since. Moves
  * the composer's files taken out on, as `settleTakenOut()` does.
  *
- * @throws If the space has no store, or the files would make more
- *   attachments than the room's policy allows.
+ * @throws If the space has no store, or the files this run adds would make
+ *   more attachments than the room's policy allows.
  */
 export const commitAttach = handler<UploadEvent, AttachState>(
   (event, { composer, store, hasStore }) => {
@@ -1720,21 +1740,20 @@ export const commitAttach = handler<UploadEvent, AttachState>(
       throw new Error(NOWHERE_FOR_FILES);
     }
     const attaching = composer.get()?.attaching ?? [];
-    const max = FABRICHAT_POLICY.maxAttachments;
-    if (attaching.length + files.length > max) {
-      throw new Error(`A message can have at most ${max} attachments.`);
-    }
-    const key = eventKey();
     const takenOut = composer.get()?.takenOut ?? [];
     const requests = target.key("requests");
     const held = new Set(
       [...attaching, ...takenOut].map((file) => file.requestId),
     );
-    const added = files.flatMap((file, index) => {
-      const requestId = `attach-${key}-${index}`;
-      if (held.has(requestId) || requests.key(requestId).get() !== undefined) {
-        return [];
-      }
+    const adding = attachRequests(
+      eventKey(),
+      files,
+      (requestId) =>
+        held.has(requestId) || requests.key(requestId).get() !== undefined,
+      attaching.length,
+      FABRICHAT_POLICY.maxAttachments,
+    );
+    const added = adding.map(({ requestId, file }) => {
       target.key("add").send({
         requestId,
         name: file.name,
@@ -1743,7 +1762,7 @@ export const commitAttach = handler<UploadEvent, AttachState>(
         size: file.size,
         onConflict: "rename",
       });
-      return [{ requestId, name: file.name }];
+      return { requestId, name: file.name };
     });
     composer.key("attaching").set([...attaching, ...added]);
     if (takenOut.length > 0) settleTakenOut(composer, store, takenOut);

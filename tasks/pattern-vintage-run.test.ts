@@ -1,13 +1,21 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
+import { SCHEMA_META_MEMBER } from "@commonfabric/data-model-schema/schema-refs";
 import { Identity } from "@commonfabric/identity";
+import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   AUTO,
   AUTO_GENERATIONS_KEPT,
   collectVintages,
   PINNED,
+  relativeToRepo,
   reportUncovered,
 } from "./pattern-vintage-lib.ts";
 import {
@@ -21,6 +29,7 @@ import {
   captureGenerations,
   captureMissing,
   captureVintage,
+  fixtureIdentity,
   type GateRoots,
   isUpgradeTarget,
   pinNewestGeneration,
@@ -489,6 +498,69 @@ const COMPATIBLE_SUBJECT_TEST = SUBJECT_TEST.replace(
 const TEST_KEY = KEY.replace(/\.tsx$/, ".test.tsx");
 
 /**
+ * A subject whose only state is empty, so an update that leaves its root
+ * reading as nothing strands no key the vintage held a value under.
+ */
+const emptySubject = (items: string) =>
+  [
+    "import { Writable, pattern } from 'commonfabric';",
+    "export interface Output { items: Writable<string[]> }",
+    "export default pattern<Record<string, never>, Output>(() => {",
+    `  const items = new Writable<string[]>(${items}).for('items');`,
+    "  return { items };",
+    "});",
+    "",
+  ].join("\n");
+
+const EMPTY_SUBJECT_TEST = [
+  "import { assert, pattern, TESTS } from 'commonfabric';",
+  `import Subject from './${KEY}';`,
+  "export default pattern(() => {",
+  "  const subject = Subject({});",
+  "  const empty = assert(() => subject.items.get().length === 0);",
+  "  return { [TESTS]: [{ assertion: empty }], subject };",
+  "});",
+  "",
+].join("\n");
+
+describe("fixtureIdentity", () => {
+  const roots: GateRoots = {
+    repoRoot: "/repo",
+    patternsRoot: "/repo/patterns",
+    vintagesRoot: "/repo/vintages",
+    signer,
+  };
+  const entry = (identity: string, main: string) => ({
+    identity,
+    symbol: "default",
+    main,
+    cellId: `of:fid1:${identity}`,
+    space: signer.did(),
+  });
+
+  it("names a fixture after the test the capture ran", () => {
+    expect(
+      fixtureIdentity(roots, "apps/a.test.tsx", [
+        entry("subject", "/patterns/apps/a.tsx"),
+        entry("test", "/patterns/apps/a.test.tsx"),
+      ]),
+    ).toBe("test");
+  });
+
+  it("refuses a run that recorded no instantiation of the test", () => {
+    expect(() =>
+      fixtureIdentity(roots, "apps/a.test.tsx", [
+        entry("subject", "/patterns/apps/a.tsx"),
+        entry("other", "/patterns/apps/b.test.tsx"),
+      ])
+    ).toThrow(
+      "cannot capture apps/a.test.tsx: the run recorded no instantiation " +
+        "of /patterns/apps/a.test.tsx",
+    );
+  });
+});
+
+/**
  * The upgrade-target filter, case by case.
  *
  * Its own tests rather than only end-to-end coverage, because the invariant it
@@ -609,6 +681,43 @@ describe("the vintage gate, end to end", () => {
 
     expect(replayed).toBe(1);
     expect(failures).toEqual([]);
+  });
+
+  it("reports each fixture, then each of its targets, as its replay begins", async () => {
+    // A fixture that fails before reaching its targets still reports itself.
+    await captureMissing(
+      roots,
+      [TEST_KEY],
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+    const emptyDir = `${roots.vintagesRoot}/${KEY}/${PINNED}`;
+    await Deno.mkdir(emptyDir, { recursive: true });
+    await Deno.writeFile(
+      `${emptyDir}/2026-07-29T12-00-00.000Z-neverwritten.sqlite`,
+      new Uint8Array(),
+    );
+    const lines: string[] = [];
+
+    const { vintages, perVintage } = await replayAll(roots, {
+      progress: (line) => lines.push(line),
+    });
+
+    // Walked in path order, so the captured fixture comes first.
+    expect(vintages.map((vintage) => vintage.testKey)).toEqual([TEST_KEY, KEY]);
+    expect(perVintage.map((outcome) => outcome.failed)).toEqual([false, true]);
+    const { targets } = perVintage[0];
+    expect(targets).toBeGreaterThan(0);
+    const fixtureLine = (index: number) =>
+      `fixture ${index + 1}/2: ${
+        relativeToRepo(vintages[index].path, roots.repoRoot)
+      }`;
+    const targetLines = Array.from({ length: targets }, (_, index) => {
+      const counted = `${index + 1}/${targets}`;
+      return expect.stringMatching(
+        new RegExp(`^  target ${counted}: /patterns/\\S+\\.tsx \\(\\S+\\)$`),
+      );
+    });
+    expect(lines).toEqual([fixtureLine(0), ...targetLines, fixtureLine(1)]);
   });
 
   it("spools no records for a caller that did not ask for them", async () => {
@@ -874,6 +983,122 @@ describe("the vintage gate, end to end", () => {
     );
     expect(reasonFor("__cfPattern_11")).toContain(
       "neither a repo path nor a served pattern route",
+    );
+  });
+
+  /**
+   * Sets the stored result schema of the subject's root in the pinned fixture
+   * to `schema`, or removes it when `schema` is `undefined`, leaving the
+   * root's presence marker in place. A native capture stamps the two together,
+   * so a root holding one without a usable other is written directly.
+   */
+  const rewriteSubjectSchema = async (schema: false | undefined) => {
+    const [pinned] = await collectVintages(roots.vintagesRoot);
+    const tmp = await Deno.makeTempDir({ prefix: "vintage-gate-doctor-" });
+    const vintage = await openFileBackedRuntime(signer, tmp, pinned.path);
+    try {
+      const manifest = await readVintageManifest(vintage);
+      const subject = manifest?.entries.find((e) =>
+        e.main === `/patterns/${KEY}`
+      );
+      if (subject === undefined) throw new Error("no subject root recorded");
+      const root = vintage.runtime.getCellFromEntityId(
+        signer.did(),
+        subject.cellId,
+      );
+      await root.sync();
+      const { error } = await vintage.runtime.editWithRetry((tx) => {
+        root.withTx(tx).setMetaRaw(
+          SCHEMA_META_MEMBER,
+          schema,
+          rawMetaWriteAuthorization,
+        );
+      });
+      expect(error).toBeUndefined();
+      await vintage.runtime.idle();
+      await vintage.runtime.storageManager.synced();
+      await vintage.snapshot(`${tmp}/rewritten.sqlite`);
+    } finally {
+      await vintage.dispose().catch(() => {});
+    }
+    // The primary file only; this fixture is single-space.
+    await Deno.copyFile(`${tmp}/rewritten.sqlite`, pinned.path);
+    await Deno.remove(tmp, { recursive: true }).catch(() => {});
+  };
+
+  it("FAILS a root whose stored schema reads back nothing, and says so", async () => {
+    // The update applies, but the vintage's side of the comparison cannot be
+    // read, so nothing about stranded state could be checked. That is a
+    // failure rather than a pass, and it names the schema as present.
+    await captureMissing(
+      roots,
+      [TEST_KEY],
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+    await rewriteSubjectSchema(false);
+    await setSource(COMPATIBLE);
+
+    const { updated, failures } = await replayAll(roots);
+
+    expect(updated).toBe(0);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].detail).toContain(
+      "stores a result schema that reads back nothing",
+    );
+    expect(failures[0].detail).not.toContain("no readable stored schema");
+  });
+
+  it("FAILS a root that carries no stored schema, and says so", async () => {
+    await captureMissing(
+      roots,
+      [TEST_KEY],
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+    await rewriteSubjectSchema(undefined);
+    await setSource(COMPATIBLE);
+
+    const { updated, failures } = await replayAll(roots);
+
+    expect(updated).toBe(0);
+    expect(failures).toHaveLength(1);
+    expect(failures[0].detail).toContain(
+      "carries a presence marker but no readable stored schema",
+    );
+    expect(failures[0].detail).not.toContain("reads back nothing");
+  });
+
+  it("FAILS an update that leaves the root reading as nothing", async () => {
+    // Nothing is stranded — the vintage held only an empty list — and nothing
+    // is refused, yet the root no longer reads as anything. The replay of a
+    // candidate that keeps the root is the control: it passes over the same
+    // fixture.
+    await setSource(emptySubject("[]"));
+    await setTestSource(EMPTY_SUBJECT_TEST);
+    await captureMissing(
+      roots,
+      [TEST_KEY],
+      new Date("2026-07-29T12:00:00.000Z"),
+    );
+
+    await setSource(emptySubject("['seeded']"));
+    const kept = await replayAll(roots);
+    expect(kept.failures).toEqual([]);
+    expect(kept.updated).toBe(1);
+
+    await setSource(
+      [
+        "import { pattern } from 'commonfabric';",
+        "export default pattern<Record<string, never>, Record<string, never>>(",
+        "  () => ({}),",
+        ");",
+        "",
+      ].join("\n"),
+    );
+    const gone = await replayAll(roots);
+    expect(gone.updated).toBe(0);
+    expect(gone.failures).toHaveLength(1);
+    expect(gone.failures[0].detail).toContain(
+      "was not refused, but the root now reads as nothing",
     );
   });
 
@@ -1802,6 +2027,79 @@ describe("the vintage gate, end to end", () => {
       expect(problems[0]).toContain("the run did not complete");
       expect(problems[0]).toContain("is a multi-user test");
       expect(problems[0]).not.toContain("its own tests did not pass");
+      expect(await collectVintages(roots.vintagesRoot)).toEqual([]);
+    });
+
+    it("refuses a run that instantiated a pattern outside the patterns root", async () => {
+      // The replay maps every recorded root to a file under the patterns root,
+      // so a root from elsewhere would fail every later replay of the fixture.
+      await Deno.mkdir(`${dir}/elsewhere`);
+      await Deno.writeTextFile(
+        `${dir}/elsewhere/helper.tsx`,
+        [
+          "import { pattern } from 'commonfabric';",
+          "export default pattern<Record<string, never>, { out: string }>(",
+          "  () => ({ out: 'helped' }),",
+          ");",
+          "",
+        ].join("\n"),
+      );
+      await setSubjectTest(
+        SUBJECT_TEST
+          .replace(
+            `import Subject from './${KEY}';`,
+            `import Subject from './${KEY}';\nimport Helper from '../elsewhere/helper.tsx';`,
+          )
+          .replace(
+            "  const subject = Subject({});",
+            "  const subject = Subject({});\n  const helper = Helper({});",
+          )
+          .replace(
+            "subject.items.get().length === 1",
+            "subject.items.get().length === 1 && helper.out === 'helped'",
+          ),
+      );
+
+      const { captured, problems } = await captureMissing(
+        roots,
+        [TEST_KEY],
+        new Date("2026-07-29T12:00:00.000Z"),
+      );
+
+      expect(captured).toEqual([]);
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toMatch(
+        /: 1 of 3 instantiation\(s\) cannot be mapped to a file \(\S+#default\)/,
+      );
+      expect(await collectVintages(roots.vintagesRoot)).toEqual([]);
+    });
+
+    it("refuses a run that instantiated only test patterns", async () => {
+      // The test asserts and passes, but drives no pattern a later version
+      // could be applied to, so the fixture would have nothing to replay.
+      await setSubjectTest(
+        [
+          "import { assert, pattern, TESTS } from 'commonfabric';",
+          "export default pattern(() => {",
+          "  const holds = assert(() => 1 + 1 === 2);",
+          "  return { [TESTS]: [{ assertion: holds }] };",
+          "});",
+          "",
+        ].join("\n"),
+      );
+
+      const { captured, problems } = await captureMissing(
+        roots,
+        [TEST_KEY],
+        new Date("2026-07-29T12:00:00.000Z"),
+      );
+
+      expect(captured).toEqual([]);
+      expect(problems).toHaveLength(1);
+      expect(problems[0]).toContain(
+        "the run instantiated no upgradable pattern (1 instantiation(s), " +
+          "all test patterns)",
+      );
       expect(await collectVintages(roots.vintagesRoot)).toEqual([]);
     });
 

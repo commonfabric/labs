@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
-import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
+import { dirname, fromFileUrl, join } from "@std/path";
 
 import {
   coverageRecords,
@@ -16,6 +15,8 @@ import { MAIN_REPORT_MARKER } from "./test-selection/report.ts";
 import type { Suite } from "./test-topology/suite.ts";
 import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
 import type { TestRecord } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import type { ManifestFetch } from "./test-selection/store.ts";
 import type { RunOutcomes } from "./test-selection/report.ts";
@@ -2040,6 +2041,61 @@ describe("post-main-report", () => {
           Deno.env.set("GITHUB_EVENT_PATH", eventPath);
         }
       }
+    });
+
+    describe("as a command-line program", () => {
+      /**
+       * Runs the script with `args` and the environment of this process,
+       * less anything naming a token or a run, plus `extra`.
+       */
+      async function runScript(
+        args: string[],
+        extra: Record<string, string> = {},
+      ) {
+        const env = Deno.env.toObject();
+        delete env.GITHUB_TOKEN;
+        delete env.GITHUB_EVENT_PATH;
+        delete env.MAIN_REPORT_RUN_ID;
+        const root = fromFileUrl(new URL("..", import.meta.url));
+        const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+          root,
+          args: (lockPath) => [
+            "run",
+            "--config",
+            join(root, "deno.jsonc"),
+            "--lock",
+            lockPath,
+            "--allow-env",
+            "--allow-read",
+            join(root, "tasks/post-main-report.ts"),
+            ...args,
+          ],
+          clearEnv: true,
+          env: { ...env, ...extra },
+        });
+        const decoder = new TextDecoder();
+        return {
+          code,
+          stdout: decoder.decode(stdout),
+          stderr: decoder.decode(stderr),
+        };
+      }
+
+      it("exits 1 and says the token is required without one", async () => {
+        const { code, stdout, stderr } = await runScript(["--dry-run"]);
+        expect(code).toBe(1);
+        expect(stderr).toContain("GITHUB_TOKEN is required.");
+        expect(stdout).not.toContain("Nothing to report on");
+      });
+
+      it("exits 0 with a token where no event names a run", async () => {
+        const { code, stdout, stderr } = await runScript(["--dry-run"], {
+          GITHUB_TOKEN: "token",
+        });
+        expect(code).toBe(0);
+        expect(stdout).toContain("Nothing to report on: no run in the event.");
+        expect(stderr).not.toContain("GITHUB_TOKEN is required.");
+      });
     });
   });
 

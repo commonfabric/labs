@@ -1,10 +1,15 @@
 /** The per-tag first-request measurement, over a recorded run. */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
 
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { main, measureRequest } from "../scripts/measure-request.ts";
 
@@ -94,6 +99,37 @@ describe("measure-request", () => {
             "Result schema (JSON):",
             JSON.stringify({ type: "object" }),
           ].join("\n"),
+        },
+        { role: "user", content: "Granted references for this run: none." },
+        { role: "user", content: "count to 100" },
+        { role: "assistant", content: "" },
+      ]),
+    );
+    expect(await measureRequest(dir)).toEqual(before);
+  });
+
+  it("measures a run recorded with the schema as its own system message as one recorded with it in the prompt", async () => {
+    const before = await measureRequest(dir);
+    Deno.writeTextFileSync(
+      join(dir, "transcript.json"),
+      JSON.stringify([
+        {
+          role: "system",
+          content: [
+            "You are cf-harness.",
+            "",
+            "Additional instructions:",
+            "Answer in one line.",
+            "",
+            "Structured result contract:",
+            "- The result schema follows these instructions as a message of its own.",
+          ].join("\n"),
+        },
+        {
+          role: "system",
+          content: `Result schema (JSON):\n${
+            JSON.stringify({ type: "object" })
+          }`,
         },
         { role: "user", content: "Granted references for this run: none." },
         { role: "user", content: "count to 100" },

@@ -5,11 +5,11 @@
  * assertion). Mirrors test-runner-console-capture.test.ts.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { resolve } from "@std/path";
 import { runTests } from "../lib/test-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const FIXTURES = resolve(import.meta.dirname!, "fixtures/settle");
 
@@ -73,7 +73,7 @@ describe(
       );
       expect(results[0].error ?? "").toContain(
         "must have an 'action', 'press', 'assertion', 'render', 'settle', " +
-          "'label', or 'await'",
+          "'deleteSpace', 'label', or 'await'",
       );
       // The step's own key, not the empty list the peek schema leaves behind.
       expect(results[0].error ?? "").toContain('Got: `["notAValidStep"]`');

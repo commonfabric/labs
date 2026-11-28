@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchemaObj } from "@commonfabric/api";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
@@ -8,6 +7,7 @@ import { anySchema } from "@commonfabric/data-model-schema/schema-walk";
 import { decomposeSchema, type JSONSchema } from "@commonfabric/runner";
 import type { IfcKey } from "@commonfabric/runner/cfc";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { schemaForSelection } from "../lib/cell-selection.ts";
 import { externalizeSchema } from "../../runner/src/link-utils.ts";
@@ -30,6 +30,7 @@ const SAMPLES = {
   exactCopyOf: ["draft"],
   projection: { from: "/draft", path: "/name" },
   collection: { subsetOf: ["all"] },
+  reclassify: [{ type: "policy" }],
   flowPrecisionClaim: { kind: "pointwise" },
 } satisfies Record<IfcKey | "observes", unknown>;
 
@@ -53,6 +54,7 @@ const EXPECTED = {
   exactCopyOf: "dropped",
   projection: "dropped",
   collection: "dropped",
+  reclassify: "dropped",
   flowPrecisionClaim: "dropped",
 } satisfies Record<IfcKey | "observes", "carried" | "dropped">;
 
@@ -233,6 +235,25 @@ describe("schemaForSelection()", () => {
         properties: { name: { $ref: `cid:${hash}` } },
       };
       expect(schemaForSelection(schema)).toBe(schema);
+    });
+
+    it("throws for a schema naming a document whose own positions cannot be hashed", () => {
+      const named = externalizeSchema(claimed);
+      const unhashable = {
+        type: "object",
+        properties: { name: named, computed: { const: () => "value" } },
+      } as unknown as JSONSchema;
+      expect(() => schemaForSelection(unhashable)).toThrow(
+        /Cannot hash value/,
+      );
+      // The same schema with a hashable value in that position is inlined.
+      const hashable: JSONSchema = {
+        type: "object",
+        properties: { name: named, computed: { const: "value" } },
+      };
+      expect(containsExternalSchemaRef(schemaForSelection(hashable))).toBe(
+        false,
+      );
     });
   });
 });

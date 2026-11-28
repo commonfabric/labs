@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { deepFreeze } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
 
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { Cell } from "../src/cell.ts";
 import type { RuntimeProgram } from "../src/harness/types.ts";
 import { getDerivedInternalCellLink } from "../src/link-utils.ts";
@@ -272,6 +277,39 @@ describe("positional-child-guard", () => {
       )).rejects.toThrow(
         /refusing to set up .*#Counter for a positional spot over the child of .*#Other: a child of .*#Counter runs at another positional spot/,
       );
+    });
+  });
+
+  describe("a positional child whose pattern identity is not stored", () => {
+    it("is set up over without a refusal, since nothing names the pattern it ran", async () => {
+      // The refusal `WITH_SIBLING` meets for a child that records `Counter`
+      // rests on that record; with neither of the child's identity members,
+      // nothing shows that the child at the spot moved.
+
+      const cell = await deployedParent("positional-unidentified");
+      const child = rt.getCellFromLink({
+        space,
+        id: positionalChild(cell, 0) as `of:${string}`,
+        path: [],
+      });
+      const clear = rt.edit();
+      for (
+        const member of ["patternIdentity", "patternSetupIdentity"] as const
+      ) {
+        child.withTx(clear).setMetaRaw(
+          member,
+          undefined,
+          rawMetaWriteAuthorization,
+        );
+      }
+      expect((await clear.commit().settled).error).toBeUndefined();
+
+      const outcome = await update(cell, WITH_SIBLING).then(
+        () => "updated",
+        (error: Error) => error.message,
+      );
+
+      expect(outcome).toBe("updated");
     });
   });
 

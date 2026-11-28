@@ -31,7 +31,6 @@
 // stale-read shape, and a vocabulary pin below keeps the injected shape
 // honest against the classifier the retry protocol actually consults.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { getLoggerCountsBreakdown } from "@commonfabric/logger";
@@ -46,10 +45,23 @@ import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog } from "./support/serving-waits.ts";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
+import {
   isRetryableCommitRejection,
   isStaleReadConflict,
 } from "../src/storage/rejection.ts";
 import { createTransactionCommitReceipt } from "../src/storage/commit-receipt.ts";
+
+// This file runs on the real clock because it drives a live memory server and
+// waits on transport edges with bounded timeouts; its retry path's catch-up
+// rides those edges, not logical time, and auto-advance would fire the retry
+// backoff as fast as it arms.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("ui-cell-write space");
 const space = spaceSigner.did() as MemorySpace;

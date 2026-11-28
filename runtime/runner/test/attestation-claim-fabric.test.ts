@@ -5,11 +5,11 @@
 // only a content-aware comparison can tell two distinct same-class instances
 // apart; these tests pin the verdicts that depend on that.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { describe, it } from "@commonfabric/test-support/test";
 import { claim } from "../src/storage/transaction/attestation.ts";
 import type {
   IAttestation,

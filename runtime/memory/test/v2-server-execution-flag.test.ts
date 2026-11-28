@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { connect, loopback } from "../v2/client.ts";
 import { Server } from "../v2/server.ts";
 import { authorizeLoopbackSessionOpen } from "../v2/session-open-auth.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("the `serverExecution` hello flag", () => {
   let server: Server;

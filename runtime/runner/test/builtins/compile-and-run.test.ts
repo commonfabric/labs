@@ -1,9 +1,18 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 
+import type { JSONSchema } from "@commonfabric/api";
+import { FabricError } from "@commonfabric/data-model/fabric-instances";
 import { Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { CompilerError } from "@commonfabric/js-compiler/errors";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import type { BuiltInCompileAndRunParams } from "commonfabric";
 
 import type { Pattern } from "../../src/builder/types.ts";
@@ -70,10 +79,13 @@ describe("compile-and-run", () => {
   });
 
   /** Builds a node and returns its action, its outputs, and its stop. */
-  function node(name: string) {
+  function node(name: string, inputSchema?: JSONSchema) {
     const inputs = runtime.getCell<BuiltInCompileAndRunParams<unknown>>(
       space,
       `${name}-inputs`,
+      inputSchema === undefined
+        ? undefined
+        : { type: "object", properties: { input: inputSchema } },
     );
     const parent = runtime.getCell(space, `${name}-parent`);
     let outputs: Outputs | undefined;
@@ -87,7 +99,7 @@ describe("compile-and-run", () => {
       runtime,
     );
     return {
-      async run(program: RuntimeProgram) {
+      async run(program: BuiltInCompileAndRunParams<unknown>) {
         const tx = runtime.edit();
         inputs.withTx(tx).set(program);
         action(tx);
@@ -193,6 +205,71 @@ describe("compile-and-run", () => {
   });
 
   describe("a finished compilation", () => {
+    it("passes nested object and array inputs to the compiled pattern", async () => {
+      const n = node("structured-input", {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: { value: { type: "number" } },
+              required: ["value"],
+            },
+          },
+        },
+        required: ["items"],
+      });
+      const input = { items: [{ value: 10 }, { value: 20 }] };
+      await n.run({ ...PROGRAM, input });
+
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      compilations[0].resolve(
+        pattern<{ items: { value: number }[] }>(({ items }) => ({ items })),
+      );
+      await drain();
+      const shown = await waitForCellValue(
+        runtime,
+        n.outputs.result.key("items"),
+        (value) => value !== undefined,
+      );
+      expect(shown).toEqual(input.items);
+      expect(created).toHaveLength(1);
+
+      await n.run({ ...PROGRAM, input: { items: [{ value: 30 }] } });
+      const updated = await waitForCellValue(
+        runtime,
+        n.outputs.result.key("items"),
+        (value) => Array.isArray(value) && value.length === 1,
+      );
+      expect(updated).toEqual([{ value: 30 }]);
+      expect(compilations).toHaveLength(1);
+    });
+
+    it("preserves a special value in a schema-bearing input", async () => {
+      const n = node("special-input", {
+        type: "object",
+        properties: { failure: true },
+        required: ["failure"],
+      });
+      await n.run({
+        ...PROGRAM,
+        input: { failure: new TypeError("child input") },
+      });
+
+      const { pattern } = createTrustedBuilder(runtime).commonfabric;
+      compilations[0].resolve(
+        pattern<{ failure: unknown }>(({ failure }) => ({ failure })),
+      );
+      await drain();
+      const failure = n.outputs.result.key("failure");
+      await waitForCellValue(runtime, failure, (value) => value !== undefined);
+      const stored = failure.getRaw({ lastNode: "value" });
+      assert(stored instanceof FabricError);
+      expect(stored.message).toBe("child input");
+      expect(stored.name).toBe("TypeError");
+    });
+
     it("runs no pattern for a compilation a newer program superseded", async () => {
       const n = node("superseded-success");
       await n.run(PROGRAM);

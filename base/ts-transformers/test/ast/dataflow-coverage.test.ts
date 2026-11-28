@@ -1,7 +1,11 @@
+import { expect } from "@std/expect";
 import { assert, assertEquals } from "@std/assert";
 import ts from "typescript";
 
 import { createDataFlowAnalyzer } from "../../src/ast/dataflow.ts";
+import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
+import { createInMemoryProgram } from "../utils.ts";
+import { describe, it, test } from "@commonfabric/test-support/test";
 
 // Branded-cell prelude so `state.*` reads resolve to a reactive (opaque) type
 // under `noLib`, mirroring the reactive harness prelude in dataflow.test.ts.
@@ -207,12 +211,12 @@ function analyzeTsx(source: string, name: string) {
 // Structural wrappers around a reactive read (1084-1098)
 //
 
-Deno.test("parenthesized reactive read stays reactive", () => {
+test("parenthesized reactive read stays reactive", () => {
   const analysis = analyze(`const value = (state.count);`, "value");
   assert(analysis.containsReactive);
 });
 
-Deno.test("as-expression around a reactive read stays reactive", () => {
+test("as-expression around a reactive read stays reactive", () => {
   const analysis = analyze(
     `const value = state.count as OpaqueCell<number>;`,
     "value",
@@ -220,7 +224,7 @@ Deno.test("as-expression around a reactive read stays reactive", () => {
   assert(analysis.containsReactive);
 });
 
-Deno.test("angle-bracket type assertion around a reactive read stays reactive", () => {
+test("angle-bracket type assertion around a reactive read stays reactive", () => {
   // Type assertions (<T>expr) only parse in .ts; pins the TypeAssertionExpression
   // handler (lines 1092-1094).
   const analysis = analyze(
@@ -230,7 +234,7 @@ Deno.test("angle-bracket type assertion around a reactive read stays reactive", 
   assert(analysis.containsReactive, "type-assertion-wrapped read is reactive");
 });
 
-Deno.test("non-null assertion around a reactive read stays reactive", () => {
+test("non-null assertion around a reactive read stays reactive", () => {
   const analysis = analyze(`const value = state.count!;`, "value");
   assert(analysis.containsReactive);
 });
@@ -239,7 +243,7 @@ Deno.test("non-null assertion around a reactive read stays reactive", () => {
 // Common Fabric Default types (790-797, 924-935)
 //
 
-Deno.test("identifier typed as a Common Fabric Default is a reactive dataflow", () => {
+test("identifier typed as a Common Fabric Default is a reactive dataflow", () => {
   // The identifier's symbol declares Default<>, so it records as an explicit
   // reactive dependency (lines 790-797).
   const { sourceFile, checker } = createProgramWithCommonFabric(`
@@ -255,7 +259,7 @@ Deno.test("identifier typed as a Common Fabric Default is a reactive dataflow", 
   assertEquals(analysis.dataFlows.length, 1);
 });
 
-Deno.test("property access whose member is a Common Fabric Default requires rewrite", () => {
+test("property access whose member is a Common Fabric Default requires rewrite", () => {
   // The property member symbol declares Default<>, so the property access is a
   // reactive dependency flagged for rewrite (lines 924-935).
   const { sourceFile, checker } = createProgramWithCommonFabric(`
@@ -289,7 +293,7 @@ function analyzePatternArrow(callbackSource: string) {
   return createDataFlowAnalyzer(checker)(arrow);
 }
 
-Deno.test("destructured alias with a renamed key resolves reactive", () => {
+test("destructured alias with a renamed key resolves reactive", () => {
   // `{ count: renamed }` builds a "property" segment from the propertyName
   // identifier (lines 234-236) and resolves back to the reactive parameter.
   const analysis = analyzePatternArrow(
@@ -298,7 +302,7 @@ Deno.test("destructured alias with a renamed key resolves reactive", () => {
   assert(analysis.containsReactive, "renamed binding alias is reactive");
 });
 
-Deno.test("destructured alias with a string-literal key resolves reactive", () => {
+test("destructured alias with a string-literal key resolves reactive", () => {
   // A quoted property name is not an identifier, so getObjectBindingAccessSegment
   // falls to getStaticPropertyNameText's string-literal branch (238-241, 253-259).
   const analysis = analyzePatternArrow(
@@ -307,7 +311,7 @@ Deno.test("destructured alias with a string-literal key resolves reactive", () =
   assert(analysis.containsReactive, "string-key binding alias is reactive");
 });
 
-Deno.test("destructured alias with a numeric-literal key resolves reactive", () => {
+test("destructured alias with a numeric-literal key resolves reactive", () => {
   // A numeric property name exercises getStaticPropertyNameText's numeric-literal
   // branch (255-256) inside the propertyName path.
   const analysis = analyzePatternArrow(
@@ -316,7 +320,7 @@ Deno.test("destructured alias with a numeric-literal key resolves reactive", () 
   assert(analysis.containsReactive, "numeric-key binding alias is reactive");
 });
 
-Deno.test("shorthand destructured alias resolves reactive", () => {
+test("shorthand destructured alias resolves reactive", () => {
   // Shorthand binding (no propertyName) builds a "property" segment from the
   // element name (lines 227-230).
   const analysis = analyzePatternArrow(
@@ -325,7 +329,7 @@ Deno.test("shorthand destructured alias resolves reactive", () => {
   assert(analysis.containsReactive, "shorthand binding alias is reactive");
 });
 
-Deno.test("array-destructured alias resolves reactive through an index segment", () => {
+test("array-destructured alias resolves reactive through an index segment", () => {
   // Array binding element contributes an index segment (284-290) and the built
   // element-access resolves back to the reactive parameter.
   const analysis = analyzePatternArrow(
@@ -334,7 +338,7 @@ Deno.test("array-destructured alias resolves reactive through an index segment",
   assert(analysis.containsReactive, "array-destructured alias is reactive");
 });
 
-Deno.test("nested destructuring resolves reactive through the whole path", () => {
+test("nested destructuring resolves reactive through the whole path", () => {
   // Nested binding elements take the owner-is-BindingElement continue branch
   // (296-299) building a multi-segment static path (`p.nested.inner`).
   const analysis = analyzePatternArrow(
@@ -347,14 +351,14 @@ Deno.test("nested destructuring resolves reactive through the whole path", () =>
 // Element access (1044-1082)
 //
 
-Deno.test("static string-index element access on a reactive cell is reactive", () => {
+test("static string-index element access on a reactive cell is reactive", () => {
   // Static literal index merges target+argument (lines 1052-1057) and stays
   // reactive because the receiver `state.items` is a reactive cell.
   const analysis = analyze(`const value = state.items["0"];`, "value");
   assert(analysis.containsReactive, "static index on reactive stays reactive");
 });
 
-Deno.test("dynamic element access on a reactive property requires rewrite", () => {
+test("dynamic element access on a reactive property requires rewrite", () => {
   // Dynamic index falls to the general element-access return (1076-1081):
   // requiresRewrite is forced true and the receiver's dataflows propagate.
   const analysis = analyze(`const value = state.items[idx];`, "value");
@@ -363,7 +367,7 @@ Deno.test("dynamic element access on a reactive property requires rewrite", () =
   assert(analysis.dataFlows.length > 0);
 });
 
-Deno.test("dynamic element access on an ignored branded parameter is inert", () => {
+test("dynamic element access on an ignored branded parameter is inert", () => {
   // `env[idx]` where `env` is a branded but ignored parameter: the receiver is
   // reactive by type yet analyzes to no dataflows, so the reactive-element-
   // access branch fires and its originatesFromIgnored guard returns empty
@@ -383,7 +387,7 @@ Deno.test("dynamic element access on an ignored branded parameter is inert", () 
 // Array-literal reactive elements (1258-1265)
 //
 
-Deno.test("array literal with a reactive element carries reactive dataflow", () => {
+test("array literal with a reactive element carries reactive dataflow", () => {
   const analysis = analyze(`const value = [state.count];`, "value");
   assert(analysis.containsReactive, "reactive array element flows");
 });
@@ -392,7 +396,7 @@ Deno.test("array literal with a reactive element carries reactive dataflow", () 
 // Synthetic property access whose root is not an identifier (696-697)
 //
 
-Deno.test("synthetic property access rooted in an object literal is inert", () => {
+test("synthetic property access rooted in an object literal is inert", () => {
   // `({}).bar` built synthetically: findRootIdentifier bottoms out on a
   // non-identifier (the object literal) and returns undefined (lines 696-697),
   // so nothing is recorded.
@@ -424,7 +428,7 @@ function analyzeArrow(source: string) {
   return createDataFlowAnalyzer(checker)(arrow);
 }
 
-Deno.test("branded property off an ignored parameter is not a reactive dependency", () => {
+test("branded property off an ignored parameter is not a reactive dependency", () => {
   // `env.cell` is branded, but `env` is an ignored aggregated parameter, so the
   // branded-property branch's originatesFromIgnored guard returns empty
   // (lines 876-878).
@@ -439,7 +443,7 @@ Deno.test("branded property off an ignored parameter is not a reactive dependenc
   assertEquals(analysis.dataFlows.length, 0);
 });
 
-Deno.test("Common Fabric Default member off an ignored parameter is inert", () => {
+test("Common Fabric Default member off an ignored parameter is inert", () => {
   // `env.value` member declares Default<>, but `env` is an ignored parameter,
   // so the common-fabric-default branch's originatesFromIgnored guard returns
   // empty (lines 925-927).
@@ -456,7 +460,7 @@ Deno.test("Common Fabric Default member off an ignored parameter is inert", () =
   );
 });
 
-Deno.test("structurally-opaque read off an ignored Default parameter is inert", () => {
+test("structurally-opaque read off an ignored Default parameter is inert", () => {
   // `d.foo` where `d` is typed as a Common Fabric Default is structurally
   // opaque (isStructuralOpaqueTargetExpression true via the Default root), but
   // `d` is an ignored parameter, so the structural-opaque branch's
@@ -478,7 +482,7 @@ Deno.test("structurally-opaque read off an ignored Default parameter is inert", 
 // JSX attributes, spreads, children (1263-1264, 1292-1295)
 //
 
-Deno.test("JSX attribute expression carries reactive dataflow", () => {
+test("JSX attribute expression carries reactive dataflow", () => {
   const analysis = analyzeTsx(
     `const value = <div title={state.count} />;`,
     "value",
@@ -486,12 +490,12 @@ Deno.test("JSX attribute expression carries reactive dataflow", () => {
   assert(analysis.containsReactive, "attribute expr dataflow is reactive");
 });
 
-Deno.test("JSX spread attribute carries reactive dataflow", () => {
+test("JSX spread attribute carries reactive dataflow", () => {
   const analysis = analyzeTsx(`const value = <div {...props} />;`, "value");
   assert(analysis.containsReactive, "spread attribute dataflow is reactive");
 });
 
-Deno.test("JSX element children with a nested element carry reactive dataflow", () => {
+test("JSX element children with a nested element carry reactive dataflow", () => {
   const analysis = analyzeTsx(
     `const value = <div><span>{state.count}</span></div>;`,
     "value",
@@ -503,7 +507,7 @@ Deno.test("JSX element children with a nested element carry reactive dataflow", 
 // Function-argument callback with a block body (1180-1189, 1231-1240)
 //
 
-Deno.test("call-argument callback block return propagates reactive dataflow", () => {
+test("call-argument callback block return propagates reactive dataflow", () => {
   // A callback argument with a block body has its return-statement expressions
   // analyzed in a child scope (lines 1180-1189).
   const analysis = analyze(
@@ -514,7 +518,7 @@ Deno.test("call-argument callback block return propagates reactive dataflow", ()
   assert(analysis.containsReactive, "block-return dataflow is reactive");
 });
 
-Deno.test("standalone arrow with a block body propagates reactive dataflow", () => {
+test("standalone arrow with a block body propagates reactive dataflow", () => {
   // A function-like expression (not a call argument) with a block body walks
   // its return statements in a child scope (lines 1231-1240).
   const { sourceFile, checker } = createProgram(
@@ -530,7 +534,7 @@ Deno.test("standalone arrow with a block body propagates reactive dataflow", () 
 // 1004-1032)
 //
 
-Deno.test("synthetic bare identifier is treated as an opaque reactive parameter", () => {
+test("synthetic bare identifier is treated as an opaque reactive parameter", () => {
   // A fully-synthetic identifier with no resolvable symbol is recorded as an
   // opaque parameter dataflow (lines 745, 753-758).
   const { checker } = createProgram(REACTIVE_PRELUDE);
@@ -541,7 +545,7 @@ Deno.test("synthetic bare identifier is treated as an opaque reactive parameter"
   assertEquals(analysis.dataFlows.length, 1);
 });
 
-Deno.test("synthetic identifier matching a synthetic local parameter is inert", () => {
+test("synthetic identifier matching a synthetic local parameter is inert", () => {
   // A synthetic arrow whose parameter has no resolvable symbol makes reads of
   // that name a scope-local reference, not a reactive dependency (lines
   // 746-751).
@@ -569,7 +573,7 @@ Deno.test("synthetic identifier matching a synthetic local parameter is inert", 
   assertEquals(analysis.dataFlows.length, 0);
 });
 
-Deno.test("synthetic __cfHelpers property access passes through without a new dataflow", () => {
+test("synthetic __cfHelpers property access passes through without a new dataflow", () => {
   // A synthetic `__cfHelpers.toSchema` access whose root is undefined is
   // treated as a helper: it passes the target's analysis through instead of
   // recording the access itself as an opaque read (lines 1007-1013). The only
@@ -585,7 +589,7 @@ Deno.test("synthetic __cfHelpers property access passes through without a new da
   );
 });
 
-Deno.test("synthetic method call on an opaque root is skipped, not recorded", () => {
+test("synthetic method call on an opaque root is skipped, not recorded", () => {
   // `element.trim()` where `element` is synthetic and unresolved: the property
   // access is a method call, so it is skipped rather than recorded (1016-1022).
   const { checker } = createProgram(REACTIVE_PRELUDE);
@@ -604,7 +608,7 @@ Deno.test("synthetic method call on an opaque root is skipped, not recorded", ()
   );
 });
 
-Deno.test("synthetic property access on an opaque root is recorded as reactive", () => {
+test("synthetic property access on an opaque root is recorded as reactive", () => {
   // `element.price` where `element` is synthetic and unresolved is treated as
   // an opaque property read (lines 1024-1032).
   const { checker } = createProgram(REACTIVE_PRELUDE);
@@ -618,7 +622,7 @@ Deno.test("synthetic property access on an opaque root is recorded as reactive",
   assertEquals(analysis.dataFlows.length, 1);
 });
 
-Deno.test("synthetic wrapped property access unwraps to its opaque root", () => {
+test("synthetic wrapped property access unwraps to its opaque root", () => {
   // `(element)!.price` built synthetically: findRootIdentifier unwraps the
   // parenthesized/non-null wrappers to reach `element` (lines 683-691), then
   // the read is recorded as opaque.
@@ -633,7 +637,7 @@ Deno.test("synthetic wrapped property access unwraps to its opaque root", () => 
   assertEquals(analysis.requiresRewrite, true);
 });
 
-Deno.test("synthetic element access unwraps through findRootIdentifier", () => {
+test("synthetic element access unwraps through findRootIdentifier", () => {
   // `element[0].price` built synthetically: findRootIdentifier descends the
   // element-access receiver (lines 679-682) to reach the opaque `element` root.
   const { checker } = createProgram(REACTIVE_PRELUDE);
@@ -645,4 +649,118 @@ Deno.test("synthetic element access unwraps through findRootIdentifier", () => {
   const synthetic = f.createPropertyAccessExpression(elem, "price");
   const analysis = createDataFlowAnalyzer(checker)(synthetic);
   assert(analysis.containsReactive, "element-access-rooted read is reactive");
+});
+
+describe("dataflow", () => {
+  describe("createDataFlowAnalyzer()", () => {
+    /** A checker for `main`, which may import the real Common Fabric types. */
+    function checkerFor(main: string) {
+      const program = createInMemoryProgram({
+        "/main.ts": main,
+        "/commonfabric.d.ts": COMMONFABRIC_TYPES["commonfabric.d.ts"]!,
+        "/cfc.ts": COMMONFABRIC_TYPES["cfc.ts"]!,
+      }, {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        moduleResolution: ts.ModuleResolutionKind.Bundler,
+        strict: true,
+        noLib: true,
+      });
+      const sourceFile = program.getSourceFile("/main.ts");
+      if (!sourceFile) throw new Error("`/main.ts` was not loaded.");
+      const statement = (name: string): ts.Identifier => {
+        let found: ts.Identifier | undefined;
+        const visit = (node: ts.Node): void => {
+          if (
+            ts.isExpressionStatement(node) &&
+            ts.isIdentifier(node.expression) &&
+            node.expression.text === name
+          ) {
+            found = node.expression;
+          }
+          ts.forEachChild(node, visit);
+        };
+        visit(sourceFile);
+        if (!found) throw new Error(`No statement reads \`${name}\`.`);
+        return found;
+      };
+      return { checker: program.getTypeChecker(), statement };
+    }
+
+    function detachedExpression(source: string): ts.Expression {
+      // Parsed without parent pointers, the expression makes the checker
+      // throw when asked for its symbol or type.
+      const sourceFile = ts.createSourceFile(
+        "/detached.ts",
+        source,
+        ts.ScriptTarget.ESNext,
+        false,
+      );
+      const [statement] = sourceFile.statements;
+      assert(statement && ts.isExpressionStatement(statement));
+      return statement.expression;
+    }
+
+    it("records an identifier the checker cannot resolve as an opaque parameter", () => {
+      const { checker } = checkerFor("export {};");
+      const detached = detachedExpression("unresolved;");
+
+      expect(() => checker.getSymbolAtLocation(detached)).toThrow();
+      const analysis = createDataFlowAnalyzer(checker)(detached);
+      expect(analysis.containsReactive).toBe(true);
+      expect(analysis.dataFlows).toEqual([detached]);
+    });
+
+    it("records a property read the checker cannot type when its root is an element binding", () => {
+      const { checker } = checkerFor("export {};");
+      const detached = detachedExpression("element.price;");
+
+      expect(() => checker.getTypeAtLocation(detached)).toThrow();
+      const analysis = createDataFlowAnalyzer(checker, {
+        isArrayMethodElementBindingReference: () => true,
+      })(detached);
+      expect(analysis.containsReactive).toBe(true);
+      expect(analysis.dataFlows).toEqual([detached]);
+    });
+
+    it("records a synthetic read through a call on a reactive root as a rewrite", () => {
+      // The synthetic root carries an original node, so it resolves to the
+      // pattern parameter, while the call in the chain keeps the read from
+      // being typed or classified as a structural path.
+      const { checker, statement } = checkerFor(`
+        import { pattern } from "commonfabric";
+        declare const plain: { make: () => { price: number } };
+        plain;
+        export default pattern((input: { make: () => { price: number } }) => {
+          input;
+          return {};
+        });
+      `);
+      const f = ts.factory;
+      const readThroughCall = (rootName: string) => {
+        const root = ts.setOriginalNode(
+          f.createIdentifier(rootName),
+          statement(rootName),
+        );
+        const access = f.createPropertyAccessExpression(
+          f.createCallExpression(
+            f.createPropertyAccessExpression(root, "make"),
+            undefined,
+            [],
+          ),
+          "price",
+        );
+        return { access, analysis: createDataFlowAnalyzer(checker)(access) };
+      };
+
+      const reactive = readThroughCall("input");
+      expect(reactive.analysis.containsReactive).toBe(true);
+      expect(reactive.analysis.requiresRewrite).toBe(true);
+      expect(reactive.analysis.dataFlows).toEqual([reactive.access]);
+
+      const inert = readThroughCall("plain");
+      expect(inert.analysis.containsReactive).toBe(false);
+      expect(inert.analysis.dataFlows).toEqual([]);
+    });
+  });
 });

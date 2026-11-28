@@ -1,5 +1,5 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { fromFileUrl } from "@std/path";
 
 import type { CellBridgeOptions } from "../cell-bridge.ts";
 import {
@@ -17,6 +17,13 @@ import type {
 } from "../platform.ts";
 import type { FsTree } from "../tree.ts";
 import { FakeBridge } from "./fake-bridge.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** What `exit` was asked to do, thrown so that `main()` stops there. */
 class Exited extends Error {
@@ -128,7 +135,9 @@ class FakeMountBridge extends FakeBridge implements MountBridge {
 
 /**
  * A host whose platform loads `fuse`, whose bridges are `FakeMountBridge`s
- * collected in `bridges`, and whose exit throws `Exited`.
+ * collected in `bridges`, and whose exit throws `Exited`. Its stdout takes
+ * whatever is written and keeps none of it, its heartbeat never beats, and no
+ * signal reaches it.
  */
 function hostFor(
   openFuse: () => LoadedFuse,
@@ -146,6 +155,33 @@ function hostFor(
     },
     exit: (code): never => {
       throw new Exited(code);
+    },
+    stdout: { write: (bytes) => Promise.resolve(bytes.length) },
+    setInterval: () => 0,
+    clearInterval: () => {},
+    addSignalListener: () => {},
+    removeSignalListener: () => {},
+  };
+}
+
+/** Signal listeners a case sends signals to itself, without the process. */
+function fakeSignals() {
+  const listeners: { signal: Deno.Signal; handler: () => void }[] = [];
+  return {
+    listeners,
+    addSignalListener(signal: Deno.Signal, handler: () => void): void {
+      listeners.push({ signal, handler });
+    },
+    removeSignalListener(signal: Deno.Signal, handler: () => void): void {
+      const index = listeners.findIndex((listener) =>
+        listener.signal === signal && listener.handler === handler
+      );
+      if (index >= 0) listeners.splice(index, 1);
+    },
+    send(signal: Deno.Signal): void {
+      listeners
+        .filter((listener) => listener.signal === signal)
+        .forEach((listener) => listener.handler());
     },
   };
 }
@@ -249,6 +285,7 @@ describe("main()", () => {
   });
 
   it("unmounts on SIGTERM and reports that it is exiting", async () => {
+    const signals = fakeSignals();
     const serving = Promise.withResolvers<void>();
     const ended = Promise.withResolvers<number>();
     const fuse = fakeFuse({
@@ -263,13 +300,168 @@ describe("main()", () => {
       ended.resolve(0);
     };
 
-    const running = main(staticMount(), hostFor(() => fuse));
+    const running = main(staticMount(), { ...hostFor(() => fuse), ...signals });
     await serving.promise;
-    Deno.kill(Deno.pid, "SIGTERM");
+    signals.send("SIGTERM");
     await running;
 
     expect(fuse.calls).toEqual(["unmount", "cleanup alreadyUnmounted=true"]);
     expect(await status()).toMatchObject({ state: "exited", exitCode: 0 });
+  });
+
+  it("unmounts once when a second signal arrives while it unmounts, and stops listening once it returns", async () => {
+    const signals = fakeSignals();
+    const fuse = fakeFuse({
+      loop: () => {
+        signals.send("SIGTERM");
+        signals.send("SIGINT");
+        signals.send("SIGTERM");
+        return Promise.resolve(0);
+      },
+    });
+
+    await main(staticMount(), { ...hostFor(() => fuse), ...signals });
+
+    expect(fuse.calls).toEqual(["unmount", "cleanup alreadyUnmounted=true"]);
+    expect(await status()).toMatchObject({ state: "exited", exitCode: 0 });
+    expect(signals.listeners).toEqual([]);
+  });
+
+  it("refreshes its status every second while it serves, and stops once it unmounts", async () => {
+    const signals = fakeSignals();
+    const intervals: { beat: () => unknown; ms: number }[] = [];
+    const cleared: (number | undefined)[] = [];
+    const armed = Promise.withResolvers<void>();
+    const stateNow = () =>
+      Deno.readTextFile(statusPath).then(
+        (text) => JSON.parse(text).state,
+        () => "missing",
+      );
+    let refreshed: unknown;
+    let afterUnmount: unknown;
+    const fuse = fakeFuse({
+      loop: async () => {
+        await armed.promise;
+        const [{ beat }] = intervals;
+        await Deno.remove(statusPath);
+        await beat();
+        refreshed = await stateNow();
+
+        await Deno.remove(statusPath);
+        signals.send("SIGTERM");
+        await beat();
+        afterUnmount = await stateNow();
+        return 0;
+      },
+    });
+
+    await main(staticMount(), {
+      ...hostFor(() => fuse),
+      ...signals,
+      setInterval: (beat, ms) => {
+        intervals.push({ beat, ms });
+        armed.resolve();
+        return 41;
+      },
+      clearInterval: (id) => cleared.push(id),
+    });
+
+    expect(intervals.map(({ ms }) => ms)).toEqual([1_000]);
+    expect(refreshed).toBe("mounted");
+    // Only the unmount's own `exiting` may have landed by then.
+    expect(afterUnmount).not.toBe("mounted");
+    expect(fuse.calls).toEqual(["unmount", "cleanup alreadyUnmounted=true"]);
+    expect(cleared).toEqual([41]);
+    expect(await status()).toMatchObject({ state: "exited" });
+  });
+
+  it("has no heartbeat without a status file", async () => {
+    const intervals: number[] = [];
+    const cleared: (number | undefined)[] = [];
+
+    await main([mountpoint, "--api-url=", "--cfc-mode=disabled"], {
+      ...hostFor(() => fakeFuse({ loop: () => Promise.resolve(0) })),
+      setInterval: (_beat, ms) => {
+        intervals.push(ms);
+        return 1;
+      },
+      clearInterval: (id) => cleared.push(id),
+    });
+
+    expect(intervals).toEqual([]);
+    expect(cleared).toEqual([undefined]);
+  });
+
+  it("announces mounted on its stdout once it serves, however the pipe splits the line", async () => {
+    const signals = fakeSignals();
+    let loopDispatched = false;
+    const atAnnouncement: unknown[] = [];
+    const written: Uint8Array[] = [];
+    // A pipe may take fewer bytes than it is given.
+    const stdout = {
+      write: (bytes: Uint8Array) => {
+        if (written.length === 0) {
+          atAnnouncement.push({
+            loopDispatched,
+            listening: signals.listeners.map(({ signal }) => signal),
+          });
+        }
+        written.push(bytes.slice(0, 5));
+        return Promise.resolve(Math.min(bytes.length, 5));
+      },
+    };
+
+    await main(staticMount(), {
+      ...hostFor(() =>
+        fakeFuse({
+          loop: () => {
+            loopDispatched = true;
+            return Promise.resolve(0);
+          },
+        })
+      ),
+      ...signals,
+      stdout,
+    });
+
+    const lines = decoder.decode(
+      new Uint8Array(written.flatMap((chunk) => [...chunk])),
+    ).split("\n");
+    expect(lines.pop()).toBe("");
+    expect(lines.map((line) => JSON.parse(line))).toEqual([
+      expect.objectContaining({ state: "mounted", pid: Deno.pid, mountpoint }),
+    ]);
+    // By the time a caller can read `mounted`, the mount serves requests and
+    // unmounts on a signal.
+    expect(atAnnouncement).toEqual([
+      { loopDispatched: true, listening: ["SIGINT", "SIGTERM"] },
+    ]);
+
+    written.length = 0;
+    await main([mountpoint, "--api-url=", "--cfc-mode=disabled"], {
+      ...hostFor(() => fakeFuse({ loop: () => Promise.resolve(0) })),
+      stdout,
+    });
+    expect(written).toEqual([]);
+  });
+
+  it("keeps serving when nothing reads its stdout", async () => {
+    const logPath = `${dir}/fuse.log`;
+    const fuse = fakeFuse({ loop: () => Promise.resolve(0) });
+
+    await main(staticMount(`--log-file=${logPath}`), {
+      ...hostFor(() => fuse),
+      stdout: {
+        write: () => Promise.reject(new Deno.errors.BrokenPipe("no reader")),
+      },
+    });
+
+    expect(fuse.calls).toEqual(["cleanup alreadyUnmounted=false"]);
+    expect(await status()).toMatchObject({ state: "exited", exitCode: 0 });
+    // The status file was written, so there is nothing to warn about.
+    const log = await Deno.readTextFile(logPath);
+    expect(log).toContain(`Mounted at ${mountpoint}\n`);
+    expect(log).not.toContain("Unable to write mounted supervisor status");
   });
 
   it("connects the spaces it is given through a bridge, and sends the bridge's invalidations to the kernel", async () => {
@@ -550,5 +742,40 @@ describe("main()", () => {
         hostFor(neverMounted),
       ),
     ).rejects.toThrow(new Exited(1));
+  });
+
+  describe("as the module a process runs", () => {
+    /**
+     * Runs Deno with the subcommand `command` and then `args`, in this
+     * package's directory, and returns how it exited and what it wrote.
+     */
+    const deno = async (command: string, ...args: string[]) => {
+      const output = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("../../../", import.meta.url)),
+        cwd: fromFileUrl(new URL("../", import.meta.url)),
+        args: (lock) => [command, `--lock=${lock}`, ...args],
+      });
+      return {
+        code: output.code,
+        stdout: decoder.decode(output.stdout),
+        stderr: decoder.decode(output.stderr),
+      };
+    };
+
+    it("runs `main()`, which exits with its usage given no mountpoint", async () => {
+      const run = await deno("run", "--allow-env", "mod.ts");
+      expect(run.code).toBe(1);
+      expect(run.stderr).toContain("Usage: mod.ts <mountpoint>");
+    });
+
+    it("runs nothing when a module imports it", async () => {
+      const imported = await deno(
+        "eval",
+        'const { main } = await import("./mod.ts"); console.log(typeof main);',
+      );
+      expect(imported.code).toBe(0);
+      expect(imported.stdout).toBe("function\n");
+      expect(imported.stderr).not.toContain("Usage: mod.ts <mountpoint>");
+    });
   });
 });

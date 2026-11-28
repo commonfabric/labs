@@ -1,9 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { dirname, fromFileUrl, join, relative, SEPARATOR } from "@std/path";
 import { walk } from "@std/fs/walk";
 import { FakeTime } from "@std/testing/time";
-import { type GitHubRun, RunLists, type RunReading } from "./github-runs.ts";
+import {
+  type GitHubRun,
+  RunLists,
+  type RunReading,
+  type RunRequest,
+  runById,
+  runsUnderWay,
+} from "./github-runs.ts";
 import {
   type GitHubRequestOptions,
   GitHubStatusError,
@@ -12,6 +18,7 @@ import {
 import { RELAY_VOUCH_MS } from "./github-webhooks.ts";
 import { RunListFile } from "./run-list-file.ts";
 import { FakeRelay, workflowRunPayload } from "./test/webhook-relay.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const REPO = "example/repo";
 const WORKFLOW = "ci.yml";
@@ -116,10 +123,21 @@ class FakeGitHub {
     }
     const size = Number(query.get("per_page"));
     const start = (Number(query.get("page")) - 1) * size;
+    const page = this.list.slice(start, start + size);
     return Promise.resolve(
-      { workflow_runs: this.list.slice(start, start + size) } as T,
+      {
+        workflow_runs: page.slice(0, this.shorten(start, page.length)),
+        total_count: this.list.length,
+      } as T,
     );
   };
+
+  /**
+   * How many of the `length` runs of the page starting at `start` of the
+   * unfiltered list to answer with, so that a test can have a page come back
+   * short from the middle of the list.
+   */
+  shorten: (start: number, length: number) => number = (_, length) => length;
 }
 
 /** Reads `github`'s workflow through `lists`, for `reading`. */
@@ -489,6 +507,98 @@ describe("github-runs", () => {
 
           expect(ids(read2)).toEqual(ids(runs(300, 1)));
           expect(github.pages).toEqual(["1@20"]);
+        });
+
+        it("rejects a reading given a page GitHub answers short from the middle of the list, and reads every run on the next", async () => {
+          const github = new FakeGitHub(runs(300, 1));
+          let short = true;
+          github.shorten = (start, length) => {
+            if (start === 0 || !short) return length;
+            short = false;
+            return 45;
+          };
+          const lists = new RunLists();
+
+          await expect(read(lists, github, { newest: 100 })).rejects.toThrow(
+            "against the 300 it counts",
+          );
+          const read2 = await read(lists, github, { newest: 100 });
+
+          expect(ids(read2)).toEqual(ids(runs(300, 1)));
+        });
+
+        it("keeps the held runs a page GitHub answers short leaves out", async () => {
+          using time = new FakeTime();
+          const github = new FakeGitHub(runs(300, 1));
+          const lists = new RunLists();
+          await read(lists, github, {
+            reader: "shallow",
+            newest: 100,
+            until: (held) => held.id === 201,
+          });
+          time.tick(HEAD_REUSE_MS);
+          github.list = [...runs(310, 301), ...github.list];
+          let short = true;
+          github.shorten = (start, length) => {
+            if (start === 0 || !short) return length;
+            short = false;
+            // The page that should hold run 201 stops above it.
+            return 310 - 201 - start;
+          };
+
+          await expect(read(lists, github, { reader: "deep" })).rejects
+            .toThrow("against the 310 it counts");
+          const deep = await read(lists, github, { reader: "deep" });
+
+          expect(ids(deep)).toEqual(ids(runs(310, 1)));
+        });
+
+        it("rejects a reading given an empty top of the list while GitHub counts runs", async () => {
+          const github = new FakeGitHub(runs(30, 1));
+          github.shorten = () => 0;
+
+          await expect(read(new RunLists(), github)).rejects.toThrow(
+            "GitHub listed 0 runs on page 1 of example/repo ci.yml at 20 a " +
+              "page, against the 30 it counts",
+          );
+        });
+
+        it("rejects a reading given a page holding runs past the count of the list's runs", async () => {
+          const github = new FakeGitHub(runs(30, 1));
+          const request = github.request;
+          github.request = async <T>(
+            path: string,
+            options: GitHubRequestOptions,
+          ): Promise<T> => {
+            const answer = await request<Record<string, unknown>>(
+              path,
+              options,
+            );
+            return { ...answer, total_count: 10 } as T;
+          };
+
+          await expect(read(new RunLists(), github)).rejects.toThrow(
+            "GitHub listed 20 runs on page 1 of example/repo ci.yml at 20 a " +
+              "page, against the 10 it counts",
+          );
+        });
+
+        it("rejects a reading given a page without a count of the list's runs", async () => {
+          const github = new FakeGitHub(runs(30, 1));
+          const request = github.request;
+          github.request = async <T>(
+            path: string,
+            options: GitHubRequestOptions,
+          ): Promise<T> => {
+            const { total_count: _, ...answer } = await request<
+              Record<string, unknown>
+            >(path, options);
+            return answer as T;
+          };
+
+          await expect(read(new RunLists(), github)).rejects.toThrow(
+            "GitHub listed example/repo ci.yml without counting its runs",
+          );
         });
 
         it("offers no more than `limit` runs", async () => {
@@ -1415,6 +1525,35 @@ describe("github-runs", () => {
             expect(read2[0].status).toBe("completed");
           });
 
+          it("takes a copy the list shows updated at the same moment over one it read before, once a delivered copy is no longer held", async () => {
+            using time = new FakeTime();
+            const relay = new FakeRelay();
+            await relay.open();
+            const github = new FakeGitHub(runs(10, 1));
+            const lists = new RunLists(undefined, relay.webhooks);
+            await read(lists, github);
+            await deliver(relay, run(5, { conclusion: "failure" }));
+            expect((await read(lists, github))[5].conclusion).toBe("failure");
+            // A shallower reading stops holding the delivered copy, and a
+            // deeper one reads the run from the list again.
+            await read(lists, github, { until: (held) => held.id === 10 });
+            const deep = await read(lists, github);
+            expect(deep[5].conclusion).toBe("success");
+            github.list = [
+              ...runs(10, 6),
+              run(5, { conclusion: "cancelled" }),
+              ...runs(4, 1),
+            ];
+            await relay.end();
+            await relay.deliver("ping", {});
+            time.tick(HEAD_REUSE_MS);
+
+            const read2 = await read(lists, github);
+
+            expect(ids(read2)).toEqual(ids(runs(10, 1)));
+            expect(read2[5].conclusion).toBe("cancelled");
+          });
+
           it("keeps a delivered copy of a run over an older copy the list shows", async () => {
             const relay = new FakeRelay();
             await relay.open();
@@ -1678,7 +1817,7 @@ describe("github-runs", () => {
               repo: REPO,
               workflow: WORKFLOW,
               runs: described,
-              complete: true,
+              complete: false,
               drift: 0,
               readAt: Date.now(),
               usedAt: Date.now(),
@@ -1720,7 +1859,9 @@ describe("github-runs", () => {
               new RunLists(join(directory, "absent", "lists.json")),
               github,
             );
-            expect(github.pages).toEqual(["1@20"]);
+            // The file does not say the head reaches the end of the list, so
+            // reading every run reads past the last one held to see.
+            expect(github.pages).toEqual(["1@20", "1@100"]);
           });
 
           it("keeps in the file the heads of readings that finish together", async () => {
@@ -1747,7 +1888,9 @@ describe("github-runs", () => {
             github.paths = [];
             const again = new RunLists(file);
             for (const workflow of workflows) await reading(again, workflow);
-            expect(github.pages).toEqual(["1@20", "1@20", "1@20"]);
+            expect(github.pages).toEqual(
+              ["1@20", "1@100", "1@20", "1@100", "1@20", "1@100"],
+            );
           });
 
           it("forgets a reader in the file that has not read for a day", async () => {
@@ -1823,6 +1966,319 @@ describe("github-runs", () => {
           });
         });
       });
+    });
+  });
+
+  describe("runsUnderWay()", () => {
+    // GitHub answers with JSON, so each stand-in answer is parsed from JSON
+    // too, which is also what gives it the type the caller asks for.
+
+    const TOP = `repos/${REPO}/actions/runs?per_page=100`;
+    const STATUSES = ["requested", "queued", "pending", "waiting", "in_progress"];
+    const filtered = (status: string, page = 1) =>
+      `repos/${REPO}/actions/runs?status=${status}&${page === 1 ? "" : `page=${page}&`}per_page=100`;
+    const byId = (id: number) => `repos/${REPO}/actions/runs/${id}`;
+
+    /**
+     * Before when a run can still be under way: `RERUN_MS` and a week before
+     * the clock each case sets, the day after the fixtures' runs were made.
+     */
+    const BEYOND_HORIZON = "2025-11-01T00:00:00Z";
+
+    let time: FakeTime;
+
+    beforeEach(() => {
+      time = new FakeTime(Date.UTC(2026, 0, 2));
+    });
+
+    afterEach(() => {
+      time.restore();
+    });
+
+    /**
+     * The first page of an unfiltered list of `total` runs: `runs`, then
+     * completed runs.
+     */
+    const fullPage = (runs: GitHubRun[] = [], total = 500) => ({
+      workflow_runs: [
+        ...runs,
+        ...Array.from({ length: 100 - runs.length }, (_, i) => run(1000 + i)),
+      ],
+      total_count: total,
+    });
+
+    /**
+     * A request answering each path with what `answers` holds for it, an
+     * empty list for any other list, and keeping the paths and options it
+     * was asked for. An answer that is an `Error` is thrown.
+     */
+    function answering(answers: Record<string, unknown>) {
+      const asked: { path: string; options: GitHubRequestOptions }[] = [];
+      const request: RunRequest = (path, options) => {
+        asked.push({ path, options });
+        const answer = answers[path] ?? { workflow_runs: [] };
+        return answer instanceof Error
+          ? Promise.reject(answer)
+          : Promise.resolve(JSON.parse(JSON.stringify(answer)));
+      };
+      return { request, asked };
+    }
+
+    it("returns the runs of an unfiltered list that holds every run and are not completed, and reads nothing else", async () => {
+      const queued = run(3, { status: "queued", conclusion: null });
+      const running = run(2, { status: "in_progress", conclusion: null });
+      const { request, asked } = answering({
+        [TOP]: { workflow_runs: [queued, running, run(1), "nonsense"], total_count: 3 },
+      });
+
+      expect(await runsUnderWay(request, REPO)).toEqual([queued, running]);
+      expect(asked).toEqual([{ path: TOP, options: { runListAccess: RUN_LIST_ACCESS } }]);
+    });
+
+    it("reads only the unfiltered list when it holds as many runs as its total, even when they fill a page", async () => {
+      const { request, asked } = answering({
+        [TOP]: fullPage([], 100),
+        [filtered("queued")]: { workflow_runs: [run(50, { status: "queued" })] },
+      });
+
+      await runsUnderWay(request, REPO);
+
+      expect(asked.map(({ path }) => path)).toEqual([TOP]);
+    });
+
+    it("reads the filtered lists when the unfiltered list does not say its total", async () => {
+      const { request, asked } = answering({
+        [TOP]: { workflow_runs: [run(1)] },
+      });
+
+      await runsUnderWay(request, REPO);
+
+      expect(asked.map(({ path }) => path)).toEqual([TOP, ...STATUSES.map((status) => filtered(status))]);
+    });
+
+    it("reads only the unfiltered list when it reaches back past the oldest a run under way can be", async () => {
+      const { request, asked } = answering({
+        [TOP]: fullPage([run(1, { created_at: BEYOND_HORIZON })]),
+        [filtered("queued")]: { workflow_runs: [run(50, { status: "queued" })] },
+      });
+
+      await runsUnderWay(request, REPO);
+
+      expect(asked.map(({ path }) => path)).toEqual([TOP]);
+    });
+
+    it("does not read again a run a filtered list names that was made before a run under way can be", async () => {
+      const { request, asked } = answering({
+        [TOP]: fullPage(),
+        [filtered("queued")]: {
+          workflow_runs: [
+            run(60, { status: "queued", created_at: BEYOND_HORIZON }),
+            run(50, { status: "queued" }),
+            { id: 70, status: "queued" },
+          ],
+        },
+        [byId(50)]: run(50, { status: "queued", conclusion: null }),
+        [byId(70)]: run(70, { status: "queued", conclusion: null }),
+      });
+
+      await runsUnderWay(request, REPO);
+
+      // One that does not say when it was made could be under way.
+      expect(asked.slice(1 + STATUSES.length).map(({ path }) => path)).toEqual([byId(50), byId(70)]);
+    });
+
+    it("requests the list of each status a run under way can have, with run list access, when the unfiltered list goes on past its first page", async () => {
+      const { request, asked } = answering({ [TOP]: fullPage() });
+
+      await runsUnderWay(request, REPO);
+
+      expect(asked).toEqual(
+        [TOP, ...STATUSES.map((status) => filtered(status))]
+          .map((path) => ({ path, options: { runListAccess: RUN_LIST_ACCESS } })),
+      );
+    });
+
+    it("reads only the unfiltered list when not asked to look deep, even when it fills a page", async () => {
+      const queued = run(3, { status: "queued", conclusion: null });
+      const { request, asked } = answering({
+        [TOP]: fullPage([queued]),
+        [filtered("queued")]: { workflow_runs: [run(50, { status: "queued" })] },
+      });
+
+      expect(await runsUnderWay(request, REPO, new Map(), false)).toEqual([queued]);
+      expect(asked.map(({ path }) => path)).toEqual([TOP]);
+    });
+
+    it("reads a filtered list page by page while its pages are full, and returns the runs further down it", async () => {
+      // The full pages hold runs too old to be read again, so that only the
+      // run past them is.
+      const page = (from: number) => ({
+        workflow_runs: Array.from({ length: 100 }, (_, i) => run(from + i, { status: "queued", created_at: BEYOND_HORIZON })),
+      });
+      const deep = run(250, { status: "queued", conclusion: null });
+      const { request, asked } = answering({
+        [TOP]: fullPage(),
+        [filtered("queued", 1)]: page(2000),
+        [filtered("queued", 2)]: page(3000),
+        [filtered("queued", 3)]: { workflow_runs: [deep] },
+        [byId(250)]: deep,
+      });
+
+      expect(await runsUnderWay(request, REPO)).toEqual([deep]);
+      expect(asked.filter(({ path }) => /runs\/\d+$/.test(path)).map(({ path }) => path)).toEqual([byId(250)]);
+      expect(asked.map(({ path }) => path).filter((path) => path.includes("status=queued"))).toEqual([
+        `repos/${REPO}/actions/runs?status=queued&per_page=100`,
+        `repos/${REPO}/actions/runs?status=queued&page=2&per_page=100`,
+        `repos/${REPO}/actions/runs?status=queued&page=3&per_page=100`,
+      ]);
+      expect(asked.map(({ path }) => path).filter((path) => path.includes("status=waiting"))).toEqual([
+        filtered("waiting", 1),
+      ]);
+    });
+
+    it("reads no more than ten pages of a filtered list", async () => {
+      const answers: Record<string, unknown> = { [TOP]: fullPage() };
+      for (let number = 1; number <= 11; number++) {
+        answers[filtered("pending", number)] = {
+          workflow_runs: Array.from({ length: 100 }, (_, i) => run(10_000 * number + i, { created_at: BEYOND_HORIZON })),
+        };
+      }
+      const { request, asked } = answering(answers);
+
+      await runsUnderWay(request, REPO);
+
+      expect(asked.map(({ path }) => path).filter((path) => path.includes("status=pending"))).toEqual(
+        Array.from({ length: 10 }, (_, i) => filtered("pending", i + 1)),
+      );
+    });
+
+    it("reads again by id the runs the filtered lists name that the unfiltered list does not, and returns those not completed", async () => {
+      const listed = run(3, { status: "queued", conclusion: null });
+      const queued = run(50, { status: "queued", conclusion: null });
+      const waiting = run(51, { status: "waiting", conclusion: null });
+      const { request, asked } = answering({
+        [TOP]: fullPage([listed]),
+        [filtered("queued")]: { workflow_runs: [listed, queued, { id: "52" }] },
+        [filtered("waiting")]: { workflow_runs: [waiting] },
+        [filtered("in_progress")]: { workflow_runs: [run(53, { status: "in_progress" })] },
+        [byId(50)]: queued,
+        [byId(51)]: waiting,
+        [byId(53)]: run(53),
+      });
+
+      expect(await runsUnderWay(request, REPO)).toEqual([listed, queued, waiting]);
+      expect(asked.slice(1 + STATUSES.length)).toEqual([50, 51, 53].map((id) => ({
+        path: byId(id),
+        options: { ignoreStatuses: [404] },
+      })));
+    });
+
+    it("reads a run found completed again only once the filtered list's copy of it is updated", async () => {
+      const finished = new Map<number, string>();
+      const stale = run(50, { status: "queued", updated_at: "2026-11-24T00:00:00Z" });
+      const answers: Record<string, unknown> = {
+        [TOP]: fullPage(),
+        [filtered("queued")]: { workflow_runs: [stale, run(51, { status: "queued" })] },
+        [byId(50)]: run(50),
+        [byId(51)]: run(51, { status: "queued", conclusion: null }),
+      };
+      const reread = async () => {
+        const { request, asked } = answering(answers);
+        await runsUnderWay(request, REPO, finished);
+        return asked.slice(1 + STATUSES.length).map(({ path }) => path);
+      };
+
+      expect(await reread()).toEqual([byId(50), byId(51)]);
+      expect(finished).toEqual(new Map([[50, "2026-11-24T00:00:00Z"]]));
+      expect(await reread()).toEqual([byId(51)]);
+
+      answers[filtered("queued")] = {
+        workflow_runs: [{ ...stale, updated_at: "2026-11-24T01:00:00Z" }],
+      };
+      answers[byId(50)] = run(50, { status: "queued", conclusion: null });
+      expect(await reread()).toEqual([byId(50)]);
+    });
+
+    it("remembers at most 10,000 runs found completed, forgetting the oldest", async () => {
+      const answers = {
+        [TOP]: fullPage(),
+        [filtered("queued")]: { workflow_runs: [run(50_000, { status: "queued" })] },
+        [byId(50_000)]: run(50_000),
+      };
+      const findAfter = async (remembered: number) => {
+        const finished = new Map(
+          Array.from({ length: remembered }, (_, i) => [i + 1, "earlier"] as const),
+        );
+        await runsUnderWay(answering(answers).request, REPO, finished);
+        return finished;
+      };
+
+      const full = await findAfter(10_000);
+      expect(full.size).toBe(10_000);
+      expect(full.has(1)).toBe(false);
+      expect(full.has(2)).toBe(true);
+      expect(full.has(50_000)).toBe(true);
+
+      const short = await findAfter(9_999);
+      expect(short.size).toBe(10_000);
+      expect(short.has(1)).toBe(true);
+      expect(short.has(50_000)).toBe(true);
+    });
+
+    it("leaves out a run deleted before it is read again", async () => {
+      const { request } = answering({
+        [TOP]: fullPage(),
+        [filtered("queued")]: { workflow_runs: [run(50, { status: "queued" })] },
+        [byId(50)]: new GitHubStatusError(`GitHub API ${byId(50)} failed: HTTP 404`, 404),
+      });
+
+      expect(await runsUnderWay(request, REPO)).toEqual([]);
+    });
+
+    it("throws when a run cannot be read again for another reason", async () => {
+      const { request } = answering({
+        [TOP]: fullPage(),
+        [filtered("queued")]: { workflow_runs: [run(50, { status: "queued" })] },
+        [byId(50)]: new GitHubStatusError(`GitHub API ${byId(50)} failed: HTTP 502`, 502),
+      });
+
+      await expect(runsUnderWay(request, REPO)).rejects.toThrow("HTTP 502");
+    });
+
+    it("throws when a list's answer holds no list of runs", async () => {
+      for (
+        const answers of [
+          { [TOP]: { message: "Not Found" } },
+          { [TOP]: fullPage(), [filtered("waiting")]: { message: "Not Found" } },
+        ]
+      ) {
+        const { request } = answering(answers);
+        await expect(runsUnderWay(request, REPO)).rejects.toThrow(
+          `GitHub's run list of ${REPO} returned invalid data`,
+        );
+      }
+    });
+  });
+
+  describe("runById()", () => {
+    /** A request answering run 5, refusing run 6 with 404, and run 7 with 502. */
+    const request: RunRequest = (path, options) => {
+      if (path.endsWith("/5")) return Promise.resolve(JSON.parse(JSON.stringify(run(5))));
+      const status = path.endsWith("/6") ? 404 : 502;
+      expect(options).toEqual({ ignoreStatuses: [404] });
+      return Promise.reject(new GitHubStatusError(`GitHub API ${path} failed: HTTP ${status}`, status));
+    };
+
+    it("returns the run as GitHub serves it", async () => {
+      expect(await runById(request, REPO, 5)).toEqual(run(5));
+    });
+
+    it("returns `undefined` for a run deleted", async () => {
+      expect(await runById(request, REPO, 6)).toBeUndefined();
+    });
+
+    it("throws for any other failure", async () => {
+      await expect(runById(request, REPO, 7)).rejects.toThrow("HTTP 502");
     });
   });
 

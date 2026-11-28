@@ -1,6 +1,5 @@
 /** Meeting binding preserves malformed storage and survives source updates. */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { FabricEpochDay } from "@commonfabric/data-model/fabric-primitives";
@@ -18,6 +17,12 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { PiecesController } from "../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("loom meeting contract");

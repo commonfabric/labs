@@ -1,7 +1,12 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
 import { verifyFirstPartyHttpRequest } from "@commonfabric/runner/toolshed-http-auth";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { RepoSyncPlan } from "../src/repo-sync.ts";
 
 const root = fromFileUrl(new URL("../../../", import.meta.url));
@@ -170,6 +175,38 @@ describe("sync-publish", () => {
       call.fn === "listRepoHeads"
         ? Response.json({ heads: [] })
         : Response.json({ error: "over the daily cap" }, { status: 429 });
+
+    const output = await runPublish(await publishArgs(PLAN));
+
+    expect(output.code).toBe(1);
+    expect(await Deno.readTextFile(`${directory}/summary.md`)).toContain(
+      "### Failed",
+    );
+  });
+
+  it("exits 0 after reporting when the index refuses an entry as too large", async () => {
+    reply = (call) =>
+      call.fn === "listRepoHeads"
+        ? Response.json({ heads: [] })
+        : Response.json(
+          { error: "program exceeds 819200 bytes of source" },
+          { status: 400 },
+        );
+
+    const output = await runPublish(await publishArgs(PLAN));
+
+    expect(output.code).toBe(0);
+    const summary = await Deno.readTextFile(`${directory}/summary.md`);
+    expect(summary).toContain("### Not published: too large for the index");
+    expect(summary).toContain("- `patterns/a/main.tsx`");
+    expect(summary).not.toContain("### Failed");
+  });
+
+  it("exits 1 after reporting when the index refuses an entry for another reason", async () => {
+    reply = (call) =>
+      call.fn === "listRepoHeads"
+        ? Response.json({ heads: [] })
+        : Response.json({ error: "malformed request" }, { status: 400 });
 
     const output = await runPublish(await publishArgs(PLAN));
 

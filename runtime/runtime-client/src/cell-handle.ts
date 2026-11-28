@@ -100,6 +100,13 @@ type WaitingRead =
     /** `cellRefToKey()` of the ref the read was asked through. */
     readonly ref: string;
 
+    /**
+     * Whether the read loads the documents the links pass through first. A
+     * read that does and one that does not answer differently on a cold
+     * replica, so neither shares the other's answer.
+     */
+    readonly loaded: boolean;
+
     /** The worker's answer. */
     readonly answer: Promise<CellResponse>;
   }
@@ -341,6 +348,10 @@ export class CellHandle<T = unknown> {
   #callbacks = new Map<
     number,
     {
+      /**
+       * Hands a value to the subscriber, logging what the subscriber or its
+       * cleanup throws rather than throwing it.
+       */
       onValue: (
         value: Readonly<T>,
         cfcLabel: CfcLabelView | undefined,
@@ -922,13 +933,7 @@ export class CellHandle<T = unknown> {
     // worker did not read with this value.
     this.#cfcLabelCurrent = false;
     for (const { onValue } of this.#callbacks.values()) {
-      try {
-        onValue(value as Readonly<T>, this.#cfcLabel, {
-          cfcLabelCurrent: false,
-        });
-      } catch (error) {
-        console.error("[CellHandle] Callback error:", error);
-      }
+      onValue(value as Readonly<T>, this.#cfcLabel, { cfcLabelCurrent: false });
     }
   }
 
@@ -1581,24 +1586,38 @@ export class CellHandle<T = unknown> {
    * Resolve links in this cell to get the actual cell it points to.
    * Returns a new CellHandle pointing to the resolved cell.
    *
+   * The worker resolves from what its replica holds now, so on a cold
+   * replica the answer can be the first document still to arrive rather than
+   * where the links end. With `loaded`, the worker first loads each document
+   * the links pass through that it has no basis for, and answers where they
+   * end: for a caller that acts on the address at once, as a click that
+   * navigates does.
+   *
    * The worker is asked in the cell's turn, after the operations asked for
    * before this one. Calls made through equal refs while one of them waits
    * for that turn, with nothing else asked of the cell since, share its
-   * request, and each gets a handle of its own.
+   * request when they ask with the same `loaded`, and each gets a handle of
+   * its own.
    */
-  async resolveAsCell(): Promise<CellHandle<T>> {
+  async resolveAsCell(
+    options: { loaded?: boolean } = {},
+  ): Promise<CellHandle<T>> {
+    const loaded = options.loaded === true;
     const waiting = this.#waitingRead();
-    const pending = waiting?.type === RequestType.CellResolveAsCell
+    const pending = waiting?.type === RequestType.CellResolveAsCell &&
+        waiting.loaded === loaded
       ? waiting.answer
       : this.#enqueueOperation(
         () =>
           this.#conn.request<RequestType.CellResolveAsCell>({
             type: RequestType.CellResolveAsCell,
             cell: this.ref(),
+            ...(loaded ? { loaded: true as const } : {}),
           }),
         (answer) => ({
           type: RequestType.CellResolveAsCell,
           ref: cellRefToKey(this.#ref),
+          loaded,
           answer,
         }),
       );

@@ -7,8 +7,8 @@ import {
   propValue,
   readValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import ScopedGroupChatPlainInputs from "./main-plain-inputs.tsx";
-import ScopedGroupChatWritableInputs from "./main-with-writable-inputs.tsx";
+import ScopedGroupChatPlainInputs from "./plain-inputs/main.tsx";
+import ScopedGroupChatWritableInputs from "./writable-inputs/main.tsx";
 
 /** The `justifyContent` a node's style sets, if it sets one. */
 const justification = (node: unknown): unknown => {

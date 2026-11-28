@@ -35,6 +35,7 @@ import { darwinLibfusePaths } from "./library-paths.ts";
 import linuxPlatform from "./platform-linux.ts";
 import { EINVAL, EROFS, FILE_MODE_RW } from "./platform.ts";
 import { FsTree } from "./tree.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function env(values: Record<string, string | undefined>) {
   return {
@@ -60,7 +61,7 @@ function assertAppearsBefore(
   );
 }
 
-Deno.test("CFC xattr namespace defaults to both and rejects unknown values", () => {
+test("CFC xattr namespace defaults to both and rejects unknown values", () => {
   assertEquals(DEFAULT_CFC_XATTR_NAMESPACE, "both");
   assertEquals(parseCfcXattrNamespace("trusted"), "trusted");
   assertEquals(parseCfcXattrNamespace("compat"), "compat");
@@ -68,7 +69,7 @@ Deno.test("CFC xattr namespace defaults to both and rejects unknown values", () 
   assertEquals(parseCfcXattrNamespace("bogus"), undefined);
 });
 
-Deno.test("default CFC writeback state path avoids /tmp fallback", () => {
+test("default CFC writeback state path avoids /tmp fallback", () => {
   assertEquals(
     defaultCfcWritebackStatePath(
       "/mnt/cf mount",
@@ -106,7 +107,7 @@ Deno.test("default CFC writeback state path avoids /tmp fallback", () => {
   );
 });
 
-Deno.test("FUSE namespace writeback decodes path component names", () => {
+test("FUSE namespace writeback decodes path component names", () => {
   assertEquals(decodeFuseNamespaceName("of%3Aentity"), "of:entity");
   assertEquals(
     appendDecodedJsonPath(["items"], "of%3Aentity"),
@@ -114,7 +115,7 @@ Deno.test("FUSE namespace writeback decodes path component names", () => {
   );
 });
 
-Deno.test("FUSE operation wiring marks writable entries and closes projection handles", () => {
+test("FUSE operation wiring marks writable entries and closes projection handles", () => {
   const tree = new FsTree();
   const directory = tree.addDir(tree.rootIno, "directory");
   const file = tree.addFile(directory, "value", "text", "string");
@@ -146,14 +147,14 @@ Deno.test("FUSE operation wiring marks writable entries and closes projection ha
   assertEquals(released, [file]);
 });
 
-Deno.test("source writeback re-encodes decoded source relpaths for tree lookup", () => {
+test("source writeback re-encodes decoded source relpaths for tree lookup", () => {
   assertEquals(
     sourceRelPathToTreeSegments("src/has:colon.tsx"),
     ["src", "has%3Acolon.tsx"],
   );
 });
 
-Deno.test("source projection failures after commit become warnings, not rejected writes", async () => {
+test("source projection failures after commit become warnings, not rejected writes", async () => {
   const receipt = {
     status: "committed" as const,
     ref: { identity: "A".repeat(43), symbol: "default" },
@@ -187,7 +188,7 @@ Deno.test("source projection failures after commit become warnings, not rejected
   );
 });
 
-Deno.test("source writes decode as strict UTF-8 text", () => {
+test("source writes decode as strict UTF-8 text", () => {
   const encode = (text: string) => new TextEncoder().encode(text);
   assertEquals(
     decodeSourceWriteText(encode("export default 1;")),
@@ -196,13 +197,13 @@ Deno.test("source writes decode as strict UTF-8 text", () => {
   assertEquals(decodeSourceWriteText(new Uint8Array(0)), "");
 });
 
-Deno.test("source writes keep a byte order mark", () => {
+test("source writes keep a byte order mark", () => {
   // The mark is content: an attached data file is stored byte-for-byte.
   const withMark = new Uint8Array([0xef, 0xbb, 0xbf, 0x7b, 0x7d]);
   assertEquals(decodeSourceWriteText(withMark), "\uFEFF{}");
 });
 
-Deno.test("source writes that are not UTF-8 text decode to undefined", () => {
+test("source writes that are not UTF-8 text decode to undefined", () => {
   // Storing replacement characters here would deploy something other than what
   // was written, so the write has to be refused instead.
   assertEquals(
@@ -212,19 +213,19 @@ Deno.test("source writes that are not UTF-8 text decode to undefined", () => {
   assertEquals(decodeSourceWriteText(new Uint8Array([0xc3, 0x28])), undefined);
 });
 
-Deno.test("no-handle truncate opens only the bounded target prefix", () => {
+test("no-handle truncate opens only the bounded target prefix", () => {
   const content = new Uint8Array([1, 2, 3, 4, 5]);
   assertEquals([...bufferForNoHandleTruncate(content, 2)], [1, 2]);
   assertEquals(bufferForNoHandleTruncate(content, 0).length, 0);
 });
 
-Deno.test("disconnectedWriteErrno only rejects degraded writes", () => {
+test("disconnectedWriteErrno only rejects degraded writes", () => {
   assertEquals(disconnectedWriteErrno({ disconnected: true }), EROFS);
   assertEquals(disconnectedWriteErrno({ disconnected: false }), null);
   assertEquals(disconnectedWriteErrno(undefined), null);
 });
 
-Deno.test("mounted is announced only after the session loop and signal handlers", async () => {
+test("mounted is announced only after the session loop and signal handlers", async () => {
   // The readiness handshake carries no timed confirmation because the `mounted`
   // announcement is honest: by the time a caller can read it, the session loop
   // is dispatched and the signal handlers are installed, so the mount serves
@@ -239,7 +240,7 @@ Deno.test("mounted is announced only after the session loop and signal handlers"
   );
   assertAppearsBefore(
     source,
-    'Deno.addSignalListener("SIGTERM"',
+    'host.addSignalListener("SIGTERM"',
     'reportSupervisorState("mounted")',
     "signal handlers installed before mounted is announced",
   );
@@ -253,7 +254,7 @@ Deno.test("mounted is announced only after the session loop and signal handlers"
   );
 });
 
-Deno.test("connection write failure classifier recognizes backend outages", () => {
+test("connection write failure classifier recognizes backend outages", () => {
   assertEquals(
     isConnectionWriteFailure(new Error("ConnectionError: transport closed")),
     true,
@@ -271,7 +272,7 @@ Deno.test("connection write failure classifier recognizes backend outages", () =
   );
 });
 
-Deno.test("CFC writeback xattr errno policy distinguishes unsupported and malformed payloads", () => {
+test("CFC writeback xattr errno policy distinguishes unsupported and malformed payloads", () => {
   const enotsup = 95;
 
   assertEquals(cfcWritebackXattrResultErrno({ ok: true }, { enotsup }), 0);
@@ -298,12 +299,12 @@ Deno.test("CFC writeback xattr errno policy distinguishes unsupported and malfor
   );
 });
 
-Deno.test("platform ENOTSUP matches host errno values", () => {
+test("platform ENOTSUP matches host errno values", () => {
   assertEquals(darwinPlatform.ENOTSUP, 45);
   assertEquals(linuxPlatform.ENOTSUP, 95);
 });
 
-Deno.test("root space lookup decodes request names and replies with canonical names", () => {
+test("root space lookup decodes request names and replies with canonical names", () => {
   assertEquals(rootSpaceLookupNames("did%3Akey%3AzSpace"), {
     spaceName: "did:key:zSpace",
     directoryName: "did%3Akey%3AzSpace",
@@ -314,7 +315,7 @@ Deno.test("root space lookup decodes request names and replies with canonical na
   });
 });
 
-Deno.test("mount fuse args apply allow_other on Linux only", () => {
+test("mount fuse args apply allow_other on Linux only", () => {
   assertEquals(
     buildMountFuseArgs({
       os: "linux",
@@ -348,7 +349,7 @@ Deno.test("mount fuse args apply allow_other on Linux only", () => {
   );
 });
 
-Deno.test("mount fuse args apply noattrcache to FUSE-T mounts only", () => {
+test("mount fuse args apply noattrcache to FUSE-T mounts only", () => {
   assertEquals(
     buildMountFuseArgs({
       os: "darwin",
@@ -378,7 +379,7 @@ Deno.test("mount fuse args apply noattrcache to FUSE-T mounts only", () => {
   }
 });
 
-Deno.test("FUSE-T mounts default to a one-second attrcache-timeout", () => {
+test("FUSE-T mounts default to a one-second attrcache-timeout", () => {
   assertEquals(
     buildMountFuseArgs({
       os: "darwin",
@@ -427,7 +428,7 @@ Deno.test("FUSE-T mounts default to a one-second attrcache-timeout", () => {
   );
 });
 
-Deno.test("mount fuse args apply attrcache-timeout to FUSE-T mounts only", () => {
+test("mount fuse args apply attrcache-timeout to FUSE-T mounts only", () => {
   assertEquals(
     buildMountFuseArgs({
       os: "darwin",
@@ -452,7 +453,7 @@ Deno.test("mount fuse args apply attrcache-timeout to FUSE-T mounts only", () =>
   );
 });
 
-Deno.test("attrcache-timeout parses whole seconds within bounds", () => {
+test("attrcache-timeout parses whole seconds within bounds", () => {
   assertEquals(parseAttrcacheTimeoutSeconds(""), undefined);
   assertEquals(parseAttrcacheTimeoutSeconds("1"), 1);
   assertEquals(parseAttrcacheTimeoutSeconds("30"), 30);
@@ -470,7 +471,7 @@ Deno.test("attrcache-timeout parses whole seconds within bounds", () => {
   assertThrows(() => parseAttrcacheTimeoutSeconds("1e21"));
 });
 
-Deno.test("libfuse search includes the FUSE-T per-user install location", () => {
+test("libfuse search includes the FUSE-T per-user install location", () => {
   assertEquals(
     darwinLibfusePaths(env({ HOME: "/Users/alice" })),
     [
@@ -488,7 +489,7 @@ Deno.test("libfuse search includes the FUSE-T per-user install location", () => 
   );
 });
 
-Deno.test("mount cache options resolve from their command-line spellings", () => {
+test("mount cache options resolve from their command-line spellings", () => {
   assertEquals(
     resolveMountCacheOptions({ noattrcache: false, attrcacheTimeout: "" }),
     { noattrcache: false, attrcacheTimeoutSeconds: undefined },
@@ -508,7 +509,7 @@ Deno.test("mount cache options resolve from their command-line spellings", () =>
   );
 });
 
-Deno.test("mount cache options reject the mutually exclusive combination", () => {
+test("mount cache options reject the mutually exclusive combination", () => {
   assertThrows(
     () =>
       resolveMountCacheOptions({ noattrcache: true, attrcacheTimeout: "1" }),
@@ -524,7 +525,7 @@ Deno.test("mount cache options reject the mutually exclusive combination", () =>
   );
 });
 
-Deno.test("mount cache options reject a flag whose value was dropped", () => {
+test("mount cache options reject a flag whose value was dropped", () => {
   // The daemon's parser yields no value for `--attrcache-timeout -1`; that
   // must fail rather than resolve to the default cache regime.
   assertThrows(
@@ -548,7 +549,7 @@ Deno.test("mount cache options reject a flag whose value was dropped", () => {
   );
 });
 
-Deno.test("mount cache options surface an out-of-range timeout", () => {
+test("mount cache options surface an out-of-range timeout", () => {
   assertThrows(
     () =>
       resolveMountCacheOptions({ noattrcache: false, attrcacheTimeout: "-1" }),
@@ -622,7 +623,7 @@ function statusWriterOver(fs: ReturnType<typeof fakeStatusFilesystem>) {
   });
 }
 
-Deno.test("supervisor status publishes each state through a rename", () => {
+test("supervisor status publishes each state through a rename", () => {
   // The reader must never see a half-written file, so the document lands under a
   // scratch name and is renamed into place rather than written in place.
   const renames: Array<[string, string]> = [];
@@ -647,7 +648,7 @@ Deno.test("supervisor status publishes each state through a rename", () => {
   });
 });
 
-Deno.test("supervisor status does not regress when a slow write is still in flight", async () => {
+test("supervisor status does not regress when a slow write is still in flight", async () => {
   const fs = fakeStatusFilesystem();
   const write = statusWriterOver(fs);
 
@@ -663,7 +664,7 @@ Deno.test("supervisor status does not regress when a slow write is still in flig
   assertEquals(JSON.parse(fs.published()!).state, "exited");
 });
 
-Deno.test("supervisor status settles on exiting when it follows a stalled mounted", async () => {
+test("supervisor status settles on exiting when it follows a stalled mounted", async () => {
   const fs = fakeStatusFilesystem();
   const write = statusWriterOver(fs);
 
@@ -677,7 +678,7 @@ Deno.test("supervisor status settles on exiting when it follows a stalled mounte
   assertEquals(JSON.parse(fs.published()!).state, "exiting");
 });
 
-Deno.test("supervisor status keeps publishing after a write fails", async () => {
+test("supervisor status keeps publishing after a write fails", async () => {
   const fs = fakeStatusFilesystem();
   let failNext = true;
   const write = createSupervisorStatusWriter({
@@ -705,7 +706,7 @@ Deno.test("supervisor status keeps publishing after a write fails", async () => 
   assertEquals(fs.scratchFilesLeft(), []);
 });
 
-Deno.test("supervisor status records when a state was reached, not when it drained", async () => {
+test("supervisor status records when a state was reached, not when it drained", async () => {
   const fs = fakeStatusFilesystem();
   let clock = "2026-03-17T00:00:01.000Z";
   const write = createSupervisorStatusWriter({
@@ -734,7 +735,7 @@ Deno.test("supervisor status records when a state was reached, not when it drain
   );
 });
 
-Deno.test("supervisor state is announced on the pipe even when the file write fails", async () => {
+test("supervisor state is announced on the pipe even when the file write fails", async () => {
   // The pipe announcement is the handshake's channel; a failed status-file write
   // must not stop it, or a parent blocked on the pipe would never wake. The write
   // error still has to reach the caller.
@@ -753,7 +754,7 @@ Deno.test("supervisor state is announced on the pipe even when the file write fa
   assertEquals(published, [["mounted", {}]]);
 });
 
-Deno.test("supervisor state records before it announces on the success path", async () => {
+test("supervisor state records before it announces on the success path", async () => {
   const order: string[] = [];
   const write = (state: string) => {
     order.push(`write:${state}`);

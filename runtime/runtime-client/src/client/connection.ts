@@ -34,6 +34,7 @@ import {
   isPresenceUpdateNotification,
   isSpaceAccessLostNotification,
   isSpaceAccessRestoredNotification,
+  isSpaceSeqAdvancedNotification,
   isTelemetryNotification,
   isVDomBatchNotification,
   NavigateRequestNotification,
@@ -47,6 +48,7 @@ import {
   SerializedDomEvent,
   SpaceAccessLostNotification,
   SpaceAccessRestoredNotification,
+  SpaceSeqAdvancedNotification,
   TelemetryNotification,
   VDomBatchNotification,
   VDomMountResponse,
@@ -166,6 +168,7 @@ export type RuntimeConnectionEvents = {
   spaceaccesslost: [SpaceAccessLostNotification];
   spaceaccessrestored: [SpaceAccessRestoredNotification];
   connectionrestored: [ConnectionRestoredNotification];
+  spaceseqadvanced: [SpaceSeqAdvancedNotification];
   telemetry: [TelemetryNotification];
   vdombatch: [VDomBatchNotification];
   pendingwriteschange: [PendingWritesNotification];
@@ -469,24 +472,21 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
       // so late subscribers get the initial value, or the refusal that stands
       // in its place. One that has read nothing yet has nothing to copy; the
       // new one hears the worker's answer with it.
-      const existingInstance = handles.values().next().value;
+      const [existingInstance] = handles;
       handles.add(cell);
-      const existing = existingInstance?.lastRead();
-      if (existing !== undefined && "refused" in existing) {
+      const existing = existingInstance.lastRead();
+      if ("refused" in existing) {
         cell[$onCellRefused](existing.refused);
-      } else if (
-        existing !== undefined && "value" in existing &&
-        "unread" in cell.lastRead()
-      ) {
+      } else if ("value" in existing && "unread" in cell.lastRead()) {
         // A value seeds only a handle that holds nothing yet: what another
         // handle holds may be a write it made or a copy it was made with,
         // which ends no refusal the new one holds.
         // The copy carries the label the other handle holds, as current as
         // it is there.
         cell[$onCellUpdate](existing.value, {
-          cfcLabel: existingInstance?.cfcLabel,
-          writtenPrincipal: existingInstance?.writtenPrincipal,
-          current: existingInstance?.cfcLabelCurrent ?? false,
+          cfcLabel: existingInstance.cfcLabel,
+          writtenPrincipal: existingInstance.writtenPrincipal,
+          current: existingInstance.cfcLabelCurrent,
         });
       }
     }
@@ -658,6 +658,8 @@ export class RuntimeConnection extends EventEmitter<RuntimeConnectionEvents> {
         this.emit("spaceaccessrestored", message);
       } else if (isConnectionRestoredNotification(message)) {
         this.emit("connectionrestored", message);
+      } else if (isSpaceSeqAdvancedNotification(message)) {
+        this.emit("spaceseqadvanced", message);
       } else if (isVDomBatchNotification(message)) {
         this.emit("vdombatch", message);
       } else if (isPendingWritesNotification(message)) {

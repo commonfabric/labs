@@ -17,10 +17,10 @@
  * there as well, against output the compiler actually emitted.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
 import { decomposeSchema } from "@commonfabric/runner";
+import { describe, it } from "@commonfabric/test-support/test";
 import { registerSchemaDocument } from "../../runner/src/schema-registry.ts";
 import { externalRefTo } from "../../runner/test/schema-ref-helpers.ts";
 

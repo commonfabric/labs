@@ -2,6 +2,7 @@ import { assertEquals } from "@std/assert";
 import { expect } from "@std/expect";
 import { connect, loopback } from "@commonfabric/memory/v2/client";
 import { Server } from "@commonfabric/memory/v2/server";
+import { test } from "@commonfabric/test-support/test";
 
 import env from "@/env.ts";
 import {
@@ -18,7 +19,7 @@ if (env.ENV !== "test") {
 
 const app = createApp().route("/", router);
 
-Deno.test("health routes", async (t) => {
+test("health routes", async (t) => {
   await t.step("GET /_health returns 200 with health status", async () => {
     const response = await app.request("/_health");
     assertEquals(response.status, 200);
@@ -250,6 +251,58 @@ Deno.test("health routes", async (t) => {
             },
           }).success,
         ).toBe(false);
+      } finally {
+        await server.close();
+      }
+    },
+  );
+
+  await t.step(
+    "GET /api/health/stats reports what passed between the memory server's currency indexes",
+    async () => {
+      const server = new Server({
+        store: new URL("memory://health-stats-currency-delivery"),
+        authorizeSessionOpen: () => "did:key:z6Mk-health-stats-currency",
+        sessionOpenAuth: { audience: "did:key:z6Mk-health-stats-audience" },
+        subscriptionRefreshDelayMs: "manual",
+      });
+      try {
+        const response = await app.request("/api/health/stats");
+        assertEquals(response.status, 200);
+        const json = await response.json();
+        expect(json.currencyDelivery).toEqual(server.currencyDelivery());
+        expect(json.currencyDelivery).toEqual({
+          triggers: 0,
+          pulls: 0,
+          advancesQueued: 0,
+          holds: 0,
+          armed: 0,
+          spaces: [],
+        });
+        // The declared response schema admits the live response, and one
+        // that lists a space a change came back to.
+        expect(declared.safeParse(json).success).toBe(true);
+        const circling = {
+          space: "did:key:z6Mk-health-stats-currency-a",
+          origin: 3,
+          hops: 5,
+          laps: 2,
+          circle: [
+            "did:key:z6Mk-health-stats-currency-a",
+            "did:key:z6Mk-health-stats-currency-b",
+          ],
+          holds: 1,
+          gapMs: 1_000,
+          heldUntil: 1_700_000_001_000,
+        };
+        const listing = (space: typeof circling) => ({
+          ...json,
+          currencyDelivery: { ...json.currencyDelivery, spaces: [space] },
+        });
+        expect(declared.safeParse(listing(circling)).success).toBe(true);
+        // The schema refuses a malformed count.
+        expect(declared.safeParse(listing({ ...circling, laps: -1 })).success)
+          .toBe(false);
       } finally {
         await server.close();
       }

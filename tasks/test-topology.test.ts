@@ -1,7 +1,6 @@
 import { expect } from "@std/expect";
 import { parse as parseJsonc } from "@std/jsonc";
 import * as path from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import {
   capabilitiesBySuite,
   claimsFor,
@@ -14,6 +13,7 @@ import {
   parseSkipList,
   SKIP_LIST_VARIABLE,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import { CAPABILITIES } from "./ci-capabilities.ts";
 import { commandsWrittenIn } from "./check-test-shuffle.ts";
 import { collectMeasuredSetDebt } from "./coverage-metrics.ts";
@@ -131,8 +131,8 @@ describe("the test topology", () => {
 
   it("gives every unit a lane may subset a file the skip list keys on", async () => {
     // A lane running part of a unit registers the rest as ignored. The
-    // registration preload looks each ignored name up under the
-    // repository-relative file that registered the test. A unit that is not
+    // test module looks each ignored name up under the repository-relative
+    // file that registered the test. A unit that is not
     // such a file therefore cannot be handed a subset, and has to be listed in
     // `whole`. An unlisted unit of that kind would get a skip list that matches
     // nothing, and its lane would run every test while being charged for one.

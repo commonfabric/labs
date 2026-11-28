@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   GuestLoadError,
@@ -23,6 +22,7 @@ import {
   reduceSimulation,
   type TileState,
 } from "./simulation.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const GUEST = new URL("./guest.ts", import.meta.url);
 const HTML = new URL("./guest.html", import.meta.url);
@@ -231,6 +231,7 @@ describe("iframe-firebreak-commons/guest", () => {
     output?: MemoryCell;
     html?: string;
     drawing?: Drawing;
+    beforeLoad?: () => void;
   } = {}) {
     const input = new MemoryCell(options.input ?? DEFAULT_INPUT, {
       readonly: true,
@@ -292,6 +293,7 @@ describe("iframe-firebreak-commons/guest", () => {
             queueMicrotask(() => Reflect.apply(setSource, this, [value]));
           },
         });
+        options.beforeLoad?.();
       },
     });
     return { page, input, state, output, drawing, frames };
@@ -726,6 +728,32 @@ describe("iframe-firebreak-commons/guest", () => {
       });
     }
 
+    it("commits nothing when asked to deploy before a tile is selected", async () => {
+      const { page, state } = await load();
+
+      // A click that is not a mouse click, such as one a script sends, still
+      // reaches a disabled button.
+      button("deploy").dispatchEvent(new Event("click"));
+      await page.settled();
+
+      expect(state.writes).toEqual([]);
+      expect(text("sync-status")).toBe("Ready · Commons crew");
+      expect(text("error")).toBe("");
+
+      mirrorTile(BURNING).click();
+      const write = state.nextWrite();
+      button("deploy").dispatchEvent(new Event("click"));
+
+      expect(text("sync-status")).toBe("Committing water deployment");
+      expect((await write).value).toEqual([{
+        id: expect.any(String),
+        actorId: CREW_ID,
+        turn: 1,
+        type: "water",
+        tileId: BURNING.id,
+      }]);
+    });
+
     it("tells the player when the board rejects the deployment", async () => {
       const { page, state } = await load();
       toolButton("firebreak").click();
@@ -1084,6 +1112,41 @@ describe("iframe-firebreak-commons/guest", () => {
 
       // The map goes at the next frame.
       parts.frames.run();
+
+      expect(mapCanvas()).toBeNull();
+    });
+
+    it("stops loading when the page hides before the commons arrive", async () => {
+      const state = new MemoryCell(DEFAULT_STATE);
+      const output = new MemoryCell(DEFAULT_OUTPUT, {
+        identity: { id: "output", instanceId: CREW_ID },
+      });
+      const release = state.holdReads();
+      const { frames } = await open({
+        state,
+        output,
+        // The guest shows that it is synchronizing once it has asked for the
+        // commons, and hides then, while the read is held back.
+        beforeLoad: () => {
+          const observer = new MutationObserver(() => {
+            observer.disconnect();
+            dispatchEvent(new Event("pagehide"));
+          });
+          observer.observe(byId("sync-status"), { childList: true });
+        },
+      });
+      release();
+
+      expect(text("error")).toBe(
+        "The Fabric bridge disconnected before the operation completed.",
+      );
+      expect(app().dataset.ready).toBe("false");
+      expect(text("sync-status")).toBe("Synchronizing commons");
+      expect(button("advance").disabled).toBe(true);
+      expect(state.writes).toEqual([]);
+      expect(output.writes).toEqual([]);
+
+      frames.run();
 
       expect(mapCanvas()).toBeNull();
     });

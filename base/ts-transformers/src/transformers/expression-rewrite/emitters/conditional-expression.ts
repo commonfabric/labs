@@ -7,7 +7,11 @@ import {
   registerSyntheticCallType,
   selectDataFlowsReferencedIn,
 } from "../../../ast/mod.ts";
-import { createReactiveWrapperForExpression } from "../rewrite-helpers.ts";
+import {
+  createReactiveWrapperForExpression,
+  hasSyntheticComputeCallbackAncestor,
+  isAlreadySyntheticComputeOwned,
+} from "../rewrite-helpers.ts";
 import {
   findPendingComputeWrapCandidate,
   isJsxLocalRewriteContainer,
@@ -36,31 +40,6 @@ function isLogicalControlFlowExpression(expr: ts.Expression): boolean {
     );
 }
 
-function hasSyntheticComputeCallbackAncestor(
-  node: ts.Node,
-  context: Parameters<Emitter>[0]["context"],
-): boolean {
-  let current = node.parent;
-  while (current) {
-    if (
-      (ts.isArrowFunction(current) || ts.isFunctionExpression(current)) &&
-      context.isSyntheticComputeCallback(current)
-    ) {
-      return true;
-    }
-    current = current.parent;
-  }
-  return false;
-}
-
-function isAlreadySyntheticComputeOwned(
-  node: ts.Node,
-  context: Parameters<Emitter>[0]["context"],
-): boolean {
-  return context.getReactiveContext(node).kind === "compute" &&
-    context.isSyntheticComputeOwnedNode(node);
-}
-
 function processBranch(
   expr: ts.Expression,
   context: Parameters<Emitter>[0]["context"],
@@ -86,24 +65,17 @@ function processBranch(
     ? findPendingComputeWrapCandidate(expr, analyze, context)
     : undefined;
 
-  if (pendingRewrite) {
-    if (
-      hasSyntheticComputeCallbackAncestor(pendingRewrite, context) ||
-      isAlreadySyntheticComputeOwned(pendingRewrite, context)
-    ) {
-      return rewriteChildren(expr) || expr;
-    }
-
-    const decision = resolveComputeWrapCandidate(
-      pendingRewrite,
-      expr,
-      "ternary branch",
-      context,
-    );
-    if (decision.kind === "skip-reported") {
-      return rewriteChildren(expr) || expr;
-    }
-
+  if (
+    pendingRewrite &&
+    !hasSyntheticComputeCallbackAncestor(pendingRewrite, context) &&
+    !isAlreadySyntheticComputeOwned(pendingRewrite, context) &&
+    resolveComputeWrapCandidate(
+        pendingRewrite,
+        expr,
+        "ternary branch",
+        context,
+      ).kind === "wrap"
+  ) {
     const derived = createReactiveWrapperForExpression(
       expr,
       branchDataFlows,
@@ -128,12 +100,10 @@ export const emitConditionalExpression: Emitter = ({
   analyze,
   rewriteChildren,
   rewriteSubexpression,
-  inSafeContext,
   preferInputBoundWrappers,
 }) => {
   if (!ts.isConditionalExpression(expression)) return undefined;
 
-  if (inSafeContext) return undefined;
   if (dataFlows.length === 0) return undefined;
 
   const predicateDataFlows = selectDataFlowsReferencedIn(

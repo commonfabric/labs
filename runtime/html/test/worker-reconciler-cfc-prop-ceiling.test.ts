@@ -12,6 +12,8 @@ import {
 } from "@commonfabric/runner/cfc";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { test } from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -33,12 +35,8 @@ import type {
 // does as a text child read from its own document. Every secret below
 // carries a string that appears nowhere else, so a search of the emitted
 // operations for it is a search for the value having escaped.
-//
-// `Deno.test` rather than `describe`/`it`: this package installs its fake
-// clock in freeze-all mode, which hangs `settle()` off `Deno.TestContext`, and
-// a `@std/testing/bdd` `it()` callback never receives that context.
 
-Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => {
+test("worker reconciler CFC ceiling over props and bindings", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler cfc prop ceiling",
   );
@@ -145,7 +143,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
       },
       ...options,
     }).mount(tree);
-    await t.settle();
+    await clock.settle();
     return {
       ops,
       cancel,
@@ -450,6 +448,38 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
       },
     );
 
+    // A stream holds no value, so no read of one admits its binding under a
+    // ceiling. Without a ceiling, nothing is decided and it is bound.
+    await t.step(
+      "withholds a stream binding under a ceiling and binds it without one",
+      async () => {
+        const tx = runtime.edit();
+        runtime.getCell(signer.did(), "prop-ceiling-stream", undefined, tx)
+          .setRawUntyped({ $stream: true });
+        expect((await tx.commit().settled).ok).toBeDefined();
+        const stream = runtime.getCell<unknown>(
+          signer.did(),
+          "prop-ceiling-stream",
+          { asCell: ["stream"] },
+        );
+        const tree: WorkerVNode = {
+          type: "vnode",
+          name: "div",
+          props: { $events: stream as never },
+          children: [],
+        };
+        const gated = await mount(tree, HOST_CEILING);
+        const ungated = await mount(tree);
+        try {
+          expect(gated.bindings("events")).toBe(0);
+          expect(ungated.bindings("events")).toBe(1);
+        } finally {
+          gated.cancel();
+          ungated.cancel();
+        }
+      },
+    );
+
     await t.step(
       "binds what a trusted component declares it uses only as a reference",
       async () => {
@@ -670,11 +700,11 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
           await write("child-ceiling-crossing-plain-row", { name: PUBLIC }, [
             secretAtom,
           ]);
-          await t.settle();
+          await clock.settle();
           expect(page.placeholders()).toBe(2);
 
           await write("child-ceiling-crossing-secret-row", { name: PUBLIC });
-          await t.settle();
+          await clock.settle();
           expect(root.texts()).toContain(PUBLIC);
         } finally {
           page.cancel();
@@ -935,7 +965,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
 
           // The choice is relabeled refused and still names the same record.
           await choose("prop-ceiling-reference-relabeled", [secretAtom]);
-          await t.settle();
+          await clock.settle();
           expect(page.removed("data-relabeled")).toBe(1);
           expect(page.removed("data-public")).toBe(0);
         } finally {
@@ -958,7 +988,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
             children: [],
           } as never);
           expect((await tx.commit().settled).ok).toBeDefined();
-          await t.settle();
+          await clock.settle();
         };
         await point(plain);
         const page = await mount(
@@ -1020,18 +1050,18 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
 
           // Admitted to admitted: the binding already in place stands.
           await write(id, "second public value");
-          await t.settle();
+          await clock.settle();
           expect(page.bindings("value")).toBe(1);
           expect(page.propsSet("title")).toContain("second public value");
 
           await write(id, SECRET, [secretAtom]);
-          await t.settle();
+          await clock.settle();
           expect(page.emitted()).not.toContain(SECRET);
           expect(page.removed("value")).toBe(1);
           expect(page.removed("title")).toBe(1);
 
           await write(id, "public again");
-          await t.settle();
+          await clock.settle();
           expect(page.bindings("value")).toBe(2);
           expect(page.propsSet("title")).toContain("public again");
         } finally {
@@ -1100,7 +1130,7 @@ Deno.test("worker reconciler CFC ceiling over props and bindings", async (t) => 
 
           const membershipChanges = async () => {
             for (const onChange of [...listeners]) onChange();
-            await t.settle();
+            await clock.settle();
           };
           const shownTitles = () =>
             page.propsSet("title").filter((title) => title === "team value");

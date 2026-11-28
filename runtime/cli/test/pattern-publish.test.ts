@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
@@ -19,6 +18,12 @@ import {
   publishReportLines,
 } from "../lib/pattern-publish.ts";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
 
 const ADDRESS = "742 Evergreen Terrace";
@@ -282,6 +287,62 @@ describe("pattern-publish", () => {
       expect(first.remixedFrom).toBe("pat-theirs");
     });
 
+    it("sends `standalone` on every version it publishes when it is stated, and never when it is not", async () => {
+      dirty = undefined;
+      await publishedReport(
+        { entry, slot: "cf-path:stands", standalone: false },
+        depsWith(scripted([FAIL, PASS], [REWRITE])),
+      );
+      const stated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(stated.map((c) => c.body.standalone)).toEqual([false, false]);
+
+      index.calls.length = 0;
+      await publishedReport({ entry }, depsWith(undefined));
+      const unstated = index.calls.filter((c) => c.fn === "publishPattern");
+      expect(stated.length).toBe(2);
+      expect(unstated).toHaveLength(1);
+      expect(Object.hasOwn(unstated[0].body, "standalone")).toBe(false);
+    });
+
+    it("names the input that keeps a pattern published as standalone a part", async () => {
+      const deps = depsWith(undefined);
+      const compile = deps.compileEntry;
+      const report = await publishedReport({ entry, standalone: true }, {
+        ...deps,
+        compileEntry: async (path, program) => ({
+          ...await compile(path, program),
+          argumentSchema: {
+            type: "object",
+            properties: { home: { type: "string" } },
+            required: ["home"],
+          },
+        }),
+      });
+
+      expect(report.standalone).toBe(false);
+      expect(report.standaloneFloor).toBe("home");
+      expect(publishReportLines(report)).toContain(
+        "Offered only as a part, not on its own: its input home is required and has no default. Give it a default to offer the pattern on its own.",
+      );
+    });
+
+    it("says the index did not record --part when it answers no standalone", async () => {
+      const deps = depsWith(undefined);
+      const client = deps.client as PatternIndexClient;
+      const publish = client.publishPattern.bind(client);
+      // An index that predates the field: it answers without `standalone`.
+      client.publishPattern = async (request) => {
+        const { standalone: _, ...answer } = await publish(request);
+        return answer;
+      };
+      const report = await publishedReport({ entry, standalone: false }, deps);
+
+      expect(report.standaloneNotRecorded).toBe(true);
+      expect(publishReportLines(report)).toContain(
+        "The index did not record whether it stands alone: it predates --standalone and --part.",
+      );
+    });
+
     it("keeps the source as a version before a rewrite it writes over uncommitted edits with allowDirty", async () => {
       dirty = [entry];
       const report = await publishedReport(
@@ -295,26 +356,104 @@ describe("pattern-publish", () => {
       });
     });
 
-    it("shares through an index that keeps no lineages as it did before", async () => {
+    it("shares on beta through the version it kept, and says so", async () => {
+      const report = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.listing).toEqual({
+        status: "requested",
+        listing: "pending",
+        channel: "beta",
+        changed: true,
+      });
+      expect(index.calls.some((call) => call.fn === "requestListing"))
+        .toBe(false);
+      expect(publishReportLines(report).join("\n")).toContain("Beta: ");
+    });
+
+    it("says where it is did not change when sharing on beta a source already stable", async () => {
+      const deps = depsWith(scripted([PASS, PASS, PASS], []));
+      const first = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "stable" },
+        deps,
+      );
+      const checking = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        deps,
+      );
+      index.setListing(first.patternId, "passed");
+      const again = await publishedReport(
+        { entry, slot: "cf-path:bins", channel: "beta" },
+        deps,
+      );
+
+      expect(checking.listing).toMatchObject({ changed: false });
+      expect(publishReportLines(checking).join("\n")).toContain(
+        "Already being checked: where it goes did not change.",
+      );
+      expect(again.listing).toMatchObject({ changed: false });
+      const text = publishReportLines(again).join("\n");
+      expect(text).toContain("Already shared: where it is did not change");
+      expect(text).not.toContain("nobody finds it");
+    });
+
+    it("shares nothing, rather than asking for a listing, on beta without a version", async () => {
+      const report = await publishedReport(
+        { entry, channel: "beta" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.listing).toEqual({
+        status: "failed",
+        reason: "the index kept no version of it to share on beta",
+      });
+      expect(
+        index.calls.some((call) =>
+          call.fn === "requestListing" || call.fn === "shareVersion"
+        ),
+      ).toBe(false);
+    });
+
+    /** Deps whose index answers listing lineages with `status`. */
+    const depsListingLineagesFailing = (status: number): PublishDeps => {
       const deps = depsWith(scripted([PASS], []));
       const client = deps.client;
+      return {
+        ...deps,
+        client: {
+          getGardenerPrompt: (r) => client.getGardenerPrompt(r),
+          publishPattern: (r) => client.publishPattern(r),
+          requestListing: (r) => client.requestListing(r),
+          shareVersion: (r) => client.shareVersion(r),
+          getPattern: (r) => client.getPattern(r),
+          whoami: () => client.whoami(),
+          listLineages: () =>
+            Promise.reject(new PatternIndexError("listLineages", status)),
+        },
+      };
+    };
+
+    it("shares through an index that keeps no lineages as it did before", async () => {
       const report = await publishedReport(
         { entry, slot: "cf-path:old" },
-        {
-          ...deps,
-          client: {
-            getGardenerPrompt: (r) => client.getGardenerPrompt(r),
-            publishPattern: (r) => client.publishPattern(r),
-            requestListing: (r) => client.requestListing(r),
-            getPattern: (r) => client.getPattern(r),
-            whoami: () => client.whoami(),
-            listLineages: () =>
-              Promise.reject(new PatternIndexError("listLineages", 404)),
-          },
-        },
+        depsListingLineagesFailing(404),
       );
 
       expect(report.outcome).toBe("shared");
+    });
+
+    it("throws, publishing nothing, when listing lineages fails otherwise", async () => {
+      const thrown = await publishPatternFromDisk(
+        { entry, slot: "cf-path:old" },
+        depsListingLineagesFailing(500),
+      ).catch((error) => error);
+
+      expect(thrown).toBeInstanceOf(PatternIndexError);
+      expect(thrown.status).toBe(500);
+      expect(index.calls.some((call) => call.fn === "publishPattern"))
+        .toBe(false);
     });
 
     it("throws naming cf index join, before compiling, for an identity that is no member", async () => {
@@ -414,6 +553,31 @@ describe("pattern-publish", () => {
 
       expect(report.remixedFrom).toBe("id-theirs");
       expect(report.priorPatternId).toBeUndefined();
+    });
+
+    it("credits the pattern named by remixedFrom over the one the source was fetched from", async () => {
+      await store.recordSource([entry], "id-fetched");
+      const report = await publishedReport(
+        { entry, remixedFrom: "id-named" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.remixedFrom).toBe("id-named");
+      expect(report.priorPatternId).toBeUndefined();
+      const publish = index.calls.find((call) => call.fn === "publishPattern")!;
+      expect(publish.body.remixedFrom).toBe("id-named");
+    });
+
+    it("credits no remix when remixedFrom names the pattern being published", async () => {
+      await store.recordSource([entry], "id-fetched");
+      const report = await publishedReport(
+        { entry, remixedFrom: "id-original" },
+        depsWith(scripted([PASS], [])),
+      );
+
+      expect(report.remixedFrom).toBeUndefined();
+      const publish = index.calls.find((call) => call.fn === "publishPattern")!;
+      expect(publish.body).not.toHaveProperty("remixedFrom");
     });
 
     it("names one's own pattern the source was fetched from as the prior version, not a remix", async () => {
@@ -709,13 +873,38 @@ describe("pattern-publish", () => {
       expect(meaning("not_requested")).toBe("Listing: unlisted.");
     });
 
+    it("returns what was shared when the index names no listing state", () => {
+      expect(publishReportLines(shared({ status: "requested" }))[2])
+        .toBe("Listing: shared.");
+    });
+
+    it("returns what each listing state means on beta", () => {
+      const meaning = (listing?: PatternIndexListing) =>
+        publishReportLines(
+          shared({ status: "requested", listing, channel: "beta" }),
+        )[2];
+      expect(meaning("passed")).toBe(
+        "Beta: reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable.",
+      );
+      expect(meaning("held")).toBe(
+        "Beta: held: the index found something identifying; see cf pattern mine.",
+      );
+      expect(meaning("error")).toBe(
+        "Beta: error: the check failed to run and waits for an admin re-run.",
+      );
+      expect(meaning("pending")).toBe(
+        "Beta: once the index's privacy check passes, it is reachable by its link (cf pattern link --beta); nobody finds it until cf pattern stable.",
+      );
+      expect(meaning(undefined)).toBe(meaning("pending"));
+    });
+
     it("returns why the listing was not requested when the request failed", () => {
       expect(publishReportLines(
         shared({ status: "failed", reason: "HTTP 503" }),
       )).toEqual([
         "Local privacy check: passed.",
         "Shared id-1.",
-        "Listing not requested: HTTP 503.",
+        "Not shared: HTTP 503.",
         "Next: open it.",
       ]);
     });

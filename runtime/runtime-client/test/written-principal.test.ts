@@ -1,11 +1,11 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { type Cell, Runtime, writtenPrincipalAt } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
@@ -15,6 +15,7 @@ import {
 import { createCellRef } from "@/backends/utils.ts";
 import type { CellHandle } from "@/cell-handle.ts";
 import {
+  type LabelReading,
   observeRepresentedPrincipal,
   observeWrittenPrincipal,
   type WrittenValue,
@@ -122,15 +123,18 @@ async function profileSpace() {
   };
 }
 
+/** A report of `observeWrittenPrincipal()`, with what it was read from. */
+type Report = [WrittenValue<FabricBytes | undefined>, LabelReading];
+
 /**
  * Observes `cell`, collecting every report: `reported(n)` resolves once
  * there have been `n`, at once when there have already.
  */
 const observe = (cell: CellHandle<FabricBytes | undefined>) => {
-  const reports: WrittenValue<FabricBytes | undefined>[] = [];
+  const reports: Report[] = [];
   const checks: (() => void)[] = [];
-  const cancel = observeWrittenPrincipal(cell, (written) => {
-    reports.push(written);
+  const cancel = observeWrittenPrincipal(cell, (written, reading) => {
+    reports.push([written, reading]);
     for (const check of checks) check();
   });
   const reported = (count: number): Promise<void> =>
@@ -204,7 +208,10 @@ describe("written-principal", () => {
       const { reports, reported } = observe(profile.field());
       await reported(1);
 
-      expect(reports).toEqual([{ value: picture, principal: OWNER }]);
+      expect(reports).toEqual([[
+        { value: picture, principal: OWNER },
+        "current",
+      ]]);
     });
 
     it("reports the visitor for a value a visitor wrote", async () => {
@@ -214,7 +221,10 @@ describe("written-principal", () => {
       const { reports, reported } = observe(profile.field());
       await reported(1);
 
-      expect(reports).toEqual([{ value: picture, principal: VISITOR }]);
+      expect(reports).toEqual([[
+        { value: picture, principal: VISITOR },
+        "current",
+      ]]);
     });
 
     it("reports no principal for a value stored without a label, or one said to represent two principals", async () => {
@@ -225,7 +235,10 @@ describe("written-principal", () => {
         const { reports, reported } = observe(profile.field());
         await reported(1);
 
-        expect(reports).toEqual([{ value: picture, principal: undefined }]);
+        expect(reports).toEqual([[
+          { value: picture, principal: undefined },
+          "current",
+        ]]);
       }
     });
 
@@ -235,7 +248,10 @@ describe("written-principal", () => {
       const { reports, reported } = observe(profile.field());
       await reported(1);
 
-      expect(reports).toEqual([{ value: picture, principal: undefined }]);
+      expect(reports).toEqual([[
+        { value: picture, principal: undefined },
+        "current",
+      ]]);
     });
 
     it("reports no principal for a cell holding a link to a value its owner wrote", async () => {
@@ -246,7 +262,10 @@ describe("written-principal", () => {
       const { reports, reported } = observe(profile.field());
       await reported(1);
 
-      expect(reports).toEqual([{ value: picture, principal: undefined }]);
+      expect(reports).toEqual([[
+        { value: picture, principal: undefined },
+        "current",
+      ]]);
     });
 
     it("reports the principal of the cell a relinked field then writes to, and of a cell relabeled under it", async () => {
@@ -259,15 +278,18 @@ describe("written-principal", () => {
       const owners = await profile.store("by-owner", picture, OWNER);
       await profile.point(owners.getAsWriteRedirectLink());
       await reported(2);
-      expect(reports.at(-1)).toEqual({ value: picture, principal: OWNER });
+      expect(reports.at(-1)).toEqual([
+        { value: picture, principal: OWNER },
+        "current",
+      ]);
 
       await profile.store("by-owner", picture, VISITOR);
       await reported(3);
 
       expect(reports).toEqual([
-        { value: picture, principal: VISITOR },
-        { value: picture, principal: OWNER },
-        { value: picture, principal: VISITOR },
+        [{ value: picture, principal: VISITOR }, "current"],
+        [{ value: picture, principal: OWNER }, "current"],
+        [{ value: picture, principal: VISITOR }, "current"],
       ]);
     });
 
@@ -282,8 +304,8 @@ describe("written-principal", () => {
       await reported(2);
 
       expect(reports).toEqual([
-        { value: picture, principal: OWNER },
-        { value: picture, principal: undefined },
+        [{ value: picture, principal: OWNER }, "current"],
+        [{ value: picture, principal: undefined }, "current"],
       ]);
     });
 
@@ -302,7 +324,10 @@ describe("written-principal", () => {
       // what the worker delivered for the requests sent before it.
       await profile.field().sync();
 
-      expect(reports).toEqual([{ value: picture, principal: OWNER }]);
+      expect(reports).toEqual([[
+        { value: picture, principal: OWNER },
+        "current",
+      ]]);
       cancel();
       cancelLabeled();
     });
@@ -323,7 +348,10 @@ describe("written-principal", () => {
       // what the worker delivered for the requests sent before it.
       await profile.field().sync();
 
-      expect(reports).toEqual([{ value: picture, principal: OWNER }]);
+      expect(reports).toEqual([[
+        { value: picture, principal: OWNER },
+        "current",
+      ]]);
       cancel();
       cancelValued();
     });
@@ -338,15 +366,15 @@ describe("written-principal", () => {
 
       const written = new FabricBytes(new Uint8Array([1, 2]));
       field.set(written);
-      expect(reports.at(-1)).toEqual(NOTHING);
+      expect(reports.at(-1)).toEqual([NOTHING, "stale"]);
 
       await field.sync();
       await profile.runtime.scheduler.idleWithPendingCommits();
       await reported(3);
-      expect(reports.at(-1)).toEqual({
-        value: written,
-        principal: profile.writtenPrincipal(),
-      });
+      expect(reports.at(-1)).toEqual([
+        { value: written, principal: profile.writtenPrincipal() },
+        "current",
+      ]);
     });
 
     it("reports nothing once cancelled", async () => {
@@ -363,34 +391,46 @@ describe("written-principal", () => {
       // observation would have heard it on.
       await witness.reported(2);
 
-      expect(cancelled.reports).toEqual([{ value: picture, principal: OWNER }]);
+      expect(cancelled.reports).toEqual([[
+        { value: picture, principal: OWNER },
+        "current",
+      ]]);
       witness.cancel();
     });
 
     it("reports neither for a cell the worker refuses, and nothing for a delivery without the label the worker read before that", () => {
       const cell = fakeCell(undefined, undefined, false);
-      const reports: WrittenValue<unknown>[] = [];
-      observeWrittenPrincipal(cell.handle, (written) => reports.push(written));
+      const reports: [WrittenValue<unknown>, LabelReading][] = [];
+      observeWrittenPrincipal(
+        cell.handle,
+        (written, reading) => reports.push([written, reading]),
+      );
       expect(reports).toEqual([]);
 
       cell.refuse();
 
-      expect(reports).toEqual([NOTHING]);
+      expect(reports).toEqual([[NOTHING, "refused"]]);
     });
   });
 
   describe("observeRepresentedPrincipal()", () => {
-    /** Observes `cell`, and returns every principal it reported. */
+    /**
+     * Observes `cell`, and returns every principal it reported, each with
+     * what it was read from.
+     */
     const observeOwner = (cell: CellHandle<unknown>) => {
-      const owners: (string | undefined)[] = [];
-      observeRepresentedPrincipal(cell, (owner) => owners.push(owner));
+      const owners: [string | undefined, LabelReading][] = [];
+      observeRepresentedPrincipal(
+        cell,
+        (owner, reading) => owners.push([owner, reading]),
+      );
       return owners;
     };
 
     it("reports the principal a profile's label names", () => {
       const profile = fakeCell({ name: "Bob" }, representing(OWNER), true);
 
-      expect(observeOwner(profile.handle)).toEqual([OWNER]);
+      expect(observeOwner(profile.handle)).toEqual([[OWNER, "current"]]);
     });
 
     it("reports no principal for a label naming two, and none once refused", () => {
@@ -403,7 +443,7 @@ describe("written-principal", () => {
 
       profile.refuse();
 
-      expect(owners).toEqual([undefined, undefined]);
+      expect(owners).toEqual([[undefined, "current"], [undefined, "refused"]]);
     });
 
     it("reports nothing until the label the worker read has arrived, no principal after a write through the handle, and the principal again once the worker delivers the label", () => {
@@ -412,14 +452,18 @@ describe("written-principal", () => {
       expect(owners).toEqual([]);
 
       profile.deliver({ name: "Bob" }, representing(OWNER));
-      expect(owners).toEqual([OWNER]);
+      expect(owners).toEqual([[OWNER, "current"]]);
 
       profile.writeLocally({ name: "Robert" });
-      expect(owners).toEqual([OWNER, undefined]);
+      expect(owners).toEqual([[OWNER, "current"], [undefined, "stale"]]);
 
       profile.deliver({ name: "Robert" }, representing(OWNER));
 
-      expect(owners).toEqual([OWNER, undefined, OWNER]);
+      expect(owners).toEqual([
+        [OWNER, "current"],
+        [undefined, "stale"],
+        [OWNER, "current"],
+      ]);
     });
 
     it("reports no principal for a cell the worker refuses before its label arrives", () => {
@@ -428,7 +472,17 @@ describe("written-principal", () => {
 
       profile.refuse();
 
-      expect(owners).toEqual([undefined]);
+      expect(owners).toEqual([[undefined, "refused"]]);
+    });
+
+    it("reports the principal from the current label once a cell the worker refused is delivered", () => {
+      const profile = fakeCell(undefined, undefined, false);
+      const owners = observeOwner(profile.handle);
+      profile.refuse();
+
+      profile.deliver({ name: "Bob" }, representing(OWNER));
+
+      expect(owners).toEqual([[undefined, "refused"], [OWNER, "current"]]);
     });
   });
 });

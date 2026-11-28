@@ -7,7 +7,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 
 import { defer } from "@commonfabric/async/defer";
@@ -17,9 +16,16 @@ import { SERVER_EXECUTION_EFFECTS_DOC_ID } from "@commonfabric/memory/v2";
 import * as Engine from "@commonfabric/memory/v2/engine";
 import * as MemoryV2Server from "@commonfabric/memory/v2/server";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { useRealClock } from "@commonfabric/test-support/fake-clock";
 
 import type { JSONSchema } from "../src/builder/types.ts";
-import { type Cell, sendEvent } from "../src/cell.ts";
+import { type Cell, EventDeliveryError, sendEvent } from "../src/cell.ts";
 import { exposeGarbageCollector } from "../src/collected-memory.ts";
 import {
   ServingWorkerPool,
@@ -34,6 +40,12 @@ import type { MemorySpace } from "../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../src/storage/v2-emulate.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
 import { ArrivalLog, awaitAdmitted } from "./support/serving-waits.ts";
+
+// This file runs on the real clock because it runs the serving loop in a real
+// Worker, whose heartbeat timer ticks on the real clock. Auto-advance would run
+// the watchdog's timer at once, and it would kill a healthy worker for the
+// silence.
+useRealClock();
 
 const spaceSigner = await Identity.fromPassphrase("serving worker space");
 const space = spaceSigner.did() as MemorySpace;
@@ -88,6 +100,24 @@ export default pattern<
   { value: Writable<number> },
   { value: number; go: Stream<unknown> }
 >(({ value }) => ({ value, go: go({ value }) }));
+`;
+
+const SPIN_PATTERN = `
+import { handler, pattern, Stream, Writable } from "commonfabric";
+const spin = handler<unknown, { value: Writable<number> }>(
+  (_event, _state) => {
+    for (;;) {
+      // Holds the serving worker's thread for good.
+    }
+  },
+);
+const bump = handler<unknown, { value: Writable<number> }>(
+  (_event, { value }) => { value.set((value.get() ?? 0) + 1); },
+);
+export default pattern<
+  { value: Writable<number> },
+  { value: number; spin: Stream<unknown>; bump: Stream<unknown> }
+>(({ value }) => ({ value, spin: spin({ value }), bump: bump({ value }) }));
 `;
 
 describe("serving-worker", () => {
@@ -500,6 +530,85 @@ describe("serving-worker", () => {
       failed: 1,
       heapStopped: 0,
     });
+  });
+
+  it("writes the error as the consequence of the event whose handler ran past the watchdog, runs that handler on no later worker, and runs the space's next event", async () => {
+    // The handler never returns, so its worker sends nothing more until the
+    // watchdog ends it, six one-second intervals after its last message. The
+    // space's next worker is placed for the events still pending in its
+    // store: that one, and one for another handler sent after it. The sender
+    // sends without an echo, as `cf piece call` does, so the handlers run in a
+    // worker and nowhere else, and the sender's commit callbacks report what
+    // each served handling came to.
+    await start({
+      watchdogIntervalMs: 1_000,
+      policy: {
+        flushDeadlineMs: 5_000,
+        idleParkMs: 600_000,
+        failureParkBackoffBaseMs: 0,
+      },
+    });
+    const writer = newClient();
+    const compiled = await writer.patternManager.compilePattern({
+      main: "/main.tsx",
+      files: [{ name: "/main.tsx", contents: SPIN_PATTERN }],
+    }, { space });
+    await writer.patternManager.flushCompileCacheWrites();
+    const setup = writer.edit();
+    const argument = writer.getCell<{ value: number }>(space, "spin-arg");
+    argument.withTx(setup).set({ value: 0 });
+    writer.run(
+      setup,
+      compiled,
+      argument,
+      writer.getCell<Record<string, unknown>>(space, "spin-result"),
+    );
+    expect((await setup.commit().settled).error).toBeUndefined();
+    await closeClient(writer, space);
+
+    const sender = newClient();
+    const result = sender.getCell<Record<string, unknown>>(
+      space,
+      "spin-result",
+      compiled.resultSchema,
+    );
+    await result.sync();
+    const failures = () =>
+      closures.count((entry) =>
+        entry.cause === "failed" && entry.spaces.includes(space)
+      );
+    const endedAgain = new Promise<"ended again">((resolve) => {
+      const stop = closures.edge(() => {
+        if (failures() < 2) return;
+        stop();
+        resolve("ended again");
+      });
+    });
+    /** Sends to `stream`, and resolves with what its handling came to. */
+    const send = (stream: string): Promise<unknown> => {
+      const handled = defer<unknown>();
+      sendEvent(result.key(stream), {}, (tx) => {
+        const status = tx.status();
+        handled.resolve(
+          status.status === "error" ? status.error : status.status,
+        );
+      }, { echo: false });
+      return handled.promise;
+    };
+    const spun = send("spin");
+    const bumped = send("bump");
+
+    const outcome = await withStuckNet(
+      Promise.race([Promise.all([spun, bumped]), endedAgain]),
+      "the events' handling, or a second worker ended",
+    );
+    expect(outcome).not.toBe("ended again");
+    const [spin, bump] = outcome as unknown[];
+    expect(spin).toBeInstanceOf(EventDeliveryError);
+    expect((spin as EventDeliveryError).kind).toBe("errored");
+    expect((spin as EventDeliveryError).reason).toContain("watchdog");
+    expect(bump).toBe("done");
+    expect(failures()).toBe(1);
   });
 
   it("compiles a program two spaces' workers recompile after a runtime version change once, in the process's compile workers", async () => {

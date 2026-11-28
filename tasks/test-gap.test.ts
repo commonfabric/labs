@@ -1,10 +1,15 @@
 import { expect } from "@std/expect";
 import { exists } from "@std/fs";
 import { dirname, fromFileUrl, join } from "@std/path";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import type { TestIdentity } from "@commonfabric/test-support/records";
 import { shuffleNotice } from "@commonfabric/test-support/shuffle";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   CAPABILITIES,
   type Capability,
@@ -20,7 +25,6 @@ import { testTitle } from "./test-summary.ts";
 import type { Suite } from "./test-topology.ts";
 import {
   afterSummaryLines,
-  defaultBase,
   describeGap,
   type Gap,
   GAP_SECONDS,
@@ -199,27 +203,6 @@ describe("test-gap", () => {
       for (const seconds of ["0", "-5", "soon", " "]) {
         expect(parseGapArgs(["--seconds", seconds])).toBeUndefined();
       }
-    });
-  });
-
-  describe("defaultBase()", () => {
-    let root: string;
-
-    beforeEach(async () => {
-      root = await repository({ "a.ts": "" });
-    });
-
-    afterEach(async () => {
-      await Deno.remove(root, { recursive: true });
-    });
-
-    it("returns `origin/main` where the checkout has no `upstream/main`", async () => {
-      expect(await defaultBase(root)).toBe("origin/main");
-    });
-
-    it("returns `upstream/main` where the checkout has one", async () => {
-      await git(root, "update-ref", "refs/remotes/upstream/main", "HEAD");
-      expect(await defaultBase(root)).toBe("upstream/main");
     });
   });
 
@@ -1342,7 +1325,7 @@ describe("test-gap", () => {
       await git(root, "update-ref", "refs/remotes/upstream/main", "base");
       expect(await command(["--dry-run"])).toBe(0);
       expect(printed[0]).toContain(
-        "the change touches 1 file(s) against upstream/main",
+        "the change touches 1 file(s) against refs/remotes/upstream/main",
       );
     });
 

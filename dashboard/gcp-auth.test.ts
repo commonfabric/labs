@@ -7,6 +7,7 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { encodeBase64 } from "@std/encoding/base64";
 import { bigQuery, METADATA_TOKEN_URL } from "./gcp.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // One request as the code issued it, normalized through Request so headers and
 // body read the same way whichever path built it.
@@ -69,7 +70,7 @@ const noEnv = () => undefined;
 
 const QUERY_OK = { jobComplete: true, rows: [{ f: [{ v: "12.5" }, { v: "bigquery" }] }] };
 
-Deno.test("GCP_SA_KEY set: a signed assertion is exchanged for a token at the key's own token_uri", async () => {
+test("GCP_SA_KEY set: a signed assertion is exchanged for a token at the key's own token_uri", async () => {
   const key = await saKeyJson();
   const { calls, result } = await withFetch(
     (_c, i) => (i === 0 ? json({ access_token: "sa-token" }) : json(QUERY_OK)),
@@ -103,7 +104,7 @@ Deno.test("GCP_SA_KEY set: a signed assertion is exchanged for a token at the ke
   assertEquals(result, [["12.5", "bigquery"]]);
 });
 
-Deno.test("no GCP_SA_KEY: the token comes from the metadata server, flavor header and all", async () => {
+test("no GCP_SA_KEY: the token comes from the metadata server, flavor header and all", async () => {
   const { calls, result } = await withFetch(
     (_c, i) => (i === 0 ? json({ access_token: "metadata-token" }) : json(QUERY_OK)),
     () => bigQuery("my-proj", "SELECT 1", noEnv),
@@ -119,7 +120,7 @@ Deno.test("no GCP_SA_KEY: the token comes from the metadata server, flavor heade
   assertEquals(result, [["12.5", "bigquery"]]);
 });
 
-Deno.test("bigQuery: the query is standard SQL and the response grid is flattened", async () => {
+test("bigQuery: the query is standard SQL and the response grid is flattened", async () => {
   const { calls, result } = await withFetch(
     (_c, i) => (i === 0 ? json({ access_token: "t" }) : json({
       jobComplete: true,
@@ -139,7 +140,7 @@ Deno.test("bigQuery: the query is standard SQL and the response grid is flattene
   assertEquals(result, [["1", ""], ["2", "b"]]);
 });
 
-Deno.test("token exchange rejected: the status is reported, not swallowed into a token", async () => {
+test("token exchange rejected: the status is reported, not swallowed into a token", async () => {
   const key = await saKeyJson();
   const err = await assertRejects(
     () =>
@@ -152,7 +153,7 @@ Deno.test("token exchange rejected: the status is reported, not swallowed into a
   assertEquals(err.message, "token exchange failed: HTTP 401");
 });
 
-Deno.test("token exchange 200 with no access_token is an error, not an empty bearer", async () => {
+test("token exchange 200 with no access_token is an error, not an empty bearer", async () => {
   const key = await saKeyJson();
   const err = await assertRejects(
     () =>
@@ -165,7 +166,7 @@ Deno.test("token exchange 200 with no access_token is an error, not an empty bea
   assertEquals(err.message, "token exchange returned no access_token string");
 });
 
-Deno.test("metadata server rejects: the status is reported (a 404 here means the wrong path)", async () => {
+test("metadata server rejects: the status is reported (a 404 here means the wrong path)", async () => {
   const err = await assertRejects(
     () => withFetch(() => json({}, 404), () => bigQuery("p", "SELECT 1", noEnv)),
     Error,
@@ -173,7 +174,7 @@ Deno.test("metadata server rejects: the status is reported (a 404 here means the
   assertEquals(err.message, "metadata token failed: HTTP 404");
 });
 
-Deno.test("metadata server 200 with no access_token is an error, not an empty bearer", async () => {
+test("metadata server 200 with no access_token is an error, not an empty bearer", async () => {
   const err = await assertRejects(
     () => withFetch(() => json({ expires_in: 3600 }), () => bigQuery("p", "SELECT 1", noEnv)),
     Error,
@@ -181,7 +182,7 @@ Deno.test("metadata server 200 with no access_token is an error, not an empty be
   assertEquals(err.message, "metadata server returned no access_token");
 });
 
-Deno.test("bigQuery: a rejected query surfaces its status rather than reading as no rows", async () => {
+test("bigQuery: a rejected query surfaces its status rather than reading as no rows", async () => {
   const err = await assertRejects(
     () =>
       withFetch(

@@ -1,10 +1,10 @@
 // The generic link traversal: what it finds, where it says the link sat, and
 // where the caller's bounds stop it.
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { linksWithPaths } from "../decode.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A link in the legacy at-rest sigil form. */
 const linkTo = (id: string) => ({ "/": { "link@1": { id } } });

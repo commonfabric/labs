@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { PiecePlan, SurveyResult } from "@commonfabric/piece/ops";
 import { decode } from "@commonfabric/text/utf8";
@@ -7,6 +6,12 @@ import { createSession, Identity } from "@commonfabric/identity";
 import { Runtime, type RuntimeProgram } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { PiecesController } from "@commonfabric/piece/ops";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   readSourcePin,

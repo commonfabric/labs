@@ -32,17 +32,16 @@ name: CFC Property Suite
 # The job takes no part in test records: no spool directory, no
 # `run-recorded` wrapper, no ship step. `docs/specs/test-records.md`
 # under "Recording" holds why, and the two steps get there differently.
-# The suite step runs `deno test` directly, and a bare run records
-# nothing: records for such a suite come from a JUnit report ingested at
-# shipping time, which the workspace runner arranges by appending
-# `--junit-path` and the registration preload, and neither is here. Its
-# tests are units of `workspace-unit` and record when CI runs them. So a
-# wrapper here files one line summarizing the invocation and nothing
-# else, which is not one execution of one test. The audit step reads the
-# corpus the step before it wrote, so no lane can be asked to run it. The
-# audit's verdict is the job's own conclusion, and the findings behind a
-# red one are in the uploaded artifacts and in
-# `audit/expected-failures.json`.
+# The suite step runs `deno test` directly with no spool, and a run with
+# no spool records nothing: a test's results become records only where a
+# run's owner, such as the workspace runner, gives the run a spool and
+# reads them back. Its tests are units of `workspace-unit` and record
+# when CI runs them. So a wrapper here files one line summarizing the
+# invocation and nothing else, which is not one execution of one test.
+# The audit step reads the corpus the step before it wrote, so no lane
+# can be asked to run it. The audit's verdict is the job's own
+# conclusion, and the findings behind a red one are in the uploaded
+# artifacts and in `audit/expected-failures.json`.
 on:
   schedule:
     - cron: "0 5 * * *" # Nightly, 05:00 UTC

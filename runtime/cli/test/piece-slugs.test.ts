@@ -5,7 +5,6 @@
  * renderer's JSON and table shapes, and the command wiring.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId, setSlugLink } from "@commonfabric/piece";
@@ -14,6 +13,12 @@ import { type Cell, Runtime } from "@commonfabric/runner";
 import { rawMetaWriteAuthorization } from "@commonfabric/runner/meta-seam";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { decode } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { listSpaceSlugs } from "../lib/piece.ts";
 import {
   listSlugsFromCommand,

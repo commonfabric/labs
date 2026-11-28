@@ -371,7 +371,7 @@ export function cellLabelSources(
   try {
     const own = cfcLabelViewSourceForCell(cell);
     const resolved = cell.resolveAsCell({ inlineArrayItemsInPlace: true });
-    return sameCell(cell, resolved)
+    return areLinksSame(cell, resolved)
       ? [own]
       : [own, cfcLabelViewSourceForCell(resolved)];
   } catch {
@@ -482,7 +482,9 @@ function schemaLabelsOf(cell: Cell<unknown>): SchemaLabels {
 /**
  * Subscribes `watch.reeval` to the access-list documents of the spaces the
  * resolver consults for `confidentiality` (`membershipSpacesInConfidentiality`,
- * which adds module-policy subjects to the spec's `Space(X)` candidates), and
+ * which adds module-policy subjects to the spec's `Space(X)` candidates, a
+ * committed one through the space of `spaces` it is the digest of, pending
+ * commonfabric/specs#110), and
  * to the manifest document of each module policy the label selects in each of
  * `spaces`, the spaces the label was read from, so that a fail-closed refusal
  * is decided again when an access list later grants (or revokes) READ or a
@@ -511,7 +513,12 @@ function watchLabelSources(
   };
   const provider = sources.membership;
   if (provider !== undefined) {
-    for (const space of membershipSpacesInConfidentiality(confidentiality)) {
+    for (
+      const space of membershipSpacesInConfidentiality(
+        confidentiality,
+        () => spaces,
+      )
+    ) {
       watchDocument(
         `membership:${space}`,
         () => provider.subscribe(space, reeval),
@@ -574,13 +581,4 @@ function resolvedConfidentialityRenderable(
     return false;
   }
   return true;
-}
-
-/** Whether two cells address the same place, comparing by identity when they cannot be compared by link. */
-function sameCell(left: Cell<unknown>, right: Cell<unknown>): boolean {
-  try {
-    return areLinksSame(left, right);
-  } catch {
-    return left === right;
-  }
 }

@@ -83,7 +83,20 @@ export interface ReplayOptions {
    * against whichever entries the repository's list holds today.
    */
   acceptedDrops?: readonly AcceptedStateDrop[];
+
+  /**
+   * Receives a line as each fixture's replay begins, then as each target the
+   * fixture records begins.
+   */
+  progress?: Progress;
 }
+
+/**
+ * Receives one line as each step of a long run begins, numbered against the
+ * count of such steps. A line is sent only once the step before it has ended,
+ * so the last line received names the step most recently begun.
+ */
+export type Progress = (line: string) => void;
 
 async function withRuntime<T>(
   roots: GateRoots,
@@ -109,10 +122,6 @@ async function withRuntime<T>(
 /** Where a recorded `main` says a repo pattern lives, for THESE roots. */
 function patternsPrefix(roots: GateRoots): string {
   return `${roots.patternsRoot.slice(roots.repoRoot.length)}/`;
-}
-
-function localProgramOptions(roots: GateRoots, key: string) {
-  return { main: `${roots.patternsRoot}/${key}`, root: roots.repoRoot };
 }
 
 /**
@@ -583,12 +592,16 @@ export async function replayVintage(
     // the materialize reads the schema THE REPLAY JUST WROTE — so the fixture
     // defect it exists to name would always report as the second one.
     const hadSchemaByCell = new Map<string, boolean>();
-    for (const entry of targets) {
-      // Skip what the presence check already reported. Reading it would only
-      // re-derive "absent" and risk reporting the same root twice.
-      if (missing.has(entry)) continue;
-      const key = `${entry.space}/${entry.cellId}`;
-      if (beforeByCell.has(key)) continue;
+    // Each root once, however many targets name it, and none the presence
+    // check already reported: reading one would only re-derive "absent" and
+    // risk reporting the same root twice.
+    const held = new Map(
+      targets.filter((entry) => !missing.has(entry)).map((entry) => [
+        `${entry.space}/${entry.cellId}`,
+        entry,
+      ]),
+    );
+    for (const [key, entry] of held) {
       beforeByCell.set(
         key,
         await readVintageState(runtimeVintage, entry.space, entry.cellId),
@@ -603,7 +616,11 @@ export async function replayVintage(
       );
     }
 
-    for (const entry of targets) {
+    for (const [index, entry] of targets.entries()) {
+      options.progress?.(
+        `  target ${index + 1}/${targets.length}: ${entry.main} ` +
+          `(${entry.symbol})`,
+      );
       // A recorded `main` is either a repo path or the ROUTE the toolshed
       // serves the pattern at; both name a file under `patterns/`.
       const key = patternKeyFromMain(entry.main, patternsPrefix(roots));
@@ -814,19 +831,9 @@ export async function replayVintage(
         // never re-derived here: this line runs AFTER the update, so asking the
         // root now would see the schema the replay just wrote.
         //
-        // UNTESTED, deliberately and with the reason recorded. The no-schema
-        // half needs a root the presence control ACCEPTS that carries no
-        // result schema. A NATIVE capture cannot make one — `runner.ts` stamps
-        // `patternSetupIdentity` and the schema in the same setup — and an
-        // attempt to construct one by hand did not reach this branch at all.
-        // Since the presence control also accepts the older `patternIdentity`
-        // marker (an adopted fixture's roots carry only that), the shape is
-        // REACHABLE in principle from an old store whose setup never wrote a
-        // schema; none observed — every runner back to the oldest adopted
-        // vintage stamps the schema in the same transaction as the identity —
-        // so the case stays defensive. What the pre-materialize read buys is
-        // that the OTHER half, which IS reachable, cannot be misreported as
-        // this one.
+        // A NATIVE capture makes neither shape — `runner.ts` stamps
+        // `patternSetupIdentity` and the schema in the same setup — so both
+        // are tested against a fixture whose stored schema was rewritten.
         report.failures.push({
           ...where,
           detail: `recorded instantiation ${entry.identity}#${entry.symbol} ` +
@@ -1067,7 +1074,12 @@ export async function replayAll(
   const recordsFragment = options.recordResults === true
     ? FragmentWriter.openForRun()
     : undefined;
-  for (const vintage of vintages) {
+  for (const [index, vintage] of vintages.entries()) {
+    options.progress?.(
+      `fixture ${index + 1}/${vintages.length}: ${
+        relativeToRepo(vintage.path, roots.repoRoot)
+      }`,
+    );
     const replayStarted = performance.now();
     const report = await replayVintage(roots, vintage, options);
     recordsFragment?.append({
@@ -1140,6 +1152,34 @@ export async function replayAll(
 /** Absolute path of the test file a fixture key names. */
 export function testPathFor(roots: GateRoots, testKey: string): string {
   return `${roots.patternsRoot}/${testKey}`;
+}
+
+/**
+ * The identity a fixture captured by running `testKey` is named by: the
+ * identity the run recorded for the test pattern itself.
+ *
+ * The TEST's, because the test is what was run. That is provenance for the
+ * capture as a whole; which PATTERNS it covers is the manifest's job, and a
+ * fixture routinely covers several. Deriving the name from one of them would
+ * have to pick a privileged one, and there is no principled choice — a test
+ * that drives two patterns equally has no primary. Taken from the recorded
+ * instantiations, so the name is always one the replay finds in the manifest.
+ *
+ * @throws If `entries` records no instantiation of the test's own file.
+ */
+export function fixtureIdentity(
+  roots: GateRoots,
+  testKey: string,
+  entries: readonly VintageManifestEntry[],
+): string {
+  const main = `${patternsPrefix(roots)}${testKey}`;
+  const test = entries.find((e) => e.main === main);
+  if (test === undefined) {
+    throw new Error(
+      `cannot capture ${testKey}: the run recorded no instantiation of ${main}`,
+    );
+  }
+  return test.identity;
 }
 
 /**
@@ -1235,32 +1275,12 @@ export async function captureVintage(
           `fixture would hold no test-written state`,
       );
     }
-    // The identity that names the fixture is the TEST's, because the test is
-    // what was run. That is provenance for the capture as a whole; which
-    // PATTERNS it covers is the manifest's job, and a fixture routinely covers
-    // several. Deriving the name from one of them would have to pick a
-    // privileged one, and there is no principled choice — a test that drives
-    // two patterns equally has no primary.
-    const program = await resolveLocalProgram(
-      (r) => vintage.runtime.harness.resolve(r),
-      localProgramOptions(roots, testKey),
-    );
-    const pattern = await vintage.runtime.patternManager.compilePattern(
-      program as never,
-      { space: vintage.space as never },
-    );
-    const ref = vintage.runtime.patternManager.getArtifactEntryRef(pattern);
-    if (ref === undefined) {
-      throw new Error(
-        `cannot capture ${testKey}: compiled test has no identity`,
-      );
-    }
-
     // Every instantiation carries its own authored file: the runtime stamps it
     // at module-index time and resolves it through the derivation chain, so a
     // nested sub-pattern names its own source rather than the entry's. Nothing
     // to fill in here.
     const entries = [...seen.values()];
+    const identity = fixtureIdentity(roots, testKey, entries);
     // Refuse to PIN a fixture holding a root nothing can address, rather than
     // waiting for the replay to fail on it. The replay does fail closed, but it
     // would do so on whoever's PR next ran the gate; catching it here blames the
@@ -1302,7 +1322,7 @@ export async function captureVintage(
     await writeVintageManifest(vintage, entries);
     const outDir = `${roots.vintagesRoot}/${testKey}/${tier}`;
     await Deno.mkdir(outDir, { recursive: true });
-    const path = `${outDir}/${vintageFileName(stampFor(now), ref.identity)}`;
+    const path = `${outDir}/${vintageFileName(stampFor(now), identity)}`;
     // Never write over an existing fixture, in EITHER tier. `captureMissing`
     // already skips a covered key, so reaching this with the file present
     // means something else did — and the cleanup below deletes files on the
@@ -1351,6 +1371,7 @@ export async function captureMissing(
   roots: GateRoots,
   testKeys: readonly string[],
   now: Date,
+  progress?: Progress,
 ): Promise<{ captured: string[]; problems: string[] }> {
   // PINNED only, because PINNED is what coverage credits. An auto capture is
   // regenerable and pruned by count, so counting one as "already have it"
@@ -1364,19 +1385,29 @@ export async function captureMissing(
       .filter((v) => v.tier === PINNED)
       .map((v) => v.testKey),
   );
+  // `--update` can only ADD: a key already pinned is skipped whichever way it
+  // was asked for. Replacing a vintage could replace the very one that would
+  // have caught a break. A key named twice on one command line is captured
+  // once, rather than failing the whole run the second time with "already
+  // exists, and a capture never overwrites a pinned vintage".
+  const missing = [...new Set(testKeys)].filter((key) => !existing.has(key));
+  return await captureEach(roots, missing, now, PINNED, progress);
+}
+
+/** Capture a vintage of `tier` for each of `testKeys`, in order. */
+async function captureEach(
+  roots: GateRoots,
+  testKeys: readonly string[],
+  now: Date,
+  tier: string,
+  progress: Progress | undefined,
+): Promise<{ captured: string[]; problems: string[] }> {
   const captured: string[] = [];
   const problems: string[] = [];
-  for (const key of testKeys) {
-    // `--update` can only ADD: a key already pinned is skipped whichever way it
-    // was asked for. Replacing a vintage could replace the very one that would
-    // have caught a break.
-    if (existing.has(key)) continue;
-    // Recorded before the attempt, so a key named twice on one command line is
-    // skipped the second time rather than failing the whole run with "already
-    // exists, and a capture never overwrites a pinned vintage".
-    existing.add(key);
+  for (const [index, key] of testKeys.entries()) {
+    progress?.(`capture ${index + 1}/${testKeys.length}: ${key}`);
     try {
-      captured.push(await captureVintage(roots, key, now));
+      captured.push(await captureVintage(roots, key, now, tier));
     } catch (error) {
       // Report every failure rather than dying on the first: a run that
       // captures 9 of 10 and then throws leaves the tree half-seeded with no
@@ -1420,6 +1451,7 @@ export async function captureChangedGenerations(
     perVintage: readonly VintageOutcome[];
   },
   now: Date,
+  progress?: Progress,
 ): Promise<CaptureChangedOutcome> {
   // Capture from a GREEN tree only. A fixture that failed is not a statement
   // about which generation the world is on, and capturing beside it would mint
@@ -1434,7 +1466,12 @@ export async function captureChangedGenerations(
   if (stale.length === 0) {
     return { kind: "all-current", replayed: replay.perVintage.length };
   }
-  const { captured, problems } = await captureGenerations(roots, stale, now);
+  const { captured, problems } = await captureGenerations(
+    roots,
+    stale,
+    now,
+    progress,
+  );
   // Prune AFTER capturing, against a RE-READ tree, so the new generations are
   // among the ones counted. Pruning first would keep `keep` old ones and then
   // add another, leaving the tree permanently one over the bound.
@@ -1532,15 +1569,7 @@ export async function captureGenerations(
   roots: GateRoots,
   testKeys: readonly string[],
   now: Date,
+  progress?: Progress,
 ): Promise<{ captured: string[]; problems: string[] }> {
-  const captured: string[] = [];
-  const problems: string[] = [];
-  for (const key of testKeys) {
-    try {
-      captured.push(await captureVintage(roots, key, now, AUTO));
-    } catch (error) {
-      problems.push(`  ${key}: ${describeFailure(error)}`);
-    }
-  }
-  return { captured, problems };
+  return await captureEach(roots, testKeys, now, AUTO, progress);
 }

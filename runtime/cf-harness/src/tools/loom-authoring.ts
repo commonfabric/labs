@@ -177,7 +177,7 @@ export const patternReference = async (
   });
   await cell.sync();
   const id = pieceId(cell);
-  if (id === undefined || getPatternIdentityRef(cell) === undefined) {
+  if (getPatternIdentityRef(cell) === undefined) {
     throw new InvalidPatternReference(
       "The held token does not identify a Pattern Instance.",
     );

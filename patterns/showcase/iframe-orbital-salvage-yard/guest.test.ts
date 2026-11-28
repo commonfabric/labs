@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   type GuestPage,
@@ -17,6 +16,9 @@ import {
   type Vector3Tuple,
 } from "./contract.ts";
 import { moduleTransformId } from "./model.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
+// deno-lint-ignore no-external-import -- the guest's own pinned Babylon
+import { EngineStore } from "npm:@babylonjs/core@9.23.0/Engines/engineStore.js";
 
 const GUEST = new URL("./guest.ts", import.meta.url);
 const HTML = new URL("./guest.html", import.meta.url);
@@ -537,6 +539,73 @@ describe("iframe-orbital-salvage-yard/guest", () => {
       );
     });
 
+    it("releases its engine when it cannot build the scene, and throws", async () => {
+      const engines = EngineStore.Instances.length;
+      const shown: string[] = [];
+      const watch = () => {
+        // A frame whose permissions policy withholds gamepads refuses the
+        // scene's input system.
+        patchProperty(navigator, "getGamepads", {
+          value() {
+            throw new DOMException(
+              "Gamepads are not allowed.",
+              "SecurityError",
+            );
+          },
+        });
+        new MutationObserver(() =>
+          shown.push(`${alertText()} | ${status().textContent}`)
+        ).observe(document, { childList: true, subtree: true });
+      };
+
+      await expect(load(resources(), { watch })).rejects.toThrow(
+        "Gamepads are not allowed.",
+      );
+      expect(shown.at(-1)).toBe(
+        "Gamepads are not allowed. | The salvage yard could not start its 3D renderer.",
+      );
+      expect(EngineStore.Instances.length).toBe(engines);
+    });
+
+    it("stops, saying why, when the page hides before the assembly loads", async () => {
+      const state = new MemoryCell(DEFAULT_STATE);
+      const release = state.holdReads();
+      const parts = resources({ state });
+      const started = Promise.withResolvers<void>();
+      const watch = () =>
+        new MutationObserver(() => {
+          if (textOf("#camera-readout") !== "") started.resolve();
+        }).observe(document, {
+          characterData: true,
+          childList: true,
+          subtree: true,
+        });
+
+      const loading = load(parts, { watch });
+      await started.promise;
+      // Hiding the page disconnects the bridge, which then fails the load:
+      // the yard is torn down once, all the same.
+      const engine = EngineStore.Instances.at(-1);
+      if (!engine) throw new Error("The yard started no engine.");
+      let releases = 0;
+      engine.onReleaseEffectsObservable.add(() => releases++);
+      dispatchEvent(new Event("pagehide"));
+      page = await loading;
+      release();
+      await page.settled();
+
+      expect(alertText()).toBe(
+        "The Fabric bridge disconnected before the operation completed.",
+      );
+      expect(status().textContent).toBe(
+        "The salvage yard could not connect to Fabric.",
+      );
+      expect(manifest()).toEqual([]);
+      expect(state.writes).toEqual([]);
+      expect(parts.frames.pending).toBe(false);
+      expect(releases).toBe(1);
+    });
+
     it("throws for a document without one of its controls", async () => {
       const html = (await Deno.readTextFile(HTML)).replace(
         '<button id="snap"',
@@ -835,6 +904,50 @@ describe("iframe-orbital-salvage-yard/guest", () => {
         position: [x, 1.2, z],
         rotationQuarterTurns: 0,
       });
+    });
+
+    it("stores where a module is let go off the canvas, and lets go of the pointer", async () => {
+      const { state, page } = await open();
+      const [x, z] = groundSpotUnder(OPEN_PLANE.x, OPEN_PLANE.y);
+
+      press(MIDDLE);
+      pointer("pointermove", OPEN_PLANE, HELD);
+      dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerId: 1,
+          pointerType: "mouse",
+          button: 0,
+        }),
+      );
+
+      expect(canvas().hasPointerCapture(1)).toBe(false);
+      expect(canvas().style.cursor).toBe("grab");
+      await page.until(() =>
+        ready() && storedTransform(state, HUB) !== undefined
+      );
+      expect(storedTransform(state, HUB)).toEqual({
+        position: [x, 1.2, z],
+        rotationQuarterTurns: 0,
+      });
+    });
+
+    it("keeps dragging when another pointer is let go off the canvas", async () => {
+      const opened = await open();
+
+      press(MIDDLE);
+      pointer("pointermove", OPEN_PLANE, HELD);
+      dispatchEvent(
+        new PointerEvent("pointerup", {
+          pointerId: 2,
+          pointerType: "touch",
+          button: 0,
+        }),
+      );
+      await opened.page.settled();
+
+      expect(canvas().hasPointerCapture(1)).toBe(true);
+      expect(canvas().style.cursor).toBe("grabbing");
+      expect(opened.state.writes).toEqual([]);
     });
 
     it("stores nothing for a press let go without moving", async () => {

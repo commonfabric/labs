@@ -1,0 +1,112 @@
+# Installs Loom's replica service on Estuary from a landed infra commit.
+#
+# The service's build is selected in the infra repository
+# (ansible/vars/replica-service-release.yml there). Installing it used to take
+# one person at their own machine, with a hardware key. The bastion can run
+# the same play with nobody present, and this workflow is what asks it to.
+#
+# It asks for no approval yet. While the service is being brought up, no
+# hosted pattern reads from it, and an install applies only what infra's main
+# selects now (the job refuses a commit that selects anything else), so Wilk
+# chose (2026-11-21) not to make each one wait for a reviewer.
+# The job therefore declares the `toolshed` environment, which holds the
+# bastion credentials and has no reviewers, as the Rapids release does. Once
+# the service is in use, declare `estuary` instead: it holds the same
+# credentials behind the reviewers a production deployment needs.
+#
+# It runs no code from any repository on the runner. It establishes that the
+# named commit is on infra's main, then hands that commit to the bastion's
+# /opt/cf/deploy-replica-service.sh, which infra owns
+# (docs/development/deploying.md, "Estuary's replica service").
+name: Deploy Estuary replica service
+
+run-name: Estuary replica service at infra ${{ inputs.infra_sha }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      infra_sha:
+        description: "Full infra main commit whose replica service selection to install"
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# A group of its own, so installs run independently of production
+# deployments. In the production group, a production run that is waiting for
+# approval would hold the group and this would queue behind it.
+concurrency:
+  group: estuary-replica-service-deployment
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: toolshed
+    permissions:
+      contents: read
+    env:
+      INFRA_SHA: ${{ inputs.infra_sha }}
+    steps:
+      - name: 🔎 Validate the infra revision
+        id: validate-input
+        run: |
+          if [[ ! "$INFRA_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo '::error::infra_sha must be a full lowercase commit SHA.'
+            exit 1
+          fi
+
+      # The bastion's play asks GitHub whether the pinned Loom commit is on
+      # Loom's main, so the token reads Loom's contents as well as infra's.
+      - name: 🔑 Create a read-only token for infra and Loom
+        id: reader
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          app-id: ${{ vars.RAPIDS_APP_ID }}
+          private-key: ${{ secrets.RAPIDS_APP_PRIVATE_KEY }}
+          owner: commonfabric
+          repositories: infra,cfs
+          permission-contents: read
+
+      - name: 🔎 Verify the infra commit belongs to main
+        id: validate-ancestry
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          status=$(gh api "repos/commonfabric/infra/compare/$INFRA_SHA...main" --jq .status)
+          case "$status" in
+            ahead|identical) ;;
+            *) echo '::error::The infra commit is not an ancestor of main.'; exit 1 ;;
+          esac
+
+      # With no reviewer, whoever dispatches this must not be able to choose
+      # an older selection by naming an older commit. Only what infra's main
+      # selects now is installed; going back means landing that on main.
+      - name: 🔎 Verify the commit selects the build main selects now
+        id: validate-selection
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        run: |
+          selection=repos/commonfabric/infra/contents/ansible/vars/replica-service-release.yml
+          named=$(gh api "$selection?ref=$INFRA_SHA" --jq .sha)
+          current=$(gh api "$selection?ref=main" --jq .sha)
+          if [[ ! "$named" =~ ^[0-9a-f]{40}$ || "$named" != "$current" ]]; then
+            echo '::error::The infra commit does not select the replica service build that main selects now.'
+            exit 1
+          fi
+
+      - name: 🚀 Install the replica service that infra selects
+        id: deploy
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2 # v1.2.5
+        env:
+          GH_TOKEN: ${{ steps.reader.outputs.token }}
+        with:
+          host: ${{ secrets.BASTION_HOST }}
+          username: bastion
+          key: ${{ secrets.BASTION_SSH_PRIVATE_KEY }}
+          command_timeout: 30m
+          envs: GH_TOKEN,INFRA_SHA
+          script: /opt/cf/deploy-replica-service.sh "$INFRA_SHA"

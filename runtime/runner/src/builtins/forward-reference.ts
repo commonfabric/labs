@@ -23,7 +23,7 @@ import { ownedResultCause } from "./scope-policy.ts";
 /** What a forwarding builtin's action is built from. */
 export interface ForwardReferenceOptions {
   /** The builtin's name, which keys the result cell it owns. */
-  name: Parameters<typeof ownedResultCause>[0];
+  name: "ifElse" | "when" | "unless";
 
   /**
    * The builtin's inputs. `condition` decides; the rest are the positions the
@@ -139,7 +139,10 @@ function forwardsNothingToUnwrittenStore(
   if (findAndInlineDataUriLinks(ref) !== undefined) return false;
   const { space, id, scope } = store.getAsNormalizedFullLink();
   const document = tx.readOrThrow({ space, id, scope, path: [] }, {
-    meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+    meta: Object.freeze({
+      ...ignoreReadForScheduling,
+      ...internalVerifierRead,
+    }),
   });
   return document === undefined;
 }

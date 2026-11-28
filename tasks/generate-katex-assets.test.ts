@@ -1,6 +1,6 @@
-import { join, toFileUrl } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   KATEX_STYLES,
   KATEX_STYLES_VERSION,
@@ -12,6 +12,12 @@ import {
   type KatexDestination,
   readKatexRelease,
 } from "./generate-katex-assets.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 /** The repository root. */
 const ROOT = new URL("../", import.meta.url);
@@ -158,6 +164,58 @@ describe("generate-katex-assets", () => {
         .toBe(await Deno.readTextFile(FONTS_STYLESHEET));
       expect(await Deno.readTextFile(destination.stylesModule))
         .toBe(await Deno.readTextFile(STYLES_MODULE));
+    });
+  });
+
+  describe("as a program", () => {
+    it("writes the files the repository holds into the checkout it is given", async () => {
+      // The program is started the way its documentation says, given a
+      // scratch checkout so that the run leaves the repository untouched.
+      const checkout = toFileUrl(`${directory}/`);
+      const stylesModule = new URL(
+        "runtime/ui/src/v2/components/cf-code-editor/features/katex-styles.ts",
+        checkout,
+      );
+      const fontsStylesheet = new URL(
+        "runtime/shell/public/styles/katex-fonts.css",
+        checkout,
+      );
+      await Deno.mkdir(new URL(".", stylesModule), { recursive: true });
+      await Deno.mkdir(new URL(".", fontsStylesheet), { recursive: true });
+
+      const root = fromFileUrl(ROOT);
+      const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-write",
+          "--allow-run",
+          join(root, "tasks/generate-katex-assets.ts"),
+          directory,
+        ],
+      });
+
+      expect(code, new TextDecoder().decode(stderr)).toBe(0);
+      expect(new TextDecoder().decode(stdout)).toContain(
+        `Wrote KaTeX ${KATEX_STYLES_VERSION}'s layout rules`,
+      );
+      expect(await Deno.readTextFile(stylesModule))
+        .toBe(await Deno.readTextFile(STYLES_MODULE));
+      expect(await Deno.readTextFile(fontsStylesheet))
+        .toBe(await Deno.readTextFile(FONTS_STYLESHEET));
+      const written = [
+        ...Deno.readDirSync(
+          new URL("runtime/shell/public/fonts/katex/", checkout),
+        ),
+      ].map((entry) => entry.name).sort();
+      const served = [...Deno.readDirSync(FONTS_DIRECTORY)]
+        .map((entry) => entry.name).sort();
+      expect(written).toEqual(served);
     });
   });
 

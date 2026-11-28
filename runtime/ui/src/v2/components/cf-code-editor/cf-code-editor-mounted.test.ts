@@ -7,7 +7,6 @@
 // First, so that the document it installs is there when Lit loads.
 import { mount, settle, window } from "../../test-utils/dom.ts";
 
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { assert } from "@std/assert";
 import { expect } from "@std/expect";
 import { FakeTime } from "@std/testing/time";
@@ -26,6 +25,7 @@ import {
   type PresenceRoomHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   createMockCellHandle,
   pushRefusal,
@@ -39,6 +39,7 @@ import { defaultTheme } from "../theme-context.ts";
 import { CFCodeEditor, MimeType } from "./index.ts";
 import type { CodeMirrorCollaborationController } from "./codemirror-collaboration.ts";
 import { codeMirrorPresenceState } from "./codemirror-presence.ts";
+import * as katexRender from "./features/katex-render.ts";
 import { setHighlightAnchorsEffect } from "./features/highlights.ts";
 
 const SPACE = "did:key:z6MkpXpeKbhbddoVvxQndKtnNZmGfpSbXXmVw88bswFy2hHh";
@@ -375,14 +376,6 @@ function completionSettles(view: EditorView): Promise<string | null> {
 
 describe("CFCodeEditor", () => {
   afterEach(async () => {
-    // happy-dom keeps the document's focus on a removed editor's content,
-    // where the editor's own focus timer then fails to read it, so focus
-    // leaves first.
-    for (
-      const editor of document.querySelectorAll<CFCodeEditor>("cf-code-editor")
-    ) {
-      editor.editorView?.contentDOM.blur();
-    }
     document.body.replaceChildren();
     await settle();
   });
@@ -1388,6 +1381,35 @@ describe("CFCodeEditor", () => {
         .toEqual([["Food", true], ["Foo", false]]);
     });
 
+    it("reports the destination of the label edited, and none for a key naming no cell", async () => {
+      const destination = bound(piece("foo-id", "Foo"));
+      const references = bound(
+        createMockCellHandle({
+          [KEY]: { destination, modifiedTitle: false },
+          b7k2m1: { modifiedTitle: false },
+        }) as unknown as CellHandle<MentionRefMap>,
+      );
+      const { element, view } = await mountEditor({
+        value: `see [Foo][${KEY}] [Bar][b7k2m1]`,
+        references,
+      });
+      const edits = recorded<{ key: string; destination: unknown }>(
+        element,
+        "mention-ref-label-changed",
+      );
+
+      view.dispatch({ changes: { from: 8, insert: "d" } });
+      view.dispatch({ changes: { from: 23, insert: "n" } });
+
+      expect(edits).toEqual([
+        expect.objectContaining({
+          key: KEY,
+          destination: destination.toSigilLink(),
+        }),
+        expect.objectContaining({ key: "b7k2m1", destination: null }),
+      ]);
+    });
+
     it("reports each further edit of a label already marked, writing the mark once", async () => {
       const references = referenceMap({ [KEY]: bound(piece("foo-id", "Foo")) });
       const { element, view } = await mountEditor({
@@ -2087,6 +2109,36 @@ describe("CFCodeEditor", () => {
       });
 
       expect(ids(mentioned)).toEqual(["of:foo-id"]);
+    });
+
+    it("replaces the piece it lists with the one the document mentions instead", async () => {
+      const foo = row("foo-id", "Foo");
+      const bar = row("bar-id", "Bar");
+      for (
+        const [value, expected, writes] of [
+          ["see [[Bar (bar-id)]]", ["of:bar-id"], 1],
+          ["see [[Foo (foo-id)]]", null, 0],
+        ] as const
+      ) {
+        const mentioned = bound(
+          createMockCellHandle([foo] as unknown as MentionableArray, {
+            id: "of:mentioned" as CellRef["id"],
+          }),
+        );
+        const { element } = await mountEditor({
+          value,
+          mentionable: universe(foo, bar),
+          mentioned,
+        });
+        await element.accessForTestingOnly.resolvePieceIds();
+
+        expect(writesAt(mentioned, mentioned.id(), [])).toHaveLength(writes);
+        if (expected === null) {
+          expect(mentioned.get()).toEqual([foo]);
+        } else {
+          expect(ids(mentioned)).toEqual(expected);
+        }
+      }
     });
 
     it("writes the list once for edits that leave its mentions as they were", async () => {
@@ -2879,6 +2931,131 @@ describe("CFCodeEditor", () => {
       element.autofocus = true;
       await element.updateComplete;
       await settle();
+    });
+  });
+
+  describe("math", () => {
+    const NOTE = "Euler: $e^{i\\pi} + 1 = 0$.";
+
+    /** The TeX of each formula KaTeX drew in `view`, in order. */
+    function formulas(view: EditorView): (string | null)[] {
+      return Array.from(
+        view.contentDOM.querySelectorAll(".cm-prose-math annotation"),
+        (annotation) => annotation.textContent,
+      );
+    }
+
+    /** Whether one of the sheets `element` has adopted lays out KaTeX. */
+    function hasKatexRules(element: CFCodeEditor): boolean {
+      return element.shadowRoot!.adoptedStyleSheets.some((sheet) =>
+        Array.from(sheet.cssRules).some((rule) =>
+          rule.cssText.startsWith(".katex")
+        )
+      );
+    }
+
+    /** A prose editor holding `NOTE`, loading KaTeX with `importKatex`. */
+    function proseEditor(
+      importKatex?: () => Promise<typeof katexRender>,
+    ): CFCodeEditor {
+      return Object.assign(new CFCodeEditor(importKatex), {
+        timingStrategy: "immediate",
+        mode: "prose",
+        math: true,
+        value: NOTE,
+      });
+    }
+
+    it("draws a prose editor's formulas, adding KaTeX's rules to the sheets already adopted", async () => {
+      const plain = await mountEditor({ mode: "prose", value: NOTE });
+      const sheets = plain.element.shadowRoot!.adoptedStyleSheets;
+      expect(sheets.length).toBeGreaterThan(0);
+
+      const element = await mount(proseEditor());
+
+      expect(formulas(element.editorView!)).toEqual(["e^{i\\pi} + 1 = 0"]);
+      expect(element.shadowRoot!.adoptedStyleSheets.slice(0, -1))
+        .toEqual(sheets);
+      expect(hasKatexRules(element)).toBe(true);
+      expect(formulas(plain.view)).toEqual([]);
+      expect(plain.view.contentDOM.textContent).toContain("$e^{i\\pi}");
+      expect(hasKatexRules(plain.element)).toBe(false);
+    });
+
+    it("loads KaTeX for an editor only once it draws math", async () => {
+      let loads = 0;
+      const importKatex = () => {
+        loads++;
+        return Promise.resolve(katexRender);
+      };
+      const element = Object.assign(new CFCodeEditor(importKatex), {
+        mode: "prose",
+        value: NOTE,
+      });
+      await mount(element);
+      element.mode = "code";
+      element.math = true;
+      await element.updateComplete;
+      expect(loads).toBe(0);
+
+      element.mode = "prose";
+      await element.updateComplete;
+      element.math = false;
+      await element.updateComplete;
+      element.math = true;
+      await element.updateComplete;
+
+      expect(loads).toBe(1);
+      expect(formulas(element.editorView!)).toEqual(["e^{i\\pi} + 1 = 0"]);
+    });
+
+    it("reports a KaTeX that fails to load, and leaves the formulas as TeX", async () => {
+      for (
+        const [cause, message] of [
+          [
+            new Error("no script for cf-katex-render"),
+            "no script for cf-katex-render",
+          ],
+          ["unmapped", "unmapped"],
+        ] as const
+      ) {
+        const element = proseEditor(() => Promise.reject(cause));
+        const errors = recorded<{ error: Error; message: string }>(
+          element,
+          "cf-error",
+        );
+        await mount(element);
+
+        expect(errors.map((detail) => detail.message)).toEqual([message]);
+        expect(errors[0].error).toBeInstanceOf(Error);
+        if (cause instanceof Error) expect(errors[0].error).toBe(cause);
+        expect(formulas(element.editorView!)).toEqual([]);
+        expect(element.editorView!.contentDOM.textContent).toContain(
+          "$e^{i\\pi} + 1 = 0$",
+        );
+        expect(hasKatexRules(element)).toBe(false);
+      }
+    });
+
+    it("draws nothing for an editor removed while KaTeX loads", async () => {
+      const started = Promise.withResolvers<void>();
+      const held = Promise.withResolvers<typeof katexRender>();
+      const element = proseEditor(() => {
+        started.resolve();
+        return held.promise;
+      });
+      const errors = recorded(element, "cf-error");
+      document.body.append(element);
+      await started.promise;
+      const view = element.editorView!;
+
+      element.remove();
+      held.resolve(katexRender);
+      await element.updateComplete;
+
+      expect(errors).toEqual([]);
+      expect(formulas(view)).toEqual([]);
+      expect(hasKatexRules(element)).toBe(false);
     });
   });
 

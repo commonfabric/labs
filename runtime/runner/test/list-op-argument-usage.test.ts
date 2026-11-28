@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Pattern } from "../src/builder/types.ts";
 import { inferListOpArgumentUsage } from "../src/builtins/list-op-argument-usage.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("list-op-argument-usage", () => {
   // The shape the transformer emits for `list.map((entry) => …)` with

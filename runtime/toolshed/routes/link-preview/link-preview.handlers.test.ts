@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { createLinkPreviewRouter } from "./link-preview.index.ts";
 import { createTestApp } from "@/lib/create-app.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const PAGE_URL = "https://example.com/article";
 const PROSE = "This is the first real paragraph of the article body.";

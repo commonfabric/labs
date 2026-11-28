@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricPlainObject } from "@commonfabric/api";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { aclDocId } from "../acl.ts";
 import * as Engine from "../v2/engine.ts";
 import { connect, loopback } from "../v2/client.ts";

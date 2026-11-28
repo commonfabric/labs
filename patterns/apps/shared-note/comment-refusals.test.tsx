@@ -22,7 +22,11 @@ import {
   setBound,
   styleOf,
 } from "../../tools/test-support/vnode-helpers.ts";
-import { SharedNoteCore, type StoredComment } from "./main.tsx";
+import {
+  type ActivityRow,
+  SharedNoteCore,
+  type StoredComment,
+} from "./main.tsx";
 import {
   profileGesture,
   type TestProfile,
@@ -75,11 +79,15 @@ export default pattern(() => {
   });
   const content = Writable.of<string>(BODY);
   const comments = Writable.of<StoredComment[]>([]);
+  const title = Writable.of<string>("Plan");
+  const activity = Writable.of<ActivityRow[]>([]);
   const note = SharedNoteCore({
     content,
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
   // The same note in another of Ada's tabs, in a third with nothing
   // selected, and as a viewer with no profile sees it.
@@ -88,14 +96,24 @@ export default pattern(() => {
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
   const freshTab = SharedNoteCore({
     content,
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
-  const guest = SharedNoteCore({ content, comments, participantName: "" });
+  const guest = SharedNoteCore({
+    content,
+    comments,
+    participantName: "",
+    title,
+    activity,
+  });
 
   // === Actions ===
 
@@ -200,15 +218,19 @@ export default pattern(() => {
     listed(comments.get()).length === 1 &&
     listed(comments.get())[0]?.status === "draft" &&
     styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
-      "flex"
+      "flex" &&
+    activity.get().length === 0
   );
   const assert_posted = assert(() =>
     named(comments.get(), "Friday")?.status === "posted" &&
     styleOf(findNodeById(note[UI], "shared-note-composer"), "display") ===
-      "none"
+      "none" &&
+    activity.get().length === 1 &&
+    activity.get()[0]?.body === 'commented on "Plan"'
   );
   const assert_reply_to_deleted_refused = assert(() =>
     named(comments.get(), "Friday") === undefined &&
+    activity.get().length === 1 &&
     hasText(
       findNodeById(note[UI], "shared-note-comment-notice"),
       "This comment is no longer posted.",
@@ -253,7 +275,8 @@ export default pattern(() => {
     )
   );
   const assert_empty_quote_refused = assert(() =>
-    named(comments.get(), "Nowhere") === undefined
+    named(comments.get(), "Nowhere") === undefined &&
+    activity.get().length === 0
   );
 
   return {

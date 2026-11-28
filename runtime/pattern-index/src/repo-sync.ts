@@ -19,7 +19,9 @@
  * on a pattern's identity, not by a git diff. The index keeps that hash on
  * each lineage's newest version and returns it from `listRepoHeads`. A path
  * the index holds a lineage for that the repository no longer selects
- * (deleted, moved, or excluded) is withdrawn. A sync that failed partway
+ * (deleted, moved, or excluded) is withdrawn, unless the repository's table
+ * of moves says it moved to an entry: then the entry takes over its lineage,
+ * and until it does the old path is kept. A sync that failed partway
  * leaves the index behind, and the next one catches it up; nothing about past
  * runs is kept anywhere but the index.
  *
@@ -32,25 +34,39 @@
 import { encodeHex } from "@std/encoding/hex";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { RuntimeProgram } from "@commonfabric/runner";
-import type {
-  PatternIndexClient,
-  PatternIndexFinding,
-  PatternIndexPublishRequest,
-  PatternIndexRepoHead,
+import {
+  type PatternIndexClient,
+  PatternIndexError,
+  type PatternIndexFinding,
+  type PatternIndexPublishRequest,
+  type PatternIndexRepoHead,
 } from "./client.ts";
 
 /** One entry as the plan phase found it. */
 export type PlannedEntry =
-  | {
-    path: string;
-    status: "compiled";
-    sourceHash: string;
+  & (
+    | {
+      status: "compiled";
+      sourceHash: string;
 
-    /** The publish request, without its repository source. */
-    request: PatternIndexPublishRequest;
-  }
-  | { path: string; status: "undescribed" }
-  | { path: string; status: "failed"; reason: string };
+      /** The publish request, without its repository source. */
+      request: PatternIndexPublishRequest;
+    }
+    | { status: "undescribed" }
+    | { status: "failed"; reason: string }
+  )
+  & {
+    path: string;
+
+    /**
+     * The paths this entry's file had before it moved within the repository,
+     * nearest first. The first of these the index holds a lineage for and
+     * the repository no longer selects is the entry's former lineage: a
+     * compiled entry with no lineage of its own continues it, and until one
+     * does it is kept rather than withdrawn.
+     */
+    formerPaths?: readonly string[];
+  };
 
 /** What the plan phase hands the publish phase. */
 export interface RepoSyncPlan {
@@ -70,6 +86,8 @@ export type EntryOutcome =
   | { path: string; status: "public-elsewhere"; patternId: string }
   | { path: string; status: "unchanged"; patternId: string }
   | { path: string; status: "undescribed" }
+  /** The index refused the program as larger than `limit` bytes of source. */
+  | { path: string; status: "oversize"; limit: string }
   | { path: string; status: "failed"; reason: string };
 
 /** A gate verdict with findings, as the newest version of a path carries it. */
@@ -88,6 +106,14 @@ export interface RepoSyncReport {
 
   /** Paths whose lineages were withdrawn, since the repository lost them. */
   withdrawn: readonly string[];
+
+  /**
+   * Former paths kept rather than withdrawn although the repository no longer
+   * selects them: the entry a file moved to has not taken over their
+   * lineage, because it failed, has no description, or already has a
+   * lineage of its own.
+   */
+  kept: readonly string[];
 
   /**
    * Why the index refused to withdraw the lineages of paths the repository
@@ -131,7 +157,30 @@ export const programSourceHash = async (
   return encodeHex(new Uint8Array(digest));
 };
 
-/** A failure's message, for a report. */
+/**
+ * The byte limit a publish's HTTP 400 program-size refusal names, or
+ * `undefined` for any other failure. The entire detail has to match the
+ * server's fixed wording with one to twelve decimal digits.
+ */
+export const programSizeLimit = (error: unknown): string | undefined => {
+  if (
+    !(error instanceof PatternIndexError) || error.fn !== "publishPattern" ||
+    error.status !== 400
+  ) {
+    return undefined;
+  }
+  const refusal = /^program exceeds ([0-9]{1,12}) bytes of source$/.exec(
+    error.detail ?? "",
+  );
+  return refusal !== null && refusal[0] === error.detail
+    ? refusal[1]
+    : undefined;
+};
+
+/**
+ * Returns a failure's message for a report. A `PatternIndexError`'s message
+ * leaves out the index's detail, so index details stay withheld.
+ */
 export const reasonOf = (error: unknown): string =>
   error instanceof Error ? error.message : String(error);
 
@@ -155,6 +204,13 @@ export const planProblem = (plan: unknown): string | undefined => {
     const where = `entries[${index}]`;
     if (!isObjectNotArray(entry) || typeof entry.path !== "string") {
       return `${where} has no path`;
+    }
+    if (
+      entry.formerPaths !== undefined &&
+      !(Array.isArray(entry.formerPaths) &&
+        entry.formerPaths.every((path) => typeof path === "string"))
+    ) {
+      return `${where} has former paths that are not a list of paths`;
     }
     if (entry.status === "undescribed") continue;
     if (entry.status === "failed") {
@@ -190,10 +246,17 @@ export type PublishClient = Pick<
   "listRepoHeads" | "publishPattern" | "withdrawRepoPaths"
 >;
 
-/** Publishes one compiled entry whose head is `head`, or that has none. */
+/**
+ * Publishes one compiled entry whose head is `head`, or that has none. An
+ * entry with no head that moved from `movedFrom` names that path, so the
+ * index moves its lineage here rather than starting one. A move the index
+ * refuses throws, and the entry is reported failed: published anyway, it
+ * would start a new lineage no later sync could move.
+ */
 const publishEntry = async (
   entry: Extract<PlannedEntry, { status: "compiled" }>,
   head: PatternIndexRepoHead | undefined,
+  movedFrom: PatternIndexRepoHead | undefined,
   options: PublishPlanOptions,
   client: PublishClient,
 ): Promise<EntryOutcome> => {
@@ -212,12 +275,25 @@ const publishEntry = async (
       path: entry.path,
       commit: options.commit,
       sourceHash: entry.sourceHash,
+      ...(head === undefined && movedFrom !== undefined
+        ? { movedFrom: movedFrom.path }
+        : {}),
     },
   });
   // An index that predates repository sync drops `source` and publishes an
   // unlinked version; that is a failure, not a success.
   if (response.ignored?.includes("source")) {
     throw new Error("the index ignored the repository source");
+  }
+  // A move the index confirms names the old path back. Without that, a new
+  // lineage was started here, which no later sync can move.
+  if (
+    head === undefined && movedFrom !== undefined &&
+    response.movedFrom === undefined
+  ) {
+    throw new Error(
+      `the index did not say it moved the lineage of ${movedFrom.path} here`,
+    );
   }
   const status = response.unchanged === true
     ? "unchanged"
@@ -251,7 +327,10 @@ const gardenerReports = (
  *
  * A refused publish is recorded and the others still run, and a refused
  * withdrawal is recorded beside them; the caller fails the job when
- * {@link syncFailed} says so.
+ * {@link syncFailed} says so. A publish refused only for its program's size
+ * is recorded as oversize, which, like an entry with no description, is
+ * reported and does not fail the job: the fix is in the pattern. The next
+ * sync tries the entry again, since nothing of it was published.
  *
  * @throws PatternIndexError when the index refuses `listRepoHeads`, before
  *   anything is published.
@@ -265,28 +344,59 @@ export const publishPlan = async (
     repository: options.repository,
   });
   const headOf = new Map(heads.map((head) => [head.path, head]));
+  const selected = new Set(plan.selected);
+  // Each entry's former lineage, claimed before anything is published: one
+  // entry at most per former path, the first that names it. A claimed path
+  // is never withdrawn this run. Either its lineage moves to the entry's
+  // path, or the entry could not take it (it failed, has no description, or
+  // has a lineage of its own) and the lineage stays where it is, for a later
+  // sync to move.
+  const claimed = new Map<string, PatternIndexRepoHead>();
+  const claimedPaths = new Set<string>();
+  // An entry with a lineage of its own claims last: it can only keep a former
+  // path, which an entry without one might move.
+  const claimOrder = [
+    ...plan.entries.filter((entry) => !headOf.has(entry.path)),
+    ...plan.entries.filter((entry) => headOf.has(entry.path)),
+  ];
+  for (const entry of claimOrder) {
+    const former = (entry.formerPaths ?? []).find((path) =>
+      headOf.has(path) && !selected.has(path) && !claimedPaths.has(path)
+    );
+    if (former === undefined) continue;
+    claimedPaths.add(former);
+    claimed.set(entry.path, headOf.get(former)!);
+  }
+  const moved = new Set<string>();
   const outcomes: EntryOutcome[] = [];
   for (const entry of plan.entries) {
     if (entry.status !== "compiled") {
-      outcomes.push(entry);
+      outcomes.push(
+        entry.status === "failed"
+          ? { path: entry.path, status: "failed", reason: entry.reason }
+          : { path: entry.path, status: entry.status },
+      );
       continue;
     }
+    const head = headOf.get(entry.path);
+    const movedFrom = head === undefined ? claimed.get(entry.path) : undefined;
     try {
       outcomes.push(
-        await publishEntry(entry, headOf.get(entry.path), options, client),
+        await publishEntry(entry, head, movedFrom, options, client),
       );
+      if (movedFrom !== undefined) moved.add(movedFrom.path);
     } catch (error) {
-      outcomes.push({
-        path: entry.path,
-        status: "failed",
-        reason: reasonOf(error),
-      });
+      const limit = programSizeLimit(error);
+      outcomes.push(
+        limit === undefined
+          ? { path: entry.path, status: "failed", reason: reasonOf(error) }
+          : { path: entry.path, status: "oversize", limit },
+      );
     }
   }
-  const selected = new Set(plan.selected);
   const entryPaths = new Set(plan.entries.map((entry) => entry.path));
   const gone = heads.map((head) => head.path).filter((path) =>
-    !selected.has(path)
+    !selected.has(path) && !claimedPaths.has(path)
   ).sort();
   let withdrawn: string[] = [];
   let withdrawFailure: string | undefined;
@@ -307,6 +417,7 @@ export const publishPlan = async (
     commit: options.commit,
     entries: outcomes,
     withdrawn,
+    kept: [...claimedPaths].filter((path) => !moved.has(path)).sort(),
     ...(withdrawFailure === undefined ? {} : { withdrawFailure }),
     dormant: heads.map((head) => head.path).filter((path) =>
       selected.has(path) && !entryPaths.has(path)
@@ -317,7 +428,8 @@ export const publishPlan = async (
 
 /**
  * Whether the job should fail: some entry could not be synced, or the
- * lineages of lost paths could not be withdrawn.
+ * lineages of lost paths could not be withdrawn. An undescribed or oversize
+ * entry is reported but is not a failure.
  */
 export const syncFailed = (report: RepoSyncReport): boolean =>
   report.withdrawFailure !== undefined ||
@@ -342,13 +454,15 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
   const published = withStatus("published");
   const failed = withStatus("failed");
   const undescribed = withStatus("undescribed");
+  const oversize = withStatus("oversize");
   const lines = [
     `## Pattern index sync: ${report.repository}`,
     "",
     `At \`${report.commit.slice(0, 12)}\`: ${report.entries.length} entries, ` +
     `${published.length} published, ` +
     `${withStatus("unchanged").length} unchanged, ` +
-    `${undescribed.length} without a description, ${failed.length} failed.`,
+    `${undescribed.length} without a description, ` +
+    `${oversize.length} too large for the index, ${failed.length} failed.`,
   ];
   const list = (title: string, note: string, paths: readonly string[]) => {
     if (paths.length === 0) return;
@@ -413,9 +527,21 @@ export const reportMarkdown = (report: RepoSyncReport): string => {
     undescribed.map((entry) => entry.path),
   );
   list(
+    "Not published: too large for the index",
+    `The index refuses a program (the entry and everything it imports) over ${
+      [...new Set(oversize.map((entry) => entry.limit))].join(" or ")
+    } bytes of source.`,
+    oversize.map((entry) => entry.path),
+  );
+  list(
     "Withdrawn",
     "No longer here: unlisted in the index, and still readable by id.",
     report.withdrawn,
+  );
+  list(
+    "Kept: moved, lineage not taken over",
+    "The moves table says each moved, and the entry at its new path has not taken over its lineage (it failed, has no description, or already has a lineage of its own), so it is kept rather than withdrawn. Fix the entry, or drop the move from the table to withdraw it.",
+    report.kept,
   );
   list(
     "No longer entries",

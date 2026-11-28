@@ -8,7 +8,6 @@
  * they assert back through the runtime's own label view.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -22,6 +21,12 @@ import {
   renderCellReference,
 } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { HarnessHandleTable } from "../src/contracts/handle-table.ts";
 import type { HarnessFabricSession } from "../src/fabric-session.ts";

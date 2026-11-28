@@ -1,6 +1,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { EditBuffer } from "../lib/view/editbuffer.ts";
 import { decodeKeys } from "../lib/view/keys.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function at(b: EditBuffer): [number, number] {
   return [b.row, b.col];
@@ -10,7 +11,7 @@ function at(b: EditBuffer): [number, number] {
 // motion
 //
 
-Deno.test("editbuffer: left/right cross line boundaries", () => {
+test("editbuffer: left/right cross line boundaries", () => {
   const b = new EditBuffer("ab\ncd");
   b.row = 0;
   b.col = 2; // end of "ab"
@@ -20,7 +21,7 @@ Deno.test("editbuffer: left/right cross line boundaries", () => {
   assertEquals(at(b), [0, 2], "left at line start goes to prev line end");
 });
 
-Deno.test("editbuffer: up/down keep a goal column over short lines", () => {
+test("editbuffer: up/down keep a goal column over short lines", () => {
   const b = new EditBuffer("longline\nx\nanother");
   b.row = 0;
   b.col = 6;
@@ -30,7 +31,92 @@ Deno.test("editbuffer: up/down keep a goal column over short lines", () => {
   assertEquals(at(b), [2, 6]);
 });
 
-Deno.test("editbuffer: line and word motion", () => {
+test("editbuffer: left and right step over a whole character as a reader sees it", () => {
+  // An accented letter written with a combining mark, then an emoji with a
+  // skin tone: two characters of two code points each.
+  const b = new EditBuffer("e\u0301👍🏽x");
+  const cols: number[] = [];
+  for (let i = 0; i < 3; i++) {
+    b.moveRight();
+    cols.push(b.col);
+  }
+  for (let i = 0; i < 3; i++) {
+    b.moveLeft();
+    cols.push(b.col);
+  }
+
+  assertEquals(cols, [2, 4, 5, 4, 2, 0]);
+});
+
+test("editbuffer: Backspace and Delete remove a whole character as a reader sees it", () => {
+  const backspaced = new EditBuffer("ae\u0301b");
+  backspaced.col = 3;
+  backspaced.deleteBackward();
+  const deleted = new EditBuffer("ae\u0301b");
+  deleted.col = 1;
+  deleted.deleteForward();
+  const plain = new EditBuffer("abc");
+  plain.col = 2;
+  plain.deleteBackward();
+
+  assertEquals([backspaced.lines[0], backspaced.col], ["ab", 1]);
+  assertEquals([deleted.lines[0], deleted.col], ["ab", 1]);
+  assertEquals([plain.lines[0], plain.col], ["ac", 1]);
+});
+
+test("editbuffer: moving rows past the first row keeps the goal display column", () => {
+  const b = new EditBuffer("漢字ab\nabcdef");
+  b.col = 2;
+  b.moveRows(-3);
+  const stayed = at(b);
+  b.moveDown();
+
+  assertEquals([stayed, at(b)], [[0, 2], [1, 4]]);
+});
+
+test("editbuffer: a mark in a long line is stepped over by looking only near it", () => {
+  // Plain letters either side of the accented e bound the stretch looked at.
+  const b = new EditBuffer(`${"x".repeat(50)}e\u0301${"y".repeat(50)}`);
+  b.col = 50;
+  b.moveRight();
+  const after = b.col;
+  b.moveLeft();
+
+  assertEquals([after, b.col], [52, 50]);
+});
+
+test("editbuffer: a mark after a control character joins the control's picture, as it is drawn", () => {
+  const b = new EditBuffer("\x01\u0301z");
+  b.moveRight();
+
+  assertEquals(b.col, 2);
+});
+
+test("editbuffer: Backspace with the cursor inside a joined character removes the whole character", () => {
+  // The cursor is put between the e and its combining accent.
+  const b = new EditBuffer("ae\u0301b");
+  b.col = 2;
+  b.deleteBackward();
+
+  assertEquals([b.lines[0], b.col], ["ab", 1]);
+});
+
+test("editbuffer: up and down keep the display column, at the start of the character drawn there", () => {
+  // The accented e takes one column, and each Han character two, so the
+  // display column 2 of "abc" falls on the x, and on 字 below.
+  const b = new EditBuffer("abc\nae\u0301x\n漢字ab");
+  b.col = 2;
+  b.moveDown();
+  const accented = at(b);
+  b.moveDown();
+  const han = at(b);
+  b.moveRight();
+  b.moveUp();
+
+  assertEquals([accented, han, at(b)], [[1, 3], [2, 1], [1, 4]]);
+});
+
+test("editbuffer: line and word motion", () => {
   const b = new EditBuffer("  foo.bar baz");
   b.moveLineEnd();
   assertEquals(b.col, 13);
@@ -44,7 +130,7 @@ Deno.test("editbuffer: line and word motion", () => {
   assertEquals(b.col, 6, "back to start of `bar`");
 });
 
-Deno.test("editbuffer: word motion keeps a combining mark with its letter", () => {
+test("editbuffer: word motion keeps a combining mark with its letter", () => {
   const b = new EditBuffer("cafe\u0301 x");
   b.moveWordForward();
   assertEquals(b.col, 5, "past the accent on `e`");
@@ -56,7 +142,7 @@ Deno.test("editbuffer: word motion keeps a combining mark with its letter", () =
 // insertion / deletion
 //
 
-Deno.test("editbuffer: insert characters and a newline", () => {
+test("editbuffer: insert characters and a newline", () => {
   const b = new EditBuffer("ac");
   b.col = 1;
   b.insert("b");
@@ -67,7 +153,7 @@ Deno.test("editbuffer: insert characters and a newline", () => {
   assertEquals(at(b), [1, 0]);
 });
 
-Deno.test("editbuffer: backspace joins lines, delete-forward too", () => {
+test("editbuffer: backspace joins lines, delete-forward too", () => {
   const b = new EditBuffer("ab\ncd");
   b.row = 1;
   b.col = 0;
@@ -82,7 +168,7 @@ Deno.test("editbuffer: backspace joins lines, delete-forward too", () => {
   assertEquals(b.text(), "acd");
 });
 
-Deno.test("editbuffer: structural edits preserve source-owned CRLF transport", () => {
+test("editbuffer: structural edits preserve source-owned CRLF transport", () => {
   const split = new EditBuffer("ab\r\ncd\r\n");
   split.col = 2;
   split.insertNewline(2);
@@ -113,7 +199,7 @@ Deno.test("editbuffer: structural edits preserve source-owned CRLF transport", (
   assertEquals(terminal.text(), "ab\r\n\r\n");
 });
 
-Deno.test("editbuffer: structural edits carry exact line-ending provenance", () => {
+test("editbuffer: structural edits carry exact line-ending provenance", () => {
   const crlf = { ending: "\r\n", bodyCarriesCrlfEnding: true } as const;
   const lf = { ending: "\n", bodyCarriesCrlfEnding: false } as const;
   const split = new EditBuffer("a\nb", [crlf, lf]);
@@ -134,7 +220,7 @@ Deno.test("editbuffer: structural edits carry exact line-ending provenance", () 
   assertEquals(replaced.lineEndingProvenance(), [lf, undefined, undefined]);
 });
 
-Deno.test("editbuffer: dirty tracks against the original", () => {
+test("editbuffer: dirty tracks against the original", () => {
   const b = new EditBuffer("x");
   assert(!b.dirty());
   b.insert("y");
@@ -143,7 +229,7 @@ Deno.test("editbuffer: dirty tracks against the original", () => {
   assert(!b.dirty(), "back to original content is clean again");
 });
 
-Deno.test("editbuffer: commitSaved makes the current text clean", () => {
+test("editbuffer: commitSaved makes the current text clean", () => {
   const b = new EditBuffer("before");
   b.moveLineEnd();
   b.insert(" after");
@@ -161,7 +247,7 @@ Deno.test("editbuffer: commitSaved makes the current text clean", () => {
 // kill / yank
 //
 
-Deno.test("editbuffer: kill-line then yank round-trips", () => {
+test("editbuffer: kill-line then yank round-trips", () => {
   const b = new EditBuffer("hello world");
   b.col = 6;
   b.killLine(); // kills "world"
@@ -170,7 +256,7 @@ Deno.test("editbuffer: kill-line then yank round-trips", () => {
   assertEquals(b.text(), "hello world");
 });
 
-Deno.test("editbuffer: kill-whole-line removes the line", () => {
+test("editbuffer: kill-whole-line removes the line", () => {
   const b = new EditBuffer("a\nb\nc");
   b.row = 1;
   b.killWholeLine();
@@ -180,7 +266,7 @@ Deno.test("editbuffer: kill-whole-line removes the line", () => {
   assertEquals(b.text(), "a\nb\nc");
 });
 
-Deno.test("editbuffer: kill-whole-line of the last line keeps no trailing newline", () => {
+test("editbuffer: kill-whole-line of the last line keeps no trailing newline", () => {
   // A single line with no terminating newline: kill it, then yank it back. The
   // round-trip must reproduce the original exactly, leaving the buffer clean.
   const b = new EditBuffer("only");
@@ -213,7 +299,7 @@ Deno.test("editbuffer: kill-whole-line of the last line keeps no trailing newlin
   assertEquals(endings.lineEndingProvenance(), [eof]);
 });
 
-Deno.test("editbuffer: consecutive kills accrete into one ring entry", () => {
+test("editbuffer: consecutive kills accrete into one ring entry", () => {
   const b = new EditBuffer("abcdef");
   b.col = 0;
   b.killWordForward(); // "abcdef" is one word → kills all
@@ -227,7 +313,7 @@ Deno.test("editbuffer: consecutive kills accrete into one ring entry", () => {
   assert(b.text() === "", "single word fully killed");
 });
 
-Deno.test("editbuffer: backward kill word prepends and moves point", () => {
+test("editbuffer: backward kill word prepends and moves point", () => {
   const b = new EditBuffer("alpha beta");
   b.moveLineEnd();
   b.killWordBackward(); // kills "beta"
@@ -235,7 +321,7 @@ Deno.test("editbuffer: backward kill word prepends and moves point", () => {
   assertEquals(b.col, 6);
 });
 
-Deno.test("editbuffer: kill region between mark and point", () => {
+test("editbuffer: kill region between mark and point", () => {
   const b = new EditBuffer("0123456789");
   b.col = 2;
   b.setMark();
@@ -247,7 +333,7 @@ Deno.test("editbuffer: kill region between mark and point", () => {
   assertEquals(b.text(), "0123456789", "yank restores at point");
 });
 
-Deno.test("editbuffer: yank-pop cycles through the ring", () => {
+test("editbuffer: yank-pop cycles through the ring", () => {
   const b = new EditBuffer("");
   // Seed three independent kills (non-consecutive so they are separate).
   for (const word of ["one", "two", "three"]) {
@@ -274,7 +360,7 @@ Deno.test("editbuffer: yank-pop cycles through the ring", () => {
 // case ops
 //
 
-Deno.test("editbuffer: case operations transform the next word, advancing", () => {
+test("editbuffer: case operations transform the next word, advancing", () => {
   const b = new EditBuffer("foo BAR baz");
   b.col = 0;
   b.uppercaseWord();
@@ -293,7 +379,7 @@ Deno.test("editbuffer: case operations transform the next word, advancing", () =
 // non-BMP
 //
 
-Deno.test("editbuffer: cursor steps whole code points past an emoji", () => {
+test("editbuffer: cursor steps whole code points past an emoji", () => {
   const b = new EditBuffer("a😀b");
   b.col = 0;
   b.moveRight();
@@ -317,31 +403,31 @@ function decode1(bytes: number[]) {
   return keys;
 }
 
-Deno.test("keys: Alt+arrow carries the alt modifier", () => {
+test("keys: Alt+arrow carries the alt modifier", () => {
   // ESC [ 1 ; 3 A  == Alt+Up
   const [k] = decode1([0x1b, 0x5b, 0x31, 0x3b, 0x33, 0x41]);
   assertEquals(k.name, "up");
   assertEquals(k.alt, true);
 });
 
-Deno.test("keys: Alt+letter and Alt+backspace", () => {
+test("keys: Alt+letter and Alt+backspace", () => {
   assertEquals(decode1([0x1b, 0x66])[0], { name: "f", alt: true } as never);
   const back = decode1([0x1b, 0x7f])[0];
   assertEquals(back.name, "backspace");
   assertEquals(back.alt, true);
 });
 
-Deno.test("keys: F3 from SS3 and from the tilde form", () => {
+test("keys: F3 from SS3 and from the tilde form", () => {
   assertEquals(decode1([0x1b, 0x4f, 0x52])[0].name, "f3"); // ESC O R
   assertEquals(decode1([0x1b, 0x5b, 0x31, 0x33, 0x7e])[0].name, "f3"); // ESC [ 13 ~
 });
 
-Deno.test("keys: plain ESC is Escape, ESC ESC is Escape", () => {
+test("keys: plain ESC is Escape, ESC ESC is Escape", () => {
   assertEquals(decode1([0x1b])[0].name, "escape");
   assertEquals(decode1([0x1b, 0x1b])[0].name, "escape");
 });
 
-Deno.test("keys: ctrl chords decode for the editor bindings", () => {
+test("keys: ctrl chords decode for the editor bindings", () => {
   assertEquals(decode1([0x18])[0].name, "ctrl-x");
   assertEquals(decode1([0x13])[0].name, "ctrl-s");
   assertEquals(decode1([0x19])[0].name, "ctrl-y");

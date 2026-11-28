@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -6,6 +5,7 @@ import {
   STORED_ARGUMENT_SCHEMA_REFUSAL,
   storedArgumentRefusalDetail,
 } from "../src/stored-argument-refusal.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("setup's refusal of a piece's stored argument", () => {
   const refusal = `${STORED_ARGUMENT_SCHEMA_REFUSAL}: missing required ` +

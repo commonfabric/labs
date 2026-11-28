@@ -2,10 +2,10 @@
 
 import { expect } from "@std/expect";
 import { fromFileUrl, join } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 
 import { cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { startAgentRunner } from "../../runtime/cli/commands/agent.ts";
 import { loadIdentity } from "../../runtime/cli/lib/identity.ts";

@@ -1,0 +1,111 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Fix": {
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "fixes": {
+        "description": "The owner's fixes, a link into the owner's space.",
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      },
+      "now": {
+        "description": "The instant the window ends at.",
+        "type": "number"
+      }
+    },
+    "required": [
+      "fixes",
+      "now"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/test/share-space-declassify/share.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Fix": {
+        "properties": {
+          "at": {
+            "type": "number"
+          },
+          "lat": {
+            "type": "number"
+          },
+          "lon": {
+            "type": "number"
+          }
+        },
+        "required": [
+          "lat",
+          "lon",
+          "at"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "publish": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Copies the window `recentFixes` computed into `shared`."
+      },
+      "publishPlain": {
+        "asCell": [
+          "stream",
+          "opaque"
+        ],
+        "description": "Copies the same window, computed by a function no rule names."
+      },
+      "shared": {
+        "description": "The last five minutes, as published to the share space.",
+        "ifc": {
+          "maxConfidentiality": []
+        },
+        "items": {
+          "$ref": "#/$defs/Fix"
+        },
+        "type": "array"
+      },
+      "space": {
+        "description": "The DID of the space the share was placed in.",
+        "type": [
+          "string",
+          "undefined"
+        ]
+      }
+    },
+    "required": [
+      "space",
+      "shared",
+      "publish",
+      "publishPlain",
+      "$NAME"
+    ],
+    "type": "object"
+  }
+}

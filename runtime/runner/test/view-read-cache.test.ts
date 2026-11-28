@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { resolveScopeKey } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import {
   ViewReadCache,
@@ -21,6 +21,112 @@ const read: IMemorySpaceAddress = {
 const identity = { principal: "did:key:alice", sessionId: "tab-a" };
 
 describe("view read cache", () => {
+  for (const scope of ["user", "session"] as const) {
+    for (const shallow of [false, true]) {
+      it(`replaces mixed implicit and explicit ${scope} reads with shallow=${shallow}`, () => {
+        const cache = new ViewReadCache<string>(identity);
+        const scoped: IMemorySpaceAddress = { ...read, scope };
+        const reads = [scoped, {
+          ...scoped,
+          scopeKey: resolveScopeKey(scope, identity),
+        }];
+        cache.set("first", {
+          reads: shallow ? [] : reads,
+          shallowReads: shallow ? reads : [],
+        });
+        cache.set("replacement", {
+          reads: [{ ...read, id: "of:replacement" }],
+          shallowReads: [],
+        });
+        cache.notify({
+          type: "integrate",
+          space,
+          changes: [{
+            address: scoped,
+            before: { value: 1 },
+            after: { value: 2 },
+          }],
+        });
+        expect(cache.value).toBe("replacement");
+        cache.notify({
+          type: "integrate",
+          space,
+          changes: [{
+            address: { ...read, id: "of:replacement" },
+            before: { value: 1 },
+            after: { value: 2 },
+          }],
+        });
+        expect(cache.value).toBeUndefined();
+      });
+    }
+  }
+
+  it("keeps explicit sessions separate when replacing mixed reads", () => {
+    const cache = new ViewReadCache<string>(identity);
+    const scoped: IMemorySpaceAddress = { ...read, scope: "session" };
+    const other = {
+      ...scoped,
+      scopeKey: resolveScopeKey("session", { ...identity, sessionId: "tab-b" }),
+    };
+    cache.set("first", {
+      reads: [scoped, {
+        ...scoped,
+        scopeKey: resolveScopeKey("session", identity),
+      }, other],
+      shallowReads: [],
+    });
+    cache.set("other session", { reads: [other], shallowReads: [] });
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [{ address: scoped, before: { value: 1 }, after: { value: 2 } }],
+    });
+    expect(cache.value).toBe("other session");
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [{ address: other, before: { value: 1 }, after: { value: 2 } }],
+    });
+    expect(cache.value).toBeUndefined();
+  });
+
+  it("keeps shallow parents and children after canonical grouping", () => {
+    const cache = new ViewReadCache<string>(identity);
+    const parent: IMemorySpaceAddress = { ...read, scope: "session" };
+    const child = {
+      ...parent,
+      scopeKey: resolveScopeKey("session", identity),
+      path: ["value", "nested"],
+    };
+    cache.set("first", {
+      reads: [],
+      shallowReads: [parent, child, { ...child, scopeKey: undefined }],
+    });
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [{
+        address: { ...child, path: ["value", "nested", "count"] },
+        before: { value: { nested: { count: 1 } } },
+        after: { value: { nested: { count: 2 } } },
+      }],
+    });
+    expect(cache.value).toBe("first");
+    cache.notify({
+      type: "integrate",
+      space,
+      changes: [{
+        address: { ...child, path: ["value", "nested", "added"] },
+        before: { value: { nested: { count: 2 } } },
+        after: { value: { nested: { count: 2, added: 3 } } },
+      }],
+    });
+    expect(cache.value).toBeUndefined();
+    cache.set("second", { reads: [], shallowReads: [] });
+    expect(cache.value).toBe("second");
+  });
+
   it("retains equal and sibling values but invalidates a previously missing read", () => {
     const cache = new ViewReadCache<string>(identity);
     cache.set("cached", { reads: [read], shallowReads: [] });

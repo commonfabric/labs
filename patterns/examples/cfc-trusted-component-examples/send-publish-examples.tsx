@@ -1,3 +1,10 @@
+/**
+ * A gallery of thirty untrusted host patterns (chat and direct-message
+ * sends, support replies, announcements, release notes, status pages,
+ * reposts, queued and staged posts) that embed reviewed trusted send and
+ * publish surfaces. The host's own buttons are visible decoys that cannot
+ * authorize the protected write.
+ */
 import {
   computed,
   handler,

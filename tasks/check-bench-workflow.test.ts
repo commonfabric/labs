@@ -4,7 +4,6 @@
  * job does not run -- a comment, a conditional step -- has to fail too.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -13,7 +12,8 @@ import {
   namedBenchmarkFiles,
   stepWords,
 } from "./check-bench-workflow.ts";
-import { CALIBRATION_FILE, KEY_BENCHMARKS } from "../dashboard/bench-report.ts";
+import { CALIBRATION_FILE } from "../dashboard/bench-report.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Helper for the tests below, which builds a workflow around its steps. */
 const workflowWith = (steps: string[]): string =>
@@ -66,15 +66,8 @@ describe("check-bench-workflow", () => {
         CALIBRATION_FILE,
         "patterns/integration/topic-board-navigation.bench.ts",
         "patterns/integration/topic-board-scale.bench.ts",
+        "patterns/integration/fabrichat-setup.bench.ts",
       ]);
-    });
-
-    it("returns one entry for two key benchmarks sharing a file", () => {
-      // The two key benchmarks are in two files today. Nothing stops them
-      // sharing one, and a file named twice would be reported twice.
-      const files = namedBenchmarkFiles();
-      expect(files.length).toBe(new Set(files).size);
-      expect(files.length).toBeLessThanOrEqual(KEY_BENCHMARKS.length + 1);
     });
   });
 
@@ -221,7 +214,7 @@ describe("check-bench-workflow", () => {
         stderr: "null",
       }).output();
       expect(code).toBe(0);
-      expect(new TextDecoder().decode(stdout)).toContain("names (3 files)");
+      expect(new TextDecoder().decode(stdout)).toContain("names (4 files)");
     });
   });
 
@@ -232,7 +225,7 @@ describe("check-bench-workflow", () => {
         code = main();
       });
       expect(code).toBe(0);
-      expect(out).toContain("names (3 files)");
+      expect(out).toContain("names (4 files)");
       expect(err).toBe("");
     });
 

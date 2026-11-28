@@ -1,9 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { pattern } from "../src/builder/pattern.ts";
 import {
@@ -12,7 +17,10 @@ import {
   writeCompiledDocs,
   writeSourceDocs,
 } from "../src/compilation-cache/cell-cache.ts";
-import { observeCompilerStackDemandsForTestingOnly } from "../src/harness/deferred-compiler-stack.ts";
+import {
+  ensureCompilerStack,
+  observeCompilerStackDemandsForTestingOnly,
+} from "../src/harness/deferred-compiler-stack.ts";
 import type { Engine } from "../src/harness/engine.ts";
 import { computeModuleHashes } from "../src/harness/module-identity.ts";
 import type { CacheableModule, RuntimeProgram } from "../src/harness/types.ts";
@@ -256,13 +264,13 @@ describe("pattern-manager", () => {
           "export default pattern(() => ({ ok: true }));\n",
       }],
     };
-    const singleIdentity = () => computeModuleHashes(SINGLE).get("/main.tsx")!;
 
     it("compiles again when the stored compiled body fails to evaluate", async () => {
       // The stored source is genuine and the compiled document carries the
       // compiler's integrity, but its body throws as it evaluates.
       const writer = newRuntime();
-      const identity = singleIdentity();
+      await ensureCompilerStack();
+      const identity = computeModuleHashes(SINGLE).get("/main.tsx")!;
       const module: CacheableModule = {
         identity,
         filename: "/main.tsx",

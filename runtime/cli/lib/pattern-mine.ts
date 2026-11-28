@@ -44,7 +44,10 @@ export interface MinePatternRow {
 
 /** What moves a pattern on, from where it stands. */
 const nextStep = (
-  row: Pick<MinePatternRow, "listing" | "listed" | "bucket" | "patternId">,
+  row: Pick<
+    PatternIndexListedPattern,
+    "listing" | "listed" | "bucket" | "patternId" | "channel"
+  >,
   entry: string | undefined,
 ): string => {
   const publish = `cf pattern share ${
@@ -52,7 +55,7 @@ const nextStep = (
   }`;
   switch (row.listing) {
     case "not_requested":
-      return `unlisted: run ${publish} to request a listing`;
+      return `not shared: run ${publish} to share it on beta, by link`;
     case "pending":
       return "checking: the index's privacy check is reading it";
     case "held":
@@ -61,6 +64,11 @@ const nextStep = (
       return "error: the check failed to run and waits for an admin re-run";
     default:
       break;
+  }
+  if (row.channel === "beta") {
+    return `on beta, by link only: cf pattern stable ${
+      entry === undefined ? "<entry file>" : shellWord(entry)
+    } makes it findable`;
   }
   if (row.listed === false) return "unlisted";
   switch (row.bucket) {

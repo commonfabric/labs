@@ -3,6 +3,7 @@ import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { CFC_LABEL_READ_FAILED_ATOM } from "@commonfabric/runner/cfc";
+import { test } from "@commonfabric/test-support/test";
 import {
   SEED_ENVELOPE_SCHEMA_HASH,
   seedStoredEnvelope,
@@ -24,7 +25,7 @@ function admissionSeam(reconciler: WorkerReconciler) {
   return reconciler.accessForTestingOnly;
 }
 
-Deno.test("worker reconciler CFC atom admission", async (t) => {
+test("worker reconciler CFC atom admission", async (t) => {
   const signer = await Identity.fromPassphrase(
     "worker reconciler cfc atom admission",
   );

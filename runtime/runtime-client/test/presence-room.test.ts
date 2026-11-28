@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import type { PresenceEvent } from "@commonfabric/memory/v2/client";
 import type { PresenceRecord } from "@commonfabric/memory/v2";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { CellHandle } from "@/cell-handle.ts";
 import { type CellRef, NotificationType, RequestType } from "@/protocol/mod.ts";
@@ -657,6 +657,29 @@ describe("RuntimeClient presence rooms", () => {
       expect(frames.cancelled).toEqual([1]);
       frames.run();
       expect(publishes(requests)).toEqual([]);
+    });
+
+    it("delivers only the failure that ended the room when a publish sent before it is refused", async () => {
+      using frames = animationFrames();
+      const { client, cell, requests, notify } = buildClient({
+        publishFails: true,
+      });
+      const handle = await client.joinPresenceRoom(cell);
+      const events: PresenceEvent[] = [];
+      handle.subscribe((event) => events.push(event));
+      handle.setName("Ada");
+      frames.run();
+      expect(publishes(requests)).toHaveLength(1);
+      notify({
+        kind: "failure",
+        error: { name: "SessionRevokedError", message: "taken over" },
+      });
+      await settle();
+      expect(events).toHaveLength(1);
+      const failure = events[0];
+      expect(failure.kind === "failure" && failure.error.name).toBe(
+        "SessionRevokedError",
+      );
     });
   });
 

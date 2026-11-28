@@ -4,10 +4,11 @@ import {
   realmFromFabricValue,
 } from "@commonfabric/data-model/codecs";
 import { defer } from "@commonfabric/async/defer";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
+import { ASSETS_ATTRIBUTE } from "../src/assets.ts";
 import {
   connectFabric,
   type FabricClient,
@@ -1418,6 +1419,148 @@ describe("guest", () => {
       } finally {
         fabric.disconnect();
       }
+    });
+
+    describe("asset()", () => {
+      // The browser test loads a real document, where the host's writer and
+      // this reader meet. Here a stand-in document hands over the element's
+      // text, which is what the reader takes from it.
+
+      /** The bytes `GLAZE` carries: the signature a PNG file opens with. */
+      const GLAZE_BYTES = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+      const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
+      const LABEL =
+        "data:image/svg+xml;charset=utf-8;base64,PHN2Zz7inJM8L3N2Zz4=";
+
+      /**
+       * Runs `body` with a client of a document that carries `assets` as the
+       * host writes them, or that carries no record at all for `undefined`.
+       */
+      async function withClient(
+        assets: Record<string, string> | undefined,
+        body: (fabric: FabricClient) => void | Promise<void>,
+      ): Promise<void> {
+        const original = Reflect.get(globalThis, "document");
+        Reflect.set(globalThis, "document", {
+          readyState: "loading",
+          querySelector: (selector: string) =>
+            assets !== undefined && selector === `script[${ASSETS_ATTRIBUTE}]`
+              ? { textContent: JSON.stringify(assets) }
+              : null,
+        });
+        const fabric = connectFabric();
+        try {
+          await body(fabric);
+        } finally {
+          fabric.disconnect();
+          Reflect.set(globalThis, "document", original);
+        }
+      }
+
+      it("returns the media type, the size of the decoded bytes, and the URL", async () => {
+        await withClient({ glaze: GLAZE, label: LABEL }, (fabric) => {
+          const glaze = fabric.asset("glaze");
+          expect(glaze.mediaType).toBe("image/png");
+          expect(glaze.size).toBe(8);
+          expect(glaze.url).toBe(GLAZE);
+          const label = fabric.asset("label");
+          expect(label.mediaType).toBe("image/svg+xml;charset=utf-8");
+          expect(label.size).toBe(14);
+        });
+      });
+
+      it("returns the size of bytes ending in each length of padding", async () => {
+        const assets = {
+          none: "data:audio/wav;base64,AAAA",
+          one: "data:audio/wav;base64,AAA=",
+          two: "data:audio/wav;base64,AA==",
+          empty: "data:audio/wav;base64,",
+        };
+        await withClient(assets, (fabric) => {
+          expect(
+            Object.keys(assets).map((name) => [
+              fabric.asset(name).size,
+              fabric.asset(name).bytes().length,
+            ]),
+          ).toEqual([[3, 3], [2, 2], [1, 1], [0, 0]]);
+        });
+      });
+
+      it("decodes the bytes, returning a fresh copy on each call", async () => {
+        await withClient({ glaze: GLAZE }, (fabric) => {
+          const glaze = fabric.asset("glaze");
+          const first = glaze.bytes();
+          first[0] = 0;
+          expect([...glaze.bytes()]).toEqual(GLAZE_BYTES);
+          expect(glaze.bytes()).not.toBe(glaze.bytes());
+        });
+      });
+
+      it("returns the bytes as a `Blob` of the asset's media type", async () => {
+        await withClient({ glaze: GLAZE }, async (fabric) => {
+          const blob = fabric.asset("glaze").blob();
+          expect(blob.type).toBe("image/png");
+          expect([...new Uint8Array(await blob.arrayBuffer())]).toEqual(
+            GLAZE_BYTES,
+          );
+        });
+      });
+
+      it("returns the bytes read as UTF-8 as its text", async () => {
+        await withClient({ label: LABEL }, (fabric) => {
+          expect(fabric.asset("label").text()).toBe("<svg>✓</svg>");
+        });
+      });
+
+      it("decodes the bytes into a bitmap of the image's dimensions", async () => {
+        /** A PNG two pixels wide and one high. */
+        const STRIP = "data:image/png;base64," +
+          "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==";
+        await withClient({ strip: STRIP }, async (fabric) => {
+          const bitmap = await fabric.asset("strip").bitmap();
+          expect([bitmap.width, bitmap.height]).toEqual([2, 1]);
+        });
+      });
+
+      it("rejects a bitmap of bytes that are not a whole image", async () => {
+        await withClient({ glaze: GLAZE }, async (fabric) => {
+          await expect(fabric.asset("glaze").bitmap()).rejects.toThrow(
+            "Cannot decode image",
+          );
+        });
+      });
+
+      it("throws for a name the document carries no asset for, listing the names it carries", async () => {
+        await withClient({ glaze: GLAZE, label: LABEL }, (fabric) => {
+          expect(() => fabric.asset("logo")).toThrow(
+            'This document carries no asset named `"logo"`; it carries ' +
+              "`glaze`, `label`.",
+          );
+          expect(() => fabric.asset("toString")).toThrow(
+            'no asset named `"toString"`',
+          );
+        });
+      });
+
+      it("throws for every name when the document carries no assets", async () => {
+        await withClient(undefined, (fabric) => {
+          expect(() => fabric.asset("glaze")).toThrow(
+            'This document carries no asset named `"glaze"`; it carries none.',
+          );
+        });
+      });
+
+      it("throws when the document carries a record that is not one of assets", async () => {
+        await withClient(
+          { glaze: "https://example.com/glaze.png" },
+          (fabric) => {
+            expect(() => fabric.asset("glaze")).toThrow(TypeError);
+            expect(() => fabric.asset("glaze")).toThrow(
+              "The asset `glaze` is not a base64 `data:` URL",
+            );
+          },
+        );
+      });
     });
   });
 

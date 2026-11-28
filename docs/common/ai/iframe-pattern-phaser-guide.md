@@ -349,9 +349,16 @@ pattern passes in as a stream where it can; the guest sends it an event with
 pattern guide is the contract.
 
 Generate textures and simple audio locally when practical. The iframe CSP does
-not allow arbitrary network fetches, so do not load assets from a CDN. For
-larger assets, include data files through the supported pattern program rather
-than inventing a side channel.
+not allow arbitrary network fetches, so do not load assets from a CDN or with
+Phaser's loader. An image, a sprite sheet, or a sound the pattern ships goes to
+the guest through `cf-iframe`'s `assets`. Phaser does not wait for an
+asynchronous `preload()` or `create()`, so decode the images before creating
+the game, `const glaze = await fabric.asset("glaze").image()`, and add each in
+`create()`: an image with `this.textures.addImage("glaze", glaze)`, a sprite
+sheet with `this.textures.addSpriteSheet("hero", hero, { frameWidth: 32,
+frameHeight: 32 })` so that its frames exist. Decode a sound with Web Audio,
+`await audio.decodeAudioData(fabric.asset(name).bytes().buffer)`. See
+[Images and other assets](./iframe-pattern-guide.md#images-and-other-assets).
 
 ## Use operations that match player intent
 

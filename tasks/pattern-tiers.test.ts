@@ -1,5 +1,6 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { dirname, fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   declaredTier,
   hasMarkerLine,
@@ -11,12 +12,14 @@ import {
   withMarker,
 } from "./pattern-tiers.ts";
 import {
+  command,
   isWritable,
   main,
   problemWith,
   runTierCheck,
   staleTableEntries,
 } from "./check-pattern-tiers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * A temporary patterns tree holding one source for every table entry, so a run
@@ -37,7 +40,7 @@ async function completeTierTree(): Promise<string> {
   for (const [file, tier] of Object.entries(TIER_FILES)) {
     await write(file, `${TIER_MARKERS[tier]}\ncode;\n`);
   }
-  await write("examples/counter/counter.tsx", "code;\n");
+  await write("examples/counter/main.tsx", "code;\n");
   return dir;
 }
 
@@ -57,7 +60,7 @@ describe("tierOf", () => {
   });
 
   it("leaves the copyable tiers unmarked", () => {
-    expect(tierOf("examples/counter/counter.tsx")).toBe(undefined);
+    expect(tierOf("examples/counter/main.tsx")).toBe(undefined);
     expect(tierOf("system/home/home.tsx")).toBe(undefined);
     expect(tierOf("system/notes/note.tsx")).toBe(undefined);
   });
@@ -209,14 +212,14 @@ describe("staleTableEntries", () => {
 
   it("reports a directory entry that matches no pattern source", () => {
     // What catches a tiered directory renamed out from under the tables.
-    const stale = staleTableEntries(["examples/counter/counter.tsx"]);
+    const stale = staleTableEntries(["examples/counter/main.tsx"]);
     expect(stale.some((entry) => entry.includes("dev/gideon-tests/"))).toBe(
       true,
     );
   });
 
   it("reports a file entry that is no longer a pattern source", () => {
-    const stale = staleTableEntries(["examples/counter/counter.tsx"]);
+    const stale = staleTableEntries(["examples/counter/main.tsx"]);
     expect(
       stale.some((entry) => entry.includes("dev/factory-outputs/vehicles.ts")),
     ).toBe(true);
@@ -305,7 +308,7 @@ describe("runTierCheck", () => {
     const dir = await completeTierTree();
     try {
       await Deno.writeTextFile(
-        `${dir}/examples/counter/counter.tsx`,
+        `${dir}/examples/counter/main.tsx`,
         `${FIXTURE}\ncode;\n`,
       );
       const report = await runTierCheck(dir, false);
@@ -442,6 +445,106 @@ describe("main", () => {
       });
       expect(code).toBe(1);
       expect(err).toContain("matches no pattern source");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+});
+
+describe("command", () => {
+  it("checks the directory it names, writing only when given --write", async () => {
+    const dir = await completeTierTree();
+    try {
+      const path = `${dir}/dev/gideon-tests/tempting.tsx`;
+      await Deno.writeTextFile(path, "code;\n");
+      let checked = 0;
+      let fixed = 1;
+      await captureConsole(async () => {
+        checked = await command([dir]);
+        expect(await Deno.readTextFile(path)).toBe("code;\n");
+        fixed = await command(["--write", dir]);
+      });
+      expect(checked).toBe(1);
+      expect(fixed).toBe(0);
+      expect(declaredTier(await Deno.readTextFile(path))).toBe("fixture");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("returns 2 with its usage, checking nothing, for an argument that is not a directory", async () => {
+    let code = 0;
+    const { out, err } = await captureConsole(async () => {
+      code = await command(["--help"]);
+    });
+    expect(code).toBe(2);
+    expect(out).toBe("");
+    expect(err).toBe("usage: check-pattern-tiers.ts [--write] [dir]");
+  });
+});
+
+const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
+
+/** Runs the script as a command with `flags`, the way its deno tasks do. */
+async function runScript(
+  flags: string[],
+  args: string[],
+): Promise<{ code: number; out: string; err: string }> {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: REPO_ROOT,
+    args: (lockPath) => [
+      "run",
+      "--config",
+      join(REPO_ROOT, "deno.jsonc"),
+      "--lock",
+      lockPath,
+      ...flags,
+      join(REPO_ROOT, "tasks/check-pattern-tiers.ts"),
+      ...args,
+    ],
+  });
+  const decoder = new TextDecoder();
+  return {
+    code: output.code,
+    out: decoder.decode(output.stdout),
+    err: decoder.decode(output.stderr),
+  };
+}
+
+describe("the script run as a command", () => {
+  // The calls to main() above pass their arguments directly, so they would
+  // still pass if the entry point never ran main, read its arguments wrongly,
+  // or needed permissions the deno tasks do not grant.
+  it("exits 0 for an agreeing tree and 1 for one with an unmarked fixture", async () => {
+    const dir = await completeTierTree();
+    try {
+      const agreeing = await runScript(["--allow-read"], [dir]);
+      expect(agreeing.code).toBe(0);
+      expect(agreeing.out).toContain("agree with the tables");
+
+      const path = `${dir}/dev/gideon-tests/tempting.tsx`;
+      await Deno.writeTextFile(path, "code;\n");
+      const unmarked = await runScript(["--allow-read"], [dir]);
+      expect(unmarked.code).toBe(1);
+      expect(unmarked.err).toContain("dev/gideon-tests/tempting.tsx");
+      expect(await Deno.readTextFile(path)).toBe("code;\n");
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
+  it("writes the missing marker when given --write", async () => {
+    const dir = await completeTierTree();
+    try {
+      const path = `${dir}/dev/gideon-tests/tempting.tsx`;
+      await Deno.writeTextFile(path, "code;\n");
+      const fixed = await runScript(
+        ["--allow-read", "--allow-write"],
+        [dir, "--write"],
+      );
+      expect(fixed.code).toBe(0);
+      expect(fixed.out).toContain("Marked 1 pattern source(s):");
+      expect(declaredTier(await Deno.readTextFile(path))).toBe("fixture");
     } finally {
       await Deno.remove(dir, { recursive: true });
     }

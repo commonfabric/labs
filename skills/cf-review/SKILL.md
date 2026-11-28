@@ -68,9 +68,12 @@ Two failure modes recur when moving fast without the whole picture:
 
 ## Step 1 — Establish scope, then pick your depth
 
-Auto-detect the target: no argument → the local branch vs `main`
-(`BASE=$(git merge-base HEAD origin/main)`, then read `git diff "$BASE"` and
-`git log "$BASE"..HEAD` for intent); a number → that PR (`gh pr view <N>`,
+Auto-detect the target: no argument → the local branch vs `main`. Take `main`
+from `upstream` when the checkout has `refs/remotes/upstream/main`, and from
+`origin` otherwise: in a fork `origin/main` is the fork's stale default branch,
+and diffing against it pulls in every unrelated upstream change. Then
+`BASE=$(git merge-base HEAD <that ref>)`, and read `git diff "$BASE"` and
+`git log "$BASE"..HEAD` for intent. A number → that PR (`gh pr view <N>`,
 `gh pr diff <N>`). Say in a couple of lines what the change does and why, and
 whether its scope is coherent or has leaked. Unclear motivation is a **question
 for the author**, not a defect.
@@ -283,13 +286,15 @@ We modify tests constantly but often can't say _why_ a given test exists. For
 each touched or added test, name the principle it guards; if you can't, that's a
 finding (likely incidental, or testing an implementation detail). A good test
 exposes the intended behavior and reads like a sentence — a user story, not an
-assertion on internals; prefer BDD style (`@std/testing/bdd` `describe` / `it`
-that read as sentences) and `expect()` over `assert*()` — a direction we apply
-inconsistently today, so nudge toward it rather than treat it as a gate. Check
-the cases cover the actual semantic change and its edge / empty / error states,
-and that a removed test dropped dead coverage, not real coverage. Follow the
-repo's testing conventions (`docs/common/ai/pattern-testing-guide.md`); run
-targeted tests while reviewing.
+assertion on internals; prefer BDD style (`describe` / `it` from
+`@commonfabric/test-support/test`, read as sentences) and `expect()` over
+`assert*()` — a direction we apply inconsistently today, so nudge toward it
+rather than treat it as a gate. A test registered with `Deno.test` or through
+`@std/testing/bdd` is a finding: no lane can skip or record it, and the
+`cf-test/registration` lint rule reports it. Check the cases cover the actual
+semantic change and its edge / empty / error states, and that a removed test
+dropped dead coverage, not real coverage. Follow the repo's testing conventions
+(`docs/common/ai/pattern-testing-guide.md`); run targeted tests while reviewing.
 
 ---
 

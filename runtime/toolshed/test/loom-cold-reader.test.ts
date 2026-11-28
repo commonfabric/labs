@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import { Server } from "@commonfabric/memory/v2/server";
 import { ExecutorHost } from "@commonfabric/runner/executor/host";
@@ -17,6 +16,7 @@ import {
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { debugVDOMSchema } from "@commonfabric/runner/schemas";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   genesisAcl,
   LoopbackSessionFactory,

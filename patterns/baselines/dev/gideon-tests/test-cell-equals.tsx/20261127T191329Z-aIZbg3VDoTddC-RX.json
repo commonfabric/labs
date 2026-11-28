@@ -1,0 +1,101 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "description"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "items": {
+        "asCell": [
+          "cell"
+        ],
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "selectedItem": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Item"
+          },
+          {
+            "type": "null"
+          }
+        ],
+        "asCell": [
+          "cell"
+        ]
+      }
+    },
+    "required": [
+      "items",
+      "selectedItem"
+    ],
+    "type": "object"
+  },
+  "pattern": "dev/gideon-tests/test-cell-equals.tsx",
+  "resultSchema": {
+    "$defs": {
+      "Item": {
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "description"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/Item"
+        },
+        "type": "array"
+      },
+      "selectedItem": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/Item"
+          },
+          {
+            "type": "null"
+          }
+        ]
+      }
+    },
+    "required": [
+      "items",
+      "selectedItem",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

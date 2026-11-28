@@ -5,12 +5,17 @@ import {
   type Page,
 } from "@commonfabric/integration";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   initializePiecesController,
   PieceController,
@@ -70,7 +75,7 @@ describe("drag-drop-demo", () => {
       rootPath,
       "examples",
       "drag-drop-demo",
-      "drag-drop-demo.tsx",
+      "main.tsx",
     );
     const program = await resolveLocalProgram(
       (resolver) => cc.runtime.harness.resolve(resolver),

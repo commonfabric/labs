@@ -6,13 +6,18 @@
  * exercised is the naming rather than the build.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import { pieceId, resolvePieceAddress } from "@commonfabric/piece";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, createBuilder, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { newPieceFromCommand } from "../commands/piece.ts";
 import { newPiece } from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";

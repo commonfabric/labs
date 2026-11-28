@@ -2,6 +2,4 @@
 
 import { runAgentsHostCli } from "./src/cli.ts";
 
-if (import.meta.main) {
-  Deno.exit(await runAgentsHostCli());
-}
+if (import.meta.main) Deno.exit(await runAgentsHostCli());

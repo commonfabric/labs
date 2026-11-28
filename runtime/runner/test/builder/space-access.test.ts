@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type {
@@ -17,6 +16,12 @@ import { Server } from "@commonfabric/memory/v2/server";
 import { authorizeLoopbackSessionOpen } from "@commonfabric/memory/v2/session-open-auth";
 import { defer } from "@commonfabric/async/defer";
 import { utf8SortedKeysOf } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { ACLManager } from "../../src/acl-manager.ts";
 import { namesInstancesByDefault } from "../../src/builder/instance-name.ts";
@@ -24,6 +29,7 @@ import { popFrame, pushFrame } from "../../src/builder/pattern.ts";
 import {
   spaceAccess,
   spaceAccessOf,
+  spaceMemberListAt,
   spaceMembers,
 } from "../../src/builder/space-access.ts";
 import type { JSONSchema } from "../../src/builder/types.ts";
@@ -294,6 +300,30 @@ describe("spaceAccess()", () => {
     options: Parameters<typeof callWith>[3] = {},
   ): ReturnType<typeof spaceMembers> {
     return callWith(spaceMembers, runtime, tx, options);
+  }
+
+  /**
+   * A serving runtime holding the space's access list, which names
+   * `alice` alone, after `alice` deletes the space and the runtime has
+   * heard of it.
+   */
+  async function deletedSpaceHolder(): Promise<Runtime> {
+    const setAcl = await aclWriter();
+    await setAcl({ [alice.did()]: "OWNER" });
+    const runtime = servingRuntime();
+    await syncAcl(runtime);
+    expect(callIn(runtime, servedTx(runtime, alice))).toBe("OWNER");
+
+    const heard = Promise.withResolvers<void>();
+    const cancel = runtime.storageManager.subscribeSpaceAccessLoss?.(
+      (lost) => {
+        if (lost === space) heard.resolve();
+      },
+    );
+    await new ACLManager(clientRuntime(alice), space).delete(alice.did());
+    await heard.promise;
+    cancel?.();
+    return runtime;
   }
 
   const resultSchema = {
@@ -622,30 +652,6 @@ describe("spaceAccess()", () => {
     });
 
     describe("once the space is deleted", () => {
-      /**
-       * A serving runtime holding the space's access list, which names
-       * `alice` alone, after `alice` deletes the space and the runtime has
-       * heard of it.
-       */
-      async function deletedSpaceHolder(): Promise<Runtime> {
-        const setAcl = await aclWriter();
-        await setAcl({ [alice.did()]: "OWNER" });
-        const runtime = servingRuntime();
-        await syncAcl(runtime);
-        expect(callIn(runtime, servedTx(runtime, alice))).toBe("OWNER");
-
-        const heard = Promise.withResolvers<void>();
-        const cancel = runtime.storageManager.subscribeSpaceAccessLoss?.(
-          (lost) => {
-            if (lost === space) heard.resolve();
-          },
-        );
-        await new ACLManager(clientRuntime(alice), space).delete(alice.did());
-        await heard.promise;
-        cancel?.();
-        return runtime;
-      }
-
       it("returns `none` to the principal the list its replica kept names", async () => {
         const runtime = await deletedSpaceHolder();
         expect(callIn(runtime, servedTx(runtime, alice))).toBe("none");
@@ -1810,6 +1816,116 @@ describe("spaceAccess()", () => {
           return {};
         })
       ).toThrow("can only be called from a handler or a reactive computation");
+    });
+  });
+
+  describe("spaceMemberListAt()", () => {
+    // The host's reader takes no frame and checks no principal, so each case
+    // calls it with a plain transaction. A client still reads only what the
+    // memory server admits its own session to.
+
+    it("returns every principal the access list names with its level, and the `*` entry apart, on a client", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({
+        [carol.did()]: "READ",
+        "*": "READ",
+        [alice.did()]: "OWNER",
+      });
+
+      const runtime = clientRuntime(bob);
+      await syncAcl(runtime);
+      expect(spaceMemberListAt(runtime, runtime.edit(), space)).toStrictEqual({
+        principals: {
+          [alice.did()]: "OWNER",
+          [carol.did()]: "READ",
+        },
+        anyone: "READ",
+      });
+    });
+
+    it("returns no `anyone` for a list with no `*` entry", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = clientRuntime(bob);
+      await syncAcl(runtime);
+      const list = spaceMemberListAt(runtime, runtime.edit(), space);
+      expect(list).toStrictEqual({
+        principals: { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+      });
+      expect(Object.hasOwn(list!, "anyone")).toBe(false);
+    });
+
+    it("returns `undefined` before the access list has arrived, and for a space that has none", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = clientRuntime(bob);
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toBeUndefined();
+      await syncAcl(runtime);
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toStrictEqual({
+          principals: { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+        });
+
+      const home = carol.did() as MemorySpace;
+      await syncAcl(runtime, home);
+      expect(spaceMemberListAt(runtime, runtime.edit(), home))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` on a client the memory server refuses the space", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER" });
+
+      const runtime = clientRuntime(dave);
+      await syncAcl(runtime);
+      expect(runtime.storageManager.spaceAccessError?.(space)?.name).toBe(
+        "AuthorizationError",
+      );
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toBeUndefined();
+    });
+
+    it("returns `undefined` on a client the memory server refuses the space after it read the list", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = clientRuntime(bob);
+      await syncAcl(runtime);
+      expect(spaceMemberListAt(runtime, runtime.edit(), space)).toBeDefined();
+
+      const heard = Promise.withResolvers<void>();
+      const cancel = runtime.storageManager.subscribeSpaceAccessLoss?.(
+        (lost) => {
+          if (lost === space) heard.resolve();
+        },
+      );
+      await setAcl({ [alice.did()]: "OWNER" });
+      await heard.promise;
+      cancel?.();
+      expect(runtime.storageManager.spaceAccessError?.(space)).toBeDefined();
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toBeUndefined();
+    });
+
+    it("returns the list on a serving runtime, to a transaction that acts for no one", async () => {
+      const setAcl = await aclWriter();
+      await setAcl({ [alice.did()]: "OWNER", [bob.did()]: "WRITE" });
+
+      const runtime = servingRuntime();
+      await syncAcl(runtime);
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toStrictEqual({
+          principals: { [alice.did()]: "OWNER", [bob.did()]: "WRITE" },
+        });
+    });
+
+    it("returns `undefined` on a serving runtime once the space is deleted", async () => {
+      const runtime = await deletedSpaceHolder();
+      expect(spaceMemberListAt(runtime, runtime.edit(), space))
+        .toBeUndefined();
     });
   });
 });

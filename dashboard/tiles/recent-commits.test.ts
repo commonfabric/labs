@@ -1,9 +1,8 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
-import { LOOM_REPO, RECENT_WINDOW, REPO, WEAVER_REPO } from "../config.ts";
+import { CFS_REPO, RECENT_WINDOW, REPO, WEAVER_REPO } from "../config.ts";
 import { staticGitHubCredential } from "../github-auth.ts";
 import { FakeRelay, pushPayload } from "../test/webhook-relay.ts";
 import type { Ctx, Run } from "../types.ts";
@@ -15,6 +14,7 @@ import {
   OrganizationCommits,
   runOutcome,
 } from "./recent-commits.ts";
+import { afterEach, beforeEach, describe, it } from "@commonfabric/test-support/test";
 
 const ORG = REPO.split("/")[0];
 const CREDENTIAL = staticGitHubCredential("test-token");
@@ -232,7 +232,7 @@ describe("recent-commits", () => {
       });
       const rows = commitRows([
         commit(REPO, "a", "2026-09-30T10:00:00Z"),
-        commit(LOOM_REPO, "a", "2026-09-30T09:00:00Z"),
+        commit(CFS_REPO, "a", "2026-09-30T09:00:00Z"),
       ], [dispatched, push]);
       expect(rows.map((row) => row.run?.id)).toEqual([2, undefined]);
     });
@@ -248,7 +248,7 @@ describe("recent-commits", () => {
         }),
         run({
           id: 2,
-          repo: LOOM_REPO,
+          repo: CFS_REPO,
           head_sha: "l",
           event: "workflow_dispatch",
           created_at: "2026-09-30T12:00:00Z",
@@ -273,7 +273,7 @@ describe("recent-commits", () => {
         head_sha: sha,
         conclusion: "failure",
       });
-      const loom = run({ id: 44, repo: LOOM_REPO, head_sha: sha });
+      const cfs = run({ id: 44, repo: CFS_REPO, head_sha: sha });
       const dispatched = run({
         id: 45,
         repo: REPO,
@@ -284,7 +284,7 @@ describe("recent-commits", () => {
         first,
         second,
         failed,
-        loom,
+        cfs,
         dispatched,
       ]);
       const target = new URL(href ?? "", "http://dashboard");
@@ -293,9 +293,9 @@ describe("recent-commits", () => {
       expect(target.searchParams.get("sha")).toBe(sha);
       expect(target.searchParams.getAll("run")).toEqual(["41:1", "42:2"]);
       expect(
-        new URL(commitGanttHref(loom, [loom]) ?? "", "http://dashboard")
+        new URL(commitGanttHref(cfs, [cfs]) ?? "", "http://dashboard")
           .searchParams.get("repo"),
-      ).toBe("loom");
+      ).toBe("cfs");
 
       const weaver = run({ repo: WEAVER_REPO, head_sha: sha });
       expect(commitGanttHref(weaver, [weaver])).toBe(null);
@@ -900,8 +900,8 @@ describe("recent-commits", () => {
             html_url: `https://github.com/${repo}/actions/runs/${id}`,
           });
         const byRepo = (repo: string) =>
-          repo === LOOM_REPO
-            ? [mk(LOOM_REPO, "2026-09-30T11:00:00Z", 7, "loom c (#7)")]
+          repo === CFS_REPO
+            ? [mk(CFS_REPO, "2026-09-30T11:00:00Z", 7, "loom c (#7)")]
             : repo === WEAVER_REPO
             ? [mk(WEAVER_REPO, "2026-09-30T10:00:00Z", 6, "weaver b (#6)")]
             : [
@@ -925,7 +925,7 @@ describe("recent-commits", () => {
         expect(rowsOf(view.extra)[0]).toContain(
           `<a class="evarrow" data-focus-key="pr-arrow-${key}" href="https://github.com/${REPO}/pull/3" target="_blank" rel="noopener" aria-label="Open landed change on GitHub">↗</a>`,
         );
-        expect(rowsOf(view.extra)[2]).toContain("commonfabric-weaver · green · ");
+        expect(rowsOf(view.extra)[2]).toContain("weaver · green · ");
         // The list's scroll position carries over live updates.
         expect(view.extra).toContain(
           '<div class="evscroll" data-focus-key="commits">',
@@ -1025,23 +1025,23 @@ describe("recent-commits", () => {
       it("opens the text of a row whose commit the green branch is or was at with a star, solid only for the commit it is at now", async () => {
         const loom = [
           run({
-            repo: LOOM_REPO,
+            repo: CFS_REPO,
             id: 3,
             head_sha: "3",
             created_at: "2026-09-30T12:00:00Z",
             green: { branch: "main-green", current: true },
           }),
           run({
-            repo: LOOM_REPO,
+            repo: CFS_REPO,
             id: 2,
             head_sha: "2",
             created_at: "2026-09-30T11:00:00Z",
             green: { branch: "main-green", current: false },
           }),
-          run({ repo: LOOM_REPO, id: 1, head_sha: "1" }),
+          run({ repo: CFS_REPO, id: 1, head_sha: "1" }),
         ];
         const view = await createRecentCommits().collect(
-          ctx((repo) => repo === LOOM_REPO ? loom : []),
+          ctx((repo) => repo === CFS_REPO ? loom : []),
         );
         const [current, former, unmarked] = rowsOf(view.extra);
         expect(current).toContain(

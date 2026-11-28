@@ -7,9 +7,9 @@
  * quiet days are quiet at all.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { newestReportedDay, reportLagDays, spendChart } from "../spend.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const DAY = 86_400_000;
 

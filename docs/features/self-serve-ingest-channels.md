@@ -605,7 +605,9 @@ registration or it does not.
 (`#` comments and blank lines ignored), visits each derived id alongside the
 index, and — with `--repair-indexes` — reindexes any that resolve. After it
 runs once, the channel is in the index and every later audit finds it without
-the record.
+the record. A record that cannot be read, or a line that does not name both a
+space and an install id, stops the command with exit status 2 before it
+connects to memory.
 
 Nothing minted from this change onward can join that population: indexing is
 now mandatory and lands in the same transaction as the registration, so there

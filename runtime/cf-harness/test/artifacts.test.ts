@@ -2,12 +2,18 @@ import { checkoutDocsCorpusRoots } from "../src/docs-corpus/corpus.ts";
 import { resolveHarnessSkillsRoot } from "../src/skills/root.ts";
 import { assert, assertEquals, assertThrows } from "@std/assert";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 
 import type { CfcSandboxResult } from "@commonfabric/runner/cfc";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+  test,
+} from "@commonfabric/test-support/test";
 
 import {
   createFileSystemHarnessArtifactStore,
@@ -175,7 +181,7 @@ const cfcInputLabelContains = (
     labelHasConfidentialityValue(entry.label, value);
 };
 
-Deno.test({
+test({
   name:
     "CfHarnessEngine persists run state and tool output artifacts when artifactRoot is configured",
   permissions: { read: true, write: true },
@@ -359,7 +365,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "CfHarnessEngine persists Loom run manifest artifacts",
   permissions: { read: true, write: true },
   async fn() {
@@ -414,7 +420,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop persists the transcript when artifactRoot is configured",
   permissions: { read: true, write: true },
@@ -800,7 +806,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop persists CFC model-context continuity across run artifacts",
   permissions: { read: true, write: true },
@@ -1045,7 +1051,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop persists subagent refs, child artifacts, and report timeline",
   permissions: { read: true, write: true },
@@ -1318,7 +1324,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop keeps raw child failure fields out of parent delegate output",
   permissions: { read: true, write: true },
@@ -1527,7 +1533,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "CfHarnessEngine persists prompt slot binding in run state artifacts",
   permissions: { read: true, write: true },
   async fn() {
@@ -1563,7 +1569,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name: "CfHarnessPromptLoop persists denied tool activity in the run report",
   permissions: { read: true, write: true },
   async fn() {
@@ -1764,7 +1770,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "CfHarnessPromptLoop records output mediation denials in persisted tool activity",
   permissions: { read: true, write: true },
@@ -1883,7 +1889,7 @@ Deno.test({
   },
 });
 
-Deno.test("createFileSystemHarnessArtifactStore rejects path-traversal run ids", () => {
+test("createFileSystemHarnessArtifactStore rejects path-traversal run ids", () => {
   assertThrows(
     () =>
       createFileSystemHarnessArtifactStore({
@@ -1895,7 +1901,7 @@ Deno.test("createFileSystemHarnessArtifactStore rejects path-traversal run ids",
   );
 });
 
-Deno.test({
+test({
   name: "readHarnessRunArtifacts confines transcript loading to the run root",
   permissions: { read: true, write: true },
   async fn() {
@@ -1945,7 +1951,7 @@ Deno.test({
   },
 });
 
-Deno.test({
+test({
   name:
     "filesystem artifact store advertises an image-attachment snapshot dir under its run root",
   permissions: { read: true, write: true },

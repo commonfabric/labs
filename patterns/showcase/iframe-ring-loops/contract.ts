@@ -239,7 +239,19 @@ export const DEFAULT_OUTPUT: IframeOutputData = {
 
 /**
  * How `scripts/write-iframe-wrapper.ts` builds `frame.tsx`: notes shared by the
- * space, settings per user, and a presence room that follows the notes.
+ * space, settings per user, and a presence room that follows the notes. The
+ * same run writes `guest.js`, the bundle of `guest.ts` that `frame.tsx` reads
+ * beside `guest.html`, so a change to this contract or to anything the guest
+ * imports is followed by this, from the repository root:
+ *
+ * ```sh
+ * deno run -A scripts/write-iframe-wrapper.ts \
+ *   --contract patterns/showcase/iframe-ring-loops/contract.ts \
+ *   --guest patterns/showcase/iframe-ring-loops/guest.ts \
+ *   --html patterns/showcase/iframe-ring-loops/guest.html \
+ *   --out patterns/showcase/iframe-ring-loops/frame.tsx --force
+ * deno fmt
+ * ```
  */
 export const IFRAME_PATTERN = {
   name: "RingLoopsFrame",

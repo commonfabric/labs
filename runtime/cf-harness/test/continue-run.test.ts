@@ -3,7 +3,6 @@
  * run id. Scripted model requests and on-disk artifacts expose both sides of
  * the boundary; the predecessor's files must remain unchanged.
  */
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
@@ -13,6 +12,12 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   buildCfHarnessBatchSystemPrompt,
@@ -1140,9 +1145,15 @@ describe("continue-run", () => {
         ];
         expect(await run(flags)).toBe(1);
         expect(requests).toHaveLength(1);
-        const system = requests[0].transcript.filter((message) =>
+        const systemMessages = requests[0].transcript.filter((message) =>
           message.role === "system"
-        ).map((message) => message.content).join("\n");
+        ).map((message) => message.content);
+        expect(systemMessages).toHaveLength(2);
+        expect(systemMessages[0]).not.toContain("Result schema (JSON):");
+        expect(systemMessages[1]).toBe(
+          'Result schema (JSON):\n{"type":"string"}',
+        );
+        const system = systemMessages.join("\n");
         expect(system).toContain("/workspace/new-result.json");
         expect(system).not.toContain("old-result.json");
         expect(system).toContain(
@@ -1403,7 +1414,10 @@ describe("continue-run", () => {
       const systems = requests[0].transcript.filter((message) =>
         message.role === "system"
       );
-      expect(systems).toHaveLength(1);
+      expect(systems).toHaveLength(2);
+      expect(systems[1].content).toBe(
+        'Result schema (JSON):\n{"type":"string"}',
+      );
       const system = systems[0].content;
       expect(system).toContain(
         "You are cf-harness, an autonomous agent harness",

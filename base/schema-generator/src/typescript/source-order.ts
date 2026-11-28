@@ -118,29 +118,22 @@ function literalNodeKey(
     case ts.SyntaxKind.FalseKeyword:
     case ts.SyntaxKind.NullKeyword:
       return "keyword";
-    case ts.SyntaxKind.NumericLiteral:
-      return { tier: 0, key: Number((literal as ts.NumericLiteral).text) };
-    case ts.SyntaxKind.BigIntLiteral:
-      return {
-        tier: 1,
-        key: BigInt((literal as ts.BigIntLiteral).text.slice(0, -1)),
-      };
-    case ts.SyntaxKind.StringLiteral:
-      return { tier: 2, key: (literal as ts.StringLiteral).text };
-    case ts.SyntaxKind.PrefixUnaryExpression: {
-      const unary = literal as ts.PrefixUnaryExpression;
-      if (unary.operator !== ts.SyntaxKind.MinusToken) return undefined;
-      if (ts.isNumericLiteral(unary.operand)) {
-        return { tier: 0, key: -Number(unary.operand.text) };
-      }
-      if (ts.isBigIntLiteral(unary.operand)) {
-        return { tier: 1, key: -BigInt(unary.operand.text.slice(0, -1)) };
-      }
-      return undefined;
-    }
-    default:
-      return undefined;
   }
+  // The checker prints a negative number or bigint as a `-` before the
+  // literal of its magnitude.
+  const negative = ts.isPrefixUnaryExpression(literal) &&
+    literal.operator === ts.SyntaxKind.MinusToken;
+  const magnitude = negative ? literal.operand : literal;
+  const sign = negative ? -1 : 1;
+  if (ts.isNumericLiteral(magnitude)) {
+    return { tier: 0, key: sign * Number(magnitude.text) };
+  }
+  if (ts.isBigIntLiteral(magnitude)) {
+    return { tier: 1, key: BigInt(sign) * BigInt(magnitude.text.slice(0, -1)) };
+  }
+  return ts.isStringLiteralLike(literal)
+    ? { tier: 2, key: literal.text }
+    : undefined;
 }
 
 /**
@@ -446,14 +439,14 @@ function writtenMappedKeys(
 
 /**
  * The property name the literal key `key` writes, as the checker names the
- * property a mapped type makes for it: a string as written, a number in its
- * canonical form (`1.0` names `"1"`, `-1` names `"-1"`). Returns `undefined`
- * for any other key.
+ * property a mapped type makes for it: a string as written, in quotes or in
+ * backquotes, and a number in its canonical form (`1.0` names `"1"`, `-1`
+ * names `"-1"`). Returns `undefined` for any other key.
  */
 function propertyNameOfKey(key: ts.TypeNode): string | undefined {
   if (!ts.isLiteralTypeNode(key)) return undefined;
   const { literal } = key;
-  if (ts.isStringLiteral(literal)) return literal.text;
+  if (ts.isStringLiteralLike(literal)) return literal.text;
   if (ts.isNumericLiteral(literal)) return String(Number(literal.text));
   if (
     ts.isPrefixUnaryExpression(literal) &&
@@ -571,6 +564,8 @@ enum Structure {
   Object,
   Intersection,
   Union,
+  TemplateLiteral,
+  StringMapping,
   Other,
 }
 
@@ -609,8 +604,10 @@ type SymbolWithInternals = ts.Symbol & {
  * node writing it and what instantiated it; an instantiation of an object
  * type a source declares, as a generic function's return type is, by what
  * instantiated it (`instantiationArguments()`); an intersection or a union
- * by its members; and an object no source declares, as the checker builds
- * for a spread, by its properties' names and then their types.
+ * by its members; an object no source declares, as the checker builds for a
+ * spread, by its properties' names and then their types; a template literal
+ * type by its text and then the types written between it; and a string
+ * mapping, as `Uppercase<T>` is, by the type it maps.
  *
  * Each part is compared by `compareTypes()` in `state`, however deep: a pair
  * met again inside its own comparison is equal so far, which ends a
@@ -675,6 +672,18 @@ function compareStructureOnce(
       );
     case Structure.Object:
       return compareUndeclaredObjects(left, right, state);
+    case Structure.TemplateLiteral: {
+      const leftTemplate = left as ts.TemplateLiteralType;
+      const rightTemplate = right as ts.TemplateLiteralType;
+      return compareStringLists(leftTemplate.texts, rightTemplate.texts) ||
+        compareTypeLists(leftTemplate.types, rightTemplate.types, state);
+    }
+    case Structure.StringMapping:
+      return compareTypes(
+        (left as ts.StringMappingType).type,
+        (right as ts.StringMappingType).type,
+        state,
+      );
     default:
       return 0;
   }
@@ -732,6 +741,10 @@ function compareAliases(
 function structureOf(type: ts.Type): Structure {
   if (type.flags & ts.TypeFlags.Intersection) return Structure.Intersection;
   if (type.flags & ts.TypeFlags.Union) return Structure.Union;
+  if (type.flags & ts.TypeFlags.TemplateLiteral) {
+    return Structure.TemplateLiteral;
+  }
+  if (type.flags & ts.TypeFlags.StringMapping) return Structure.StringMapping;
   if (type.flags & ts.TypeFlags.Object) {
     const objectFlags = (type as ts.ObjectType).objectFlags;
     if (objectFlags & ts.ObjectFlags.Reference) return Structure.Reference;

@@ -1,10 +1,12 @@
 import { assertEquals, assertStringIncludes } from "@std/assert";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { stub } from "@std/testing/mock";
 
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { compileMain, runCompileTypeLib, USAGE } from "./compile-type-lib.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("compileMain resolves references and strips withheld globals", async () => {
+test("compileMain resolves references and strips withheld globals", async () => {
   // The compiler resolves `/// <reference lib="...">` directives and emits one
   // file, dropping the withheld-global declarations on the way out. This
   // exercises that end to end against a temporary library rather than the real
@@ -36,7 +38,7 @@ Deno.test("compileMain resolves references and strips withheld globals", async (
   }
 });
 
-Deno.test("compileMain includes a library two others reference once", async () => {
+test("compileMain includes a library two others reference once", async () => {
   const dir = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(
@@ -66,7 +68,7 @@ Deno.test("compileMain includes a library two others reference once", async () =
   }
 });
 
-Deno.test("runCompileTypeLib writes the es2023 library given both paths", async () => {
+test("runCompileTypeLib writes the es2023 library given both paths", async () => {
   const dir = await Deno.makeTempDir();
   try {
     await Deno.writeTextFile(
@@ -85,7 +87,7 @@ Deno.test("runCompileTypeLib writes the es2023 library given both paths", async 
   }
 });
 
-Deno.test("runCompileTypeLib prints its usage and fails without both paths", async () => {
+test("runCompileTypeLib prints its usage and fails without both paths", async () => {
   using log = stub(console, "log");
 
   assertEquals(await runCompileTypeLib([]), 1);
@@ -97,4 +99,51 @@ Deno.test("runCompileTypeLib prints its usage and fails without both paths", asy
     [USAGE],
     [USAGE],
   ]);
+});
+
+/** Runs the script as a program, as its shebang does. */
+async function runScript(args: string[]) {
+  const { code, stdout } = await runDenoCommandWithTemporaryLock({
+    root: fromFileUrl(new URL("../../../", import.meta.url)),
+    args: (lock) => [
+      "run",
+      "--cached-only",
+      "--frozen=true",
+      `--lock=${lock}`,
+      "--allow-read",
+      "--allow-write",
+      fromFileUrl(new URL("compile-type-lib.ts", import.meta.url)),
+      ...args,
+    ],
+  });
+  return { code, stdout: new TextDecoder().decode(stdout) };
+}
+
+test("compile-type-lib.ts run as a program prints its usage and exits 1 without both paths", async () => {
+  const { code, stdout } = await runScript([]);
+
+  assertEquals(code, 1);
+  assertEquals(stdout, `${USAGE}\n`);
+});
+
+test("compile-type-lib.ts run as a program writes the compiled library and exits 0", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await Deno.writeTextFile(
+      join(dir, "es2023.d.ts"),
+      "declare var Keep: number;\r\n",
+    );
+    const outFile = join(dir, "out.d.ts");
+
+    const { code, stdout } = await runScript([dir, outFile]);
+
+    assertEquals(code, 0);
+    assertEquals(stdout, "");
+    assertStringIncludes(
+      await Deno.readTextFile(outFile),
+      "declare var Keep: number;",
+    );
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
 });

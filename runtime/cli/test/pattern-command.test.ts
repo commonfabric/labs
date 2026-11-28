@@ -1,11 +1,18 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+import { ValidationError } from "@cliffy/command";
 import { join } from "@std/path";
 import { Identity } from "@commonfabric/identity";
 import { PatternIndexClient } from "@commonfabric/pattern-index/client";
 import { PatternIndexStore } from "@commonfabric/pattern-index/store";
-import { gitUncommitted, mine } from "../commands/pattern.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { gitUncommitted, mine, pattern } from "../commands/pattern.ts";
 import type { IndexDeps } from "../commands/pattern-index.ts";
+import { IdentityKeyfileError } from "../lib/identity.ts";
 import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
 
 const git = async (cwd: string, ...args: string[]) => {
@@ -151,9 +158,9 @@ describe("pattern", () => {
       expect(rendered).toEqual([{
         value: [
           "about id-mine  id-mine",
-          `  unlisted: run cf pattern share ${
+          `  not shared: run cf pattern share ${
             join(dir, "bins.tsx")
-          } to request a listing`,
+          } to share it on beta, by link`,
         ].join("\n"),
         json: undefined,
       }]);
@@ -182,6 +189,37 @@ describe("pattern", () => {
         mine({ identity: keyPath, patternIndexUrl: BASE }, deps),
       ).rejects.toThrow("join with your invite link");
       expect(rendered).toEqual([]);
+    });
+  });
+
+  describe("the link command", () => {
+    const parse = (...args: string[]) =>
+      pattern.reset().throwErrors().noExit().parse(["link", ...args]);
+
+    it("throws a usage error for --beta together with --number, in either order", async () => {
+      for (
+        const args of [
+          ["--beta", "--number", "1"],
+          ["--number", "1", "--beta"],
+        ]
+      ) {
+        const error = await parse(...args, "main.tsx").catch((e) => e);
+        expect(error).toBeInstanceOf(ValidationError);
+        expect(error.message).toBe(
+          'Option "--beta" conflicts with option "--number".',
+        );
+      }
+    });
+
+    it("accepts --beta on its own, going on to load the identity", async () => {
+      const dir = await Deno.makeTempDir();
+      try {
+        await expect(
+          parse("--beta", "-i", join(dir, "missing.key"), "main.tsx"),
+        ).rejects.toThrow(IdentityKeyfileError);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 });

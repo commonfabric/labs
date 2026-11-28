@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { spy } from "@std/testing/mock";
 
 import type { JSONSchemaObj, JSONValue } from "@commonfabric/api";
@@ -8,9 +7,20 @@ import { internSchema } from "@commonfabric/data-model-schema";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { popFrame, pushFrame } from "../src/builder/pattern.ts";
 import { JSONSchema } from "../src/builder/types.ts";
+import type { CfcLabelView } from "../src/cfc/label-view-core.ts";
+import {
+  linkCfcLabelView,
+  withLinkCfcLabelView,
+} from "../src/cfc/link-label-view.ts";
 import { createRef } from "../src/create-ref.ts";
 import {
   applyChangeSet,
@@ -1340,6 +1350,72 @@ describe("data-updating", () => {
       expect(isSigilLink(
         tx.readValueOrThrow(holder.key("addressed").getAsNormalizedFullLink()),
       )).toBe(true);
+    });
+
+    describe("a link carrying a label view", () => {
+      const view: CfcLabelView = {
+        version: 1,
+        entries: [{ path: [], label: { integrity: ["carried-view"] } }],
+      };
+
+      /** The label views recorded with the link writes `tx` holds. */
+      const linkWriteViews = () =>
+        tx.getCfcState().writePolicyInputs.flatMap((input) =>
+          input.kind === "link-write" ? [input.cfcLabelView] : []
+        );
+
+      // Writes `link`, and then the same link carrying `view`, into slots of
+      // their own, and returns the change each write produced.
+      const writeWithAndWithoutView = (
+        name: string,
+        overwrite?: "redirect",
+      ) => {
+        const holder = runtime.getCell<Record<string, unknown>>(
+          space,
+          `${name} holder`,
+          undefined,
+          tx,
+        );
+        holder.set({});
+        const source = runtime.getCell(space, `${name} source`, undefined, tx)
+          .getAsNormalizedFullLink();
+        const link = createSigilLinkFromParsedLink({ ...source, overwrite });
+        const [plain] = normalizeAndDiff(
+          runtime,
+          tx,
+          holder.key("plain").getAsNormalizedFullLink(),
+          link,
+        );
+        const [viewed] = normalizeAndDiff(
+          runtime,
+          tx,
+          holder.key("viewed").getAsNormalizedFullLink(),
+          withLinkCfcLabelView(link, view),
+        );
+        return { link, plain, viewed };
+      };
+
+      for (const overwrite of [undefined, "redirect"] as const) {
+        const kind = overwrite ?? "plain";
+
+        it(`stores a ${kind} link without the view and records the view for the write`, () => {
+          const { link, plain, viewed } = writeWithAndWithoutView(
+            `carried view ${kind} link`,
+            overwrite,
+          );
+
+          // A link without a view is written as it is.
+          expect(plain.value).toBe(link);
+          // The viewed link is written as the same link, without the view.
+          expect(viewed.value).not.toBe(link);
+          expect(viewed.value).toEqual(link);
+          expect(isSigilLink(viewed.value)).toBe(true);
+          if (!isSigilLink(viewed.value)) return;
+          expect(linkCfcLabelView(viewed.value)).toBeUndefined();
+          // The view reaches the write's policy input, and only that write's.
+          expect(linkWriteViews()).toEqual([undefined, view]);
+        });
+      }
     });
   });
 

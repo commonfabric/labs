@@ -7,6 +7,7 @@ import { Database } from "@db/sqlite";
 
 import type { DiscoveredSpace } from "../discover.ts";
 import { describeIdentity } from "../identity.ts";
+import { test } from "@commonfabric/test-support/test";
 
 const SCHEMA = `
 CREATE TABLE "commit" (
@@ -53,7 +54,7 @@ function disc(path: string): DiscoveredSpace {
   return { did, path, sizeBytes: 0, mtimeMs: 0 };
 }
 
-Deno.test("identity world: spaces + owned scopes", async (t) => {
+test("identity world: spaces + owned scopes", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-identity-" });
   const homePath = `${dir}/${HOME}.sqlite`;
   const profilePath = `${dir}/${PROFILE}.sqlite`;

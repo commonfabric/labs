@@ -148,21 +148,16 @@ export class NativeTypeFormatter implements TypeFormatter {
       : NATIVE_TYPE_SCHEMAS[typeName!];
     // TODO(danfuzz): `structuredClone()` mangles non-JSON `FabricValue`s —
     // harmless while `NATIVE_TYPE_SCHEMAS` are plain JSON, but a problem once
-    // schema-generator covers the full `FabricValue` spectrum. See the matching
-    // note on `cloneSchemaDefinition()` re: a FabricValue-aware clone and
-    // whether mutability is even needed.
+    // schema-generator covers the full `FabricValue` spectrum. It then needs a
+    // FabricValue-aware clone; also revisit whether a freely-mutable result is
+    // required at all, since an immutable base plus `cloneForMutation()` for
+    // scoped edits is a safer pattern.
     return (typeof schema === "boolean" ? schema : structuredClone(schema!));
   }
 
   static #getTypeName(type: ts.Type): string | undefined {
-    // Prefer direct symbol name; fall back to target symbol for TypeReference
-    const symbol = type.symbol;
-    let name = symbol?.name;
-    const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
-    if (!name && (objectFlags & ts.ObjectFlags.Reference)) {
-      const ref = type as unknown as ts.TypeReference;
-      name = ref.target?.symbol?.name ?? name;
-    }
+    // A type reference has its target's symbol, so the symbol names it.
+    let name = type.symbol?.name;
     // Known compiler-internal anonymous type names
     // Using a minimal whitelist - only block the most common cases we know are problematic.
     // Fail open: if uncertain, let it through rather than break user code (like GraphQL __Schema types).
@@ -194,18 +189,6 @@ export class NativeTypeFormatter implements TypeFormatter {
     return name;
   }
 
-  static #getTypeSymbol(type: ts.Type): ts.Symbol | undefined {
-    if (type.symbol) return type.symbol;
-
-    const objectFlags = (type as ts.ObjectType).objectFlags ?? 0;
-    if (objectFlags & ts.ObjectFlags.Reference) {
-      const ref = type as unknown as ts.TypeReference;
-      return ref.target?.symbol;
-    }
-
-    return type.aliasSymbol;
-  }
-
   /**
    * Whether the name is one a concrete `FabricPrimitive` class is declared
    * under, which is the name a TypeScript type referring to the class has.
@@ -230,12 +213,16 @@ export class NativeTypeFormatter implements TypeFormatter {
     );
   }
 
+  /**
+   * Whether `type`'s symbol is declared in a default library. A union, as
+   * the library's `ArrayBufferLike` is, has no symbol: the union formatter
+   * reads its members, each a native type here.
+   */
   static #hasLibraryDeclaration(
     type: ts.Type,
     context: GenerationContext,
   ): boolean {
-    const symbol = NativeTypeFormatter.#getTypeSymbol(type);
-    return symbol?.declarations?.some((declaration) =>
+    return type.symbol?.declarations?.some((declaration) =>
       isDefaultLibrarySourceFile(declaration.getSourceFile(), context)
     ) ?? false;
   }

@@ -17,7 +17,7 @@ import {
   hasExactText,
   hasText,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Cheeseboard from "./cheeseboard.tsx";
+import Cheeseboard from "./main.tsx";
 
 const PAGE = [
   "# Pizza schedule",

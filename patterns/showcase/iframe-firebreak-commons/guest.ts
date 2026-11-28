@@ -590,7 +590,6 @@ const stops = [
 ];
 
 function dispose(): void {
-  if (disposed) return;
   disposed = true;
   abort.abort();
   stops.forEach((stop) => stop());

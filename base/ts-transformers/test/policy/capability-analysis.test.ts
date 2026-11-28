@@ -7,45 +7,11 @@ import {
   type MergeablePushMisuse,
 } from "../../src/policy/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
-
-function collectMergeablePushMisuses(
-  source: string,
-): MergeablePushMisuse[] {
-  const findings: MergeablePushMisuse[] = [];
-  analyzeFunctionCapabilities(parseFirstCallback(source), {
-    mergeablePushMisuseSink: (finding) => findings.push(finding),
-  });
-  return findings;
-}
-
-function parseFirstCallback(
-  source: string,
-): ts.ArrowFunction | ts.FunctionExpression {
-  const file = ts.createSourceFile(
-    "/test.ts",
-    source,
-    ts.ScriptTarget.ESNext,
-    true,
-    ts.ScriptKind.TS,
-  );
-
-  let callback: ts.ArrowFunction | ts.FunctionExpression | undefined;
-  const visit = (node: ts.Node): void => {
-    if (callback) return;
-    if (ts.isArrowFunction(node) || ts.isFunctionExpression(node)) {
-      callback = node;
-      return;
-    }
-    ts.forEachChild(node, visit);
-  };
-  visit(file);
-
-  if (!callback) {
-    throw new Error("Expected a callback expression in test source.");
-  }
-
-  return callback;
-}
+import {
+  collectMergeablePushMisuses,
+  parseFirstCallback,
+} from "../first-callback.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgramWithSource(source: string): {
   program: ts.Program;
@@ -178,7 +144,7 @@ function getPaths(
   };
 }
 
-Deno.test("Capability analysis tracks alias assignment chains", () => {
+test("Capability analysis tracks alias assignment chains", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       const alias = input;
@@ -194,7 +160,7 @@ Deno.test("Capability analysis tracks alias assignment chains", () => {
   assert(input.readPaths.includes("user.name"));
 });
 
-Deno.test("TypeScript exposes accessor fields as property declarations", () => {
+test("TypeScript exposes accessor fields as property declarations", () => {
   const file = ts.createSourceFile(
     "/test.ts",
     `
@@ -237,7 +203,7 @@ class Example {
   );
 });
 
-Deno.test("Capability analysis tracks object destructure aliases", () => {
+test("Capability analysis tracks object destructure aliases", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       const { foo, bar: b, user: { name } } = input;
@@ -253,7 +219,7 @@ Deno.test("Capability analysis tracks object destructure aliases", () => {
   assert(input.readPaths.includes("user.name"));
 });
 
-Deno.test("Capability analysis does not descend into nested callbacks", () => {
+test("Capability analysis does not descend into nested callbacks", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       const local = () => input.hidden;
@@ -268,7 +234,7 @@ Deno.test("Capability analysis does not descend into nested callbacks", () => {
   assert(!input.readPaths.includes("hidden"));
 });
 
-Deno.test(
+test(
   "Capability analysis counts outer captures used inside inline array callbacks",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -300,7 +266,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis counts outer captures used inside other eager array callbacks",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -351,7 +317,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps opaque helper callbacks out of outer summaries",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -379,7 +345,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps dotted literal keys distinct from nested member paths",
   () => {
     const fn = parseFirstCallback(
@@ -401,7 +367,7 @@ Deno.test(
   },
 );
 
-Deno.test("Capability analysis tracks reassignment aliases", () => {
+test("Capability analysis tracks reassignment aliases", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       let current = input;
@@ -417,7 +383,7 @@ Deno.test("Capability analysis tracks reassignment aliases", () => {
   assert(input.readPaths.includes("user.name"));
 });
 
-Deno.test("Capability analysis tracks object assignment pattern aliases", () => {
+test("Capability analysis tracks object assignment pattern aliases", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       let name;
@@ -435,7 +401,7 @@ Deno.test("Capability analysis tracks object assignment pattern aliases", () => 
   assert(input.readPaths.includes("profile.title"));
 });
 
-Deno.test("Capability analysis treats array assignment patterns as wildcard", () => {
+test("Capability analysis treats array assignment patterns as wildcard", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       let first;
@@ -449,7 +415,7 @@ Deno.test("Capability analysis treats array assignment patterns as wildcard", ()
   assertEquals(input.wildcard, true);
 });
 
-Deno.test("Capability analysis reads the prefix above a dynamic alias key in full", () => {
+test("Capability analysis reads the prefix above a dynamic alias key in full", () => {
   const fn = parseFirstCallback(
     `const fn = (input, key) => {
       const alias = input.offers;
@@ -464,7 +430,7 @@ Deno.test("Capability analysis reads the prefix above a dynamic alias key in ful
   assertEquals(input.fullShapePaths, ["offers"]);
 });
 
-Deno.test(
+test(
   "Capability analysis: an unknown access does not erase non-overlapping identity paths",
   () => {
     // Closure captures share one synthetic root state, so an unknown access
@@ -495,7 +461,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis: a root-scoped unknown access still erases element identity paths",
   () => {
     // The CT-1639 removal idiom: a dynamic element access through a
@@ -521,7 +487,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis: an unknown access still erases the root-length identity path",
   () => {
     // The whole-root comparison overlaps whatever the unknown access may
@@ -542,7 +508,7 @@ Deno.test(
   },
 );
 
-Deno.test("Capability analysis tracks template literal and numeric key paths", () => {
+test("Capability analysis tracks template literal and numeric key paths", () => {
   const fn = parseFirstCallback(
     "const fn = (input) => input.key(`profile`).key(0).get();",
   );
@@ -554,7 +520,7 @@ Deno.test("Capability analysis tracks template literal and numeric key paths", (
   assertEquals(input.wildcard, false);
 });
 
-Deno.test("Capability analysis tracks boolean wrapper conditions", () => {
+test("Capability analysis tracks boolean wrapper conditions", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       for (; (input.ready as boolean)!; ) {
@@ -573,7 +539,7 @@ Deno.test("Capability analysis tracks boolean wrapper conditions", () => {
   assert(input.readPaths.includes("alt"));
 });
 
-Deno.test("Capability analysis marks object assignment spreads as wildcard", () => {
+test("Capability analysis marks object assignment spreads as wildcard", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       let value;
@@ -590,7 +556,7 @@ Deno.test("Capability analysis marks object assignment spreads as wildcard", () 
   assertEquals(input.wildcard, true);
 });
 
-Deno.test("Capability analysis treats elementById as a wildcard array read", () => {
+test("Capability analysis treats elementById as a wildcard array read", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => input.elementById("k1").get();`,
   );
@@ -602,7 +568,7 @@ Deno.test("Capability analysis treats elementById as a wildcard array read", () 
   assertEquals(input.wildcard, true);
 });
 
-Deno.test("Capability analysis does not record method names as read paths", () => {
+test("Capability analysis does not record method names as read paths", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => input.get().foo;`,
   );
@@ -615,7 +581,7 @@ Deno.test("Capability analysis does not record method names as read paths", () =
   assert(!input.readPaths.includes(""));
 });
 
-Deno.test("Capability analysis tracks destructured parameter paths", () => {
+test("Capability analysis tracks destructured parameter paths", () => {
   const fn = parseFirstCallback(
     `const fn = (_, { input }) => input.key("foo").get();`,
   );
@@ -627,7 +593,7 @@ Deno.test("Capability analysis tracks destructured parameter paths", () => {
   assertEquals(params.wildcard, false);
 });
 
-Deno.test("Capability analysis classifies write-only usage", () => {
+test("Capability analysis classifies write-only usage", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       input.key("count").set(1);
@@ -641,7 +607,7 @@ Deno.test("Capability analysis classifies write-only usage", () => {
   assertEquals(input.readPaths.length, 0);
 });
 
-Deno.test("Capability analysis classifies read+write usage as writable", () => {
+test("Capability analysis classifies read+write usage as writable", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       input.key("count").set(input.key("count").get() + 1);
@@ -656,7 +622,7 @@ Deno.test("Capability analysis classifies read+write usage as writable", () => {
   assert(input.writePaths.includes("count"));
 });
 
-Deno.test("Capability analysis classifies update-only usage as writeonly", () => {
+test("Capability analysis classifies update-only usage as writeonly", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       input.key("profile").update({ name: "Ada" });
@@ -670,7 +636,7 @@ Deno.test("Capability analysis classifies update-only usage as writeonly", () =>
   assertEquals(input.readPaths.length, 0);
 });
 
-Deno.test("Capability analysis classifies push-only usage as writeonly", () => {
+test("Capability analysis classifies push-only usage as writeonly", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       input.key("items").push({ id: "1" });
@@ -684,7 +650,7 @@ Deno.test("Capability analysis classifies push-only usage as writeonly", () => {
   assertEquals(input.readPaths.length, 0);
 });
 
-Deno.test("Capability analysis reads the whole list passed to pushAll", () => {
+test("Capability analysis reads the whole list passed to pushAll", () => {
   // `xs === input.prev` makes `other` identity-compared, so an element pushed
   // by `push(xs)` stays an identity use; `pushAll(xs)` stores every element of
   // the list, so the list is read in full.
@@ -709,7 +675,7 @@ Deno.test("Capability analysis reads the whole list passed to pushAll", () => {
   assert(!push.fullShapePaths.includes("other"));
 });
 
-Deno.test("Capability analysis classifies removeAll-only usage as writeonly", () => {
+test("Capability analysis classifies removeAll-only usage as writeonly", () => {
   const fn = parseFirstCallback(
     `const fn = (input, item) => {
       input.key("items").removeAll(item);
@@ -723,7 +689,7 @@ Deno.test("Capability analysis classifies removeAll-only usage as writeonly", ()
   assertEquals(input.readPaths.length, 0);
 });
 
-Deno.test("Capability analysis keeps opaque derivation methods opaque", () => {
+test("Capability analysis keeps opaque derivation methods opaque", () => {
   const fn = parseFirstCallback(
     `const fn = (input, mapper) => {
       input.map(mapper);
@@ -743,7 +709,7 @@ Deno.test("Capability analysis keeps opaque derivation methods opaque", () => {
   assertEquals(input.wildcard, false);
 });
 
-Deno.test(
+test(
   "Capability analysis records nested opaque derivation methods without reads",
   () => {
     const fn = parseFirstCallback(
@@ -762,7 +728,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis treats dynamic opaque derivation receivers as wildcard",
   () => {
     const fn = parseFirstCallback(
@@ -779,7 +745,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps root derivation plus equality usage opaque",
   () => {
     const fn = parseFirstCallback(
@@ -798,7 +764,7 @@ Deno.test(
   },
 );
 
-Deno.test("Capability analysis classifies pure passthrough as opaque", () => {
+test("Capability analysis classifies pure passthrough as opaque", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       const alias = input;
@@ -815,7 +781,7 @@ Deno.test("Capability analysis classifies pure passthrough as opaque", () => {
   assertEquals(input.identityOnly, false);
 });
 
-Deno.test("Capability analysis marks root call arguments as wildcard", () => {
+test("Capability analysis marks root call arguments as wildcard", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       consume(input);
@@ -831,7 +797,7 @@ Deno.test("Capability analysis marks root call arguments as wildcard", () => {
   assertEquals(input.writePaths.length, 0);
 });
 
-Deno.test(
+test(
   "Capability analysis treats new-expression root arguments as passthrough",
   () => {
     const fn = parseFirstCallback(
@@ -850,7 +816,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis interprocedural propagation tracks callee reads in compute mode",
   () => {
     const source = `const helper = (value) => value.foo;
@@ -871,7 +837,7 @@ const fn = (input) => helper(input);`;
   },
 );
 
-Deno.test(
+test(
   "Capability analysis interprocedural propagation tracks root opaque use",
   () => {
     const source = `import { type Cell } from "commonfabric";
@@ -901,7 +867,7 @@ const fn = (input: Cell<string[]>, other: Cell<string[]>, mapper: (value: string
   },
 );
 
-Deno.test(
+test(
   "Capability analysis without interprocedural propagation keeps conservative wildcard",
   () => {
     const source = `const helper = (value) => value.foo;
@@ -919,7 +885,7 @@ const fn = (input) => helper(input);`;
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent from imported Writable parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -954,7 +920,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent for a nullable imported Writable parameter",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -988,7 +954,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent for a null-and-undefined imported Writable parameter",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1024,7 +990,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent from imported WriteonlyCell parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1060,7 +1026,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis widens to its list an imported WriteonlyCell argument a run-time index picks",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1100,7 +1066,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records a comparison, and no read, from imported ComparableCell parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1136,7 +1102,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps a member-access WriteonlyCell argument write-only",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1172,7 +1138,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not record write intent from imported Cell parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1207,7 +1173,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis charges a write through a resolved cell to its receiver",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1237,7 +1203,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps a resolved cell's receiver whole beside a narrower read",
   () => {
     // `sentAt` is read on the receiver and `body` through the resolved cell;
@@ -1270,7 +1236,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis ignores imported Writable type names from other libraries",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1304,7 +1270,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis selects the Writable overload for imported clients",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1346,7 +1312,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent from imported Writable constructors",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1382,7 +1348,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not record write intent from imported Cell constructors",
   () => {
     // A constructor whose auth parameter is declared bare `Cell<Auth>` does not
@@ -1422,7 +1388,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not record write intent for unmatched extra arguments",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1455,7 +1421,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis reads a generic constraint to classify an imported parameter",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1490,7 +1456,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis reads a ReadonlyCell generic constraint as readonly",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1524,7 +1490,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent for imported Writable rest parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1558,7 +1524,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent for imported Array rest parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1592,7 +1558,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records write intent for imported readonly-array rest parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1626,7 +1592,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not map array spreads to imported fixed parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1673,7 +1639,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis maps spread calls to imported Writable rest parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1719,7 +1685,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis expands a fixed tuple spread into imported fixed parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1756,7 +1722,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis maps each fixed tuple spread element to its own parameter capability",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1796,7 +1762,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not expand a variable-length array spread into imported fixed parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1833,7 +1799,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps a tuple spread with a non-cell position conservatively read",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1873,7 +1839,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis maps a leading fixed argument before a fixed tuple spread",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1918,7 +1884,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis advances past a single-element tuple spread to a trailing argument",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -1963,7 +1929,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis stays conservative for a variadic tuple spread into fixed parameters",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -2002,7 +1968,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis wildcards a dynamically indexed fixed tuple spread",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -2048,7 +2014,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis maps writeonly, comparable, and opaque fixed tuple positions",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -2106,7 +2072,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis records nothing for a parenthesis-free imported construction",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -2146,7 +2112,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis shrinks a root cell to readonly for a ReadonlyCell parameter",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -2186,7 +2152,7 @@ Deno.test(
   },
 );
 
-Deno.test("Capability analysis marks for...in over tracked source as wildcard", () => {
+test("Capability analysis marks for...in over tracked source as wildcard", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       for (const key in input) {
@@ -2200,7 +2166,7 @@ Deno.test("Capability analysis marks for...in over tracked source as wildcard", 
   assertEquals(input.wildcard, true);
 });
 
-Deno.test(
+test(
   "Capability analysis keeps bare for...of element uses path-specific",
   () => {
     const fn = parseFirstCallback(
@@ -2218,7 +2184,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps ?? fallback aliases path-specific through for...of item reads",
   () => {
     const fn = parseFirstCallback(
@@ -2238,7 +2204,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis follows right-hand ?? fallback aliases through for...of item reads",
   () => {
     const fn = parseFirstCallback(
@@ -2259,7 +2225,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis binds plain array callback items back to source element paths",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2293,7 +2259,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis follows tracked values through local Map set/get",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2327,7 +2293,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis follows tracked values stored in local arrays through sort callbacks",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2366,7 +2332,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not treat non-cell set calls as identity array sinks",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2396,7 +2362,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps array locals structural when methods inspect items before set",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2429,7 +2395,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps array-literal map chains structural before set",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2471,7 +2437,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis treats direct local array set payloads as identity-only",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2507,7 +2473,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis treats local array push, unshift, and splice payloads as identity-only",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2562,7 +2528,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps splice control arguments structural",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2607,7 +2573,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps primitive local array writer payloads structural",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2646,7 +2612,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis restores local array bindings after nested callbacks",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2690,7 +2656,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis restores local array bindings after block shadowing",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2735,7 +2701,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis restores local map bindings after block shadowing",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2774,7 +2740,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps element bindings through filter-to-map chains",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2809,7 +2775,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis tracks properties read from find() result aliases",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2847,7 +2813,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis tracks direct properties read from find() results",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2880,7 +2846,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis conservatively widens chained unknown array methods",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2914,7 +2880,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis tracks chained || fallback reads on both branches",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2935,7 +2901,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps array item properties named key",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -2969,7 +2935,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis treats equals() arguments as identity-only",
   () => {
     const fn = parseFirstCallback(
@@ -2995,7 +2961,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis treats .equals() receiver and argument as identity-only",
   () => {
     const fn = parseFirstCallback(
@@ -3021,7 +2987,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis treats .equalLinks() receiver and argument as comparable",
   () => {
     const fn = parseFirstCallback(
@@ -3047,7 +3013,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis marks destructured cell equals paths as identity-cell paths",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3079,7 +3045,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis marks inferred lift cell equals paths as identity-cell paths",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -3122,7 +3088,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis drops identity-only paths that overlap full-shape reads",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -3155,7 +3121,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis tracks known fixed-symbol element access without wildcard",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3186,7 +3152,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis resolves shadowed fixed-key identifiers to local const strings",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3212,7 +3178,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis tracks known fixed-symbol destructuring without wildcard",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3236,7 +3202,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis tracks aliased fixed-symbol destructuring without wildcard",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -3306,7 +3272,7 @@ const SELF_READS = `(input: Input) => [
   input[SELF]?.title,
 ]`;
 
-Deno.test(
+test(
   "Capability analysis leaves SELF paths out of a pattern callback's input",
   () => {
     const input = analyzeInputWithSelf(`pattern(${SELF_READS});`, true);
@@ -3316,7 +3282,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps SELF paths on the input of any other callback",
   () => {
     const input = analyzeInputWithSelf(`lift(${SELF_READS});`, false);
@@ -3326,7 +3292,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps a pattern callback's input identity-only beside a SELF read",
   () => {
     const input = analyzeInputWithSelf(
@@ -3340,7 +3306,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps a pattern callback's input identity-only beside a dynamic-key read under SELF",
   () => {
     const input = analyzeInputWithSelf(
@@ -3355,7 +3321,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis does not treat arbitrary .equals() methods as identity-only",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3382,7 +3348,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps dynamic element access after .get() reading both captures",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3412,7 +3378,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps for...of over tracked sub-path path-specific",
   () => {
     const fn = parseFirstCallback(
@@ -3431,7 +3397,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps direct array parameters path-specific in for...of loops",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3470,7 +3436,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis visits chained array callbacks inside for...of iterable expressions",
   () => {
     const { program, sourceFile } = createProgramWithSource(
@@ -3506,7 +3472,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis handles deeply nested mutual recursion without hanging",
   () => {
     const source = `
@@ -3531,7 +3497,7 @@ const main = (input) => f(input);`;
   },
 );
 
-Deno.test(
+test(
   "Capability analysis interprocedural with default parameters does not corrupt paths",
   () => {
     const source = `
@@ -3553,7 +3519,7 @@ const caller = (input) => callee(input);`;
   },
 );
 
-Deno.test(
+test(
   "Capability analysis interprocedural propagation stays conservative across source-file boundaries",
   () => {
     const { program, sourceFile } = createProgramWithFiles({
@@ -3576,7 +3542,7 @@ Deno.test(
   },
 );
 
-Deno.test("Capability analysis marks an array-destructured parameter as wildcard", () => {
+test("Capability analysis marks an array-destructured parameter as wildcard", () => {
   // Unpacking a parameter positionally (`[first, second]`) loses the
   // field-level precision needed to shrink, so the root is wildcarded.
   const fn = parseFirstCallback(
@@ -3589,7 +3555,7 @@ Deno.test("Capability analysis marks an array-destructured parameter as wildcard
   assertEquals(param.wildcard, true);
 });
 
-Deno.test("Capability analysis skips omitted elements in array destructuring", () => {
+test("Capability analysis skips omitted elements in array destructuring", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       const [, , third] = input.items;
@@ -3602,7 +3568,7 @@ Deno.test("Capability analysis skips omitted elements in array destructuring", (
   assert(input.readPaths.includes("items"));
 });
 
-Deno.test("Capability analysis tracks reads through a nullish-fallback alias", () => {
+test("Capability analysis tracks reads through a nullish-fallback alias", () => {
   const fn = parseFirstCallback(
     `const fn = (a, b) => {
       const picked = a.user ?? b.user;
@@ -3614,7 +3580,7 @@ Deno.test("Capability analysis tracks reads through a nullish-fallback alias", (
   assert(getPaths(summary, "a").readPaths.includes("user"));
   assert(getPaths(summary, "b").readPaths.includes("user"));
 });
-Deno.test(
+test(
   "Mergeable-push misuse: flags a read-then-push to the same collection",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3633,7 +3599,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: flags a push a guard on a read below a fallback depends on",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3651,7 +3617,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: flags an iterate-dedup-then-push to the same collection",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3669,7 +3635,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: ignores an iterate-then-push when the iteration serves neither the push nor a write",
   () => {
     // The iteration still keeps the append in the conflict set, but with no
@@ -3686,7 +3652,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: flags a read-then-pushAll to the same collection",
   () => {
     const flagged = collectMergeablePushMisuses(
@@ -3711,7 +3677,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a value-dependent push as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3729,7 +3695,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies an append-then-trim as an independent read-modify-write",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3746,7 +3712,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: ignores a push when the read serves neither the push nor another write",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3761,7 +3727,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a ternary-guarded push as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3778,7 +3744,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a coalescing-guarded push as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3794,7 +3760,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a while-bounded push as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3811,7 +3777,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a for-condition-bounded push as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3828,7 +3794,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a push inside iteration of the read as read-dependent",
   () => {
     // The pushed value is a constant, so this classifies through the loop's
@@ -3847,7 +3813,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a push keyed by a for-in over the read as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3864,7 +3830,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a push inside a callback over the read as read-dependent",
   () => {
     // Checker-less analysis only descends into nested callbacks when asked;
@@ -3891,7 +3857,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: tracks read influence through assignment and destructuring",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3909,7 +3875,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a dedup guard inside a switch case as read-dependent",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3931,7 +3897,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: scans past a nested function declaration in a guard statement",
   () => {
     // The first early-exit sibling contains a function declaration; its name
@@ -3954,7 +3920,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: classifies a destructuring iterate-dedup as read-dependent",
   () => {
     // The loop destructures the tainted element, dedups against it, and the
@@ -3976,7 +3942,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: flags a read-then-push in a destructured handler",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -3995,7 +3961,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: ignores an unconditional push with no read",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -4008,7 +3974,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: ignores a push when the read is of a different path",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -4022,7 +3988,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: ignores a read-then-addUnique (the keyed fix)",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -4036,7 +4002,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: ignores a read-modify-write set",
   () => {
     const findings = collectMergeablePushMisuses(
@@ -4050,7 +4016,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Mergeable-push misuse: records no sites when no sink is provided",
   () => {
     // Without a sink the analysis stays a pure capability summary; the
@@ -4069,7 +4035,7 @@ Deno.test(
   },
 );
 
-Deno.test("Capability analysis classifies send() as a write", () => {
+test("Capability analysis classifies send() as a write", () => {
   const fn = parseFirstCallback(
     `const fn = (input) => {
       input.events.send({ fired: true });
@@ -4087,7 +4053,7 @@ Deno.test("Capability analysis classifies send() as a write", () => {
   assertEquals(input.capability, "writeonly");
 });
 
-Deno.test(
+test(
   "Capability analysis fails closed on unknown methods without a checker",
   () => {
     const fn = parseFirstCallback(
@@ -4104,7 +4070,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis marks unknown cell-method calls as unverified",
   () => {
     const source = `import { type Cell } from "commonfabric";
@@ -4128,7 +4094,7 @@ const fn = (input: Cell<{ items: string[] }>) => {
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps value-level unknown methods verified",
   () => {
     const source = `import { type Cell } from "commonfabric";
@@ -4152,7 +4118,7 @@ const fn = (input: Cell<string[]>) => {
   },
 );
 
-Deno.test(
+test(
   "Capability analysis marks set() with an onCommit callback as unverified",
   () => {
     const fn = parseFirstCallback(
@@ -4173,7 +4139,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis marks send() with an onCommit callback as unverified",
   () => {
     const fn = parseFirstCallback(
@@ -4191,7 +4157,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps plain set()/send() calls verified",
   () => {
     const fn = parseFirstCallback(
@@ -4209,7 +4175,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "Capability analysis marks dynamic cell-method calls as unverified",
   () => {
     const source = `import { type Cell } from "commonfabric";
@@ -4232,7 +4198,7 @@ const fn = (input: Cell<{ items: string[] }>, m: string) => {
   },
 );
 
-Deno.test(
+test(
   "Capability analysis keeps value-level dynamic method calls verified",
   () => {
     const source = `import { type Cell } from "commonfabric";
@@ -4255,7 +4221,7 @@ const fn = (input: Cell<Record<string, () => number>>, m: string) => {
   },
 );
 
-Deno.test(
+test(
   "Capability analysis fails closed on dynamic methods without a checker",
   () => {
     const fn = parseFirstCallback(

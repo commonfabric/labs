@@ -50,7 +50,7 @@ established by signature verification, so it is not something a client can
 assert on its own.
 
 The server decides the person a session stands for from that principal and from
-what else the open established (`Server.#decidePerson`):
+what else the open established (`Server.#personOf`):
 
 1. **Some sessions stand for nobody.** These are a serving loop's own sessions
    (`SessionState.servingOwn`), and sessions whose principal is not a person's
@@ -68,8 +68,9 @@ what else the open established (`Server.#decidePerson`):
    agent's key. A chain from Alice's home space, whose DID is Alice's
    identity, to an agent's key also stands for Alice.
 3. **These are not people's identities:** the `*` principal, service principals
-   (`MEMORY_SERVICE_DIDS`), delegating principals (the server's own identity
-   when server execution is on), and a space's own key on the space it names,
+   (`MEMORY_SERVICE_DIDS`), delegating principals (when server execution is
+   on, the server's own identity and each toolshed identity the memory
+   router's directory lists), and a space's own key on the space it names,
    unless that space is a Home space or has history and no access list. Every
    space's genesis is committed by a session signed with the space's own random
    key, which is then destroyed, and that key is not a person. A Home space's
@@ -78,9 +79,13 @@ what else the open established (`Server.#decidePerson`):
    the same test that refuses to delete one. A space with history and no access
    list predates access lists, and its own key is taken to be its person's.
 
-The decision is made when a session opens, and again for every session on a
-space whenever that space's access list changes, so the genesis commit that
-makes a space a Home space is attributed to its person.
+The decision is made each time a span is attributed. The part that reads the
+space, whether its own key is a person's, is decided when a session opens and
+again for every session on a space whenever that space's access list changes
+(`Server.#decideOwnKey`), so the genesis commit that makes a space a Home space
+is attributed to its person. The service and delegating classes are read as
+they are at the span, so a toolshed identity the memory router's directory
+starts or stops listing is judged anew on a session that is already open.
 
 ## The Available Signal
 

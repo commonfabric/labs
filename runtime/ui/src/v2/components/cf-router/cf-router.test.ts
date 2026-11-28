@@ -2,13 +2,13 @@
 import { mount } from "../../test-utils/dom.ts";
 
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   createMockCellHandle,
   writesSent,
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFLink, CFRouter } from "./index.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 /** A router holding a link to `to`, mounted, and whether any
  * `cf-route-change` got past the router. */

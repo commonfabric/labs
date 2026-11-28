@@ -564,11 +564,13 @@ export class RoutedPlane {
     };
     ended.addEventListener("abort", close, { once: true });
     try {
-      if (ended.aborted) throw new Error("the routed session is closed");
+      // The mount refuses at once where `ended` aborted before the listener
+      // above was added.
       const session = await client.mount(
         space,
         { actingAs: "space-owner" },
         this.#options.sessionOpenAuth,
+        ended,
       );
       return { client, session, localSeq: 0, watchers: new Map() };
     } catch (error) {

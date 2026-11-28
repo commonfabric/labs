@@ -9,7 +9,6 @@
  * more than the narrowing gains them.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   isArrayWithOnlyIndexProperties,
@@ -22,6 +21,7 @@ import {
   isPlainObject,
   type ReadonlyRecord,
 } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * The narrowing contract of the structural predicates, as described in the

@@ -3,8 +3,6 @@
  * and lease freshness validation.
  */
 
-import { describe, it } from "@std/testing/bdd";
-
 import { expect } from "@std/expect";
 
 import {
@@ -12,6 +10,7 @@ import {
   redactCdpEndpoint,
   validateBrowserAccessLeaseFreshness,
 } from "../src/contracts/browser-access.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("browser-access", () => {
   describe("normalizeCdpOrigin", () => {

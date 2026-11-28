@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { resolveScopeKey } from "@commonfabric/memory/v2";
 import { expect } from "@std/expect";
@@ -8,6 +7,12 @@ import {
   ExecutionLeaseCycle,
   executionLeaseHolder,
 } from "@commonfabric/memory/v2/execution-lease";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { diffAndUpdate } from "../src/data-updating.ts";
 import { toMemorySpaceAddress } from "../src/link-types.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
@@ -44,6 +49,7 @@ import {
 } from "../src/executor/wave.ts";
 import { EngineWaveCommitSink } from "../src/executor/engine-wave-sink.ts";
 import { newSharedServer } from "./memory-v2-test-utils.ts";
+import { clock } from "@commonfabric/test-support/fake-clock";
 
 const signer = await Identity.fromPassphrase("scheduler wave withdrawal");
 const space = signer.did() as MemorySpace;
@@ -785,6 +791,100 @@ describe("reactive wave withdrawal", () => {
       runtime.scheduler.unsubscribe(derive);
     });
   }
+  it("leaves recovery to a newer run sealed while an obsolete run waited for the commit that dropped its output", async () => {
+    // Whether a dropped output is owed is read from the commit that dropped
+    // it, so a run waits for its replica to take that commit. A run sealed
+    // during the wait holds the node's recovery, which that run's own
+    // settlement decides: here a second structure commit drops its output
+    // too, and it derives again.
+
+    const output = runtime.getCell<string>(space, "awaited-output", undefined);
+    const outputLink = output.getAsNormalizedFullLink();
+    const wave = newWave();
+    let sealing = wave;
+    const authoring = new Runtime({
+      apiUrl: new URL(import.meta.url),
+      storageManager: EmulatedStorageManager.connectTo(server, {
+        as: signer,
+        id: "awaited-author",
+      }),
+    });
+    peers.push(authoring);
+    const storeStructure = async (result: string) => {
+      const authored = authoring.edit();
+      authoring.getCellFromLink(outputLink).withTx(authored).setMetaRaw(
+        "result",
+        createSigilLinkFromParsedLink(
+          runtime.getCell(space, result, undefined).getAsNormalizedFullLink(),
+        ),
+        rawMetaWriteAuthorization,
+      );
+      expect((await authored.commit().settled).error).toBeUndefined();
+    };
+    await storeStructure("awaited-result");
+    runtime.installSealDestination({
+      seal: (tx) => sealing.seal(tx),
+    }, {
+      runStamper: (tx, info) =>
+        stampWaveRunContext(tx, { actionId: info.actionId, kind: info.kind }),
+    });
+    // Holds this replica's first load of the output, which takes the commit
+    // that dropped the first run's write, until the test releases it.
+    const loading = Promise.withResolvers<void>();
+    const loaded = Promise.withResolvers<void>();
+    const syncCell = storageManager.syncCell.bind(storageManager);
+    let held = false;
+    using _hold = stub(
+      storageManager,
+      "syncCell",
+      async (...args: Parameters<typeof syncCell>) => {
+        if (
+          !held && args[0].getAsNormalizedFullLink().id === outputLink.id
+        ) {
+          held = true;
+          loading.resolve();
+          await loaded.promise;
+        }
+        return await syncCell(...args);
+      },
+    );
+    let runs = 0;
+    const derive: Action = (tx) => {
+      runs++;
+      tx.writeValueOrThrow(outputLink, "derived");
+    };
+    actions.push(derive);
+    runtime.scheduler.subscribe(derive, {
+      reads: [],
+      shallowReads: [],
+      writes: [],
+    }, { isEffect: true });
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(1);
+
+    const recoveryWave = sealing = newWave();
+    expect((await wave.commitWave(newSink())).supersededWrites).toBe(1);
+    await wave.settled();
+    await loading.promise;
+    await runtime.scheduler.run(derive);
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(2);
+    loaded.resolve();
+    await clock.settle();
+    await runtime.scheduler.idleWithPendingCommits();
+    expect(runs).toBe(2);
+
+    await storeStructure("awaited-result-again");
+    sealing = newWave();
+    expect((await recoveryWave.commitWave(newSink())).supersededWrites).toBe(1);
+    await recoveryWave.settled();
+    await clock.settle();
+    await runtime.scheduler.idleWithPendingCommits();
+
+    expect(runs).toBe(3);
+    runtime.scheduler.unsubscribe(derive);
+  });
+
   it("derives again when an authored commit left one output with no value and the run's other output committed", async () => {
     const output = runtime.getCell<string>(space, "partial-output", undefined);
     const kept = runtime.getCell<string>(space, "partial-kept", undefined);

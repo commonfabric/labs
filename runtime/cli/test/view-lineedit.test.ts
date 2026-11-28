@@ -1,8 +1,8 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { Key } from "../lib/view/keys.ts";
 import { firstShown, LineEdit } from "../lib/view/lineedit.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** The key that types `char`. */
 function typed(char: string): Key {
@@ -155,6 +155,39 @@ describe("lineedit", () => {
       expect([line.value, line.cursor, line.scroll]).toEqual(["abcdef", 6, 3]);
     });
 
+    it("moves, deletes, and scrolls by characters as a reader sees them", () => {
+      // An accented letter written with a combining mark, an emoji with a
+      // skin tone, and a Han character: three characters, and two of them
+      // two columns wide.
+      const line = new LineEdit("e\u0301👍🏽漢");
+
+      expect(line.cursor).toBe(3);
+      line.handleKey({ name: "left" }, 10);
+      line.handleKey({ name: "backspace" }, 10);
+      expect([line.value, line.cursor]).toEqual(["e\u0301漢", 1]);
+      line.handleKey({ name: "home" }, 10);
+      line.handleKey({ name: "delete" }, 10);
+      expect([line.value, line.cursor]).toEqual(["漢", 0]);
+      line.handleKey({ name: "end" }, 2);
+      expect([line.cursor, line.scroll]).toEqual([1, 1]);
+    });
+
+    it("joins a mark after a control character to the control's picture, as the line is drawn", () => {
+      const line = edited("\x01\u0301z", [{ name: "home" }, { name: "right" }]);
+
+      expect(line.cursor).toBe(1);
+      expect(line.value).toBe("\x01\u0301z");
+    });
+
+    it("joins a combining mark typed after a letter to that letter", () => {
+      const line = edited("e", [typed("\u0301"), typed("x")]);
+
+      expect([line.value, line.cursor]).toEqual(["e\u0301x", 2]);
+      line.handleKey({ name: "left" }, 10);
+      line.handleKey({ name: "backspace" }, 10);
+      expect(line.value).toBe("x");
+    });
+
     it("drops the selection when told to, keeping the text and cursor", () => {
       const line = new LineEdit("abc");
       line.selectAll(10);
@@ -183,17 +216,32 @@ describe("lineedit", () => {
   });
 
   describe("firstShown()", () => {
+    /** `length` characters a column wide each. */
+    const narrow = (length: number) => Array(length).fill("a");
+
     it("returns the first character shown, moved only as far as it takes to show the cursor", () => {
-      expect(firstShown(0, 3, 4, 9)).toBe(0);
-      expect(firstShown(0, 9, 4, 9)).toBe(6);
-      expect(firstShown(5, 7, 4, 9)).toBe(5);
-      expect(firstShown(5, 2, 4, 9)).toBe(2);
-      expect(firstShown(0, 3, 0, 3)).toBe(3);
+      expect(firstShown(0, 3, 4, narrow(9))).toBe(0);
+      expect(firstShown(0, 9, 4, narrow(9))).toBe(6);
+      expect(firstShown(5, 7, 4, narrow(9))).toBe(5);
+      expect(firstShown(5, 2, 4, narrow(9))).toBe(2);
+      expect(firstShown(0, 3, 0, narrow(3))).toBe(3);
     });
 
     it("moves back as far as it takes to leave no column empty past the end", () => {
-      expect(firstShown(6, 5, 4, 5)).toBe(2);
-      expect(firstShown(3, 2, 10, 2)).toBe(0);
+      expect(firstShown(6, 5, 4, narrow(5))).toBe(2);
+      expect(firstShown(3, 2, 10, narrow(2))).toBe(0);
+    });
+
+    it("counts the columns each character takes, showing a wide one whole", () => {
+      // Four characters two columns wide each, in a field five columns wide:
+      // two of them fit, with or without the cursor's column after the text.
+      const wide = [..."漢漢漢漢"];
+
+      expect(firstShown(0, 1, 5, wide)).toBe(0);
+      expect(firstShown(0, 2, 5, wide)).toBe(1);
+      expect(firstShown(0, 4, 5, wide)).toBe(2);
+      expect(firstShown(3, 2, 5, wide)).toBe(2);
+      expect(firstShown(0, 4, 5, narrow(4))).toBe(0);
     });
   });
 });

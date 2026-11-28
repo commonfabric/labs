@@ -1,7 +1,4 @@
-import {
-  entityRefToString,
-  isEntityRef,
-} from "@commonfabric/data-model/cell-rep";
+import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 
 import { getLogger } from "../../../base/logger/src/logger.ts";
 // Relative import (not "@commonfabric/js-values/types") for the same rollup
@@ -94,9 +91,8 @@ export function resolveCellPath<T>(
   return isCell(value) ? value.get() : value;
 }
 
-export function cellEntityIdString(cell: Cell<unknown>): string | undefined {
-  const id = cell.entityId;
-  return isEntityRef(id) ? entityRefToString(id) : undefined;
+export function cellEntityIdString(cell: Cell<unknown>): string {
+  return entityRefToString(cell.entityId);
 }
 
 /**

@@ -4,14 +4,15 @@
  * `main-applicator.test.ts` run the same code against a mock document. These
  * tests check it against the browser's own rules for which properties set
  * which attributes. They run under deno-web-test, which registers tests
- * through `Deno.test`. The functions from `@std/testing/bdd` are therefore not
- * available here.
+ * through `Deno.test` alone, so they use `test()` and steps rather than
+ * `describe()`.
  */
 
 import { assertEquals, assertStrictEquals } from "@std/assert";
 
 import { DomApplicator } from "../src/main/applicator.ts";
 import type { VDomOp } from "../src/vdom-ops.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /**
  * A custom element class that defines one property, `label`, with a getter and
@@ -147,7 +148,7 @@ for (const [tagName, attributes, key, value, children = ""] of builtInCases) {
   const markup = `<${tagName}${
     Object.entries(attributes).map(([name, v]) => ` ${name}="${v}"`).join("")
   }>${children && `${children}</${tagName}>`}`;
-  Deno.test(`removing ${key}, set to ${JSON.stringify(value)}, from ${markup} leaves it as though never set`, () => {
+  test(`removing ${key}, set to ${JSON.stringify(value)}, from ${markup} leaves it as though never set`, () => {
     const element = removeAfterSetting(
       tagName,
       attributes,
@@ -161,7 +162,7 @@ for (const [tagName, attributes, key, value, children = ""] of builtInCases) {
   });
 }
 
-Deno.test("removing one property leaves the others in place", () => {
+test("removing one property leaves the others in place", () => {
   const element = removeAfterSetting("input", {}, {
     title: "Hint",
     placeholder: "Name",
@@ -169,7 +170,7 @@ Deno.test("removing one property leaves the others in place", () => {
   assertEquals(element.outerHTML, '<input placeholder="Name">');
 });
 
-Deno.test("removing an inherited property from a custom element removes its attribute", () => {
+test("removing an inherited property from a custom element removes its attribute", () => {
   const element = removeAfterSetting("x-labeled-box", {}, {
     title: "Hint",
     label: "Box",
@@ -178,13 +179,13 @@ Deno.test("removing an inherited property from a custom element removes its attr
   assertStrictEquals((element as LabeledBox).label, "Box");
 });
 
-Deno.test("removing a property from a custom element constructs no other instance", () => {
+test("removing a property from a custom element constructs no other instance", () => {
   const before = LabeledBox.constructed;
   removeAfterSetting("x-labeled-box", {}, { title: "Hint" }, "title");
   assertStrictEquals(LabeledBox.constructed, before + 1);
 });
 
-Deno.test("removing a property a custom element defines sets it to undefined", () => {
+test("removing a property a custom element defines sets it to undefined", () => {
   const element = removeAfterSetting("x-labeled-box", {}, {
     title: "Hint",
     label: "Box",
@@ -196,7 +197,7 @@ Deno.test("removing a property a custom element defines sets it to undefined", (
   );
 });
 
-Deno.test("a prop whose name names no property is warned of once, naming the property", () => {
+test("a prop whose name names no property is warned of once, naming the property", () => {
   const warnings: unknown[][] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => warnings.push(args);
@@ -224,7 +225,7 @@ Deno.test("a prop whose name names no property is warned of once, naming the pro
   assertStrictEquals(String(warnings[0]![0]).includes("`defaultSize`"), true);
 });
 
-Deno.test("a bound prop whose name names no property is warned of too", () => {
+test("a bound prop whose name names no property is warned of too", () => {
   const warnings: unknown[][] = [];
   const warn = console.warn;
   console.warn = (...args: unknown[]) => warnings.push(args);

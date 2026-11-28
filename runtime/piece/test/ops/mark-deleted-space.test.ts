@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createSession, Identity } from "@commonfabric/identity";
 import {
@@ -8,6 +7,12 @@ import {
   type RuntimeProgram,
 } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   markDeletedSpaceOf,
   retireDeletedProfileOf,
@@ -103,6 +108,29 @@ const unreadableProgram: RuntimeProgram = {
     ),
   }],
 };
+
+/**
+ * The same Home with `command` exported as a plain value rather than as the
+ * stream that takes it, so that sending to it fails.
+ */
+function brokenCommandProgram(
+  command: "markSharedSpaceDeleted" | "retireProfile",
+): RuntimeProgram {
+  const stream = {
+    markSharedSpaceDeleted: "markSharedSpaceDeleted({ marked })",
+    retireProfile: "retireProfile({ retirements })",
+  }[command];
+  return {
+    main: `/broken-${command}-home.tsx`,
+    files: [{
+      name: `/broken-${command}-home.tsx`,
+      contents: catalogSource.replace(
+        `${command}: ${stream},`,
+        `${command}: "not a stream",`,
+      ),
+    }],
+  };
+}
 
 const markedSchema = {
   type: "array",
@@ -263,6 +291,36 @@ describe("mark-deleted-space", () => {
       expect(await controller.markDeletedSpace(PROFILE)).toBe("not-listed");
       expect(await retirements(home)).toEqual([PROFILE]);
       expect(await marked(home)).toEqual([]);
+    });
+
+    it("rejects with a failed mark, having still sent the retirement", async () => {
+      const home = await installCustomRoot(
+        runtime,
+        controller,
+        brokenCommandProgram("markSharedSpaceDeleted"),
+      );
+      await listProfiles(home, [GONE], []);
+      await expect(controller.markDeletedSpace(GONE)).rejects.toThrow(
+        "Transaction required",
+      );
+      expect(await retirements(home)).toEqual([GONE]);
+      expect(await marked(home)).toEqual([]);
+    });
+
+    it("rejects with a failed retirement, having still sent the mark", async () => {
+      const home = await installCustomRoot(
+        runtime,
+        controller,
+        brokenCommandProgram("retireProfile"),
+      );
+      await listProfiles(home, [GONE], []);
+      await expect(controller.markDeletedSpace(GONE)).rejects.toThrow(
+        "Transaction required",
+      );
+      expect(await marked(home)).toEqual([
+        { space: GONE, expectedRevision: "2:gone" },
+      ]);
+      expect(await retirements(home)).toEqual([]);
     });
   });
 });

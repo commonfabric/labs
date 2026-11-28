@@ -1,11 +1,17 @@
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import {
   parseRecordLine,
   RECORDS_DIR_VARIABLE,
 } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { createRuntime } from "../runtime/cli/lib/dev.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import {
   cfcheck,
   type CfcheckContext,
@@ -73,7 +79,7 @@ describe("cfcheck", () => {
     it("returns the repository's own corpus, relative to its root", async () => {
       const context = checkoutContext();
       const corpus = await context.corpus();
-      expect(corpus).toContain("patterns/examples/counter/counter.tsx");
+      expect(corpus).toContain("patterns/examples/counter/main.tsx");
       expect(corpus).not.toContain(
         "patterns/examples/counter/counter.test.tsx",
       );
@@ -102,6 +108,51 @@ describe("cfcheck", () => {
     it("returns `(batch)` for a diagnostic that names no file", () => {
       expect(diagnosticFile(undefined, "/repo")).toBe("(batch)");
       expect(diagnosticFile("", "/repo")).toBe("(batch)");
+    });
+  });
+
+  describe("the script", () => {
+    // Running `cfcheck.ts` as `deno task cfcheck` does hands the command
+    // line to `cfcheck()` and exits with the code and the text it returns.
+    async function run(args: string[]) {
+      const root = fromFileUrl(new URL("..", import.meta.url));
+      const { code, stdout, stderr } = await runDenoCommandWithTemporaryLock({
+        root,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(root, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "-A",
+          join(root, "tasks/cfcheck.ts"),
+          ...args,
+        ],
+      });
+      const decoder = new TextDecoder();
+      return {
+        code,
+        stdout: decoder.decode(stdout),
+        stderr: decoder.decode(stderr),
+      };
+    }
+
+    it("exits 2 with the usage on standard error for a command line it cannot read", async () => {
+      expect(await run(["--update"])).toEqual({
+        code: 2,
+        stdout: "",
+        stderr: "Unknown argument: --update\n" +
+          "usage: deno task cfcheck [--only <pattern>]...\n",
+      });
+    });
+
+    it("exits 2 with what is wrong with a `--only` that carries nothing", async () => {
+      expect(await run(["--only"])).toEqual({
+        code: 2,
+        stdout: "",
+        stderr: "--only needs a value\n" +
+          "usage: deno task cfcheck [--only <pattern>]...\n",
+      });
     });
   });
 

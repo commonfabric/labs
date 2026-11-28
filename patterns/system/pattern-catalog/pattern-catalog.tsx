@@ -10,10 +10,12 @@
  *
  * The catalog exposes data cells (`status`, `entries`), a `page` stream whose
  * requests carry a cell the caller owns for the answer, and the requests to
- * get a pattern. Only `GetItButton` can add one of those: the list's type
- * declares its one trusted writer.
+ * get a pattern. Only `GetItButton` can add one of those: each request's type
+ * declares its one trusted writer, and labels it with who tapped.
  */
 import {
+  AuthoredByCurrentUser,
+  type Cell,
   computed,
   eventKey,
   handler,
@@ -61,6 +63,24 @@ export interface CatalogCounts {
 }
 
 /**
+ * A link to a Common Fabric profile, opaque on purpose: render it with
+ * `<cf-profile-badge>`, which reads the name and picture from the profile and
+ * shows whether they are the profile owner's own. Never read a name out of it
+ * yourself.
+ */
+export type CatalogProfile = Cell<Record<string, never>>;
+
+/**
+ * One original along a remix's chain: the pattern and its published name, or
+ * `unavailable` for an original the viewer may not see (taken down, say),
+ * which ends the chain and says nothing else about it. A step with no
+ * `patternId` is read as `unavailable`.
+ */
+export type CatalogRemixStep =
+  | { patternId: string; title?: string }
+  | { unavailable: true };
+
+/**
  * One published pattern, as the catalog describes it. Every field but
  * `patternId` and `title` may be absent; a caller shows what is there.
  * `title`, `blurb` and `tags` are written by the pattern's author: render them
@@ -73,6 +93,14 @@ export interface CatalogEntry {
   title: string;
   /** What the pattern does: the index's description. */
   blurb?: string;
+  /**
+   * Whether its author offers it to a person choosing what to place, on its
+   * own at the top of a loom. Every pattern is also a part other patterns
+   * may build from; one that is not standalone is only that. A host copies
+   * the index's answer onto every entry and never fills in its own; a caller
+   * reads an entry without it as not offered on its own.
+   */
+  standalone?: boolean;
   tags?: string[];
   quality?: CatalogQuality;
   /** When the version was published (ISO 8601). */
@@ -80,6 +108,26 @@ export interface CatalogEntry {
   bucket?: CatalogBucket;
   /** The author's stable pseudonym, not who they are. */
   author?: string;
+  /**
+   * How much other people use the author's other shared patterns, 0 to 9: what
+   * makes an anonymous author worth trusting. Shown beside `author`, never
+   * beside a profile.
+   */
+  authorTier?: number;
+  /**
+   * The Common Fabric profile the author published this pattern under, when
+   * they chose to be named (`cf pattern publish --as`). The name and picture
+   * are read from the profile itself, never carried here. Absent on a pattern
+   * shared anonymously, which shows only `author`.
+   */
+  authorProfile?: CatalogProfile;
+  /**
+   * What this pattern is a remix of, nearest original first: a remix of a
+   * remix lists its whole chain. An original the viewer may not see is
+   * `{unavailable: true}` and ends the chain. Absent when it is not a remix,
+   * or when the index shows it to this viewer as no remix at all.
+   */
+  remixOf?: CatalogRemixStep[];
   /** Present only on the viewer's own entries that others cannot find yet. */
   unlisted?: CatalogUnlisted;
   counts?: CatalogCounts;
@@ -146,11 +194,14 @@ export interface GetItAnswer {
   placed?: string;
 }
 
-/** Appends one request to get `patternId` at `destination`. */
+/**
+ * Appends one request to get `patternId` at `destination`, as a document of
+ * its own labelled with who tapped (`GetItRequests`).
+ */
 export const requestGetIt = handler<
   void,
   {
-    getItRequests: Writable<GetItRequest[]>;
+    getItRequests: Writable<GetItRequests>;
     getItAnswers: Record<string, GetItAnswer>;
     status: CatalogStatus;
     host: string | undefined;
@@ -178,13 +229,16 @@ export const requestGetIt = handler<
   // admits again derives the same key, and finds its request already there.
   const requestId = eventKey();
   if (requests.some((request) => request?.requestId === requestId)) return;
+  // The new request is a `GetItEntry`, so it is stored as a document of its
+  // own with its own `authored-by` and writer; the requests already there
+  // stay the documents they are.
   getItRequests.set([...requests, {
     requestId,
     patternId,
     destination,
     requestedAt: Date.now(),
     host,
-  }]);
+  } as GetItEntry]);
 });
 
 /** The id of `GetItButton`'s surface, as its trusted writes name it. */
@@ -193,13 +247,24 @@ export const GET_IT_SURFACE = "PatternCatalogGetIt";
 /** The id of the button's one action, as its trusted writes name it. */
 export const GET_IT_ACTION = "PatternCatalogRequestGetIt";
 
-/** The catalog's requests to get a pattern: written only by `GetItButton`. */
-export type GetItRequests = TrustedActionWrite<
-  GetItRequest[],
-  typeof requestGetIt,
-  typeof GET_IT_ACTION,
-  typeof GET_IT_SURFACE
+/**
+ * One stored request to get a pattern: written only by `requestGetIt`, on a
+ * trusted tap on `GetItButton`, and labelled `authored-by` the principal who
+ * tapped. The policy sits on each request rather than on the list, so each is
+ * a document of its own carrying both, and a host checks the request it acts
+ * on: who asked, and that the button's handler wrote it.
+ */
+export type GetItEntry = AuthoredByCurrentUser<
+  TrustedActionWrite<
+    GetItRequest,
+    typeof requestGetIt,
+    typeof GET_IT_ACTION,
+    typeof GET_IT_SURFACE
+  >
 >;
+
+/** The catalog's requests to get a pattern, oldest first. */
+export type GetItRequests = GetItEntry[];
 
 /** What `#patternCatalog` resolves to. */
 export interface PatternCatalog {
@@ -317,7 +382,7 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       return blocked;
     });
     return {
-      [NAME]: computed(() => "Get it"),
+      [NAME]: "Get it",
       [UI]: (
         <cf-hstack
           gap="2"
@@ -345,6 +410,81 @@ export const GetItButton = pattern<GetItButtonInput, GetItButtonOutput>(
       ),
       answer,
       getIt,
+    };
+  },
+);
+
+/** What `CatalogByline` takes. */
+export interface CatalogBylineInput {
+  entry: CatalogEntry;
+}
+
+/** What `CatalogByline` returns. */
+export interface CatalogBylineOutput {
+  [NAME]: string;
+  [UI]: VNode;
+}
+
+/**
+ * How a remix's chain reads: "Remix of “A”, a remix of “B”". A step without a
+ * title is "an untitled pattern", never its id. The chain stops at the first
+ * step the viewer may not see, or that is not well formed (fail closed), and
+ * says "a pattern that's no longer available" for it.
+ */
+export const remixOfText = (steps: readonly CatalogRemixStep[]): string => {
+  const names: string[] = [];
+  for (const step of Array.isArray(steps) ? steps : []) {
+    if (
+      !step || typeof step !== "object" || "unavailable" in step ||
+      typeof step.patternId !== "string" || !step.patternId
+    ) {
+      names.push("a pattern that's no longer available");
+      break;
+    }
+    const title = typeof step.title === "string"
+      ? step.title.split(/\s+/).join(" ").trim()
+      : "";
+    names.push(title ? `“${title}”` : "an untitled pattern");
+  }
+  return names.length === 0 ? "" : `Remix of ${names.join(", a remix of ")}`;
+};
+
+/**
+ * Who made an entry and what it remixes, the way every caller shows it. A
+ * pattern published under a profile shows that profile's badge, which reads
+ * the name and picture from the profile itself; one shared anonymously shows
+ * only its pseudonym. A remix says what it is a remix of, down its chain.
+ */
+export const CatalogByline = pattern<CatalogBylineInput, CatalogBylineOutput>(
+  ({ entry }) => {
+    const remixText = computed(() => remixOfText(entry?.remixOf ?? []));
+    const pseudonym = computed(() => {
+      if (entry?.authorProfile || !entry?.author) return "";
+      const tier = entry?.authorTier;
+      return typeof tier === "number" && Number.isInteger(tier) && tier >= 0 &&
+          tier <= 9
+        ? `${entry.author} · credibility ${tier} of 9`
+        : entry.author;
+    });
+    return {
+      [NAME]: "Byline",
+      [UI]: (
+        <cf-hstack
+          gap="2"
+          wrap
+          style={{
+            alignItems: "center",
+            fontSize: "13px",
+            color: "var(--cf-theme-color-text-secondary)",
+          }}
+        >
+          {entry?.authorProfile
+            ? <cf-profile-badge $profile={entry.authorProfile} size="xs" />
+            : null}
+          {computed(() => pseudonym ? <span>by {pseudonym}</span> : null)}
+          {computed(() => remixText ? <span>{remixText}</span> : null)}
+        </cf-hstack>
+      ),
     };
   },
 );

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
 import { type CellScope, resolveScopeKey } from "@commonfabric/memory/v2";
-import { describe, it } from "@std/testing/bdd";
 
 import type { SchemaPathSelector } from "@commonfabric/api";
 import type { FabricValue } from "@commonfabric/data-model";
@@ -18,6 +17,7 @@ import type {
   URI,
 } from "@commonfabric/memory/interface";
 import { maxOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
@@ -4461,6 +4461,7 @@ describe("SchemaObjectTraverser slow-traverse reporting", () => {
     expect(report).toContain("trackerVals=2");
     expect(report).toContain("traverseSchema=1");
     expect(report).toContain("maxDepth=1");
+    expect(report).toContain("nativeDepthHandoffs=0");
     // docVisits is populated only under CF_TRAVERSE_DIAGNOSTICS=1.
     expect(report).toContain("topDocs=n/a (set CF_TRAVERSE_DIAGNOSTICS=1)");
   });

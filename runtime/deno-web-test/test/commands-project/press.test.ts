@@ -1,3 +1,4 @@
+// deno-lint-ignore-file cf-test/registration -- a fixture testing the browser harness's own `Deno.test`
 import { pressKey } from "@commonfabric/deno-web-test/commands";
 import { focusedPair } from "./mod.ts";
 
@@ -75,4 +76,24 @@ Deno.test("an unknown key is refused", async function () {
 Deno.test("an unknown modifier is refused", async function () {
   // @ts-expect-error: "Hyper" is not a key a test may hold down.
   await pressKey("Tab", { modifiers: ["Hyper"] });
+});
+
+Deno.test("a command with no id is reported, and the next command still runs", async function () {
+  const send: unknown = Reflect.get(globalThis, "__denoWebTestDriver");
+  if (typeof send !== "function") {
+    throw new Error("the driver installed no binding");
+  }
+  send("not a command");
+  // Commands run in the order they arrive, so once this press settles the
+  // driver has reported the one before it.
+  const { first, second } = focusedPair();
+  try {
+    await pressKey("Tab");
+    if (document.activeElement !== second) {
+      throw new Error("Tab did not move focus to the second button");
+    }
+  } finally {
+    first.remove();
+    second.remove();
+  }
 });

@@ -30,10 +30,13 @@ export type MemoryEnvironment = Pick<
   | "MEMORY_MINIMUM_CLIENT_GENERATION"
   | "API_URL"
   | "MEMORY_SYNC_CID_REFERENCES"
+  | "MEMORY_RETIRE_BARE_DID_LABELS"
+  | "MEMORY_STORE_READS_DIGEST"
   | "MEMORY_ACL_DELEGATIONS"
   | "MEMORY_DOCUMENT_CACHE_BUDGET_BYTES"
   | "MEMORY_DOCUMENT_CACHE_MAX_ENTRIES"
   | "MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES"
+  | "MEMORY_UNTRUSTED_MESSAGE_SLOTS"
 >;
 
 /** A memory server and the handle that closes it with its private listener. */
@@ -107,11 +110,17 @@ export async function openMemory(
   // their reads run as the space's OWNER (the user whose space it is), and
   // the service identity itself reads a space's ACL only. It is NOT an
   // OWNER-class memory service principal: the operator's
-  // `MEMORY_SERVICE_DIDS` list is used verbatim on both arms, and the
+  // `MEMORY_SERVICE_DIDS` list is used verbatim under the flag, and the
   // Phase-7 implicit-OWNER blanket is retired (the serving identity never
   // writes into users' home spaces; served writes ride the wave's §2b
-  // delegated carriage under the acting user). OFF the flag the delegating
-  // list is empty — byte-identical ACL decisions.
+  // delegated carriage under the acting user). Behind the memory router each
+  // toolshed identity the directory lists is a delegating principal too: a
+  // crossing from the toolshed serving another space opens its session, with
+  // the same binding, as that toolshed's identity. OFF the flag the
+  // delegating class is empty, and the process identity is an OWNER-class
+  // service principal: its indexed-collection host maintains the
+  // collections of every space over loopback sessions
+  // (docs/features/indexed-collections.md, "Which runtime maintains").
   const serverExecutionOn = serverExecutionEnabledFromEnv(getEnv);
   const memoryAclPrincipals = memoryAclPrincipalsFor({
     configured: environment.MEMORY_SERVICE_DIDS
@@ -120,6 +129,12 @@ export async function openMemory(
       .filter((did) => did.length > 0),
     processIdentityDid: identity.did(),
     serverExecution: serverExecutionOn,
+    // Behind the memory router each toolshed has an identity of its own, and
+    // the directory lists them: a crossing from another toolshed arrives as
+    // a session of that toolshed's identity.
+    ...(routerPolicy !== undefined
+      ? { listsPeer: (did: string) => routerPolicy.listsToolshed(did) }
+      : {}),
   });
   if (serverExecutionOn) {
     console.log(
@@ -128,6 +143,13 @@ export async function openMemory(
         "other served read runs under the acting user via the " +
         "actingAs binding; docs/specs/server-side-execution/protocol.md §2b)",
     );
+    if (memoryAclPrincipals.isDelegatingPeer !== undefined) {
+      console.log(
+        "Memory: each toolshed the memory router's directory lists is a " +
+          "DELEGATING memory principal too (crossings from the toolshed " +
+          "serving another space; docs/specs/memory-v2/routed-mode-a.md)",
+      );
+    }
     if (memoryAclPrincipals.serviceDids.includes(identity.did())) {
       console.log(
         "Memory: NOTE — the operator's MEMORY_SERVICE_DIDS also lists the " +
@@ -136,6 +158,12 @@ export async function openMemory(
           "delegating listing is then moot",
       );
     }
+  } else {
+    console.log(
+      `Memory: server execution OFF — process identity ${identity.did()} ` +
+        "is an OWNER-class memory service principal, for the sessions of " +
+        "its indexed-collection host",
+    );
   }
 
   // Session.open verification is shared with the standalone server. Toolshed
@@ -179,6 +207,9 @@ export async function openMemory(
     // Offered unless the deployment turns it off; a client takes it only when
     // it opts in.
     syncCidReferences: environment.MEMORY_SYNC_CID_REFERENCES,
+    // On unless the deployment turns it off; each store is respelled as it
+    // opens, once.
+    retireBareDidLabels: environment.MEMORY_RETIRE_BARE_DID_LABELS,
     // The posture this process publishes on `/api/meta`, read when an open
     // asks rather than now: it is published once the Runtime exists, after
     // this server is constructed, and until then it names no instances.
@@ -190,6 +221,9 @@ export async function openMemory(
       mode: environment.MEMORY_ACL_MODE,
       serviceDids: memoryAclPrincipals.serviceDids,
       delegatingDids: memoryAclPrincipals.delegatingDids,
+      ...(memoryAclPrincipals.isDelegatingPeer !== undefined
+        ? { isDelegatingPeer: memoryAclPrincipals.isDelegatingPeer }
+        : {}),
       delegations: environment.MEMORY_ACL_DELEGATIONS,
     },
     ...(routerPolicy !== undefined
@@ -201,8 +235,12 @@ export async function openMemory(
       : {}),
     documentCacheBudgetBytes: environment.MEMORY_DOCUMENT_CACHE_BUDGET_BYTES,
     documentCacheMaxEntries: environment.MEMORY_DOCUMENT_CACHE_MAX_ENTRIES,
+    // On unless the deployment turns it off, as it must before rolling back to
+    // a version that predates digest-form rows.
+    storeReadsDigest: environment.MEMORY_STORE_READS_DIGEST,
     documentCacheTotalBudgetBytes:
       environment.MEMORY_DOCUMENT_CACHE_TOTAL_BUDGET_BYTES,
+    untrustedMessageSlots: environment.MEMORY_UNTRUSTED_MESSAGE_SLOTS,
   });
   const routedListener = await routerPolicy?.start(server).catch(
     async (error) => {

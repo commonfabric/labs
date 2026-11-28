@@ -35,7 +35,7 @@ const ROW_RULES = (["good", "warn", "bad"] as const).map((s) =>
 ).join("\n");
 
 export interface PerformanceViewState {
-  repo: "labs" | "loom";
+  repo: "labs" | "cfs";
   days: number;
   sort: string;
   stat: string;

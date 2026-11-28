@@ -15,6 +15,7 @@ import { cellOfTarget } from "./space-access.ts";
  * Returns the person whose own profile `target` is, by the rule every reader
  * of which profiles are a person's applies (`profileOwnerAt()`), or
  * `undefined` when it is no one's, and for a `target` passed as `undefined`.
+ * Loads each document the rule reads that the local replica has not seen.
  * In a reactive computation the result updates when the profile's label or
  * its name changes, or a document it reads arrives. In a handler, a document
  * it reads that is still loading withdraws the handler, which runs again once
@@ -37,17 +38,24 @@ export function profileOwnerOf(target: unknown): DID | undefined {
     throw new Error(`\`${name}\` requires an executing runtime.`);
   }
   if (target === undefined) return undefined;
-  // In a handler, each document the rule reads that is still loading
-  // withdraws the handler, which runs again once it arrives.
-  const visit = frame.frameKind === "handler"
-    ? (document: NormalizedFullLink) =>
+  const visit = (document: NormalizedFullLink) => {
+    // A cell returned by `linksOf()` names its target without loading it.
+    // The verifier's raw reads need the same load as a value read, while
+    // retaining their own dependency and confidentiality classification.
+    runtime.ensureLinkedDocLoaded(
+      { ...document, path: [], schema: { type: "unknown" } },
+      document.space,
+      tx.tx.scopeKeyIdentity,
+    );
+    if (frame.frameKind === "handler") {
       withdrawHandlerWhileLoading(
         runtime,
         tx,
         document,
         `the profile document \`${document.id}\` was read while it was still loading`,
-      )
-    : undefined;
+      );
+    }
+  };
   return profileOwnerAt(
     runtime,
     tx,

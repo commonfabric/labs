@@ -5,20 +5,9 @@ import { join } from "@std/path/join";
 import { normalize } from "@std/path/normalize";
 import { relative } from "@std/path/relative";
 
-import { decodeDataFile } from "@commonfabric/text/utf8";
-import { isDeno } from "@commonfabric/platform/env";
+import { decodeDataFile } from "@commonfabric/text/data-file";
 
 import type { ProgramResolver, Source } from "./interface.ts";
-
-/**
- * Guard the Deno-only file system entry points. Each caller names itself, so a
- * caller reaching this in a browser or worker is told which one it was.
- */
-function requireDeno(what: string): void {
-  if (!isDeno()) {
-    throw new Error(`${what} is not supported in this environment.`);
-  }
-}
 
 function isOutsideRoot(relativePath: string): boolean {
   return relativePath === ".." || relativePath.startsWith(`..${SEPARATOR}`) ||
@@ -53,6 +42,18 @@ export class InMemoryProgram implements ProgramResolver {
     if (contents === undefined) return Promise.resolve(undefined);
     return Promise.resolve({ contents, name: identifier });
   }
+
+  /**
+   * Lists the modules named directly inside `directory`. A directory is
+   * nothing here but a prefix of names, so one holding no module is absent.
+   */
+  listDataFiles(directory: string): Promise<readonly string[] | undefined> {
+    const parent = directory.replace(/\/+$/, "");
+    const names = Object.keys(this.#modules).filter((name) =>
+      name.slice(0, name.lastIndexOf("/")) === parent
+    );
+    return Promise.resolve(names.length === 0 ? undefined : names);
+  }
 }
 
 /**
@@ -62,9 +63,11 @@ export class InMemoryProgram implements ProgramResolver {
  * stores it under, and a path that escapes the root — through `..` or through a
  * symbolic link — is refused.
  *
- * A source package holds text, so the bytes are decoded as UTF-8 strictly. A
- * file that is not valid UTF-8 is reported by name rather than being silently
- * stored with replacement characters in place of the bytes that were read.
+ * A source package holds text, so the bytes are decoded by `decodeDataFile`:
+ * a binary media file becomes its `data:` URL, and any other file is decoded
+ * as UTF-8 strictly, a file that is not valid UTF-8 being reported by name
+ * rather than stored with replacement characters in place of the bytes that
+ * were read.
  *
  * Deno-only.
  */
@@ -72,7 +75,6 @@ export function readDataFileSource(
   dataPath: string,
   rootPath: string,
 ): Source {
-  requireDeno("readDataFileSource");
   const fsRoot = normalize(rootPath);
   const normalizedDataPath = normalize(dataPath);
   const relativeDataPath = relative(fsRoot, normalizedDataPath);
@@ -108,8 +110,8 @@ export class FileSystemProgramResolver implements ProgramResolver {
         `Main file "${mainPath}" must be within root directory "${this.#fsRoot}".`,
       );
     }
-    this.#realFsRoot = this.#realPath(this.#fsRoot);
-    const realMainPath = this.#realPath(normalizedMainPath);
+    this.#realFsRoot = Deno.realPathSync(this.#fsRoot);
+    const realMainPath = Deno.realPathSync(normalizedMainPath);
     if (isOutsideRoot(relative(this.#realFsRoot, realMainPath))) {
       throw new Error(
         `Main file "${mainPath}" must be within root directory "${this.#fsRoot}".`,
@@ -117,7 +119,7 @@ export class FileSystemProgramResolver implements ProgramResolver {
     }
     this.#main = {
       name: groundedSourceName(relativeMainPath),
-      contents: this.#readFile(realMainPath),
+      contents: Deno.readTextFileSync(realMainPath),
     };
   }
 
@@ -130,18 +132,18 @@ export class FileSystemProgramResolver implements ProgramResolver {
     if (realPath === undefined) return Promise.resolve(undefined);
     return Promise.resolve({
       name: specifier,
-      contents: this.#readFile(realPath),
+      contents: Deno.readTextFileSync(realPath),
     });
   }
 
   /**
-   * Reads the data file `name` from the file system. Async so that a refusal
-   * — an escaping name, bytes that are not text — arrives as a rejection. A
-   * method that returns a promise and also throws where it is called cannot be
-   * handled one way.
+   * Reads the data file `name` from the file system, a binary media file as
+   * its base64 `data:` URL and any other file as UTF-8 text. Async so that a
+   * refusal — an escaping name, or a text file whose bytes are not valid UTF-8
+   * — arrives as a rejection. A method that returns a promise and also throws
+   * where it is called cannot be handled one way.
    */
   async resolveDataFile(name: string): Promise<Source | undefined> {
-    requireDeno("FileSystemProgramResolver");
     let realPath: string | undefined;
     try {
       realPath = this.#groundedRealPath(name, "Data file");
@@ -156,6 +158,37 @@ export class FileSystemProgramResolver implements ProgramResolver {
       name,
       contents: decodeDataFile(await Deno.readFile(realPath), name),
     };
+  }
+
+  /**
+   * Lists the files directly inside the directory `directory` names, grounded
+   * as a data file is, or undefined where there is no directory there. Async
+   * for the reason {@link resolveDataFile} is.
+   */
+  async listDataFiles(
+    directory: string,
+  ): Promise<readonly string[] | undefined> {
+    let realPath: string | undefined;
+    try {
+      realPath = this.#groundedRealPath(directory, "Data directory");
+    } catch (error) {
+      if (error instanceof Deno.errors.NotFound) return undefined;
+      throw error;
+    }
+    if (realPath === undefined) return undefined;
+    const parent = directory.replace(/\/+$/, "");
+    const names: string[] = [];
+    try {
+      for await (const entry of Deno.readDir(realPath)) {
+        const isFile = entry.isFile ||
+          (entry.isSymlink && await linksToFile(join(realPath, entry.name)));
+        if (isFile) names.push(`${parent}/${entry.name}`);
+      }
+    } catch (error) {
+      if (error instanceof Deno.errors.NotADirectory) return undefined;
+      throw error;
+    }
+    return names.sort();
   }
 
   /**
@@ -180,7 +213,7 @@ export class FileSystemProgramResolver implements ProgramResolver {
         `${kind} "${specifier}" resolves outside of root directory "${this.#fsRoot}".`,
       );
     }
-    const realPath = this.#realPath(absPath);
+    const realPath = Deno.realPathSync(absPath);
     if (isOutsideRoot(relative(this.#realFsRoot, realPath))) {
       throw new Error(
         `${kind} "${specifier}" resolves outside of root directory "${this.#fsRoot}".`,
@@ -188,15 +221,19 @@ export class FileSystemProgramResolver implements ProgramResolver {
     }
     return realPath;
   }
+}
 
-  #realPath(path: string): string {
-    requireDeno("FileSystemProgramResolver");
-    return Deno.realPathSync(path);
-  }
-
-  #readFile(path: string): string {
-    requireDeno("FileSystemProgramResolver");
-    return Deno.readTextFileSync(path);
+/**
+ * Helper for `FileSystemProgramResolver.listDataFiles()`, which returns
+ * whether the symbolic link `path` resolves to a file. One that resolves to
+ * nothing is not a file.
+ */
+async function linksToFile(path: string): Promise<boolean> {
+  try {
+    return (await Deno.stat(path)).isFile;
+  } catch (error) {
+    if (error instanceof Deno.errors.NotFound) return false;
+    throw error;
   }
 }
 

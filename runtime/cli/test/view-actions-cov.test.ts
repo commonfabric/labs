@@ -7,6 +7,7 @@ import {
   treeNextSibling,
   treePrevSibling,
 } from "../lib/view/actions.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** Minimal structure node carrying just the fields the helpers read. */
 function node(
@@ -29,7 +30,7 @@ function node(
   };
 }
 
-Deno.test("treeNextSibling: out-of-range index is a no-op (line 96)", () => {
+test("treeNextSibling: out-of-range index is a no-op (line 96)", () => {
   const flat = [node(0), node(1), node(1)];
   // An index past the end never enters the while loop, so the function
   // returns the index unchanged via the final fallthrough.
@@ -41,7 +42,7 @@ Deno.test("treeNextSibling: out-of-range index is a no-op (line 96)", () => {
   assertEquals(treeNextSibling([], 0), 0);
 });
 
-Deno.test("treePrevSibling: undefined node returns the index (line 109)", () => {
+test("treePrevSibling: undefined node returns the index (line 109)", () => {
   const flat = [node(0), node(1)];
   // `flat[idx]` is undefined for an out-of-range index, so the guard returns
   // the index unchanged before scanning.
@@ -50,7 +51,7 @@ Deno.test("treePrevSibling: undefined node returns the index (line 109)", () => 
   assertEquals(treePrevSibling([], 0), 0);
 });
 
-Deno.test("treeChild: undefined node returns the index (line 148)", () => {
+test("treeChild: undefined node returns the index (line 148)", () => {
   const flat = [node(0), node(1)];
   // Same guard: an out-of-range index has no node, so `treeChild` is a no-op.
   assertEquals(treeChild(flat, flat.length), flat.length);
@@ -58,7 +59,7 @@ Deno.test("treeChild: undefined node returns the index (line 148)", () => {
   assertEquals(treeChild([], 0), 0);
 });
 
-Deno.test(
+test(
   "nodeForViewport: falls back to the enclosing node when nothing starts on screen (lines 231-232)",
   () => {
     // One outer node spanning lines 0..100 and an inner node that *starts*
@@ -81,7 +82,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "nodeForViewport: falls back to 0 when nothing starts on screen and nothing encloses (line 232 else)",
   () => {
     // Every node lives entirely above the viewport, so neither the on-screen

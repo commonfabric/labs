@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   ChangeSet,
   Compartment,
@@ -20,6 +19,7 @@ import {
   type PresenceRoomHandle,
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 import { CFCodeEditor } from "./cf-code-editor.ts";
 import {
   highlightAnchors,
@@ -675,7 +675,7 @@ describe("CFCodeEditor collaboration", () => {
       _collaboration: collaboration,
       _publishPresence: () => calls.push("presence"),
       _reportSelection: () => calls.push("selection"),
-      emit: () => calls.push("change"),
+      emit: (name: string) => calls.push(name),
       setValue: () => calls.push("value"),
       _updateMentionedFromContent: () => calls.push("mentioned"),
       _setupPieceNameSubscriptions: () => calls.push("subscriptions"),
@@ -704,7 +704,8 @@ describe("CFCodeEditor collaboration", () => {
       "selection",
       "operation",
       "presence",
-      "change",
+      "cf-change",
+      "cf-edit",
       "mentioned",
       "subscriptions",
       "names",
@@ -727,10 +728,25 @@ describe("CFCodeEditor collaboration", () => {
     invoke(undefined, false, true);
     expect(calls).toEqual(["presence", "selection"]);
 
+    // A read-only editor tells no edit.
+    calls.length = 0;
+    self.readonly = true;
+    invoke(undefined);
+    expect(calls).not.toContain("cf-edit");
+    self.readonly = false;
+
     calls.length = 0;
     self._collaboration = undefined as never;
     invoke(undefined);
     expect(calls).toContain("value");
+    expect(calls).toContain("cf-edit");
+    // Nor does one an ordinary cell pushed.
+    calls.length = 0;
+    invoke(Transaction.remote);
+    expect(calls).not.toContain("cf-edit");
+    calls.length = 0;
+    invoke(cellSync);
+    expect(calls).not.toContain("cf-edit");
   });
 
   it("leaves operation authority in charge of ordinary Cell echoes", () => {

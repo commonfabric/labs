@@ -4,9 +4,9 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import type { JSONSchema, JSONSchemaObj } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { TransformationDiagnostic } from "../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";

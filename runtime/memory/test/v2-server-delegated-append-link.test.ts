@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import * as Engine from "../v2/engine.ts";
 import { Server } from "../v2/server.ts";
@@ -10,6 +9,12 @@ import {
   type StreamEventsDocValue,
 } from "../v2.ts";
 import { testSessionOpenServerOptions } from "./v2-auth-test-helpers.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 const SPACE = "did:key:z6Mk-delegated-append-link-space";
 const STREAM = { id: "of:delegated-append-link-stream", path: ["stream"] };
@@ -62,6 +67,37 @@ describe("Server", () => {
           );
           expect(result.deduped).toBe(false);
           expect(await storedEventIds(server)).toEqual(["event-derived"]);
+        } finally {
+          await server.close();
+        }
+      });
+
+      it("acknowledges a delivery re-sent under a fresh `localSeq` as deduped, with no commit, and appends another event", async () => {
+        const server = createServer();
+        try {
+          const first = await server.commitDelegatedAppend(
+            delivery("event-resent", STREAM),
+          );
+          const engine = await server.engineForSpace(SPACE);
+          const head = Engine.serverSeq(engine);
+
+          const resent = await server.commitDelegatedAppend({
+            ...delivery("event-resent", STREAM),
+            localSeq: 2,
+          });
+          expect(resent).toEqual({ deduped: true });
+          expect(Engine.serverSeq(engine)).toBe(head);
+
+          const next = await server.commitDelegatedAppend({
+            ...delivery("event-next", STREAM),
+            localSeq: 3,
+          });
+          expect(next).toEqual({ seq: head + 1, deduped: false });
+          expect(first.deduped).toBe(false);
+          expect(await storedEventIds(server)).toEqual([
+            "event-resent",
+            "event-next",
+          ]);
         } finally {
           await server.close();
         }

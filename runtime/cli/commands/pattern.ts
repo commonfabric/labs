@@ -1,4 +1,4 @@
-import { Command } from "@cliffy/command";
+import { Command, ValidationError } from "@cliffy/command";
 import { basename, dirname } from "@std/path";
 import { LLMClient } from "@commonfabric/llm";
 import type { MemorySpace, Runtime } from "@commonfabric/runner";
@@ -23,14 +23,24 @@ import {
   entryHistory,
   historyLines,
   lineageLines,
+  type LinkChannel,
+  linkLine,
+  makeStable,
   PatternHistoryError,
+  patternLink,
+  requireLineage,
   rollbackEntry,
   rollbackLines,
+  stableLine,
 } from "../lib/pattern-history.ts";
 import {
+  type DeployedSource,
   entrySlot,
   lineageForEntry,
   type SlotSources,
+  versionJson,
+  versionLine,
+  type VersionOutcome,
 } from "../lib/pattern-versions.ts";
 import {
   chooseProfile,
@@ -41,13 +51,21 @@ import {
 import { type ListedProfile, listProfiles } from "../lib/profile.ts";
 import type { DIDKey } from "@commonfabric/identity";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import type { PatternIndexClient } from "@commonfabric/pattern-index/client";
+import type {
+  PatternIndexChannel,
+  PatternIndexClient,
+} from "@commonfabric/pattern-index/client";
 import {
   publishPatternFromDisk,
   type PublishReport,
   publishReportLines,
 } from "../lib/pattern-publish.ts";
-import { loadPieces, type SpaceConfig } from "../lib/piece.ts";
+import {
+  loadPieces,
+  readRunningPattern,
+  type RunningPattern,
+  type SpaceConfig,
+} from "../lib/piece.ts";
 import { render } from "../lib/render.ts";
 import { absPath } from "../lib/utils.ts";
 import {
@@ -57,8 +75,10 @@ import {
   rethrowAsNotMember,
 } from "./pattern-index.ts";
 import {
+  parsePieceOptions,
   parseSpaceOptions,
   type PieceCLIOptions,
+  recordVersionInIndex,
   targetOptions,
 } from "./piece.ts";
 
@@ -74,6 +94,8 @@ interface PublishCLIOptions extends PieceCLIOptions {
   allowDirty?: boolean;
   skipLocalCheck?: boolean;
   remixedFrom?: string;
+  standalone?: boolean;
+  part?: boolean;
   patternIndexUrl?: string;
   json?: boolean;
 }
@@ -182,11 +204,24 @@ interface NamedPublishCLIOptions extends PublishCLIOptions {
 }
 
 /**
- * Checks and shares `entry`, printing the report; with `naming`, then names
- * the lineage the share was kept in, once the report is out, so a naming
- * that fails never hides what the share did.
+ * `cf pattern share`: checks and shares `entry` on beta, by link only,
+ * printing the report; `cf pattern stable` makes it findable.
  */
 export async function share(
+  options: PublishCLIOptions,
+  entry: string,
+  deps: PublishCommandDeps = {},
+): Promise<void> {
+  await shareOn("beta", options, entry, deps);
+}
+
+/**
+ * Checks and shares `entry` on `channel`, printing the report; with
+ * `naming`, then names the lineage the share was kept in, once the report is
+ * out, so a naming that fails never hides what the share did.
+ */
+async function shareOn(
+  channel: PatternIndexChannel,
   options: PublishCLIOptions,
   entry: string,
   {
@@ -239,10 +274,16 @@ export async function share(
           : { keywords: listFlag(options.keywords) }),
         allowDirty: !!options.allowDirty,
         slot: await entrySlot(absPath(entry), slotSources(store)),
+        channel,
         skipLocalCheck: !!options.skipLocalCheck,
         ...(options.remixedFrom === undefined
           ? {}
           : { remixedFrom: options.remixedFrom }),
+        ...(options.standalone
+          ? { standalone: true }
+          : options.part
+          ? { standalone: false }
+          : {}),
       },
       {
         compileEntry: (main, program) =>
@@ -287,7 +328,8 @@ export async function share(
 }
 
 /**
- * `cf pattern publish`: shares `entry` as `share` does, then names the
+ * `cf pattern publish`: shares `entry` as `share` does but on stable, so it
+ * is findable once checked, then names the
  * person as its author under one of their profiles. It names nothing unless
  * `--as` repeats the profile's name, so whoever runs it has had to read the
  * name it shows, and an agent has to have asked the person. Everything that
@@ -343,7 +385,8 @@ export async function publishNamed(
   const sources = slotSources(
     storeFor(resolvePatternIndexUrl(options.patternIndexUrl), deps.store),
   );
-  await share(options, entry, deps, async (client, report) => {
+  // Publishing under a name is meant to be found, so it shares on stable.
+  await shareOn("stable", options, entry, deps, async (client, report) => {
     // The lineage the share landed in, which the index may have found by
     // an earlier publication rather than by this file's slot.
     const lineageId = report.lineageId ??
@@ -454,8 +497,8 @@ export async function rollback(
       {
         client,
         sources,
-        readTextFile: (path) => Deno.readTextFile(path),
-        writeTextFile: (path, contents) => Deno.writeTextFile(path, contents),
+        readFile: (path) => Deno.readFile(path),
+        writeFile: (path, bytes) => Deno.writeFile(path, bytes),
       },
     );
     out(
@@ -464,6 +507,79 @@ export async function rollback(
     );
   });
 }
+
+/** What `cf pattern checkpoint` reaches; the real piece and index by default. */
+export interface CheckpointDeps {
+  readRunning?: typeof readRunningPattern;
+  readTextFile?: (path: string) => Promise<string>;
+  recordVersion?: (deployed: DeployedSource) => Promise<VersionOutcome>;
+  render?: typeof render;
+}
+
+/**
+ * `cf pattern checkpoint`: keeps what a piece runs now as a private version
+ * of `entry`'s lineage, which the sharing setting may share once it settles,
+ * as it may a deployed one. It deploys nothing, so a pattern made with
+ * `--no-index-version` deploys is kept once a change is finished. Exits 1 when no version was kept, since the
+ * person asked for one.
+ */
+export async function checkpoint(
+  options: PieceCLIOptions & { json?: boolean },
+  entry: string,
+  {
+    readRunning = readRunningPattern,
+    readTextFile = (path) => Deno.readTextFile(path),
+    recordVersion,
+    render: out = render,
+  }: CheckpointDeps = {},
+): Promise<void> {
+  const config = parsePieceOptions(options);
+  const running: RunningPattern = await readRunning(config);
+  // The entry names the lineage the version joins, so it must be the file
+  // the piece runs, as it was deployed: another file, or this one edited
+  // since, would file the piece's source under the wrong history.
+  const runningMain = running.program.files.find((file) =>
+    file.name === running.program.main
+  );
+  if (runningMain?.contents !== await readTextFile(absPath(entry))) {
+    throw new ValidationError(
+      `${entry} is not what the piece runs: deploy it first ` +
+        `(cf piece setsrc), or name the entry file the piece was deployed from.`,
+      { exitCode: 1 },
+    );
+  }
+  const outcome = await (recordVersion ??
+    ((deployed) => recordVersionInIndex(config.identity, deployed)))({
+      entry: absPath(entry),
+      program: running.program,
+      patternId: () => Promise.resolve(running.patternId),
+      piece: { space: running.space, id: running.id },
+      // A piece following a system or repository pattern is not the
+      // person's work, and keeps no version, as a deploy of it does not.
+      ...(running.origin === undefined ? {} : { origin: running.origin }),
+      // No keepPrivate: the sharing setting covers a checkpoint as it does a
+      // deploy, and the index shares one only once it has settled.
+    });
+  if (options.json) {
+    out(versionJson(outcome), { json: true });
+  } else {
+    out(checkpointLine(outcome));
+  }
+  if (outcome.status !== "recorded") Deno.exitCode = 1;
+}
+
+/** What a checkpoint came to, in one line; a version not kept says why. */
+export const checkpointLine = (outcome: VersionOutcome): string => {
+  switch (outcome.status) {
+    case "recorded":
+      return versionLine(outcome) ?? "";
+    case "not-joined":
+      return "No version kept: this machine has not joined a pattern index (cf index join).";
+    case "skipped":
+    case "failed":
+      return `No version kept: ${outcome.reason}.`;
+  }
+};
 
 export async function unshare(
   options: IndexCLIOptions,
@@ -485,6 +601,40 @@ export async function unshare(
         : `${entry} is no longer listed or shared on its own. Anyone holding the id of a version already shared can still open it; cf pattern share shares it again.`,
       { json: options.json },
     );
+  });
+}
+
+/** `cf pattern stable`: makes the newest shared version findable. */
+export async function stable(
+  options: IndexCLIOptions,
+  entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options, access);
+    const lineage = await requireLineage(client, absPath(entry), sources);
+    const report = await makeStable(client, lineage, entry);
+    out(options.json ? report : stableLine(entry, report), {
+      json: options.json,
+    });
+  });
+}
+
+/** `cf pattern link`: a link to the entry's stable, beta or numbered version. */
+export async function link(
+  options: IndexCLIOptions & { beta?: boolean; number?: number },
+  entry: string,
+  { render: out = render, ...access }: IndexDeps = {},
+): Promise<void> {
+  const channel: LinkChannel = options.number ??
+    (options.beta ? "beta" : "stable");
+  await ownerOnly(async () => {
+    const { client, sources } = await indexFor(options, access);
+    const lineage = await requireLineage(client, absPath(entry), sources);
+    const report = await patternLink(client, lineage, entry, channel);
+    out(options.json ? report : linkLine(entry, lineage, report), {
+      json: options.json,
+    });
   });
 }
 
@@ -583,6 +733,20 @@ const shareOptions = (cmd: Command<any>) =>
       "--remixed-from <patternId:string>",
       "The published pattern this one was built from, when cf has no record of it.",
     )
+    .option(
+      "--standalone",
+      "Offer it to people choosing what to place, on its own at the top of a " +
+        "loom. Without --standalone or --part, a new version keeps its " +
+        "predecessor's answer, a remix its source's, and any other first " +
+        "version stands alone when its entry file is main.tsx. A pattern " +
+        "that needs an input with no default is a part either way.",
+      { conflicts: ["part"] },
+    )
+    .option(
+      "--part",
+      "Offer it only as a part other patterns build from, not on its own.",
+      { conflicts: ["standalone"] },
+    )
     .env(
       "CF_PATTERN_INDEX_URL=<url:string>",
       "Base URL of the pattern index.",
@@ -608,9 +772,11 @@ export const pattern = new Command()
     targetOptions(
       shareOptions(new Command())
         .description(
-          "Share a pattern anonymously: others who share see it under a " +
-            "pseudonym of this pattern alone, never linked to your other " +
-            "patterns or your name. Join first with cf index join. It " +
+          "Share a pattern anonymously on beta: anyone with its link " +
+            "(cf pattern link --beta) can reach it, under a pseudonym of this " +
+            "pattern alone, never linked to your other patterns or your " +
+            "name; cf pattern stable makes it findable. Join first with " +
+            "cf index join. It " +
             "checks the pattern for personal details with the index's own " +
             "privacy question, and when it finds some, rewrites it into a " +
             "general version (specific values lifted into arguments). The " +
@@ -633,7 +799,7 @@ export const pattern = new Command()
       shareOptions(new Command())
         .description(
           "Publish a pattern under your name: shares it as cf pattern share " +
-            "does, then shows one of your profiles as its author to every " +
+            "does but on stable, findable once checked, then shows one of your profiles as its author to every " +
             "member. Only this pattern is named; your other patterns stay " +
             "anonymous and unlinked. Says what it reveals, and names nothing " +
             "unless --as repeats the name it shows.",
@@ -660,8 +826,8 @@ export const pattern = new Command()
       new Command()
         .description(
           "The versions the index keeps of a pattern you deploy: one for " +
-            "each cf piece new or cf piece setsrc of it, private unless " +
-            "shared. Without an entry file, lists every pattern of yours " +
+            "each cf piece new or cf piece setsrc of it, and each " +
+            "cf pattern checkpoint, private unless shared. Without an entry file, lists every pattern of yours " +
             "the index keeps. Only you can read them.",
         )
         .arguments("[entry:string]")
@@ -693,6 +859,30 @@ export const pattern = new Command()
         ),
     ).action(rollback),
   )
+  /* pattern checkpoint */
+  .command(
+    "checkpoint",
+    targetOptions(
+      new Command()
+        .description(
+          "Keep what a piece runs now as a private checkpoint in a " +
+            "pattern's history, the version cf pattern rollback goes back " +
+            "to. It deploys nothing, and is shared as a deploy is: by " +
+            "cf pattern share, or by your sharing setting once it settles.",
+        )
+        .arguments("<entry:string>")
+        .option(
+          "-c,--cell, --piece <cell:string>",
+          "The piece whose pattern to keep.",
+        )
+        .option("--json", "Print the outcome as JSON, for an agent to read.")
+        .example(
+          cliText("cf pattern checkpoint ./bins.tsx --cell <piece>"),
+          "Keep the pattern <piece> runs as a private version of ./bins.tsx.",
+        ),
+      { global: false },
+    ).action(checkpoint),
+  )
   /* pattern unshare */
   .command(
     "unshare",
@@ -706,6 +896,42 @@ export const pattern = new Command()
         )
         .arguments("<entry:string>"),
     ).action(unshare),
+  )
+  /* pattern stable */
+  .command(
+    "stable",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Make a pattern's newest shared version stable: what search, the " +
+            "catalog and a plain link give. It passed the privacy check when " +
+            "it was shared on beta, so no new source is exposed; only who " +
+            "can find it changes. One still being checked becomes stable " +
+            "once it passes.",
+        )
+        .arguments("<entry:string>"),
+    ).action(stable),
+  )
+  /* pattern link */
+  .command(
+    "link",
+    indexAccessOptions(
+      new Command()
+        .description(
+          "Print a link to a shared pattern: its stable version, or beta " +
+            "when nothing is stable yet. A link names the pattern by its " +
+            "pseudonym, and shows your name only on a pattern published " +
+            "under it.",
+        )
+        .arguments("<entry:string>")
+        .option("--beta", "Link to beta, the newest shared version.", {
+          conflicts: ["number"],
+        })
+        .option(
+          "--number <n:integer>",
+          "Link to exactly shared version n, which never changes.",
+        ),
+    ).action(link),
   )
   /* pattern unpublish */
   .command(

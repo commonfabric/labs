@@ -57,6 +57,7 @@ import {
   type FileStoreRecord,
   type FileStoreRecordCell,
 } from "../fabrifile/store.tsx";
+import { FileStoreView } from "../fabrifile/view.tsx";
 import {
   addParticipant,
   type ParticipantRosterCell,
@@ -345,9 +346,20 @@ export interface RoomManager extends JoiningManager {
 
   /**
    * The people the viewer's rooms list, other than the viewer: by principal,
-   * the profiles attesting it.
+   * the profiles attesting it. A manager with `askedPeople` lists them only
+   * for a session that has asked for them; one from before lists them
+   * without being asked, and reading them reads every listed room's roster.
    */
-  people: PerUser<Record<string, ProfileCell[]>>;
+  people: PerSession<Record<string, ProfileCell[]>>;
+
+  /**
+   * `people`, for a session that has asked for them, and no one before; what
+   * the room's picker reads.
+   */
+  askedPeople?: PerSession<Record<string, ProfileCell[]>>;
+
+  /** Asks for `askedPeople`, for the session, as a picker of them opens. */
+  askForPeople?: Stream<unknown>;
 }
 
 /** Each of the viewer's adds' outcomes, by its `requestId`. */
@@ -762,13 +774,18 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
     );
     // Each person the manager lists who isn't a member of the room's space, by
     // the first profile attesting them, with what tells them apart from
-    // another of them under the same name, per user, as the manager's people
-    // are, and no one while the space's members aren't known. The binding's
-    // name is the value's cause, the identity of the document that stores it,
-    // so renaming it moves its data.
-    const candidatesForUser = computed((): PerUser<AddCandidate[]> => {
+    // another of them under the same name, per session, as the manager's
+    // `askedPeople` are, and no one while the space's members aren't known.
+    // `askedPeople` lists no one until the session asks for them
+    // (`askForPeople`), as the panel's control below does, so the room reads
+    // no other room until then. A manager with no `askedPeople`, one from
+    // before it had them, is read through its `people` instead, which it
+    // lists without being asked. The binding's name is the value's cause, the
+    // identity of the document that stores it, so renaming it moves its data.
+    const candidatesForSession = computed((): PerSession<AddCandidate[]> => {
       if (members === undefined) return [];
-      const listed = Object.entries(manager?.people ?? {}).flatMap(
+      const people = manager?.askedPeople ?? manager?.people ?? {};
+      const listed = Object.entries(people).flatMap(
         ([principal, profiles]) => {
           const profile = profiles[0];
           return members.some((member) => member.principal === principal) ||
@@ -787,7 +804,16 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
       }));
     });
     const candidatesDisplay = computed((): ChatDisplay =>
-      candidatesForUser.length === 0 ? "none" : "block"
+      candidatesForSession.length === 0 ? "none" : "block"
+    );
+    // The control asking for the people shows while the picker offers no one,
+    // to a reader whose manager can be asked: one with `askedPeople`, which
+    // `askForPeople` comes with. A declared stream reads as present whether
+    // or not the manager holds one, so it is the people that say so.
+    const askDisplay = computed((): ChatDisplay =>
+      manager?.askedPeople !== undefined && candidatesForSession.length === 0
+        ? "block"
+        : "none"
     );
 
     return {
@@ -811,6 +837,19 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
             />
           </div>
           <div
+            id="fabrichat-add-member-ask-people"
+            hidden
+            style={{ display: askDisplay }}
+          >
+            <cf-button
+              size="sm"
+              variant="ghost"
+              onClick={manager?.askForPeople}
+            >
+              Add people from your chats
+            </cf-button>
+          </div>
+          <div
             id="fabrichat-add-member-people"
             hidden
             style={{ display: candidatesDisplay }}
@@ -819,7 +858,7 @@ export const AddMember = pattern<AddMemberInput, AddMemberOutput>(
               <cf-text variant="caption">
                 Or add people from your chats:
               </cf-text>
-              {candidatesForUser.map((candidate) => (
+              {candidatesForSession.map((candidate) => (
                 <cf-hstack
                   gap="2"
                   align="center"
@@ -1155,12 +1194,14 @@ export interface ChatRoomView {
 
   /**
    * Those who joined the room itself, each added once through
-   * `addParticipant`, in the order they were added. Unlike `participants`, it
-   * lists no author it doesn't hold, and no participant of another space, so
-   * it is read from the roster alone. Like `participants`, it is a claim, not
-   * proof of access.
+   * `addParticipant`, in the order they were added; absent until someone
+   * joins, and in a room nobody can join. Unlike `participants`, it lists no
+   * author it doesn't hold, and no participant of another space: it is a link
+   * to the roster the room stores, so a reader reads what is stored, whether
+   * or not any runtime has derived anything of the room since. Like
+   * `participants`, it is a claim, not proof of access.
    */
-  roster: ProfileCell[];
+  roster?: ProfileCell[];
 
   /**
    * The members of the room's space (`memberSet()`): one for each principal
@@ -1890,13 +1931,17 @@ export const FabriChatRoomCore = pattern<
     joined: tellJoined,
   });
   const openAttach = prepareAttach({ ensureFileStore: ensureFileStoreHere });
+  // Whether the space names a store, read from the record itself:
+  // `spaceFileStore` compares unequal to `undefined` even where the record
+  // names no store.
+  const hasSpaceFileStore = computed(() =>
+    (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
+      undefined
+  );
   const attachFiles = commitAttach({
     composer,
     store: spaceFileStore,
-    hasStore: computed(() =>
-      (ownSpace ? fileStore?.get().store : rootFileStore?.get()?.store) !==
-        undefined
-    ),
+    hasStore: hasSpaceFileStore,
   });
   // The files this session's composer is attaching, a list of the session's
   // own, so that each session's rows are its own.
@@ -1920,6 +1965,30 @@ export const FabriChatRoomCore = pattern<
         : [];
     })
   );
+  // A room that is its space's root, and names a store, shows the store's
+  // files from its own rendering, as a root offering file storage does.
+  const showsFiles = computed(() => ownSpace && hasSpaceFileStore);
+  // Whether this session has the space's files open. The store's view is
+  // mapped from a list of the session's own that holds the store only while
+  // they are, so a session that hasn't opened them holds no view, and nothing
+  // reads the store's entries for it.
+  const filesOpen = new Writable.perSession(false);
+  const filesStores = computed((): PerSession<Cell<FileStoreOutput>[]> =>
+    filesOpen.get() && showsFiles && spaceFileStore !== undefined
+      ? [spaceFileStore]
+      : []
+  );
+  const filesViews = filesStores.map((store) => FileStoreView({ store }));
+  const filesViewUIs = computed((): PerSession<VNode[]> =>
+    filesViews.map((filesView) => filesView[UI])
+  );
+  const filesLabel = computed((): PerSession<string> =>
+    filesOpen.get() ? "Hide files" : "Files"
+  );
+  const filesToggleDisplay = computed((): ChatDisplay =>
+    showsFiles ? "block" : "none"
+  );
+  const toggleFiles = action(() => filesOpen.set(!filesOpen.get()));
   const threadComposers = threadComposerRoots.map((root) =>
     FabriChatThreadComposer({
       root,
@@ -1991,7 +2060,7 @@ export const FabriChatRoomCore = pattern<
     about: aboutView,
     replyShape: CHAT_REPLY_SHAPE,
     participants,
-    roster: joined,
+    roster: roster.key("items"),
     members: membersForUser,
     participantEntries: participantEntriesForUser,
     participantPrincipals: participantPrincipalsForUser,
@@ -2173,16 +2242,30 @@ export const FabriChatRoomCore = pattern<
               </cf-button>
             </cf-hstack>
           ))}
-          <cf-file-input
-            multiple
-            showPreview={false}
-            buttonText="📎 Attach"
-            variant="ghost"
-            size="sm"
-            disabled={cannotSendForSession}
-            oncf-click={openAttach}
-            oncf-change={attachFiles}
-          />
+          <cf-hstack gap="2" align="center">
+            <cf-file-input
+              multiple
+              showPreview={false}
+              buttonText="📎 Attach"
+              variant="ghost"
+              size="sm"
+              disabled={cannotSendForSession}
+              oncf-click={openAttach}
+              oncf-change={attachFiles}
+            />
+            <div
+              id="fabrichat-files-toggle"
+              hidden
+              style={{ display: filesToggleDisplay }}
+            >
+              <cf-button size="sm" variant="ghost" onClick={toggleFiles}>
+                {filesLabel}
+              </cf-button>
+            </div>
+          </cf-hstack>
+        </cf-vstack>
+        <cf-vstack id="fabrichat-files" gap="2">
+          {filesViewUIs}
         </cf-vstack>
 
         <cf-vstack

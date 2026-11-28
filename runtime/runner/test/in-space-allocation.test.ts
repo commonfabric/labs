@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
@@ -11,6 +10,12 @@ import {
 import { aclDocId } from "@commonfabric/memory/acl";
 import { readSpaceKind } from "@commonfabric/memory/v2/genesis-root";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
 import { parseLink } from "../src/link-utils.ts";

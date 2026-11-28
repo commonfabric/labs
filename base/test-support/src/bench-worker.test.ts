@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { BenchWorker } from "./bench-worker.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A far side that acknowledges whatever it is sent. */
 const ACKS =

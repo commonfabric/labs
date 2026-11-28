@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import { CFHoverReveal } from "./index.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** The opacity the actions container is drawn at. */
 function actionsOpacity(element: CFHoverReveal): string {
@@ -25,7 +26,7 @@ async function mountWithAction(): Promise<{
   return { element, action: element.querySelector("button")! };
 }
 
-Deno.test("cf-hover-reveal hides its actions while nothing reveals them", async () => {
+test("cf-hover-reveal hides its actions while nothing reveals them", async () => {
   const { element } = await mountWithAction();
   try {
     expect(actionsOpacity(element)).toBe("0");
@@ -34,7 +35,7 @@ Deno.test("cf-hover-reveal hides its actions while nothing reveals them", async 
   }
 });
 
-Deno.test("cf-hover-reveal shows its actions while `revealed` is set", async () => {
+test("cf-hover-reveal shows its actions while `revealed` is set", async () => {
   const { element } = await mountWithAction();
   try {
     element.revealed = true;
@@ -51,7 +52,7 @@ Deno.test("cf-hover-reveal shows its actions while `revealed` is set", async () 
   }
 });
 
-Deno.test("cf-hover-reveal shows its actions while focus is inside it", async () => {
+test("cf-hover-reveal shows its actions while focus is inside it", async () => {
   const { element, action } = await mountWithAction();
   try {
     action.focus();

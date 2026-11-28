@@ -1,17 +1,17 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   parseOnly,
   patternsToCheck,
   selectionFor,
   USAGE,
 } from "./cfcheck-lib.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** Four patterns, spread across the trees the collector walks. */
 const CORPUS = [
   "connectors/agents/debug-view/logic.ts",
-  "patterns/examples/counter/counter.tsx",
-  "patterns/examples/form-demo/form-demo.tsx",
+  "patterns/examples/counter/main.tsx",
+  "patterns/examples/form-demo/main.tsx",
   "patterns/system/home/home.tsx",
 ];
 
@@ -72,22 +72,22 @@ describe("cfcheck-lib", () => {
       // What a lane passes: a unit is a whole path, and the lane is
       // charged for the units it asked for and no others.
       expect(
-        patternsToCheck(CORPUS, ["patterns/examples/form-demo/form-demo.tsx"]),
+        patternsToCheck(CORPUS, ["patterns/examples/form-demo/main.tsx"]),
       )
-        .toEqual(["patterns/examples/form-demo/form-demo.tsx"]);
+        .toEqual(["patterns/examples/form-demo/main.tsx"]);
     });
 
     it("takes every pattern a term matches", () => {
       expect(patternsToCheck(CORPUS, ["patterns/"])).toEqual([
-        "patterns/examples/counter/counter.tsx",
-        "patterns/examples/form-demo/form-demo.tsx",
+        "patterns/examples/counter/main.tsx",
+        "patterns/examples/form-demo/main.tsx",
         "patterns/system/home/home.tsx",
       ]);
     });
 
     it("takes a pattern under either of two terms", () => {
       expect(patternsToCheck(CORPUS, ["form-demo", "home.tsx"])).toEqual([
-        "patterns/examples/form-demo/form-demo.tsx",
+        "patterns/examples/form-demo/main.tsx",
         "patterns/system/home/home.tsx",
       ]);
     });

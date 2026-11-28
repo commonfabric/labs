@@ -1089,14 +1089,25 @@ export const DEFAULT_CFC_DECOMPOSED_ENVELOPES: CfcDecomposedEnvelopes = false;
  * Whether the envelope persist path stores version-2 envelopes, whose
  * labels above the inline limit are references to content-addressed label
  * documents (`docs/specs/content-addressed-cfc-labels.md`). Off stores
- * version 1, every label inline. Reading resolves either version. Ships
- * behind a flag because a reader that predates version 2 fails closed on
- * it, which is correct and also unusable: every deployed reader must
- * interpret version 2 before any space sees one.
+ * version 1, every label inline. Reading resolves either version. A
+ * `Runtime` writes version 2 unless told otherwise
+ * (`RUNTIME_CFC_DIAL_DEFAULTS`); the constant below is the floor of a
+ * transaction no runtime configured, which keeps version 1.
  */
 export type CfcContentAddressedLabels = boolean;
 
 export const DEFAULT_CFC_CONTENT_ADDRESSED_LABELS: CfcContentAddressedLabels =
+  false;
+
+/**
+ * Whether commit preparation stores a reclassified value's creator-releasable
+ * `User` clauses as that clause or the declared policy (the
+ * `cfcPatternReclassification` experimental flag, which a `Runtime` turns on
+ * only beside `pieceCreatorRecord`). Off stores the flow join as derived.
+ */
+export type CfcPatternReclassification = boolean;
+
+export const DEFAULT_CFC_PATTERN_RECLASSIFICATION: CfcPatternReclassification =
   false;
 
 /**
@@ -1184,6 +1195,7 @@ export type CfcTxState = {
   policyEvaluationMode: CfcPolicyEvaluationMode;
   labelMetadataProtectionMode: CfcLabelMetadataProtectionMode;
   declaredMonotonicityMode: CfcDeclaredMonotonicityMode;
+  patternReclassification: CfcPatternReclassification;
   // The one sanctioned per-tx exemption from the declared-monotonicity gate
   // (§8.12.7 route 2b seam). Absent = gate applies. Set only through the
   // privileged `setCfcDeclaredWideningExemption` (trusted-builtin identity),
@@ -1244,7 +1256,10 @@ export type CfcTxState = {
   // as `writePolicyInputIdentities` above: attribution must not borrow an
   // identity a later run in the same transaction happens to set. The
   // runtime's own privileged persistence writes are excluded — bookkeeping,
-  // not authorship.
+  // not authorship — and so is a served event's processed claim, which §6.2.2
+  // makes the runtime's write, apart from the handler's: only the claim's own
+  // value, under no identity, at a path the runtime named a claim, which is
+  // the write the join's stamp leaves out too.
   writeIdentity: {
     sawWrite: boolean;
     multiple: boolean;

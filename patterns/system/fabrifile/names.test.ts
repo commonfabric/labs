@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { freeName, isValidName, MAX_NAME_BYTES, utf8Length } from "./names.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("names", () => {
   describe("utf8Length()", () => {

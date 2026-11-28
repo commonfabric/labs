@@ -44,6 +44,7 @@ import {
 import {
   type CfcCellLinkRefPayload,
   linkCfcLabelView,
+  stripSigilCfcLabelViews,
 } from "./cfc/link-label-view.ts";
 import { storedCfcMetadataAppliesToPath } from "./cfc/metadata.ts";
 import { cfcSchemaEntries } from "./cfc/schema-label-view.ts";
@@ -433,15 +434,6 @@ const recordLinkWritePolicyInput = (
   });
 };
 
-const cfcLabelViewForPrimitiveLink = (
-  value: unknown,
-): CfcLabelView | undefined => {
-  if (!isSigilLink(value)) {
-    return undefined;
-  }
-  return cloneCfcLabelView(linkCfcLabelView(value));
-};
-
 const attachCfcLabelViewToSigilLink = (
   value: unknown,
   cfcLabelView: CfcLabelView | undefined,
@@ -454,18 +446,6 @@ const attachCfcLabelViewToSigilLink = (
     ...linkRefPayload(value),
     cfcLabelView: clonedView,
   });
-};
-
-const stripCfcLabelViewFromPrimitiveLink = (value: unknown): unknown => {
-  if (!isSigilLink(value)) {
-    return value;
-  }
-  const inner = linkRefPayload(value) as CfcCellLinkRefPayload;
-  if (inner.cfcLabelView === undefined) {
-    return value;
-  }
-  const { cfcLabelView: _cfcLabelView, ...cleanInner } = inner;
-  return linkRefFrom(cleanInner);
 };
 
 /**
@@ -722,11 +702,11 @@ function writeWalked(
 ): boolean {
   const readOptions: DiffAndUpdateOptions = {
     ...options,
-    meta: {
+    meta: Object.freeze({
       ...options?.meta,
       ...markReadAsAttemptedWrite,
       ...allowMutableTransactionRead,
-    },
+    }),
   };
   const anchored: NonNullable<DiffWalkState["anchored"]> = [];
   const state: DiffWalkState = {
@@ -846,7 +826,7 @@ export function scopedArgumentInitializationTargets(
   // Reads which slots exist; the writes it leads to land in those slots.
   const value = tx.readValueOrThrow(container, {
     nonRecursive: true,
-    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+    meta: Object.freeze({ ...allowMutableTransactionRead, ...mergeableOpRead }),
   });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return [];
   return sessionScopedArgumentKeys(schema).flatMap((key) => {
@@ -882,13 +862,16 @@ export function initializeScopedArgumentSlots(
   }
   const options = {
     nonRecursive: true,
-    meta: { ...markReadAsAttemptedWrite, ...allowMutableTransactionRead },
+    meta: Object.freeze({
+      ...markReadAsAttemptedWrite,
+      ...allowMutableTransactionRead,
+    }),
   };
   // Reads which slots exist; the writes it leads to land in those slots, and
   // the diffs below attempt them under `options`.
   const value = tx.readValueOrThrow(container, {
     nonRecursive: true,
-    meta: { ...allowMutableTransactionRead, ...mergeableOpRead },
+    meta: Object.freeze({ ...allowMutableTransactionRead, ...mergeableOpRead }),
   });
   if (!isKeyableObjectNotArray(value) || isPrimitiveCellLink(value)) return;
   const changes: ChangeSet = [];
@@ -1089,7 +1072,10 @@ function anchorValueAsEntity(
   // build its write; the write lands at `link`, not at what these read.
   const probeOptions = {
     ...options,
-    meta: { ...withoutAttemptedWriteMark(options?.meta), ...mergeableOpRead },
+    meta: Object.freeze({
+      ...withoutAttemptedWriteMark(options?.meta),
+      ...mergeableOpRead,
+    }),
   };
 
   // If we're setting an array element, make the array the context for the
@@ -1706,7 +1692,10 @@ export function normalizeAndDiff(
       !cfcLabelViewHasValues(carriedCfcLabelView)
     ) {
       const probeOptions = {
-        meta: { ...ignoreReadForScheduling, ...internalVerifierRead },
+        meta: Object.freeze({
+          ...ignoreReadForScheduling,
+          ...internalVerifierRead,
+        }),
       };
       const currentReference = tx.readValueOrThrow(link, probeOptions);
       if (
@@ -1725,11 +1714,11 @@ export function normalizeAndDiff(
         // from the verifier read above.
         tx.readValueOrThrow(link, {
           ...options,
-          meta: {
+          meta: Object.freeze({
             ...options?.meta,
             ...markReadAsAttemptedWrite,
             ...writeDestinationRead,
-          },
+          }),
         });
         tx.recordCfcWritePolicyInput({
           kind: "preserved-output",
@@ -1783,6 +1772,12 @@ export function normalizeAndDiff(
   let newValueLink = isPrimitiveCellLink(newValue)
     ? parseLink(newValue, link)
     : undefined;
+  // The label view the incoming link carries. It is not part of what the link
+  // addresses: a written link is stored without it, and the schema rewrite
+  // below keeps it on the rewritten link.
+  const carriedCfcLabelView = isPrimitiveCellLink(newValue)
+    ? cloneCfcLabelView(linkCfcLabelView(newValue))
+    : undefined;
 
   // Ordinary document links can carry immutable values in schema defaults.
   // Expand those before the writer decomposes their schemas into durable docs.
@@ -1792,10 +1787,7 @@ export function normalizeAndDiff(
   ) {
     const inlined = findAndInlineDataUriLinks(newValue);
     if (inlined !== newValue) {
-      newValue = attachCfcLabelViewToSigilLink(
-        inlined,
-        cfcLabelViewForPrimitiveLink(newValue),
-      );
+      newValue = attachCfcLabelViewToSigilLink(inlined, carriedCfcLabelView);
       newValueLink = parseLink(newValue, link);
     }
   }
@@ -1845,7 +1837,7 @@ export function normalizeAndDiff(
   let currentValue = precomputedCurrent === NO_PRECOMPUTED
     ? tx.readValueOrThrow(link, {
       ...options,
-      meta: { ...options?.meta, ...writeDestinationRead },
+      meta: Object.freeze({ ...options?.meta, ...writeDestinationRead }),
     })
     : precomputedCurrent;
 
@@ -1858,7 +1850,6 @@ export function normalizeAndDiff(
 
   // A new alias can overwrite a previous alias. No-op if the same.
   if (newValueLink?.overwrite === "redirect") {
-    const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
     if (
       currentValueIsLink && isWriteRedirectLink(currentValue) &&
       areNormalizedLinksSame(parseLink(currentValue, link), newValueLink)
@@ -1886,7 +1877,7 @@ export function normalizeAndDiff(
       recordLinkWritePolicyInput(tx, link, newValueLink, carriedCfcLabelView);
       changes.push({
         location: link,
-        value: stripCfcLabelViewFromPrimitiveLink(newValue) as FabricValue,
+        value: stripSigilCfcLabelViews(newValue) as FabricValue,
       });
       return changes;
     }
@@ -1979,7 +1970,6 @@ export function normalizeAndDiff(
       () =>
         debugStr`[BRANCH_CELL_LINK] Processing cell link at path=${pathStr} link=$quote,long${newValue}`,
     );
-    const carriedCfcLabelView = cfcLabelViewForPrimitiveLink(newValue);
 
     // Collapse same-document self/parent links created by query-result dereferencing.
     // Example: "internal.__#1.next" -> "internal.__#1". Writing that link would
@@ -2105,7 +2095,7 @@ export function normalizeAndDiff(
         // TODO(seefeld): Normalize the link to a sigil link?
         {
           location: link,
-          value: stripCfcLabelViewFromPrimitiveLink(newValue) as FabricValue,
+          value: stripSigilCfcLabelViews(newValue) as FabricValue,
         },
       ];
     }

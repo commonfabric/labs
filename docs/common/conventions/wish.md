@@ -177,9 +177,10 @@ wish({ query: "#profileBio" }) // default profile's bio (free-text description)
 wish({ query: "#profileSpace" }) // default profile's space cell
 ```
 
-No target answers with a profile's picture or avatar text. Anyone can write a
-profile's picture, so a pattern reads the face from the profile `#profile`
-resolves, with `profileFace()` from
+No target answers with a profile's picture or avatar text. A stored picture may
+not be its owner's: earlier releases let anyone set one through `setPicture`,
+and a value can be stored without a label. So a pattern reads the face from the
+profile `#profile` resolves, with `profileFace()` from
 `patterns/system/profile-face/profile-face.ts`, which shows a picture or
 avatar text only when the profile's owner wrote it
 ([`principal-of.md`](../../features/principal-of.md) states the rule and what
@@ -319,7 +320,7 @@ has no profile.
 | Storage    | Home default pattern       | Current space                   | Profile piece                    |
 | Scope      | Cross-space                | Per-space                       | Cross-space, per-user            |
 | Source     | User's favorites list      | Pattern's `mentionable` export  | User's profile element list      |
-| Tag source | Snapshotted when favorited | Computed from schema            | `userTags` first, then `tag`     |
+| Tag source | Snapshotted when favorited | Piece's result schema           | `userTags` first, then `tag`     |
 
 ### Accessing the Favorites List Itself
 

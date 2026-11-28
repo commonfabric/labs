@@ -1,13 +1,14 @@
 // Verification of a compacted store against its backup: passes on what the
 // run produces, and names the property a tampered result lost.
 
-import { assert, assertEquals, assertFalse } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 
 import { applyCommit, close, open } from "@commonfabric/memory/v2/engine";
 import { compactStore } from "@commonfabric/memory/v2/compact";
 import { encodeMemoryBoundary } from "@commonfabric/memory/v2";
+import { test } from "@commonfabric/test-support/test";
 
 import {
   type CompactionVerification,
@@ -208,7 +209,7 @@ async function withCompacted(
   }
 }
 
-Deno.test("verifyCompaction passes on the run's own output, in full and sampled", async () => {
+test("verifyCompaction passes on the run's own output, in full and sampled", async () => {
   await withCompacted(({ backup, result }) => {
     const full = verifyCompaction({ result, against: backup });
     assertEquals(failing(full), []);
@@ -265,7 +266,7 @@ Deno.test("verifyCompaction passes on the run's own output, in full and sampled"
   });
 });
 
-Deno.test("verifyCompaction passes when the space has no ACL document", async () => {
+test("verifyCompaction passes when the space has no ACL document", async () => {
   await withCompacted(({ backup, result }) => {
     const verification = verifyCompaction({ result, against: backup });
     assertEquals(failing(verification), []);
@@ -277,7 +278,7 @@ Deno.test("verifyCompaction passes when the space has no ACL document", async ()
   }, { withAcl: false });
 });
 
-Deno.test("verifyCompaction passes when the ACL document is a tombstone the run left alone, and catches it moved", async () => {
+test("verifyCompaction passes when the ACL document is a tombstone the run left alone, and catches it moved", async () => {
   await withCompacted(async ({ backup, result, dir }) => {
     const verification = verifyCompaction({ result, against: backup });
     assertEquals(failing(verification), []);
@@ -302,7 +303,7 @@ Deno.test("verifyCompaction passes when the ACL document is a tombstone the run 
   }, { deleteAcl: true });
 });
 
-Deno.test("verifyCompaction passes on a second run whose backup already holds markers", async () => {
+test("verifyCompaction passes on a second run whose backup already holds markers", async () => {
   await withCompacted(({ backup, result }) => {
     const verification = verifyCompaction({ result, against: backup });
     assertEquals(
@@ -335,7 +336,7 @@ Deno.test("verifyCompaction passes on a second run whose backup already holds ma
   }, { twice: true });
 });
 
-Deno.test("verifyCompaction passes on a run interrupted after one instance and resumed", async () => {
+test("verifyCompaction passes on a run interrupted after one instance and resumed", async () => {
   await withCompacted(({ backup, result }) => {
     const verification = verifyCompaction({ result, against: backup });
     assertEquals(
@@ -361,7 +362,7 @@ Deno.test("verifyCompaction passes on a run interrupted after one instance and r
   }, { interrupt: true });
 });
 
-Deno.test("verifyCompaction passes on a run interrupted after its audit and resumed", async () => {
+test("verifyCompaction passes on a run interrupted after its audit and resumed", async () => {
   await withCompacted(({ backup, result }) => {
     const verification = verifyCompaction({ result, against: backup });
     assertEquals(
@@ -380,7 +381,7 @@ Deno.test("verifyCompaction passes on a run interrupted after its audit and resu
   }, { interruptAfterAudit: true });
 });
 
-Deno.test("verifyCompaction holds an interrupted attempt's retained audit to the backup", async () => {
+test("verifyCompaction holds an interrupted attempt's retained audit to the backup", async () => {
   await withCompacted(async ({ backup, result, dir }) => {
     // The first attempt wrote its audit before the interruption; the resumed
     // run wrote the one the head reads. A changed owner in the retained
@@ -512,7 +513,7 @@ Deno.test("verifyCompaction holds an interrupted attempt's retained audit to the
   }, { interruptAfterAudit: true });
 });
 
-Deno.test("verifyCompaction passes on a second run after the ACL document was tombstoned", async () => {
+test("verifyCompaction passes on a second run after the ACL document was tombstoned", async () => {
   await withCompacted(({ backup, result }) => {
     const verification = verifyCompaction({ result, against: backup });
     assertEquals(
@@ -527,7 +528,7 @@ Deno.test("verifyCompaction passes on a second run after the ACL document was to
   }, { twice: true, tombstoneBetween: true });
 });
 
-Deno.test("verifyCompaction holds an earlier run's commit to the backup", async () => {
+test("verifyCompaction holds an earlier run's commit to the backup", async () => {
   await withCompacted(async ({ backup, result, dir }) => {
     const copy = `${dir}/earlier-run-tampered.sqlite`;
     await Deno.copyFile(result, copy);
@@ -547,7 +548,7 @@ Deno.test("verifyCompaction holds an earlier run's commit to the backup", async 
   }, { twice: true });
 });
 
-Deno.test("verifyCompaction catches a materialized boundary holding the wrong state under a bounded cut", async () => {
+test("verifyCompaction catches a materialized boundary holding the wrong state under a bounded cut", async () => {
   await withCompacted(async ({ backup, result, dir }) => {
     const clean = verifyCompaction({ result, against: backup });
     assertEquals(failing(clean), [], formatCompactionVerification(clean));
@@ -571,7 +572,7 @@ Deno.test("verifyCompaction catches a materialized boundary holding the wrong st
   }, { keepLast: 6 });
 });
 
-Deno.test("verifyCompaction names what a tampered result lost", async () => {
+test("verifyCompaction names what a tampered result lost", async () => {
   await withCompacted(async ({ backup, result, dir }) => {
     const tampered = async (
       sql: string,
@@ -795,7 +796,45 @@ Deno.test("verifyCompaction names what a tampered result lost", async () => {
   });
 });
 
-Deno.test("reconstructRevision gives the state after exactly one row", async () => {
+test("verifyCompaction throws when a head cannot be read in either file", async () => {
+  await withCompacted(async ({ backup, result, dir }) => {
+    // Every read of a head resolves its branch through `parent_branch`;
+    // without that column, no document in the file can be read.
+    const unreadable = async (source: string, name: string) => {
+      const copy = `${dir}/${name}`;
+      await Deno.copyFile(source, copy);
+      const db = new Database(copy);
+      db.exec(`ALTER TABLE branch RENAME COLUMN parent_branch TO parent`);
+      db.close();
+      return copy;
+    };
+    const brokenResult = await unreadable(result, "broken-result.sqlite");
+    const brokenBackup = await unreadable(backup, "broken-backup.sqlite");
+    for (
+      const options of [
+        // The backup's fingerprint reaches every head, and the result's read
+        // of each throws.
+        { result: brokenResult, against: backup },
+        // The backup's fingerprint fails before any head; each is then read
+        // on its own.
+        { result, against: brokenBackup },
+        // Sampled, without a fingerprint, on either side.
+        { result: brokenResult, against: backup, sample: 1 },
+        { result, against: brokenBackup, sample: 2 },
+      ]
+    ) {
+      assertThrows(
+        () => verifyCompaction(options),
+        Error,
+        "no such column: parent_branch",
+      );
+    }
+    // The intact pair reads back and verifies.
+    assert(verifyCompaction({ result, against: backup }).ok);
+  });
+});
+
+test("reconstructRevision gives the state after exactly one row", async () => {
   const dir = await Deno.makeTempDir({ prefix: "reconstruct-revision-" });
   try {
     const path = `${dir}/space.sqlite`;

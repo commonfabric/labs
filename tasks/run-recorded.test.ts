@@ -1,8 +1,14 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { fromFileUrl, join } from "@std/path";
 
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { readSpool } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { runRecorded, type Spawn, spawnInherited } from "./run-recorded.ts";
 
 /** A spawner that records what it was asked to start and ends as told. */
@@ -146,6 +152,32 @@ describe("run-recorded", () => {
         expect((await readSpool(spoolDir)).records).toEqual([]);
       });
     }
+  });
+
+  describe("as a script", () => {
+    it("exits with the wrapped command's code and records it under the names it was given", async () => {
+      const result = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("..", import.meta.url)),
+        args: (lock) => [
+          "run",
+          `--lock=${lock}`,
+          "-A",
+          fromFileUrl(new URL("./run-recorded.ts", import.meta.url)),
+          "gate",
+          "repo",
+          "probe-script",
+          "--",
+          Deno.execPath(),
+          "eval",
+          "Deno.exit(5)",
+        ],
+        env: { CF_TEST_RECORDS_DIR: spoolDir, INIT_CWD: dir },
+      });
+      expect(result.code).toBe(5);
+      const spool = await readSpool(spoolDir);
+      expect(spool.records.map((record) => [record.test, record.outcome]))
+        .toEqual([[{ k: "gate", s: "repo", n: "probe-script" }, "fail"]]);
+    });
   });
 
   describe("spawnInherited()", () => {

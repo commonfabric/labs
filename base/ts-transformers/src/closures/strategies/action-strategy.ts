@@ -1,10 +1,6 @@
 import ts from "typescript";
 import type { TransformationContext } from "../../core/mod.ts";
-import {
-  declaredVerbResultTypeNode,
-  detectCallKind,
-  registerSyntheticCallType,
-} from "../../ast/mod.ts";
+import { declaredVerbResultTypeNode, detectCallKind } from "../../ast/mod.ts";
 import { CaptureCollector } from "../capture-collector.ts";
 import {
   createActionEventSchema,
@@ -35,16 +31,10 @@ function isActionCall(
 function extractActionCallback(
   actionCall: ts.CallExpression,
 ): ts.ArrowFunction | undefined {
-  const args = actionCall.arguments;
-
-  if (args.length === 1) {
-    const callback = args[0];
-    if (callback) {
-      return unwrapArrowFunction(callback);
-    }
-  }
-
-  return undefined;
+  const [callback, ...extra] = actionCall.arguments;
+  return callback && extra.length === 0
+    ? unwrapArrowFunction(callback)
+    : undefined;
 }
 
 /**
@@ -71,6 +61,8 @@ function extractActionCallback(
  * Supported:     action(() => count.set(count.get() + 1))
  * NOT supported: action(function() { count.set(count.get() + 1) })
  *
+ * An unsupported callback is reported as `action:unsupported-callback`.
+ *
  * To support function expressions in the future:
  * 1. Update PatternBuilder.buildHandlerCallback to accept FunctionExpression
  *    (currently typed as ArrowFunction only)
@@ -90,9 +82,17 @@ export function transformActionCall(
   const actionCall = node;
   const { checker } = context;
 
-  // Extract callback
+  // Only a single arrow callback can be lowered. Any other argument list would
+  // reach the runtime unlowered, where `action()` throws, so it is reported.
   const callback = extractActionCallback(actionCall);
   if (!callback) {
+    context.reportDiagnostic({
+      type: "action:unsupported-callback",
+      message: "action() takes exactly one argument, an arrow function " +
+        "written at the call (`action(() => …)` or `action((event) => …)`). " +
+        "Write the callback inline here.",
+      node: actionCall.arguments[0] ?? actionCall,
+    });
     return undefined;
   }
 
@@ -137,11 +137,7 @@ export function transformActionCall(
     : createActionEventSchema(context);
 
   // State schema is based on captures
-  const stateTypeNode = createHandlerStateSchema(
-    captureTree,
-    undefined, // no explicit state parameter in action
-    context,
-  );
+  const stateTypeNode = createHandlerStateSchema(captureTree, context);
 
   // `action<Event, Result>`'s second type argument is the verb's declared
   // result. Lowering to `handler` is where it would otherwise be lost — the
@@ -150,7 +146,7 @@ export function transformActionCall(
   // lowers to the module's result schema.
   const resultTypeNode = declaredVerbResultTypeNode(actionCall, "action");
 
-  const finalCall = buildCapturedHandlerClosureCall(
+  return buildCapturedHandlerClosureCall(
     actionCall,
     callback,
     transformedBody,
@@ -164,26 +160,4 @@ export function transformActionCall(
       ...(resultTypeNode ? { resultTypeNode } : {}),
     },
   );
-
-  // Register the return type in the TypeRegistry for schema inference.
-  // This enables SchemaInjectionTransformer to correctly infer the pattern's result type
-  // when an action is returned as a property (e.g., return { inc: action(...) }).
-  // Without this registration, the synthetic handler call has no type information,
-  // resulting in an empty result schema for the pattern.
-  //
-  // Note: The action call has type `ModuleFactory<T, Stream<void>>`, but the finalCall
-  // is `handler(...)({...})` which CALLS the factory. We need the return type of that call,
-  // which is `Reactive<Stream<void>>`.
-  const typeRegistry = context.state.typeRegistry;
-  // Get the type of the original action call (ModuleFactory<T, Stream<void>>)
-  const actionType = checker.getTypeAtLocation(actionCall);
-  // Get the call signature to find what type is returned when calling the factory
-  const callSignatures = actionType.getCallSignatures();
-  if (callSignatures.length > 0) {
-    const callReturnType = callSignatures[0]!.getReturnType();
-    // This should be Reactive<Stream<void>> - the type of calling handler(...)({...})
-    registerSyntheticCallType(finalCall, callReturnType, typeRegistry);
-  }
-
-  return finalCall;
 }

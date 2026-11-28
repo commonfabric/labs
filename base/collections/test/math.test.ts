@@ -1,7 +1,7 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { maxOf, minOf } from "@commonfabric/collections/math";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("math", () => {
   describe("minOf()", () => {

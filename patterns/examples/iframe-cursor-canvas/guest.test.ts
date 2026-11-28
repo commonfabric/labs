@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
 
 import {
   type GuestPage,
@@ -8,6 +7,7 @@ import {
   openGuestPage,
 } from "../../tools/test-support/iframe-guest.ts";
 import type { CanvasShape, ShapeBox } from "./contract.ts";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 
 const GUEST = new URL("./guest.ts", import.meta.url);
 const HTML = new URL("./guest.html", import.meta.url);
@@ -140,6 +140,30 @@ describe("iframe-cursor-canvas/guest", () => {
       expect(byTestId<HTMLButtonElement>("add-rectangle").disabled).toBe(true);
     });
 
+    it("adds no shape before the board loads", async () => {
+      const state = new MemoryCell({ shapes: [] });
+      state.failReads(new Error("The board is unreadable."));
+      page = await openGuestPage({
+        guest: GUEST,
+        html: HTML,
+        resources: {
+          input: new MemoryCell({ title: "x" }).resource(),
+          state: state.resource(),
+          output: new MemoryCell().resource(),
+          cursors: new MemoryPresenceRoom().resource(),
+        },
+      });
+      const alert = document.querySelector('[role="alert"]')!;
+      await page.until(() => alert.textContent !== "");
+
+      byTestId<HTMLButtonElement>("add-rectangle").click();
+      byTestId<HTMLButtonElement>("add-ellipse").click();
+      await page.settled();
+
+      expect(state.writes).toEqual([]);
+      expect(allByTestId("shape")).toEqual([]);
+    });
+
     it("throws for a document with no #root element", async () => {
       await expect(openGuestPage({
         guest: GUEST,
@@ -195,6 +219,29 @@ describe("iframe-cursor-canvas/guest", () => {
       expect(byTestId<HTMLButtonElement>("delete-shape").disabled).toBe(true);
     });
 
+    it("marks removed the shape selected, wherever the board holds it", async () => {
+      const other = storedShape("b", {
+        position: { x: 600, y: 400 },
+        width: 100,
+        height: 100,
+      });
+      const { page, state } = await open({
+        state: new MemoryCell({ shapes: [storedShape("a", BOX), other] }),
+      });
+      pointer(shapeElement("b")!, "pointerdown", 650, 450);
+      pointer(shapeElement("b")!, "pointerup", 650, 450);
+
+      const write = state.nextWrite();
+      byTestId<HTMLButtonElement>("delete-shape").click();
+      expect((await write).path).toEqual(["shapes", 1, "removed"]);
+      await page.until(() => shapeElement("b") === null);
+
+      expect(state.value).toEqual({
+        shapes: [storedShape("a", BOX), { ...other, removed: true }],
+      });
+      expect(shapeElement("a")).not.toBeNull();
+    });
+
     it("marks the selected shape removed on the Backspace key", async () => {
       const { page, state } = await open();
       pointer(shapeElement("a")!, "pointerdown", 150, 150);
@@ -246,6 +293,27 @@ describe("iframe-cursor-canvas/guest", () => {
       await page.until(() => alert.textContent !== "");
 
       expect(alert.textContent).toContain("Removal refused.");
+    });
+
+    it("refuses to remove a selected shape the board can no longer read", async () => {
+      const { page, state } = await open();
+      pointer(shapeElement("a")!, "pointerdown", 150, 150);
+      pointer(shapeElement("a")!, "pointerup", 150, 150);
+      state.failReads(new Error("The board is unreadable."));
+      byTestId<HTMLButtonElement>("add-rectangle").click();
+      const alert = document.querySelector('[role="alert"]')!;
+      await page.until(() => alert.textContent !== "");
+      expect(alert.textContent).toContain("The board is unreadable.");
+      const writes = state.writes.length;
+
+      byTestId<HTMLButtonElement>("delete-shape").click();
+      await page.until(() => !alert.textContent!.includes("unreadable"));
+      await page.settled();
+
+      expect(alert.textContent).toContain(
+        "That shape is no longer on the board.",
+      );
+      expect(state.writes.slice(writes)).toEqual([]);
     });
 
     it("clears the selection when the empty board is pressed", async () => {
@@ -450,6 +518,32 @@ describe("iframe-cursor-canvas/guest", () => {
         hue: expect.any(Number),
       });
       expect(status.textContent).toBe("Live · only you");
+    });
+
+    it("publishes no name or hue before the board loads", async () => {
+      const state = new MemoryCell();
+      state.failReads(new Error("The board is unreadable."));
+      const cursors = new MemoryPresenceRoom();
+      page = await openGuestPage({
+        guest: GUEST,
+        html: HTML,
+        resources: {
+          input: new MemoryCell({ title: "x" }).resource(),
+          state: state.resource(),
+          output: new MemoryCell({ displayName: "Ada", hue: 40 }).resource(),
+          cursors: cursors.resource(),
+        },
+      });
+      const status = byTestId("presence-status");
+      await page.until(() =>
+        status.dataset.status === "live" &&
+        document.querySelector('[role="alert"]')!.textContent !== ""
+      );
+      await page.settled();
+
+      expect(cursors.name).toBeUndefined();
+      expect(cursors.facets.has("user")).toBe(false);
+      expect(byTestId("display-name").value).toBe("");
     });
 
     it("goes by the name and hue the user stored", async () => {

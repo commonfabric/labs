@@ -7,13 +7,14 @@ import WebSocket from "ws";
 import { assert, assertEquals, assertRejects } from "@std/assert";
 import { expect } from "@std/expect";
 import { toFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
 import { spy, stub } from "@std/testing/mock";
-import { Identity } from "@commonfabric/identity";
+import { Identity, issueDelegation } from "@commonfabric/identity";
 import { sha256 } from "@commonfabric/content-hash";
 import { taggedHashStringOf } from "@commonfabric/data-model";
 import { setModernCellRepConfig } from "@commonfabric/data-model/cell-rep";
+import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { isPlainObject } from "@commonfabric/js-values/types";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import type { MemorySpace } from "../interface.ts";
 import {
   encodeMemoryBoundary,
@@ -749,7 +750,7 @@ async function frameOrClose(socket: FramedSocket): Promise<unknown> {
   }
 }
 
-Deno.test("redeemed Mode A tickets are single use; control renews and releases authority independently", async () => {
+test("redeemed Mode A tickets are single use; control renews and releases authority independently", async () => {
   const f = await fixture("lifecycle");
   try {
     const session = await f.open();
@@ -814,6 +815,81 @@ Deno.test("redeemed Mode A tickets are single use; control renews and releases a
   } finally {
     await f.close();
   }
+});
+
+describe("routed session.open proof chains", () => {
+  // A client opens a space that owns itself by naming its own key and
+  // presenting the space's delegation as `authorization.proofs`; the router
+  // forwards that shape of `authorization`, and so does the data socket.
+  const chainOpen = async (
+    f: Awaited<ReturnType<typeof fixture>>,
+    authorization: (proof: FabricBytes) => Record<string, unknown>,
+  ) => {
+    const admit = async (identity: Identity) =>
+      (await f.control(
+        6,
+        new RoutedWriter("mvp1").fixed(f.context).blob(f.flags).blob(
+          await f.proof(identity),
+        ).bytes,
+      )).status;
+    assertEquals(await admit(f.outsider), 0);
+    const delegation = await issueDelegation(f.principal, {
+      aud: f.outsider.did(),
+      sub: f.space.did(),
+      cmd: "/memory",
+      pol: [],
+    });
+    // The fixture's requests are plain JSON, so the bytes go as the wire
+    // encodes them.
+    const encoded = JSON.parse(
+      encodeMemoryBoundary(
+        authorization(new FabricBytes(delegation.bytes)) as never,
+      ).slice("fvj1:".length),
+    );
+    f.socket.receive(
+      encodeRoutedFrame(
+        `fvj1:${
+          JSON.stringify({
+            type: "session.open",
+            requestId: "chain",
+            space: f.space.did(),
+            principal: f.outsider.did(),
+            session: {},
+            authorization: encoded,
+          })
+        }`,
+        FRAME_SLOTS,
+      ),
+    );
+  };
+
+  it("opens a session for a key the access list names only through its chain", async () => {
+    const f = await fixture("session-open-proofs");
+    try {
+      expect(f.greeted.flags).toMatchObject({ sessionOpenProofs: true });
+      await chainOpen(f, (proof) => ({ proofs: [proof] }));
+      let answer: Record<string, unknown>;
+      do {
+        answer = decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS)
+          .body;
+      } while (answer.requestId !== "chain");
+      expect(answer.ok).toMatchObject({ sessionId: expect.any(String) });
+      expect(f.socket.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("closes the data socket on an authorization holding more than proofs", async () => {
+    const f = await fixture("session-open-signed-authorization");
+    try {
+      await chainOpen(f, (proof) => ({ proofs: [proof], signature: "x" }));
+      await f.socket.closed.promise;
+      expect(f.link.readyState).toBe(1);
+    } finally {
+      await f.close();
+    }
+  });
 });
 
 describe("routed session reports", () => {
@@ -1303,7 +1379,7 @@ describe("optional routed host quotas", () => {
   });
 });
 
-Deno.test("routed host limits are config over defaults, and must nest", () => {
+test("routed host limits are config over defaults, and must nest", () => {
   assertEquals(routedHostLimits(), DEFAULT_ROUTED_HOST_LIMITS);
   // A session's watch IDs are configuration.
   assertEquals(routedHostLimits().watchesPerSession, 2048);
@@ -1408,7 +1484,7 @@ Deno.test("routed host limits are config over defaults, and must nest", () => {
   }
 });
 
-Deno.test("a request past a capacity limit is denied, and the context goes on", async () => {
+test("a request past a capacity limit is denied, and the context goes on", async () => {
   const watches = (prefix: string, length = 1024) =>
     Array.from(
       { length },
@@ -1494,7 +1570,7 @@ Deno.test("a request past a capacity limit is denied, and the context goes on", 
   }
 });
 
-Deno.test("a request for a session revoked while it was in flight is denied, and the socket goes on", async () => {
+test("a request for a session revoked while it was in flight is denied, and the socket goes on", async () => {
   const f = await fixture("revoked-in-flight");
   try {
     const session = await f.open();
@@ -1589,7 +1665,7 @@ Deno.test("a request for a session revoked while it was in flight is denied, and
   }
 });
 
-Deno.test("more views than a session may hold are refused, and the socket goes on", async () => {
+test("more views than a session may hold are refused, and the socket goes on", async () => {
   setServerExecutionConfig(true);
   const f = await fixture("views");
   try {
@@ -1629,7 +1705,7 @@ Deno.test("more views than a session may hold are refused, and the socket goes o
   }
 });
 
-Deno.test("a session's watch IDs are bounded by configuration, and a mutation past the bound is refused with the socket open", async (t) => {
+test("a session's watch IDs are bounded by configuration, and a mutation past the bound is refused with the socket open", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -1852,7 +1928,7 @@ Deno.test("a session's watch IDs are bounded by configuration, and a mutation pa
   });
 });
 
-Deno.test("a session's watch mutations, resumptions and close are dispatched one at a time, each once the turn of the one before it has ended", async (t) => {
+test("a session's watch mutations, resumptions and close are dispatched one at a time, each once the turn of the one before it has ended", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -2060,7 +2136,7 @@ Deno.test("a session's watch mutations, resumptions and close are dispatched one
   });
 });
 
-Deno.test("holdings and views named on a watch add leave a session's counted usage as it was", async () => {
+test("holdings and views named on a watch add leave a session's counted usage as it was", async () => {
   setServerExecutionConfig(true);
   // Two views and four holdings are all the context may hold of each.
   const f = await fixture("add-names-watches", {
@@ -2135,7 +2211,7 @@ Deno.test("holdings and views named on a watch add leave a session's counted usa
   }
 });
 
-Deno.test("a set staged in parts counts toward the context's quotas from its first part", async (t) => {
+test("a set staged in parts counts toward the context's quotas from its first part", async (t) => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -2340,7 +2416,7 @@ Deno.test("a set staged in parts counts toward the context's quotas from its fir
   });
 });
 
-Deno.test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
+test("holdings and views are counted as lists, and anything else closes the socket", async (t) => {
   const holding = (i: number) => ({ id: `of:h${i}`, seq: 0 });
   const holdings = (length: number) =>
     Array.from({ length }, (_, i) => holding(i));
@@ -2442,7 +2518,7 @@ Deno.test("holdings and views are counted as lists, and anything else closes the
   }
 });
 
-Deno.test("the toolshed admits a frame at its configured slot cap and closes on one more", async () => {
+test("the toolshed admits a frame at its configured slot cap and closes on one more", async () => {
   // The hello, flags included, and a session.open are well under 64 slots.
   const f = await fixture("frame-slots", { limits: { frameSlots: 64 } });
   try {
@@ -2497,7 +2573,7 @@ Deno.test("the toolshed admits a frame at its configured slot cap and closes on 
   }
 });
 
-Deno.test("the toolshed accepts and acknowledges a large commit with a null slot cap", async () => {
+test("the toolshed accepts and acknowledges a large commit with a null slot cap", async () => {
   const f = await fixture("disabled-frame-slots", {
     limits: { frameSlots: null },
   });
@@ -2541,7 +2617,7 @@ Deno.test("the toolshed accepts and acknowledges a large commit with a null slot
   }
 });
 
-Deno.test("a refusal that cannot be answered closes only its socket", async () => {
+test("a refusal that cannot be answered closes only its socket", async () => {
   const f = await fixture("refusal-output-bound");
   try {
     await f.open();
@@ -2568,7 +2644,7 @@ Deno.test("a refusal that cannot be answered closes only its socket", async () =
   }
 });
 
-Deno.test("an open whose grant expired in flight is refused for now, a released principal's for good", async () => {
+test("an open whose grant expired in flight is refused for now, a released principal's for good", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const f = await fixture("grant-crossed", { clock });
   try {
@@ -2625,7 +2701,7 @@ Deno.test("an open whose grant expired in flight is refused for now, a released 
   }
 });
 
-Deno.test("a principal's session limit refuses one open and undoes its reservation", async () => {
+test("a principal's session limit refuses one open and undoes its reservation", async () => {
   const f = await fixture("principal-sessions", {
     limits: { sessionsPerPrincipal: 2 },
   });
@@ -2655,7 +2731,7 @@ Deno.test("a principal's session limit refuses one open and undoes its reservati
   }
 });
 
-Deno.test("a released principal leaves the history once its statement expires", async () => {
+test("a released principal leaves the history once its statement expires", async () => {
   const clock = { now: Math.floor(Date.now() / 1000) };
   const f = await fixture("released-history", {
     clock,
@@ -2692,7 +2768,7 @@ Deno.test("a released principal leaves the history once its statement expires", 
   }
 });
 
-Deno.test("a closed context's tickets leave with it", async () => {
+test("a closed context's tickets leave with it", async () => {
   // Two tickets in all, and the fixture's own was redeemed, so the third
   // passing context is issued one only if the toolshed removed the tickets
   // of the two before it.
@@ -2718,7 +2794,7 @@ Deno.test("a closed context's tickets leave with it", async () => {
   }
 });
 
-Deno.test("a redeemed ticket no longer counts against the ticket limit, however many data sockets a context opens", async () => {
+test("a redeemed ticket no longer counts against the ticket limit, however many data sockets a context opens", async () => {
   // Two tickets in all. The fixture's context redeemed one for its first
   // data socket, and redeems one more for each socket that replaces it.
   const f = await fixture("ticket-redeem", {
@@ -2739,7 +2815,7 @@ Deno.test("a redeemed ticket no longer counts against the ticket limit, however 
   }
 });
 
-Deno.test("two sockets presenting one ticket at once redeem it once", async () => {
+test("two sockets presenting one ticket at once redeem it once", async () => {
   const f = await fixture("ticket-race");
   try {
     const ticket = await f.issueTicket();
@@ -2771,7 +2847,7 @@ Deno.test("two sockets presenting one ticket at once redeem it once", async () =
   }
 });
 
-Deno.test("connections that come and go cannot fill the ledger or refuse a live context's proofs", async () => {
+test("connections that come and go cannot fill the ledger or refuse a live context's proofs", async () => {
   // Before a context's proofs left with it, each passing context's stayed
   // in the ledger until they expired, so cycling connections filled it.
   const f = await fixture("cycling", {
@@ -2810,7 +2886,7 @@ Deno.test("connections that come and go cannot fill the ledger or refuse a live 
   }
 });
 
-Deno.test("a statement serves one live context; after it closes, the router may present it again within its lease, by design", async () => {
+test("a statement serves one live context; after it closes, the router may present it again within its lease, by design", async () => {
   const f = await fixture("one-live-context");
   try {
     const admit = async (ctx: Uint8Array<ArrayBuffer>, statement: Uint8Array) =>
@@ -2838,7 +2914,7 @@ Deno.test("a statement serves one live context; after it closes, the router may 
   }
 });
 
-Deno.test("a released principal's statement cannot admit it again while its context lives", async () => {
+test("a released principal's statement cannot admit it again while its context lives", async () => {
   const f = await fixture("released-statement");
   try {
     const ctx = new Uint8Array(16).fill(64);
@@ -2861,7 +2937,7 @@ Deno.test("a released principal's statement cannot admit it again while its cont
     await f.close();
   }
 });
-Deno.test("one context holds at most its quota of unexpired proofs", async () => {
+test("one context holds at most its quota of unexpired proofs", async () => {
   const f = await fixture("proof-quota", {
     limits: {
       principalsPerContext: 2,
@@ -2892,7 +2968,7 @@ Deno.test("one context holds at most its quota of unexpired proofs", async () =>
   }
 });
 
-Deno.test("a routed toolshed serves either cell representation, and refuses a client at the other", async () => {
+test("a routed toolshed serves either cell representation, and refuses a client at the other", async () => {
   for (const modernCellRep of [false, true]) {
     for (const clientModernCellRep of [false, true]) {
       const f = await fixture(
@@ -2918,7 +2994,7 @@ Deno.test("a routed toolshed serves either cell representation, and refuses a cl
   setModernCellRepConfig(true);
 });
 
-Deno.test("a client without stableExpressionResultIds reaches a data socket, and the toolshed refuses each of its session opens for good", async () => {
+test("a client without stableExpressionResultIds reaches a data socket, and the toolshed refuses each of its session opens for good", async () => {
   // The router no longer refuses the flag's absence: the context, its ticket
   // and the data socket are all granted, and the toolshed answers every
   // `session.open` with the final refusal, which the SDK treats as terminal
@@ -2953,7 +3029,7 @@ Deno.test("a client without stableExpressionResultIds reaches a data socket, and
   }
 });
 
-Deno.test("a routed connection is not sent session/admissible when a grant admits a refused principal", async () => {
+test("a routed connection is not sent session/admissible when a grant admits a refused principal", async () => {
   const f = await fixture("admission-notice");
   try {
     // Both peers advertise the capability, so only the routed connection
@@ -3045,7 +3121,7 @@ Deno.test("a routed connection is not sent session/admissible when a grant admit
   }
 });
 
-Deno.test("omitted views retain their quota across watch replacements and resume", async () => {
+test("omitted views retain their quota across watch replacements and resume", async () => {
   setServerExecutionConfig(true);
   // Sixteen sessions of 64 views fill a context limited to 1,024 watches.
   const f = await fixture("retained-views", {
@@ -3119,7 +3195,7 @@ Deno.test("omitted views retain their quota across watch replacements and resume
   }
 });
 
-Deno.test("rejected view mutations leave no persistent quota reservation", async () => {
+test("rejected view mutations leave no persistent quota reservation", async () => {
   setServerExecutionConfig(true);
   const f = await fixture("rejected-views");
   try {
@@ -3168,7 +3244,7 @@ Deno.test("rejected view mutations leave no persistent quota reservation", async
   }
 });
 
-Deno.test("revocation before a failed resume response cannot restore phantom quotas", async () => {
+test("revocation before a failed resume response cannot restore phantom quotas", async () => {
   setServerExecutionConfig(true);
   const f = await fixture("revoked-resume");
   try {
@@ -3241,7 +3317,7 @@ Deno.test("revocation before a failed resume response cannot restore phantom quo
   }
 });
 
-Deno.test("the private data boundary closes a forged route without affecting the authenticated link", async () => {
+test("the private data boundary closes a forged route without affecting the authenticated link", async () => {
   const f = await fixture("forged-route");
   try {
     const session = await f.open();
@@ -3382,7 +3458,7 @@ describe("private routed stream admission", () => {
   }
 });
 
-Deno.test("a slow private reader exhausts only its bounded output context", async () => {
+test("a slow private reader exhausts only its bounded output context", async () => {
   const f = await fixture("slow-output");
   try {
     const session = await f.open();
@@ -5238,6 +5314,200 @@ describe("routed output high and low marks", () => {
     }
   });
 
+  /**
+   * A connection with one open session, `s`, whose socket writes are held
+   * from when this returns until `drain()`. The answer to its watch addition `a`,
+   * sent once `answer` resolves, leaves less room under the bound than any
+   * other answer takes, so an answer queued behind it closes the socket.
+   */
+  async function heldWatchAnswer(name: string, watchesPerSession: number) {
+    const answer = Promise.withResolvers<void>();
+    const f = await routedRequestFixture(name, async (requestId, send) => {
+      if (requestId === "open") {
+        send({ type: "response", requestId, ok: { sessionId: "s" } });
+      } else if (requestId === "a") {
+        await answer.promise;
+        send(sizedResponse(requestId, BOUND - 16));
+      } else send({ type: "response", requestId, ok: {} });
+    }, { outputBytesPerSocket: BOUND, watchesPerSession });
+    await f.socket.receive(f.request("open"));
+    const opened = decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS);
+    expect(opened.body.ok).toEqual({ sessionId: "s" });
+    const callbacks: (() => void)[] = [];
+    let hold = true;
+    const send = f.socket.send.bind(f.socket);
+    const output = stubOutput(f.socket, (bytes, done) => {
+      assert(done);
+      if (hold) {
+        send(bytes);
+        callbacks.push(done);
+      } else send(bytes, done);
+    });
+    return {
+      ...f,
+      answer,
+      /** Sends session `s` a watch addition naming `watch`. */
+      add: (requestId: string, watch: string) =>
+        f.socket.receive(encodeMemoryBoundary({
+          type: "session.watch.add",
+          requestId,
+          space: f.space.did(),
+          sessionId: "s",
+          watches: [{ id: watch, kind: "graph", query: { roots: [] } }],
+        })),
+      /** Completes every held write and every write after it. */
+      drain: () => {
+        hold = false;
+        while (callbacks.length) callbacks.shift()!();
+      },
+      /** The next answer the router receives. */
+      next: async () =>
+        decodeRoutedFrame(await f.socket.take(), true, FRAME_SLOTS).body,
+      close: async () => {
+        try {
+          await f.close();
+        } finally {
+          output.restore();
+        }
+      },
+    };
+  }
+
+  it("holds a session's next watch change while the answer to the one before it fills the output", async () => {
+    const f = await heldWatchAnswer("flow-session-change", 2);
+    try {
+      await f.add("a", "w0");
+      await f.add("b", "w1");
+      await setImmediate();
+      // `b` waits for the turn of `a`, which waits for its answer.
+      expect(f.handled).toEqual(["open", "a"]);
+      f.answer.resolve();
+      await setImmediate();
+      // The turn of `a` has ended, and its answer, still retained, holds `b`
+      // where its answer would have closed the socket.
+      expect(f.handled).toEqual(["open", "a"]);
+      expect(f.socket.isPaused).toBe(true);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+      f.drain();
+      expect((await f.next()).requestId).toBe("a");
+      const answer = await f.next();
+      expect(answer.requestId).toBe("b");
+      expect(answer.ok).toEqual({});
+      expect(f.handled).toEqual(["open", "a", "b"]);
+      expect(f.socket.isPaused).toBe(false);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("holds the refusal of a session's watch change while the answer to the one before it fills the output", async () => {
+    // One watch per session, so `b`, which would make the session's second,
+    // is refused once `a` is answered.
+    const f = await heldWatchAnswer("flow-session-refusal", 1);
+    try {
+      const reasons = await refusalReasons(async () => {
+        await f.add("a", "w0");
+        await f.add("b", "w1");
+        await setImmediate();
+        // `b` waits for the turn of `a`, which waits for its answer.
+        expect(f.handled).toEqual(["open", "a"]);
+        f.answer.resolve();
+        await setImmediate();
+        // The refusal of `b` waits for the output to drain, where sending it
+        // would have closed the socket.
+        expect(f.handled).toEqual(["open", "a"]);
+        expect(f.socket.isPaused).toBe(true);
+        expect(f.socket.readyState).toBe(WebSocket.OPEN);
+        f.drain();
+        expect((await f.next()).requestId).toBe("a");
+        const refusal = await f.next();
+        expect(refusal.requestId).toBe("b");
+        expect(refusal.error).toEqual({
+          name: "AuthorizationError",
+          message: "Routed memory request denied",
+        });
+      });
+      expect(reasons).toEqual(["frame-limit"]);
+      expect(f.handled).toEqual(["open", "a"]);
+      expect(f.socket.isPaused).toBe(false);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("refuses a session's resumption whose principal the router released while the answer before it filled the output", async () => {
+    const f = await heldWatchAnswer("flow-session-released", 2);
+    try {
+      const reasons = await refusalReasons(async () => {
+        await f.add("a", "w0");
+        await f.socket.receive(encodeMemoryBoundary({
+          type: "session.open",
+          requestId: "r",
+          space: f.space.did(),
+          principal: f.principal.did(),
+          session: { sessionId: "s", sessionToken: "t" },
+        }));
+        await setImmediate();
+        // `r` resumes `s`, so it waits for the turn of `a`.
+        expect(f.handled).toEqual(["open", "a"]);
+        f.answer.resolve();
+        await setImmediate();
+        // The answer to `a` holds `r`, and the router releases the principal
+        // `r` opens for while it waits.
+        expect(f.socket.isPaused).toBe(true);
+        expect(
+          (await f.control(
+            4,
+            new RoutedWriter("mrl1").fixed(f.context).text(f.principal.did())
+              .bytes,
+          )).status,
+        ).toBe(0);
+        f.drain();
+        expect((await f.next()).requestId).toBe("a");
+        const refusal = await f.next();
+        expect(refusal.requestId).toBe("r");
+        expect(refusal.error).toEqual({
+          name: "AuthorizationError",
+          message: "Routed memory request denied",
+        });
+      });
+      expect(reasons).toEqual(["principal-not-held"]);
+      expect(f.handled).toEqual(["open", "a"]);
+      expect(f.socket.readyState).toBe(WebSocket.OPEN);
+    } finally {
+      await f.close();
+    }
+  });
+
+  it("hands over a session's resumption once the answer before it drains, while its principal is held", async () => {
+    const f = await heldWatchAnswer("flow-session-held", 2);
+    try {
+      await f.add("a", "w0");
+      await f.socket.receive(encodeMemoryBoundary({
+        type: "session.open",
+        requestId: "r",
+        space: f.space.did(),
+        principal: f.principal.did(),
+        session: { sessionId: "s", sessionToken: "t" },
+      }));
+      await setImmediate();
+      f.answer.resolve();
+      await setImmediate();
+      expect(f.socket.isPaused).toBe(true);
+      expect(f.handled).toEqual(["open", "a"]);
+      f.drain();
+      expect((await f.next()).requestId).toBe("a");
+      const answer = await f.next();
+      expect(answer.requestId).toBe("r");
+      expect(answer.ok).toEqual({});
+      expect(f.handled).toEqual(["open", "a", "r"]);
+    } finally {
+      await f.close();
+    }
+  });
+
   it("keeps the hard input reservation bound for requests arriving after pause", async () => {
     const produced = Promise.withResolvers<void>();
     // A lone response at the bound, wider than the send window, reaches the
@@ -6159,7 +6429,7 @@ describe("routed close diagnostics", () => {
   }
 });
 
-Deno.test("custom transports omit routed capability and reject an unsolicited routed hello", async () => {
+test("custom transports omit routed capability and reject an unsolicited routed hello", async () => {
   const flags = {
     ...getMemoryProtocolFlags(),
     connectionAuth: true,
@@ -6192,7 +6462,7 @@ Deno.test("custom transports omit routed capability and reject an unsolicited ro
   );
 });
 
-Deno.test("SDK pins router metadata across toolshed responses and signs pushed renewals", async () => {
+test("SDK pins router metadata across toolshed responses and signs pushed renewals", async () => {
   const f = await fixture("sdk-renewal");
   const now = Math.floor(Date.now() / 1000);
   let receiver: ((payload: string) => void) | undefined;
@@ -6322,7 +6592,7 @@ Deno.test("SDK pins router metadata across toolshed responses and signs pushed r
   }
 });
 
-Deno.test("a release needs no durable record, and a proof without the ledger closes the host", async () => {
+test("a release needs no durable record, and a proof without the ledger closes the host", async () => {
   const f = await fixture("failed-release");
   try {
     await f.open();
@@ -6351,7 +6621,7 @@ Deno.test("a release needs no durable record, and a proof without the ledger clo
   }
 });
 
-Deno.test("toolshed space control and revocation deny stale ownership and close failed durable custody", async () => {
+test("toolshed space control and revocation deny stale ownership and close failed durable custody", async () => {
   const f = await fixture("space-control");
   try {
     assertEquals(
@@ -6403,7 +6673,7 @@ Deno.test("toolshed space control and revocation deny stale ownership and close 
   }
 });
 
-Deno.test("invalid private endpoints and frame types have no authority; revocation fails closed without a ledger", async () => {
+test("invalid private endpoints and frame types have no authority; revocation fails closed without a ledger", async () => {
   const f = await fixture("private-admission");
   try {
     for (
@@ -6441,7 +6711,7 @@ Deno.test("invalid private endpoints and frame types have no authority; revocati
   }
 });
 
-Deno.test("private TLS listener accepts bounded binary links and rejects HTTP, Origin and extensions", async () => {
+test("private TLS listener accepts bounded binary links and rejects HTTP, Origin and extensions", async () => {
   const f = await fixture("tls-listener");
   const tls = new URL("./fixtures/routed-tls/", import.meta.url);
   const cert = Deno.readTextFileSync(new URL("localhost.crt", tls));
@@ -6659,7 +6929,7 @@ describe("listenRoutedMemory()", () => {
   });
 });
 
-Deno.test("quota totals return to zero after sessions, watches and refusals come and go", async () => {
+test("quota totals return to zero after sessions, watches and refusals come and go", async () => {
   const watches = (prefix: string, length: number) =>
     Array.from(
       { length },
@@ -6764,7 +7034,7 @@ Deno.test("quota totals return to zero after sessions, watches and refusals come
   }
 });
 
-Deno.test("quota totals return to zero across socket replacement and context close", async () => {
+test("quota totals return to zero across socket replacement and context close", async () => {
   const f = await fixture("quota-churn-close", {
     limits: {
       sessionsPerContext: 3,

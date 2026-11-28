@@ -23,7 +23,7 @@ import {
   swatch,
   weekdayOf,
 } from "./view-walk.ts";
-import WeeklyCalendar from "./weekly-calendar.tsx";
+import WeeklyCalendar from "./main.tsx";
 
 export default pattern(() => {
   const cal = WeeklyCalendar({ events: [] });

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { FakeTime } from "@std/testing/time";
 
@@ -8,6 +7,7 @@ import { publisherRunning } from "../test-selection-activity.ts";
 import { makeTestFlakes } from "../tiles/test-flakes.ts";
 import { makeTestSelection } from "../tiles/test-selection.ts";
 import type { Ctx } from "../types.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 function context(token = "test-token"): Ctx {
   return {
@@ -80,9 +80,10 @@ function serve(publisher: () => Publisher, requests: URL[] = []) {
     const status = url.searchParams.get("status");
     const size = Number(url.searchParams.get("per_page"));
     const start = (Number(url.searchParams.get("page") ?? 1) - 1) * size;
+    const whole = status === null ? list : indexed[status] ?? [];
     return Promise.resolve(Response.json({
-      workflow_runs: (status === null ? list : indexed[status] ?? [])
-        .slice(start, start + size),
+      total_count: whole.length,
+      workflow_runs: whole.slice(start, start + size),
     }));
   });
 }

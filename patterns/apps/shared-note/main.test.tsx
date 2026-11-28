@@ -37,6 +37,7 @@ import {
   styleOf,
 } from "../../tools/test-support/vnode-helpers.ts";
 import SharedNote, {
+  type ActivityRow,
   type NoteProfile,
   SharedNoteCore,
   type StoredComment,
@@ -269,20 +270,32 @@ export default pattern(() => {
   });
   const content = Writable.of<string>(MARKDOWN);
   const comments = Writable.of<StoredComment[]>([]);
+  const title = Writable.of<string>("Plan");
+  const activity = Writable.of<ActivityRow[]>([]);
   const note = SharedNoteCore({
     content,
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
   // The same note as a viewer with no profile sees it.
-  const guest = SharedNoteCore({ content, comments, participantName: "" });
+  const guest = SharedNoteCore({
+    content,
+    comments,
+    participantName: "",
+    title,
+    activity,
+  });
   // The same note in another of Ada's tabs.
   const otherTab = SharedNoteCore({
     content,
     comments,
     myProfile: adaProfile,
     participantName: "Ada",
+    title,
+    activity,
   });
   // The same note as Ada sees it holding a profile that is not hers, as a
   // pattern embedding the core could hand it: one whose label names no one.
@@ -291,6 +304,8 @@ export default pattern(() => {
     comments,
     myProfile: Writable.of<NoteProfile>({ name: "Grace" }),
     participantName: "Ada",
+    title,
+    activity,
   });
   const QUOTE = "- [ ] task";
   const quoteFrom = MARKDOWN.indexOf(QUOTE);

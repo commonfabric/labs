@@ -12,9 +12,9 @@
  * rather than returning something a pattern would go on to parse.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { createBuilder } from "../src/builder/factory.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("commonfabric dataFile builtin", () => {
   const { dataFile } = createBuilder().commonfabric;
@@ -27,6 +27,17 @@ describe("commonfabric dataFile builtin", () => {
     expect(() => dataFile("/data/cities.json")).toThrow(
       'No attached data file "/data/cities.json"',
     );
+  });
+
+  it("refuses a URL read when no data-file closure is bound", () => {
+    expect(() => dataFile.url("/glaze.png")).toThrow(
+      'No attached data file "/glaze.png": this pattern was loaded without a ' +
+        "data-file closure.",
+    );
+  });
+
+  it("returns no assets for a directory when no data-file closure is bound", () => {
+    expect(dataFile.urls("/assets")).toEqual({});
   });
 
   it("says the closure is missing rather than blaming the path", () => {

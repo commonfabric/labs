@@ -1,8 +1,13 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs/exists";
 import type { JSONSchema } from "@commonfabric/runner";
 import { recordsSpooledBy } from "@commonfabric/test-support/records";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import type { CommandOutput } from "./command-output.ts";
 import type { AcceptedContractBreak } from "./pattern-compat-accepted-breaks.ts";
 import {
@@ -38,6 +43,9 @@ const WITHOUT_TITLE: PatternContract = {
 };
 
 const RECORDED_AT = new Date("2026-01-02T03:04:05Z");
+
+/** Arguments that judge one real pattern of this checkout, which passes. */
+const COUNTER = ["--only", "examples/counter/main.tsx"];
 
 /** A module whose default export is a pattern declaring `contract`. */
 const patternModule = (contract: PatternContract) => ({ default: contract });
@@ -98,6 +106,44 @@ describe("pattern-compat", () => {
     writeBaseline(baselinesDir, key, contract, RECORDED_AT);
 
   describe("judgeCompatibility()", () => {
+    describe("a main.tsx entry", () => {
+      const NEEDS_IDS: PatternContract = {
+        argumentSchema: {
+          type: "object",
+          properties: { ids: { type: "array" } },
+          required: ["ids"],
+        },
+        resultSchema: RESULT_WITH_TITLE,
+      };
+
+      it("fails when it requires an input with no default, naming the input", async () => {
+        await record("demo/main.tsx", NEEDS_IDS);
+
+        const shown = await judge({
+          "patterns/demo/main.tsx": patternModule(NEEDS_IDS),
+        });
+
+        expect(shown.code).toBe(1);
+        expect(shown.err).toContain(
+          "demo/main.tsx\n  is a main.tsx entry, which is offered as " +
+            "standalone, but requires ids with no default",
+        );
+      });
+
+      it("passes for the same contract in a file of another name, or outside patterns/", async () => {
+        await record("demo/part.tsx", NEEDS_IDS);
+        await record("agent-sessions-debug/main.tsx", NEEDS_IDS);
+
+        const shown = await judge({
+          "patterns/demo/part.tsx": patternModule(NEEDS_IDS),
+          "connectors/agents/debug-view/main.tsx": patternModule(NEEDS_IDS),
+        });
+
+        expect({ code: shown.code, err: shown.err })
+          .toEqual({ code: 0, err: undefined });
+      });
+    });
+
     describe("a pattern with no baseline", () => {
       it("fails, naming the contract and the command that records it", async () => {
         const sink: RecordSink = { records: [] };
@@ -110,6 +156,7 @@ describe("pattern-compat", () => {
         expect(shown.code).toBe(1);
         expect(shown.said).toEqual([
           "Checking update compatibility for 1 patterns.",
+          "[1/1] demo/a.tsx",
         ]);
         expect(shown.out).toBeUndefined();
         expect(shown.err).toContain(
@@ -227,6 +274,8 @@ describe("pattern-compat", () => {
         expect(shown.code).toBe(1);
         expect(shown.said).toEqual([
           "Checking update compatibility for 2 patterns.",
+          "[1/2] demo/a.tsx",
+          "[2/2] demo/gone.tsx",
         ]);
         expect(shown.err).toContain(
           "\ndemo/gone.tsx\n  has 1 baseline(s) but yields no contract now: " +
@@ -372,6 +421,39 @@ describe("pattern-compat", () => {
       });
     });
 
+    it("says a counted line naming each pattern, in key order, as its judging starts", async () => {
+      await record("demo/gone.tsx", WITH_TITLE);
+      const events: string[] = [];
+      const modules: Record<string, unknown> = {
+        "patterns/demo/b.tsx": patternModule(WITH_TITLE),
+        "patterns/demo/a.tsx": {},
+      };
+      await judge(modules, {
+        evaluate: (file) => {
+          events.push(`evaluate ${file}`);
+          return Promise.resolve(modules[file]);
+        },
+        say: (line) => events.push(line),
+        records: {
+          append: (record) => {
+            if (record.line === "record") events.push(record.test.n);
+          },
+        },
+      });
+
+      expect(events).toEqual([
+        "Checking update compatibility for 3 patterns.",
+        "[1/3] demo/a.tsx",
+        "evaluate patterns/demo/a.tsx",
+        "pattern-compat demo/a.tsx",
+        "[2/3] demo/b.tsx",
+        "evaluate patterns/demo/b.tsx",
+        "pattern-compat demo/b.tsx",
+        "[3/3] demo/gone.tsx",
+        "pattern-compat demo/gone.tsx",
+      ]);
+    });
+
     describe("options", () => {
       it("judges only the patterns `--only` selects", async () => {
         const shown = await judge({
@@ -381,6 +463,7 @@ describe("pattern-compat", () => {
 
         expect(shown.said).toEqual([
           "Checking update compatibility for 1 patterns.",
+          "[1/1] demo/a.tsx",
         ]);
         expect(shown.out).toContain("Skipped 1 file(s)");
       });
@@ -399,6 +482,7 @@ describe("pattern-compat", () => {
         const untimed = await judge(modules);
         expect(untimed.said).toEqual([
           "Checking update compatibility for 1 patterns.",
+          "[1/1] demo/a.tsx",
         ]);
       });
 
@@ -436,20 +520,21 @@ describe("pattern-compat", () => {
 
     // The whole gate, over one pattern of this checkout and its baselines.
 
-    const counter = ["--only", "examples/counter/counter.tsx"];
-
     it("compiles a real pattern and proves it against its recorded baselines, writing no record unasked", async () => {
       const said: string[] = [];
       let shown: CommandOutput | undefined;
       const spooled = await recordsSpooledBy(async () => {
-        shown = await runPatternCompat(counter, {
+        shown = await runPatternCompat(COUNTER, {
           say: (line) => said.push(line),
         });
       });
 
       expect(shown?.err).toBeUndefined();
       expect(shown?.code).toBe(0);
-      expect(said).toEqual(["Checking update compatibility for 1 patterns."]);
+      expect(said).toEqual([
+        "Checking update compatibility for 1 patterns.",
+        "[1/1] examples/counter/main.tsx",
+      ]);
       expect(shown?.out).toContain(
         "\n1 pattern(s) can be updated from every recorded contract.",
       );
@@ -458,11 +543,57 @@ describe("pattern-compat", () => {
 
     it("writes one gate record per judged pattern when asked", async () => {
       const spooled = await recordsSpooledBy(() =>
-        runPatternCompat(counter, { recordResults: true, say: () => {} })
+        runPatternCompat(COUNTER, { recordResults: true, say: () => {} })
       );
 
       expect(spooled.map((record) => [record.test.n, record.outcome]))
-        .toEqual([["pattern-compat examples/counter/counter.tsx", "pass"]]);
+        .toEqual([["pattern-compat examples/counter/main.tsx", "pass"]]);
+    });
+  });
+
+  describe("as a program", () => {
+    // `deno task pattern-compat` is judged by its exit code and its standard
+    // error, which only running it as a program states. It is started through
+    // `Deno.execPath()` so the child writes a coverage profile the parent's
+    // Deno can report, and with `--frozen` so it resolves the checked-in
+    // dependency graph.
+    const run = async (...args: string[]) => {
+      const { code, stdout, stderr } = await new Deno.Command(Deno.execPath(), {
+        args: ["run", "--frozen", "-A", "tasks/pattern-compat.ts", ...args],
+        cwd: new URL("../", import.meta.url),
+      }).output();
+      const decoder = new TextDecoder();
+      return {
+        code,
+        out: decoder.decode(stdout),
+        err: decoder.decode(stderr),
+      };
+    };
+
+    it("exits 2 and names an argument it does not know, judging nothing", async () => {
+      const shown = await run("--frobnicate");
+
+      expect(shown).toEqual({
+        code: 2,
+        out: "",
+        err: "Unknown argument: --frobnicate\n",
+      });
+    });
+
+    it("exits 0 and records each judged pattern for a run that passes", async () => {
+      let shown: Awaited<ReturnType<typeof run>> | undefined;
+      const spooled = await recordsSpooledBy(async () => {
+        shown = await run(...COUNTER);
+      });
+
+      expect(shown?.code).toBe(0);
+      expect(shown?.err).toBe("");
+      expect(shown?.out).toContain("[1/1] examples/counter/main.tsx\n");
+      expect(shown?.out).toContain(
+        "\n1 pattern(s) can be updated from every recorded contract.\n",
+      );
+      expect(spooled.map((record) => [record.test.n, record.outcome]))
+        .toEqual([["pattern-compat examples/counter/main.tsx", "pass"]]);
     });
   });
 });

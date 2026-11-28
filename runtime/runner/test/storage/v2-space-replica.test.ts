@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 
 import type { FabricValue } from "@commonfabric/api";
 import { Identity } from "@commonfabric/identity";
@@ -12,6 +11,12 @@ import {
 } from "@commonfabric/memory/v2";
 import * as MemoryV2Client from "@commonfabric/memory/v2/client";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type {
   ForeignScopedReadGrant,
@@ -22,11 +27,16 @@ import type {
   StoreReadThrough,
   URI,
 } from "../../src/storage/interface.ts";
-import type { SessionConnection, SpaceReplica } from "../../src/storage/v2.ts";
+import {
+  type SessionConnection,
+  setConflictAdmissionMode,
+  type SpaceReplica,
+} from "../../src/storage/v2.ts";
 import {
   mountOver,
   newSharedServer,
   newSpaceReplica,
+  withoutMarkedSplices,
 } from "../memory-v2-test-utils.ts";
 import { captureLogs } from "../support/captured-logs.ts";
 
@@ -570,6 +580,46 @@ describe("SpaceReplica", () => {
           },
         });
         expect(mounts).toBe(0);
+      });
+
+      it("refuses a commit the session refuses to send for its marked splice as a local conflict, leaving no stale floor", async () => {
+        setConflictAdmissionMode("preempt");
+        cleanups.push(() => setConflictAdmissionMode(undefined));
+        // The server does not advertise `markedSplicesV1`, as one that
+        // predates marked splices does not, so the session refuses the commit
+        // at its first send.
+        withoutMarkedSplices(server);
+        const replica = replicaOver();
+        const result = await replica.commitNative({
+          operations: [{
+            op: "patch",
+            id: doc,
+            type: "application/json",
+            patches: [{
+              op: "splice",
+              path: "/value/list",
+              index: 0,
+              remove: 0,
+              add: ["x"],
+              pinned: true,
+            }],
+            value: { value: { list: ["x"] } },
+          }],
+        });
+        expect(result.error?.name).toBe("ConflictError");
+        expect(result.error?.message).toContain("markedSplicesV1");
+        // Nothing reached the store, which will never report this commit
+        // caught up, so a later reader of the document is not held for it.
+        expect(
+          replica.accessForTestingOnly.preemptThreshold({
+            localSeq: 99,
+            reads: {
+              confirmed: [{ id: doc, path: toDocumentPath([]), seq: 0 }],
+              pending: [],
+            },
+            operations: [],
+          }),
+        ).toBeUndefined();
       });
     });
 
@@ -1168,6 +1218,130 @@ describe("SpaceReplica", () => {
           "memory replica closed",
         );
         expect(closed.length).toBe(1);
+      });
+    });
+
+    describe("markedSplices()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `markedSplicesV1` when `advertised`, in the state `state`
+       * leaves it (a connection with no state when it is `undefined`).
+       */
+      const replicaOnConnection = async (
+        state: { now?: MemoryV2Client.ConnectionState },
+        advertised = true,
+      ) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = await mount();
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                markedSplicesV1: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            if (state.now === undefined) return { session, client: connection };
+            return {
+              session,
+              client: {
+                ...connection,
+                get connectionState() {
+                  return state.now;
+                },
+              },
+            };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` while a connection that advertises the mark is up", async () => {
+        const replica = await replicaOnConnection({ now: "connected" });
+        expect(replica.markedSplices()).toBe(true);
+      });
+
+      it("returns `false` while the connection reconnects, though its last flags advertise the mark", async () => {
+        const state: { now?: MemoryV2Client.ConnectionState } = {
+          now: "connected",
+        };
+        const replica = await replicaOnConnection(state);
+        state.now = "reconnecting";
+        expect(replica.markedSplices()).toBe(false);
+        state.now = "connected";
+        expect(replica.markedSplices()).toBe(true);
+      });
+
+      it("returns `false` for a connection that reports no state", async () => {
+        const replica = await replicaOnConnection({});
+        expect(replica.markedSplices()).toBe(false);
+      });
+
+      it("returns `false` for a live connection that does not advertise the mark", async () => {
+        const replica = await replicaOnConnection({ now: "connected" }, false);
+        expect(replica.markedSplices()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().markedSplices()).toBe(false);
+      });
+    });
+
+    describe("invitesRevisionWatchable()", () => {
+      /**
+       * A replica whose session sits on a connection to a server that
+       * advertises `spaceInvitesRevision` as `advertised` says, on the branch
+       * `branch` forks (the default branch when it is absent).
+       */
+      const replicaAdvertising = async (
+        advertised: boolean,
+        branch?: string,
+      ) => {
+        const replica = replicaOver({
+          createSession: async () => {
+            const { client, session } = branch === undefined
+              ? await mount()
+              : await mountOver(
+                MemoryV2Client.loopback(server),
+                space,
+                service,
+                { branch, forkBranch: true },
+              );
+            if (branch !== undefined) cleanups.push(() => client.close());
+            const connection: SessionConnection = {
+              serverFlags: {
+                ...client.serverFlags!,
+                spaceInvitesRevision: advertised,
+              },
+              delivered: () => client.delivered(),
+              close: () => client.close(),
+            };
+            return { session, client: connection };
+          },
+        });
+        await replica.ensureSession();
+        return replica;
+      };
+
+      it("returns `true` for a session on the default branch of a server that advertises the revision document", async () => {
+        const replica = await replicaAdvertising(true);
+        expect(replica.invitesRevisionWatchable()).toBe(true);
+      });
+
+      it("returns `false` for a session on a server that does not advertise it", async () => {
+        const replica = await replicaAdvertising(false);
+        expect(replica.invitesRevisionWatchable()).toBe(false);
+      });
+
+      it("returns `false` for a session on a branch, whose document stays as the fork found it, though its server advertises it", async () => {
+        const replica = await replicaAdvertising(true, "invites-fork");
+        expect(replica.invitesRevisionWatchable()).toBe(false);
+      });
+
+      it("returns `false` before a session exists", () => {
+        expect(replicaOver().invitesRevisionWatchable()).toBe(false);
       });
     });
   });

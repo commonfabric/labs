@@ -1,4 +1,3 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { normalize } from "@std/path/posix";
 import {
@@ -10,9 +9,17 @@ import { PiecesController } from "@commonfabric/piece/ops";
 import {
   computeEntryIdentity,
   ensureCompilerStack,
+  getPatternIdentityRef,
   Runtime,
 } from "@commonfabric/runner";
+import { createLLMFriendlyLink } from "@commonfabric/runner/shared";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { CfHarnessEngine } from "../src/engine.ts";
 import type { HarnessFetch } from "../src/contracts/http-fetch.ts";
 import type { RunPatternToolSuccessOutput } from "../src/tools/run-pattern.ts";
@@ -775,6 +782,41 @@ describe("run_pattern publish render gate", () => {
     it("keeps no version of a revision whose predecessor nobody can describe", async () => {
       const { versions } = await reviseInLaterRun({});
       expect(versions).toEqual([]);
+    });
+
+    it("names no dependency for an import that only a data file the revision carries over spells", async () => {
+      // A data file is stored uninterpreted, so import-shaped text inside one
+      // is data. The revision carries this one over beside its new source.
+      const guest = { name: "/guest.js", contents: 'import("cf:pattern:abc")' };
+      const controller = await pieces.create({
+        main: "/main.tsx",
+        files: [
+          { name: "/main.tsx", contents: WORKING_SORTABLE_TABLE },
+          guest,
+        ],
+        dataFiles: [guest.name],
+      }, { input: { rows: [{ name: "Avery", score: 12 }] } });
+      const cell = controller.getCell();
+      const previous = getPatternIdentityRef(cell)?.identity;
+      expect(previous).toBeDefined();
+      const { original, served } = await servedOriginal(true);
+      const index = stubIndex({
+        [previous!]: { ...served[original], patternId: previous },
+      });
+      const engine = createEngine(index, { origin: "agent" });
+      const revised = await engine.invokeBuiltinTool("revise_piece", {
+        token: createLLMFriendlyLink(
+          cell.getAsNormalizedFullLink(),
+          pieces.getSpace(),
+        ),
+        sourceText: REVISED,
+      });
+      expect(revised.output).toMatchObject({ status: "ok" });
+      await engine.flushPatternIndexLedger();
+
+      const [version] = published(index);
+      expect(version.body.program).toMatchObject({ dataFiles: [guest.name] });
+      expect(version.body.dependencies).toEqual([]);
     });
 
     it("continues the iteration this session made without asking whose it is", async () => {

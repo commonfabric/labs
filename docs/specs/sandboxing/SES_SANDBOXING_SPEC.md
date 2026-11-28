@@ -733,8 +733,10 @@ const DEFAULT_LOCKDOWN_OPTIONS = {
   consoleTaming: "unsafe",
   localeTaming: "unsafe", // paired with the pre-lockdown locale sanitizer
   evalTaming: "safe-eval",
-  // …plus errorTrapping, reporting, unhandledRejectionTrapping, regExpTaming,
-  // domainTaming, overrideDebug, legacyRegeneratorRuntimeTaming, __hardenTaming__
+  errorTrapping: "none",
+  unhandledRejectionTrapping: "none",
+  // …plus reporting, regExpTaming, domainTaming, overrideDebug,
+  // legacyRegeneratorRuntimeTaming, __hardenTaming__
 };
 
 sanitizeLocaleMethods(); // vetted shim; before the intrinsics freeze
@@ -752,6 +754,22 @@ frame-collapse passes in §8.6.5.
 
 Notes:
 
+- Lockdown installs no handlers for uncaught exceptions or unhandled
+  rejections, so a locked-down realm reports them the way an unlocked one does.
+  In Deno, the process prints the error with its stack and exits with status 1,
+  and `deno test` fails the test module the error escaped from. SES's own
+  handlers would instead register Node-style `process` listeners. Deno treats a
+  registered `unhandledRejection` listener as having handled the rejection, so
+  the process would exit 0. A browser worker has neither `process` nor
+  `window`, so SES would install nothing there either way.
+  `runtime/runner/test/ses-runtime.test.ts` runs a locked-down process to each
+  of these ends.
+- Pattern code can create a promise and leave its rejection unhandled, and
+  that ends the process or worker the pattern runs in. A long-running host that
+  runs patterns calls `logUnhandledRejections()`
+  (`runtime/runner/src/sandbox/unhandled-rejections.ts`), which logs each such
+  rejection and marks it handled, so that the host keeps running. The toolshed
+  process and both serving worker entries call it at startup.
 - `lockdown(options)` is exactly `repairIntrinsics(options)` followed by
   `hardenIntrinsics()`. The runtime spells out the two phases because the
   `Error.isError` shim has nowhere else to run: SES's error taming rebuilds the

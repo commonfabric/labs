@@ -3,6 +3,7 @@ import { dirname, fromFileUrl, relative } from "@std/path";
 import { parse as parseYaml } from "@std/yaml";
 import { getBinary } from "@astral/astral";
 import { COVERAGE_ARTIFACT } from "@commonfabric/test-support/records";
+import { test } from "@commonfabric/test-support/test";
 import { BuildConfig } from "./build-binaries.ts";
 import { commandWords, withoutComments } from "./ci-workflow.ts";
 import { phaseOf } from "./ci-step-phases.ts";
@@ -136,7 +137,7 @@ function workflowTriggers(contents: string): string {
   return contents.slice(0, concurrencyStart);
 }
 
-Deno.test("every workflow and composite action is valid YAML", async () => {
+test("every workflow and composite action is valid YAML", async () => {
   // Every other check in this file reads the workflow files as TEXT (regex over
   // job and step blocks), so none of them can notice that a file has stopped
   // being valid YAML — and a workflow that does not parse produces ZERO jobs on
@@ -166,7 +167,7 @@ Deno.test("every workflow and composite action is valid YAML", async () => {
   );
 });
 
-Deno.test("cache-only binary builders install their entrypoint graphs", async () => {
+test("cache-only binary builders install their entrypoint graphs", async () => {
   const installAction = await Deno.readTextFile(
     new URL("../.github/actions/deno-install/action.yml", import.meta.url),
   );
@@ -202,7 +203,7 @@ Deno.test("cache-only binary builders install their entrypoint graphs", async ()
   assertEquals(dockerBuilds, ["toolshed"]);
 });
 
-Deno.test("the test-selection publisher installs only what it runs", async () => {
+test("the test-selection publisher installs only what it runs", async () => {
   const publisher = (await parsedWorkflow("test-selection.yml")).jobs.publish;
 
   assertEquals(
@@ -218,7 +219,7 @@ Deno.test("the test-selection publisher installs only what it runs", async () =>
   );
 });
 
-Deno.test("CI browser tests use the runner's installed Chrome", async () => {
+test("CI browser tests use the runner's installed Chrome", async () => {
   const contents = await workflow("deno.yml");
   const configuredPath = contents.match(
     /^ {2}ASTRAL_BIN_PATH: (\S+)$/m,
@@ -272,7 +273,7 @@ Deno.test("CI browser tests use the runner's installed Chrome", async () => {
   }
 });
 
-Deno.test("the first CI wave leaves runner capacity for another run", async () => {
+test("the first CI wave leaves runner capacity for another run", async () => {
   const ci = await parsedWorkflow("deno.yml");
   const githubParallelRunnerLimit = 60;
   // A job without dependencies starts at once, as many times as its matrix
@@ -290,23 +291,23 @@ Deno.test("the first CI wave leaves runner capacity for another run", async () =
       `two overlapping runs must fit within GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
-  // A run's lanes wait for the job counting them, so what holds them is the
-  // cap: half the limit for a pull request's run, and two thirds for the full
-  // run.
   assert(
     LANES_MAX <= githubParallelRunnerLimit / 2,
-    `a run may take ${LANES_MAX} lanes, more than half of GitHub's ` +
+    `a pull request may take ${LANES_MAX} lanes, more than half of GitHub's ` +
       `${githubParallelRunnerLimit}-runner limit`,
   );
+  const parallel = ci.jobs.tests!.strategy?.["max-parallel"];
+  assert(parallel !== undefined && parallel > 0);
   assert(
-    FULL_LANES_MAX <= githubParallelRunnerLimit * 2 / 3,
-    `the full run may take ${FULL_LANES_MAX} lanes, which leaves less than a ` +
-      `third of GitHub's ${githubParallelRunnerLimit}-runner limit for ` +
-      `anything else`,
+    parallel <= githubParallelRunnerLimit * 2 / 3,
+    `the test matrix may use ${parallel} runners at once, which leaves ` +
+      `less than a third of GitHub's runner capacity for anything else`,
   );
+  assert(FULL_LANES_MAX > parallel);
+  assert(FULL_LANES_MAX <= 256, "a job matrix may contain at most 256 jobs");
 });
 
-Deno.test("every step we name carries a phase marker", async () => {
+test("every step we name carries a phase marker", async () => {
   // A step whose name starts with no marker in `PHASE_MARKERS` is charted as
   // "other", which is how a job's setup time goes missing from the timings
   // people read when deciding what to make faster. The classifier reads the
@@ -330,7 +331,7 @@ Deno.test("every step we name carries a phase marker", async () => {
   );
 });
 
-Deno.test("every work step is bounded before its job is", async () => {
+test("every work step is bounded before its job is", async () => {
   // GitHub ends a job that runs past the job's own `timeout-minutes` by
   // cancelling it, so the job's conclusion is `cancelled` — the same conclusion
   // a run stopped by hand or superseded by a newer push carries, and one that
@@ -388,7 +389,7 @@ Deno.test("every work step is bounded before its job is", async () => {
   }
 });
 
-Deno.test("a lane's step is bounded above what a lane is packed to finish inside", async () => {
+test("a lane's step is bounded above what a lane is packed to finish inside", async () => {
   // A lane packs its work against a budget derived from the bound of the
   // run it is part of, and the bound on the step that runs it only stops a
   // lane that hangs. At or below either run's bound, it would stop a lane
@@ -409,7 +410,7 @@ Deno.test("a lane's step is bounded above what a lane is packed to finish inside
   );
 });
 
-Deno.test("Pull Request Comments follows the CI workflow by name", async () => {
+test("Pull Request Comments follows the CI workflow by name", async () => {
   const deno = await workflow("deno.yml");
   const comment = await workflow("pull-request-comments.yml");
   const name = deno.match(/^name: (.+)$/m);
@@ -422,7 +423,7 @@ Deno.test("Pull Request Comments follows the CI workflow by name", async () => {
 // triggered it, so only a first-level follower of the test workflow can
 // read a run's own event, branch and head. A follower of a follower gets
 // the default branch and its tip whatever the triggering run was.
-Deno.test("each comment job selects runs by the triggering run's own facts", async () => {
+test("each comment job selects runs by the triggering run's own facts", async () => {
   const comment = await workflow("pull-request-comments.yml");
   assertStringIncludes(
     comment,
@@ -446,7 +447,7 @@ Deno.test("each comment job selects runs by the triggering run's own facts", asy
 // with permission to comment as the repository. Its whole history is
 // there because the report lists what the default branch gained since
 // the commit a manifest was published from, as the lanes do.
-Deno.test("the run report checks out the commit it reports on", async () => {
+test("the run report checks out the commit it reports on", async () => {
   const comment = await workflow("pull-request-comments.yml");
   assertStringIncludes(
     comment,
@@ -488,7 +489,11 @@ interface Job {
   permissions?: Record<string, string>;
   env?: Record<string, string>;
   outputs?: Record<string, string>;
-  strategy?: { "fail-fast"?: boolean; matrix?: Record<string, unknown> };
+  strategy?: {
+    "fail-fast"?: boolean;
+    "max-parallel"?: number;
+    matrix?: Record<string, unknown>;
+  };
   steps?: Step[];
 }
 
@@ -590,7 +595,7 @@ function assertStepFailed(run: StepRun, what: string): void {
   assert(run.code !== 0, withStderr(what, run));
 }
 
-Deno.test("the lanes run as many lanes, and with the arguments, the plan says", async () => {
+test("the lanes run as many lanes, and with the arguments, the plan says", async () => {
   // Every run counts its lanes before they start, and the lanes read the
   // count and their arguments from the plan and from nowhere else.
   const ci = await parsedWorkflow("deno.yml");
@@ -618,7 +623,7 @@ Deno.test("the lanes run as many lanes, and with the arguments, the plan says", 
   );
 });
 
-Deno.test("a lane runs the lane runner and holds the token alone", async () => {
+test("a lane runs the lane runner and holds the token alone", async () => {
   const ci = await parsedWorkflow("deno.yml");
 
   for (const id of LANE_JOBS) {
@@ -661,7 +666,7 @@ Deno.test("a lane runs the lane runner and holds the token alone", async () => {
   }
 });
 
-Deno.test("a lane runs the repository's code from a path with a space and an emoji", async () => {
+test("a lane runs the repository's code from a path with a space and an emoji", async () => {
   // A test that turns a file URL into a path without decoding it passes in a
   // checkout whose path is plain ASCII, so the lane runs from one whose path
   // is not.
@@ -704,7 +709,7 @@ Deno.test("a lane runs the repository's code from a path with a space and an emo
   }
 });
 
-Deno.test("the plan reaches the lanes as a count, a list of lanes, and arguments", async () => {
+test("the plan reaches the lanes as a count, a list of lanes, and arguments", async () => {
   const plan = (await parsedWorkflow("deno.yml")).jobs.plan;
   const count = namedStep(plan, "🗺️ Count the lanes the run needs");
   assertEquals(count.env, {
@@ -797,7 +802,7 @@ Deno.test("the plan reaches the lanes as a count, a list of lanes, and arguments
   );
 });
 
-Deno.test("a lane keeps each binary under an exact key and its compile cache by compiler", async () => {
+test("a lane keeps each binary under an exact key and its compile cache by compiler", async () => {
   // A lane runs a binary it restores without asking what it was built from,
   // so each binary's key names everything it is built from and has no
   // prefix to fall back on. A lane builds only the binaries it needs, so
@@ -859,7 +864,7 @@ Deno.test("a lane keeps each binary under an exact key and its compile cache by 
   assertStepFailed(await resolving("exit 1"), "a failed key passes");
 });
 
-Deno.test("a lane uploads what Status and a reader of a failure need", async () => {
+test("a lane uploads what Status and a reader of a failure need", async () => {
   const ci = await parsedWorkflow("deno.yml");
   const job = ci.jobs.tests;
 
@@ -963,7 +968,7 @@ Deno.test("a lane uploads what Status and a reader of a failure need", async () 
   }
 });
 
-Deno.test("Status waits for every job that runs a test", async () => {
+test("Status waits for every job that runs a test", async () => {
   const ci = await parsedWorkflow("deno.yml");
   const status = ci.jobs.status;
   const release = Object.keys(ci.jobs).filter((id) =>
@@ -1005,7 +1010,7 @@ Deno.test("Status waits for every job that runs a test", async () => {
   }
 });
 
-Deno.test("nothing is released that the full run has not passed", async () => {
+test("nothing is released that the full run has not passed", async () => {
   const ci = await parsedWorkflow("deno.yml");
   for (const id of ["attest-binaries", "deploy-shell-staging"]) {
     assert(
@@ -1016,7 +1021,7 @@ Deno.test("nothing is released that the full run has not passed", async () => {
   assertEquals(ci.jobs["deploy-rapids"], undefined);
 });
 
-Deno.test("Status fails unless every job passed and the lanes ran", async () => {
+test("Status fails unless every job passed and the lanes ran", async () => {
   const status = (await parsedWorkflow("deno.yml")).jobs.status;
   const verify = namedStep(status, "🔎 Verify the run's jobs");
   assertEquals(verify.if, "always()");
@@ -1066,7 +1071,7 @@ Deno.test("Status fails unless every job passed and the lanes ran", async () => 
   );
 });
 
-Deno.test("Status judges the coverage gates of every run", async () => {
+test("Status judges the coverage gates of every run", async () => {
   const status = (await parsedWorkflow("deno.yml")).jobs.status;
   const gate = namedStep(
     status,
@@ -1220,11 +1225,11 @@ Deno.test("Status judges the coverage gates of every run", async () => {
   assertEquals(comment.with?.path, "coverage-comment.json");
 });
 
-Deno.test("Status ships its gates' records from every run, and the run's coverage from a push", async () => {
+test("Status ships its gates' records from every run, and the run's coverage from a push", async () => {
   const status = (await parsedWorkflow("deno.yml")).jobs.status;
 
   // It reads what every lane of the run produced, so no lane can be asked to
-  // run it: no wrapper, and no JUnit file gathered. What its spool holds is
+  // run it: no wrapper, and no tests of its own. What its spool holds is
   // the record of each coverage gate it judged, which every run ships, and
   // the run's coverage measurements, which only a push writes, because every
   // reader takes a figure from a push to main alone.
@@ -1245,7 +1250,7 @@ Deno.test("Status ships its gates' records from every run, and the run's coverag
   );
 });
 
-Deno.test("the store half of the drift guard reads every record artifact", async () => {
+test("the store half of the drift guard reads every record artifact", async () => {
   const ci = await parsedWorkflow("deno.yml");
   const status = ci.jobs.status;
 
@@ -1286,7 +1291,7 @@ Deno.test("the store half of the drift guard reads every record artifact", async
   assertEquals(check.if, "${{ !cancelled() }}");
 });
 
-Deno.test("no step selects a server-execution arm by literal", async () => {
+test("no step selects a server-execution arm by literal", async () => {
   // Every assignment of the flag belongs to the lane runner's capabilities,
   // which resolve both roles from one constant, so a flip of the default
   // moves both together and a value pinned by hand cannot turn a flip into a
@@ -1303,7 +1308,7 @@ Deno.test("no step selects a server-execution arm by literal", async () => {
   );
 });
 
-Deno.test("Dashboard publishes only from main, never from a pull request", async () => {
+test("Dashboard publishes only from main, never from a pull request", async () => {
   const deno = await workflow("deno.yml");
   const dashboard = await workflow("dashboard-image.yml");
 
@@ -1344,8 +1349,8 @@ Deno.test("Dashboard publishes only from main, never from a pull request", async
     "permissions:\n      contents: read\n      id-token: write",
   );
 
-  // Both tags go up in the one push: the immutable commit tag the infra
-  // overlay pins, and the `latest` the deployment follows.
+  // Both tags go up in the one push: the immutable commit tag, whose digest
+  // the infra overlay pins, and `latest`.
   const build = stepBlock(publish, "🏗️ Build and push dashboard image");
   assertStringIncludes(build, "\n          push: true\n");
   assertStringIncludes(
@@ -1379,7 +1384,7 @@ Deno.test("Dashboard publishes only from main, never from a pull request", async
   }
 });
 
-Deno.test("the Dashboard workflow records no tests", async () => {
+test("the Dashboard workflow records no tests", async () => {
   const dashboard = withoutComments(await workflow("dashboard-image.yml"));
   const relay = withoutComments(await workflow("test-records-relay.yml"));
 
@@ -1401,15 +1406,15 @@ Deno.test("the Dashboard workflow records no tests", async () => {
   );
 });
 
-Deno.test("the CFC Property Suite workflow records no tests", async () => {
+test("the CFC Property Suite workflow records no tests", async () => {
   const suite = withoutComments(await workflow("cfc-properties.yml"));
   const relay = withoutComments(await workflow("test-records-relay.yml"));
 
   // Both of the job's steps fall outside what a record is for, and for the
   // two different reasons `docs/specs/test-records.md` gives under
-  // "Recording". The suite step runs `deno test` directly, with no
-  // `--junit-path` to ingest and no registration preload, so nothing under
-  // it records; a wrapper passes recording through to what it runs, so one
+  // "Recording". The suite step runs `deno test` directly, with no spool
+  // for its tests to write into, so nothing under it records; a wrapper
+  // passes recording through to what it runs, so one
   // here would file a line summarizing the invocation and nothing else.
   // Those tests are units of `workspace-unit` and record when CI runs
   // them. The audit step reads the corpus the step before it wrote, so no
@@ -1448,7 +1453,7 @@ Deno.test("the CFC Property Suite workflow records no tests", async () => {
   assertStringIncludes(job, "deno task cfc-audit ");
 });
 
-Deno.test("One commit publishes one set of release artifacts", async () => {
+test("One commit publishes one set of release artifacts", async () => {
   // A release artifact is named after the commit it was built from, and the
   // deploy hands the bastion a commit rather than a build. So a commit has one
   // tarball and one checksum for that tarball, and they stay as they were
@@ -1509,7 +1514,7 @@ Deno.test("One commit publishes one set of release artifacts", async () => {
   }
 });
 
-Deno.test("a release subject whose attestation does not verify fails the job", async () => {
+test("a release subject whose attestation does not verify fails the job", async () => {
   // The verification step's script runs here against a stand-in `gh` that
   // lists the subjects it is asked about and fails on the one named by
   // FAIL_SUBJECT, and a stand-in `jq` that prints what it reads.
@@ -1573,7 +1578,7 @@ Deno.test("a release subject whose attestation does not verify fails the job", a
   }
 });
 
-Deno.test("Deploy steps call the bastion wrapper the way it accepts", async () => {
+test("Deploy steps call the bastion wrapper the way it accepts", async () => {
   // The bastion's /opt/cf/deploy.sh takes an environment name and a
   // 40-character commit SHA, and nothing else. Hand it a third argument, an
   // environment it does not know, or a revision that is not a full SHA, and it
@@ -1624,7 +1629,7 @@ Deno.test("Deploy steps call the bastion wrapper the way it accepts", async () =
   assertEquals(callers, ["deploy-production.yml"]);
 });
 
-Deno.test("every test-records artifact name is store-safe and unique", async () => {
+test("every test-records artifact name is store-safe and unique", async () => {
   // The relay derives each store object's name from the artifact's name
   // through objectNameSlug, which collapses characters unsafe in object
   // names. Two artifacts in one run whose names differ only by collapsed
@@ -1666,7 +1671,7 @@ Deno.test("every test-records artifact name is store-safe and unique", async () 
   assert(shipSteps >= 2, `only ${shipSteps} ship steps found`);
 });
 
-Deno.test("test-records-ship forwards its optional variant input", async () => {
+test("test-records-ship forwards its optional variant input", async () => {
   const action = await Deno.readTextFile(
     new URL(
       "../.github/actions/test-records-ship/action.yml",
@@ -1711,7 +1716,7 @@ function evaluate(expression: string, github: unknown): unknown {
   return new Function("github", `return (${expression});`)(github);
 }
 
-Deno.test("the run in tomorrow's order runs once a seed, at a green head", async () => {
+test("the run in tomorrow's order runs once a seed, at a green head", async () => {
   const ci = parseYaml(await workflow("deno.yml")) as TomorrowWorkflow;
   const tomorrow = parseYaml(
     await workflow("test-order-tomorrow.yml"),
@@ -1810,7 +1815,7 @@ Deno.test("the run in tomorrow's order runs once a seed, at a green head", async
   );
 });
 
-Deno.test("the run in tomorrow's order runs the CI suites and ships nothing", async () => {
+test("the run in tomorrow's order runs the CI suites and ships nothing", async () => {
   const ciText = await workflow("deno.yml");
   const ci = parseYaml(ciText) as TomorrowWorkflow;
   const tomorrow = parseYaml(

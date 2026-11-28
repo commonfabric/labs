@@ -9,6 +9,7 @@ import { rewriteExpression } from "../src/transformers/expression-rewrite/mod.ts
 import type { ReactiveContextKind } from "../src/ast/mod.ts";
 import type { ExpressionContainerKind } from "../src/transformers/expression-site-types.ts";
 import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 // These tests drive the shared expression-rewrite entry point
 // (`rewriteExpression`) directly against reactive binary expressions found in
@@ -109,7 +110,6 @@ function printNode(node: ts.Node, sourceFile: ts.SourceFile): string {
 interface RewriteOptions {
   reactiveContextKind: ReactiveContextKind;
   containerKind: ExpressionContainerKind;
-  inSafeContext: boolean;
   markSyntheticOwned?: boolean;
 }
 
@@ -133,7 +133,6 @@ function rewriteBinary(
     analyze,
     reactiveContextKind: options.reactiveContextKind,
     containerKind: options.containerKind,
-    inSafeContext: options.inSafeContext,
   });
   return {
     result,
@@ -146,7 +145,7 @@ const OR = ts.SyntaxKind.BarBarToken;
 const NULLISH = ts.SyntaxKind.QuestionQuestionToken;
 const PLUS = ts.SyntaxKind.PlusToken;
 
-Deno.test(
+test(
   "emitBinaryExpression lowers a pattern-owned && with a simple reactive left to a when() call",
   () => {
     const { printed } = rewriteBinary(
@@ -158,7 +157,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     assert(printed, "expected the && to be lowered");
@@ -167,7 +165,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression lowers a pattern-owned || with a simple reactive left to an unless() call",
   () => {
     const { printed } = rewriteBinary(
@@ -179,7 +177,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     assert(printed, "expected the || to be lowered");
@@ -188,7 +185,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression wraps a non-simple && condition in a lift before the when() call",
   () => {
     const { printed } = rewriteBinary(
@@ -200,7 +197,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     assert(printed, "expected the && to be lowered");
@@ -212,7 +208,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression wraps a non-simple || condition in a lift before the unless() call",
   () => {
     const { printed } = rewriteBinary(
@@ -224,7 +220,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     assert(printed, "expected the || to be lowered");
@@ -234,76 +229,7 @@ Deno.test(
   },
 );
 
-Deno.test(
-  "emitBinaryExpression leaves a safe-context && untouched instead of lowering it",
-  () => {
-    const { result } = rewriteBinary(
-      `export default pattern((_s) => {
-        const showPanel = cell(true);
-        return { [UI]: <div>{showPanel.get() && <span>P</span>}</div> };
-      });`,
-      AND,
-      {
-        reactiveContextKind: "compute",
-        containerKind: "jsx-expression",
-        inSafeContext: true,
-      },
-    );
-    // In a safe (compute) context the context policy does not lower && to
-    // when(); the emitter declines to rewrite so the raw && is preserved.
-    assert(
-      result === undefined,
-      "expected && in a safe context to be left untouched",
-    );
-  },
-);
-
-Deno.test(
-  "emitBinaryExpression leaves a safe-context || untouched instead of lowering it",
-  () => {
-    const { result } = rewriteBinary(
-      `export default pattern((_s) => {
-        const value = cell("");
-        return { [UI]: <div>{value.get() || <span>F</span>}</div> };
-      });`,
-      OR,
-      {
-        reactiveContextKind: "compute",
-        containerKind: "jsx-expression",
-        inSafeContext: true,
-      },
-    );
-    assert(
-      result === undefined,
-      "expected || in a safe context to be left untouched",
-    );
-  },
-);
-
-Deno.test(
-  "emitBinaryExpression declines to wrap any reactive binary in a safe context",
-  () => {
-    const { result } = rewriteBinary(
-      `export default pattern<{ count: number }>((state) => ({
-        [UI]: <div>{state.count + 100}</div>,
-      }));`,
-      PLUS,
-      {
-        reactiveContextKind: "compute",
-        containerKind: "jsx-expression",
-        inSafeContext: true,
-      },
-    );
-    // Safe contexts allow opaque reads, so the arithmetic binary is not wrapped
-    // in a compute wrapper.
-    assert(
-      result === undefined,
-      "expected arithmetic in a safe context to be left untouched",
-    );
-  },
-);
-
-Deno.test(
+test(
   "emitBinaryExpression wraps a pattern-owned arithmetic binary in a lift compute wrapper",
   () => {
     const { printed } = rewriteBinary(
@@ -314,7 +240,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     assert(printed, "expected arithmetic to be wrapped");
@@ -322,7 +247,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression declines to rewrite a purely-literal binary with no reactive operands",
   () => {
     const { result } = rewriteBinary(
@@ -331,7 +256,6 @@ Deno.test(
       {
         reactiveContextKind: "compute",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     // No dataflows, a non-reactive left operand, and no lowering policy means
@@ -343,7 +267,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression declines to wrap a reactive-valued binary that captures no dataflows",
   () => {
     const { result } = rewriteBinary(
@@ -353,7 +277,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     // The left side is a reactive value (so the early skip does not fire) but
@@ -366,7 +289,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression defers a reactive fallback receiver of an unlowered map()",
   () => {
     const { result } = rewriteBinary(
@@ -378,7 +301,6 @@ Deno.test(
       {
         reactiveContextKind: "pattern",
         containerKind: "jsx-expression",
-        inSafeContext: false,
       },
     );
     // `(items ?? []).map(...)` is a simple reactive left feeding a not-yet
@@ -391,7 +313,38 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
+  "emitBinaryExpression leaves a neutral && over a non-reactive object alias untouched",
+  () => {
+    // `options` is an object literal holding a cell. Resolving the alias
+    // records the cell read in the analysis graph, so the binary arrives with
+    // a relevant dataflow, but neither operand is reactive and there is no
+    // subexpression to compute-wrap.
+    const source = (left: string) =>
+      `export default pattern((_s) => {
+        const count = cell(0);
+        const options = { initial: count };
+        return { [UI]: <div>{${left} && <span>x</span>}</div> };
+      });`;
+    const neutral: RewriteOptions = {
+      reactiveContextKind: "neutral",
+      containerKind: "jsx-expression",
+    };
+
+    const { result } = rewriteBinary(source("options"), AND, neutral);
+    assertEquals(result, undefined);
+
+    // Reading the cell through the alias makes the binary reactive, so the
+    // same site is wrapped.
+    const { printed } = rewriteBinary(source("options.initial"), AND, neutral);
+    assert(printed, "expected a reactive && to be wrapped");
+    const root = parseModule(printed);
+    assertEquals(callsNamed(root, "lift").length, 1);
+    assertEquals(callsNamed(root, "when").length, 0);
+  },
+);
+
+test(
   "emitBinaryExpression rewrites a synthetic compute-owned array-method receiver without asserting compute-wrap invariants",
   () => {
     const { printed } = rewriteBinary(
@@ -403,7 +356,6 @@ Deno.test(
       {
         reactiveContextKind: "compute",
         containerKind: "jsx-expression",
-        inSafeContext: false,
         markSyntheticOwned: true,
       },
     );
@@ -416,7 +368,7 @@ Deno.test(
   },
 );
 
-Deno.test(
+test(
   "emitBinaryExpression throws a compiler-bug error for a compute-owned binary that is not an array-method receiver",
   () => {
     const { sourceFile, checker, context } = createContext(
@@ -442,7 +394,6 @@ Deno.test(
           analyze,
           reactiveContextKind: "pattern",
           containerKind: "jsx-expression",
-          inSafeContext: false,
         }),
       Error,
       "Internal Common Fabric compiler error",

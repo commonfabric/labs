@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   baselineKeyOf,
@@ -7,6 +6,11 @@ import {
   unjustifiedDeletions,
 } from "./check-baselines-append-only.ts";
 import { type Git, gitIn } from "./repository-files.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { fromFileUrl, join } from "@std/path";
+
+const REPO_ROOT = fromFileUrl(new URL("..", import.meta.url));
 
 const BASE = "patterns/baselines";
 
@@ -132,15 +136,22 @@ describe("main()", () => {
   /**
    * A git that names `abc123` as the merge base of `base` and `HEAD`, and
    * `deleted` as the files the change since it deletes, a move counting as a
-   * deletion only where `--no-renames` asks for one.
+   * deletion only where `--no-renames` asks for one. It has an `upstream/main`
+   * only where `upstream` says so.
    */
   const gitDeleting = (
     base: string,
     deleted: { removed: readonly string[]; moved?: readonly string[] },
+    upstream = false,
   ): Git =>
   (...args) => {
     const asked = args.join(" ");
     if (asked === `merge-base ${base} HEAD`) return Promise.resolve("abc123\n");
+    if (
+      asked === "for-each-ref --format=%(refname) refs/remotes/upstream/main"
+    ) {
+      return Promise.resolve(upstream ? "refs/remotes/upstream/main\n" : "");
+    }
     const listed = (paths: readonly string[]) =>
       Promise.resolve(paths.map((path) => `${path}\n`).join(""));
     const filter = "--diff-filter=D --name-only abc123...HEAD";
@@ -206,6 +217,30 @@ describe("main()", () => {
     });
   });
 
+  it("measures from `origin/main` where it is named no base and the checkout has no `upstream/main`", async () => {
+    expect(
+      await main(
+        undefined,
+        gitDeleting("refs/remotes/origin/main", { removed: [] }),
+      ),
+    ).toEqual({
+      out: "Pattern baselines are append-only against this base.",
+      code: 0,
+    });
+  });
+
+  it("measures from `upstream/main` where it is named no base and the checkout has one", async () => {
+    const { code, err } = await main(
+      undefined,
+      gitDeleting("refs/remotes/upstream/main", {
+        removed: [`${BASE}/system/home/home.tsx/20260101T000000Z-a.json`],
+      }, true),
+    );
+
+    expect(code).toBe(1);
+    expect(err).toContain("patterns/system/home/home.tsx still exists.");
+  });
+
   it("returns 2 and asks for real history where git finds no merge base", async () => {
     const { code, out, err } = await main(
       "nowhere",
@@ -218,5 +253,73 @@ describe("main()", () => {
       "Could not resolve a merge base against nowhere. This check needs " +
         "real history — CI must check out with fetch-depth: 0.",
     );
+  });
+});
+
+describe("the check as CI runs it", () => {
+  it("exits 1 naming a deleted baseline, and 0 against a base with no deletion", async () => {
+    // Runs the script the way `deno task check-baselines-append-only` does,
+    // with only the permissions the task grants, so the entry point that turns
+    // main()'s decision into output and an exit code is exercised.
+    const repo = await Deno.makeTempDir({ prefix: "baselines-entry-" });
+    const git = async (...args: string[]) => {
+      const { success } = await new Deno.Command("git", {
+        args: ["-c", "commit.gpgsign=false", ...args],
+        cwd: repo,
+        env: {
+          GIT_AUTHOR_NAME: "A",
+          GIT_AUTHOR_EMAIL: "a@example.com",
+          GIT_COMMITTER_NAME: "A",
+          GIT_COMMITTER_EMAIL: "a@example.com",
+        },
+        stdout: "null",
+        stderr: "null",
+      }).output();
+      expect(success).toBe(true);
+    };
+    const check = (base: string) =>
+      runDenoCommandWithTemporaryLock({
+        root: REPO_ROOT,
+        cwd: repo,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(REPO_ROOT, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-run=git",
+          join(REPO_ROOT, "tasks/check-baselines-append-only.ts"),
+          base,
+        ],
+      });
+    try {
+      const baseline = `${BASE}/system/home/home.tsx/20260101T000000Z-a.json`;
+      await Deno.mkdir(`${repo}/${BASE}/system/home/home.tsx`, {
+        recursive: true,
+      });
+      await Deno.writeTextFile(`${repo}/${baseline}`, '{"contract":1}\n');
+      await git("init", "-q");
+      await git("add", ".");
+      await git("commit", "-q", "-m", "base");
+      await git("branch", "base");
+      await git("rm", "-q", baseline);
+      await git("commit", "-q", "-m", "drop the baseline");
+
+      const failed = await check("base");
+      expect(failed.code).toBe(1);
+      expect(new TextDecoder().decode(failed.stdout)).toBe("");
+      expect(new TextDecoder().decode(failed.stderr)).toContain(
+        `  ${baseline}\n    patterns/system/home/home.tsx still exists.\n`,
+      );
+
+      const passed = await check("HEAD");
+      expect(passed.code).toBe(0);
+      expect(new TextDecoder().decode(passed.stdout)).toBe(
+        "Pattern baselines are append-only against this base.\n",
+      );
+    } finally {
+      await Deno.remove(repo, { recursive: true });
+    }
   });
 });

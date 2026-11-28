@@ -163,7 +163,7 @@ call `counter.increment.send()`.
 
 ## A complete real pattern
 
-This is `patterns/examples/counter/counter.tsx`, lightly trimmed. It uses
+This is `patterns/examples/counter/main.tsx`, lightly trimmed. It uses
 every concept above; read it top to bottom.
 
 ```tsx

@@ -36,7 +36,7 @@ import {
 import type { CacheableModule } from "../harness/types.ts";
 import type { NormalizedFullLink } from "../link-types.ts";
 import { createSigilLinkFromParsedLink, parseLink } from "../link-utils.ts";
-import { formerPatternKey } from "../pattern-key-moves.ts";
+import { formerPatternKeys } from "../pattern-key-moves.ts";
 import { snapshotQueryResult } from "../query-result-proxy.ts";
 import type { MemorySpace, Runtime } from "../runtime.ts";
 import { normalizeCellScope } from "../scope.ts";
@@ -163,7 +163,8 @@ export interface SourceDoc extends ModuleDocBase {
  *
  * `kind` separates the two things this set holds. A `"compiled"` document's
  * `code` is an emitted module body, built into a record and executed. A
- * `"data"` document's `code` is the verbatim bytes of an attached data file:
+ * `"data"` document's `code` is the stored text of an attached data file (a
+ * binary media file's base64 `data:` URL; see `decodeDataFile`):
  * the compiled set carries them so a warm load has everything the pattern
  * needs without reading the source set, and nothing ever parses, verifies, or
  * executes them.
@@ -264,17 +265,20 @@ const rootsOfSharedTail = (
 };
 
 /**
- * The name a module had before the patterns were sorted into categories: a
- * name below the patterns route, or below a checkout's `/patterns/`, names the
- * pattern by its key, and a pattern that moved had another key.
+ * The names a module had before its pattern moved, the latest first: a name
+ * below the patterns route, or below a checkout's `/patterns/`, names the
+ * pattern by its key, and a pattern that moved had other keys. None for a
+ * module whose pattern never moved.
  */
-const formerModuleName = (name: string): string => {
+const formerModuleNames = (name: string): string[] => {
   for (const root of ["/api/patterns/", "/patterns/"]) {
     if (name.startsWith(root)) {
-      return `${root}${formerPatternKey(name.slice(root.length))}`;
+      return formerPatternKeys(name.slice(root.length)).map((key) =>
+        `${root}${key}`
+      );
     }
   }
-  return name;
+  return [];
 };
 
 /**
@@ -293,8 +297,8 @@ const formerModuleName = (name: string): string => {
  * `/patterns` — and every other module additionally matches the
  * previous module named by its own name under the previous root. A module
  * named below the patterns route or a checkout's `/patterns/` also matches
- * the previous module named by the key its pattern had before the patterns
- * were sorted into categories, under either root. A module with more than one
+ * the previous module named by each key its pattern had before it moved,
+ * under either root. A module with more than one
  * candidate, or one that two successors claim, is ambiguous and matches
  * nothing.
  *
@@ -365,28 +369,33 @@ export function deriveModulePredecessors<
       next: nextEntry,
     }
     : undefined;
-  // The entries' shared tail is taken twice: as the entries are named, and
-  // with the next entry under the key its pattern had before the patterns
-  // were sorted into categories. Each gives the roots its own names shift
-  // between.
-  const rootPairs = entryPair === undefined ? [] : [
-    { rename: (name: string) => name },
-    { rename: formerModuleName },
-  ].flatMap(({ rename }) => {
-    const roots = rootsOfSharedTail(
-      canonicalModuleFilename(entryPair.previous.doc.filename),
-      rename(canonicalModuleFilename(entryPair.next.filename)),
-    );
-    return roots === undefined ? [] : [{ rename, roots }];
-  });
+  // The entries' shared tail is taken as the entries are named, and with the
+  // next entry under each key its pattern had before it moved. Each gives the
+  // roots its own names shift between. Another module may have moved fewer
+  // times than the entry, or more, so each module is tried under its own name
+  // and each of its former names against every pair of roots.
+  const nextEntryName = entryPair === undefined
+    ? undefined
+    : canonicalModuleFilename(entryPair.next.filename);
+  const rootPairs = entryPair === undefined || nextEntryName === undefined
+    ? []
+    : [nextEntryName, ...formerModuleNames(nextEntryName)].flatMap((name) => {
+      const roots = rootsOfSharedTail(
+        canonicalModuleFilename(entryPair.previous.doc.filename),
+        name,
+      );
+      return roots === undefined || roots.previous === roots.next
+        ? []
+        : [roots];
+    });
   const namesFor = (name: string): string[] => {
-    const names = new Set([name, formerModuleName(name)]);
-    for (const { rename, roots } of rootPairs) {
-      const renamed = rename(name);
-      if (
-        roots.previous !== roots.next && renamed.startsWith(`${roots.next}/`)
-      ) {
-        names.add(`${roots.previous}${renamed.slice(roots.next.length)}`);
+    const own = [name, ...formerModuleNames(name)];
+    const names = new Set(own);
+    for (const roots of rootPairs) {
+      for (const candidate of own) {
+        if (candidate.startsWith(`${roots.next}/`)) {
+          names.add(`${roots.previous}${candidate.slice(roots.next.length)}`);
+        }
       }
     }
     return [...names];
@@ -818,27 +827,12 @@ export function verifySourceDocs(
   for (const [rootIdentity, rootDoc] of docsByIdentity) {
     if (verdicts.has(rootIdentity)) continue;
 
-    // The root's view: BFS over authored-import edges only.
-    const viewIds: string[] = [];
-    const seen = new Set<string>();
-    const queue = [rootIdentity];
-    while (queue.length > 0) {
-      const id = queue.shift()!;
-      if (seen.has(id)) continue;
-      seen.add(id);
-      const doc = docsByIdentity.get(id);
-      if (doc === undefined) continue; // dangling edge — recorded in `missing`
-      viewIds.push(id);
-      for (const imp of doc.imports) {
-        if (imp.specifier.startsWith(ROOT_LINK_SPECIFIER)) continue;
-        queue.push(imp.identity);
-      }
-    }
-
-    const files = viewIds.map((id) => {
-      const doc = docsByIdentity.get(id)!;
-      return { name: doc.filename, contents: doc.code };
-    });
+    // A dangling edge reaches nothing here, and is recorded in `missing`.
+    const view = sourceDocView(docsByIdentity, rootIdentity);
+    const files = view.map(([, doc]) => ({
+      name: doc.filename,
+      contents: doc.code,
+    }));
     if (new Set(files.map((f) => f.name)).size !== files.length) {
       // Duplicate filename within one view: not attributable to any emission.
       // Only the root is condemned — an intact member still verifies in its
@@ -851,8 +845,7 @@ export function verifySourceDocs(
       string,
       { specifier: string; target: string }[]
     >();
-    for (const id of viewIds) {
-      const doc = docsByIdentity.get(id)!;
+    for (const [, doc] of view) {
       const packageEdges = doc.imports
         .filter((imp) =>
           imp.specifier.startsWith(SOURCE_ROOT_SPECIFIER) ||
@@ -871,15 +864,15 @@ export function verifySourceDocs(
     // Within one view, filenames are unique by construction, so mapping the
     // view's data identities to their filenames is unambiguous here.
     const viewDataFiles = new Set(
-      viewIds
-        .filter((id) => dataIdentities.has(id))
-        .map((id) => docsByIdentity.get(id)!.filename),
+      view
+        .filter(([id]) => dataIdentities.has(id))
+        .map(([, doc]) => doc.filename),
     );
     const declarations = new Map<string, { imports: readonly string[] }>();
-    for (const id of viewIds) {
+    for (const [id, doc] of view) {
       const imports = attestedImports(id);
       if (imports !== undefined) {
-        declarations.set(docsByIdentity.get(id)!.filename, { imports });
+        declarations.set(doc.filename, { imports });
       }
     }
     const recomputed = computeModuleHashes(
@@ -893,12 +886,9 @@ export function verifySourceDocs(
         ...(declarations.size === 0 ? {} : { declarations }),
       },
     );
-    for (const id of viewIds) {
+    for (const [id, doc] of view) {
       if (!verdicts.has(id)) {
-        verdicts.set(
-          id,
-          recomputed.get(docsByIdentity.get(id)!.filename) === id,
-        );
+        verdicts.set(id, recomputed.get(doc.filename) === id);
       }
     }
   }
@@ -913,6 +903,35 @@ export function verifySourceDocs(
     mismatches,
     missing,
   };
+}
+
+/**
+ * Helper for `verifySourceDocs()` and `canonicalSourceImports()`, which
+ * returns the view of `rootIdentity` in `docsByIdentity`, breadth first: each
+ * document of the set reached from it over edges other than cache-root edges,
+ * with its identity. An edge to an identity outside the set reaches nothing.
+ */
+function sourceDocView(
+  docsByIdentity: ReadonlyMap<string, SourceDoc>,
+  rootIdentity: string,
+): [string, SourceDoc][] {
+  const view: [string, SourceDoc][] = [];
+  const seen = new Set<string>();
+  const queue = [rootIdentity];
+  while (queue.length > 0) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const doc = docsByIdentity.get(id);
+    if (doc === undefined) continue;
+    view.push([id, doc]);
+    for (const imp of doc.imports) {
+      if (!imp.specifier.startsWith(ROOT_LINK_SPECIFIER)) {
+        queue.push(imp.identity);
+      }
+    }
+  }
+  return view;
 }
 
 /**
@@ -2831,10 +2850,10 @@ async function planStampRepair(
   for (const [identity, doc] of closure) {
     const link = ownKey(sourceDocKey(identity));
     const whole = readWhole(link);
-    const value = whole?.value;
-    if (!isObjectOrArray(value) || Array.isArray(value)) return "refused";
-    const stored = value as Record<string, unknown>;
-    if (stored.identity !== identity) return "refused";
+    const stored = whole?.value;
+    if (!isObjectOrArray(stored) || stored.identity !== identity) {
+      return "refused";
+    }
     const storedImports = stored.imports;
     if (
       !Array.isArray(storedImports) ||
@@ -2951,7 +2970,6 @@ async function planStampRepair(
       dataIdentities,
       entryIdentity,
     );
-    if (imports === undefined) return "refused";
     repairedClosure.set(identity, { ...doc, imports });
     if (keepList) repairedLists.set(identity, storedStringList(list) ?? []);
     plan.push({
@@ -3099,14 +3117,15 @@ function reachesEvery(
  * in scan order, then its source-root and data-file edges ordered by
  * specifier and identity, then, on the closure's entry `entryIdentity` only,
  * one cache-root edge per other module of the closure it links, ordered by
- * identity. Returns `undefined` when its own view does not resolve.
+ * identity. The authored edges resolve over the view `verifySourceDocs()`
+ * hashes `identity` in.
  */
 function canonicalSourceImports(
   closure: ReadonlyMap<string, SourceDoc>,
   identity: string,
   dataIdentities: ReadonlySet<string>,
   entryIdentity: string,
-): ModuleImportRef[] | undefined {
+): ModuleImportRef[] {
   const doc = closure.get(identity)!;
   const isPackageEdge = (imp: ModuleImportRef) =>
     imp.specifier.startsWith(SOURCE_ROOT_SPECIFIER) ||
@@ -3114,27 +3133,10 @@ function canonicalSourceImports(
   const isRootEdge = (imp: ModuleImportRef) =>
     imp.specifier.startsWith(ROOT_LINK_SPECIFIER);
 
-  // The record's own view, as verification builds it.
-  const viewIds: string[] = [];
-  const seen = new Set<string>();
-  const queue = [identity];
-  while (queue.length > 0) {
-    const id = queue.shift()!;
-    if (seen.has(id)) continue;
-    seen.add(id);
-    const member = closure.get(id);
-    if (member === undefined) return undefined;
-    viewIds.push(id);
-    for (const imp of member.imports) {
-      if (!isRootEdge(imp)) queue.push(imp.identity);
-    }
-  }
-  const identityByFilename = new Map<string, string>();
-  for (const id of viewIds) {
-    const filename = closure.get(id)!.filename;
-    if (identityByFilename.has(filename)) return undefined;
-    identityByFilename.set(filename, id);
-  }
+  const view = sourceDocView(closure, identity);
+  const identityByFilename = new Map(
+    view.map(([id, member]) => [member.filename, id]),
+  );
 
   const authored: ModuleImportRef[] = [];
   if (!dataIdentities.has(identity)) {
@@ -3143,25 +3145,26 @@ function canonicalSourceImports(
     const edges = resolveModuleImports(
       {
         main: doc.filename,
-        files: viewIds.map((id) => ({
-          name: closure.get(id)!.filename,
-          contents: closure.get(id)!.code,
+        files: view.map(([, member]) => ({
+          name: member.filename,
+          contents: member.code,
         })),
       },
       {
         dataFiles: new Set(
-          viewIds.filter((id) => dataIdentities.has(id)).map((id) =>
-            closure.get(id)!.filename
+          view.filter(([id]) => dataIdentities.has(id)).map(([, member]) =>
+            member.filename
           ),
         ),
       },
     );
-    const own = edges.get(doc.filename);
-    if (own === undefined) return undefined;
-    for (const dep of own.internalDeps) {
-      const target = identityByFilename.get(dep.target);
-      if (target === undefined) return undefined;
-      authored.push({ specifier: dep.specifier, identity: target });
+    // The resolution keys every file of the view, and each internal
+    // dependency is one of them.
+    for (const dep of edges.get(doc.filename)!.internalDeps) {
+      authored.push({
+        specifier: dep.specifier,
+        identity: identityByFilename.get(dep.target)!,
+      });
     }
   }
   const byKey = (a: ModuleImportRef, b: ModuleImportRef) =>

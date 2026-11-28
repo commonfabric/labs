@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import {
   decodeMemoryBoundary,
   encodeMemoryBoundary,
@@ -21,6 +20,7 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const ROOM = "room-0123456789abcdefghijklmnop";
 
@@ -43,6 +43,14 @@ class ReconnectableTransport implements Transport {
   #connections = 0;
   #sessionOpenGate: PromiseWithResolvers<void> | undefined;
   #sessionOpenHeld: PromiseWithResolvers<void> | undefined;
+  #answerHold:
+    | {
+      type: string;
+      requestId?: unknown;
+      payload?: string;
+      held: PromiseWithResolvers<void>;
+    }
+    | undefined;
   readonly #server: Server;
 
   constructor(server: Server) {
@@ -68,8 +76,35 @@ class ReconnectableTransport implements Transport {
     this.#sessionOpenGate = undefined;
   }
 
+  /**
+   * Holds the server's answer to the next `type` request until
+   * `releaseAnswer()`, and resolves the returned promise once that answer
+   * is being held.
+   */
+  holdAnswer(type: string): Promise<void> {
+    this.#answerHold = { type, held: Promise.withResolvers<void>() };
+    return this.#answerHold.held.promise;
+  }
+
+  /** Hands the client the answer `holdAnswer()` held. */
+  releaseAnswer(): void {
+    const payload = this.#answerHold?.payload;
+    this.#answerHold = undefined;
+    if (payload !== undefined) this.#receiver(payload);
+  }
+
   async send(payload: string): Promise<void> {
-    const message = decodeMemoryBoundary(payload) as { type?: string };
+    const message = decodeMemoryBoundary(payload) as {
+      type?: string;
+      requestId?: unknown;
+    };
+    const hold = this.#answerHold;
+    if (
+      hold !== undefined && hold.type === message.type &&
+      hold.requestId === undefined
+    ) {
+      hold.requestId = message.requestId;
+    }
     if (message.type === "session.open" && this.#sessionOpenGate) {
       const gate = this.#sessionOpenGate.promise;
       this.#sessionOpenHeld?.resolve();
@@ -101,6 +136,15 @@ class ReconnectableTransport implements Transport {
     if (this.#connection === null) {
       this.#connections++;
       this.#connection = this.#server.connect((message) => {
+        const hold = this.#answerHold;
+        if (
+          hold !== undefined && hold.requestId !== undefined &&
+          message.type === "response" && message.requestId === hold.requestId
+        ) {
+          hold.payload = encodeMemoryBoundary(message);
+          hold.held.resolve();
+          return;
+        }
         this.#receiver(encodeMemoryBoundary(message));
       });
     }
@@ -316,6 +360,44 @@ describe("v2-presence-client", () => {
       }
     });
 
+    it("reports a publication whose send the transport refuses with something other than an error as a failure carrying an error", async () => {
+      const server = createServer("send-refused");
+      const space = "did:key:z6Mk-presence-client-send-refused";
+      const inner = loopback(server);
+      const refusing: Transport = {
+        ...inner,
+        send(payload) {
+          const message = decodeMemoryBoundary(payload) as { type?: string };
+          if (message.type === "presence.publish") {
+            return Promise.reject("publication refused by the transport");
+          }
+          return inner.send(payload);
+        },
+      };
+      const client = await connect({ transport: refusing });
+      try {
+        const session = await client.mount(
+          space,
+          {},
+          testSessionOpenAuthFactory,
+        );
+        const observer = new Observer();
+        const membership = await session.joinPresenceRoom(
+          ROOM,
+          observer.observe,
+        );
+        const failure = observer.next("failure");
+        membership.publish({ name: "Ada", facets: {} });
+        const { error } = await failure;
+        expect(error).toBeInstanceOf(Error);
+        expect(error.message).toBe("publication refused by the transport");
+        expect(client.connectionState).toBe("connected");
+      } finally {
+        await client.close();
+        await server.close();
+      }
+    });
+
     it("refuses to join when the server does not advertise `presenceV1`", async () => {
       const { presenceV1: _presenceV1, ...flags } = getMemoryProtocolFlags();
       let receiver = (_payload: string) => {};
@@ -489,6 +571,41 @@ describe("v2-presence-client", () => {
       } finally {
         await clientA.close();
         await clientB.close();
+        await server.close();
+      }
+    });
+
+    it("tells a room nothing more once its session closes while the rejoin's answer is on its way", async () => {
+      const server = createServer("close-while-rejoining");
+      const space = "did:key:z6Mk-presence-client-close-while-rejoining";
+      const transportA = new ReconnectableTransport(server);
+      const clientA = await connect({ transport: transportA });
+      try {
+        const a = await clientA.mount(space, {}, testSessionOpenAuthFactory);
+        const observerA = new Observer();
+        await a.joinPresenceRoom(ROOM, observerA.observe);
+        expect(observerA.events.map((event) => event.kind)).toEqual([
+          "snapshot",
+        ]);
+
+        // The reconnect rejoins the room, and the relay's answer is held
+        // until the session has closed.
+        const held = transportA.holdAnswer("presence.join");
+        transportA.disconnect();
+        await held;
+        const closing = a.close();
+        transportA.releaseAnswer();
+        await closing;
+        // A mount on the same client is answered after the rejoin's answer
+        // has been handled.
+        await clientA.mount(`${space}-after`, {}, testSessionOpenAuthFactory);
+
+        expect(observerA.events.map((event) => event.kind)).toEqual([
+          "snapshot",
+          "failure",
+        ]);
+      } finally {
+        await clientA.close();
         await server.close();
       }
     });

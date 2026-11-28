@@ -5,7 +5,15 @@
  * code and runs where there is no credential to take.
  */
 
-import { globToRegExp, join, relative, resolve, SEPARATOR } from "@std/path";
+import {
+  basename,
+  globToRegExp,
+  join,
+  relative,
+  resolve,
+  SEPARATOR,
+} from "@std/path";
+import { normalize as normalizePosix } from "@std/path/posix";
 import type { RuntimeProgram } from "@commonfabric/runner";
 import {
   type CompiledPattern,
@@ -37,6 +45,12 @@ export interface RepoEntryOptions {
 
   /** Globs, relative to `repoRoot`, removing files `include` named. */
   exclude: readonly string[];
+
+  /**
+   * The paths an entry's file had before it moved, nearest first, all
+   * relative to `repoRoot`; none when the repository records no moves.
+   */
+  formerPaths?: (path: string) => readonly string[];
 }
 
 /** What the plan phase reaches the world through. */
@@ -136,6 +150,16 @@ export const findEntries = async (
 };
 
 /**
+ * Whether a repository says this entry stands alone: in a repository a
+ * pattern's folder is its name, `<name>/main.tsx` is the entry offered to a
+ * person choosing what to place, and every other file is a part. Sent
+ * either way, so the repository's answer is stated rather than left to the
+ * index's default for a first version.
+ */
+export const isStandaloneEntry = (path: string): boolean =>
+  basename(path) === "main.tsx";
+
+/**
  * Resolves and compiles one entry, given the source already read from it.
  */
 const planEntry = async (
@@ -168,8 +192,87 @@ const planEntry = async (
     keywords: doc.keywords,
     argumentSchema: compiled.argumentSchema,
     resultSchema: compiled.resultSchema,
+    standalone: isStandaloneEntry(path),
   });
   return { path, status: "compiled", sourceHash, request };
+};
+
+/**
+ * A table of moves: each key a path a pattern had, each value the path it
+ * moved to, both relative to the program root. A key and value that end in
+ * `/` move a whole directory. Labs' `MOVED_PATTERN_KEYS` is one.
+ */
+export type MovesTable = Readonly<Record<string, string>>;
+
+/**
+ * The former paths of a file under `programRoot`, nearest moves first: every
+ * path the table says moved to it, then every path that moved to one of
+ * those, and so on. A file can have several, as when a table keeps each old
+ * path pointing straight at the newest one, so the publish phase takes the
+ * first of them the index holds a lineage for.
+ */
+export const formerPathsIn = (
+  programRoot: string,
+  table: MovesTable,
+): (path: string) => readonly string[] => {
+  // Git and the table write paths with `/` on every platform. The repository
+  // root itself (`.`) prefixes nothing.
+  const root = normalizePosix(programRoot).replace(/\/+$/, "");
+  const prefix = root === "." || root === "" ? "" : `${root}/`;
+  const moves = Object.entries(table);
+  /**
+   * The keys the table says moved straight to `key`. An entry naming the
+   * file itself says where it came from, so a directory moved to where it
+   * now lies does not; only without one does the directory's move speak
+   * for it.
+   */
+  const movedTo = (key: string): { from: string; move: number }[] => {
+    const files = moves.flatMap(([from, to], move) =>
+      to === key ? [{ from, move }] : []
+    );
+    if (files.length > 0) return files;
+    return moves.flatMap(([from, to], move) =>
+      to.endsWith("/") && from.endsWith("/") && key.startsWith(to)
+        ? [{ from: from + key.slice(to.length), move }]
+        : []
+    );
+  };
+  return (path) => {
+    if (!path.startsWith(prefix)) return [];
+    const start = path.slice(prefix.length);
+    const listed = new Set([start]);
+    const former: string[] = [];
+    // Each move applies at most once along a file's history. Without that, a
+    // cycle of directory moves (`a/` to `b/`, `b/sub/` to `a/`) would grow
+    // the path forever, since no exact path repeats. Two histories can reach
+    // the same path having used different moves, and the one with fewer
+    // spent can reach further, so a path is passed over only when reached
+    // again with the same moves used.
+    type Step = { key: string; used: ReadonlySet<number> };
+    const stateOf = ({ key, used }: Step) =>
+      `${[...used].sort((a, b) => a - b).join(",")}:${key}`;
+    const visited = new Set<string>();
+    for (
+      let next: Step[] = [{ key: start, used: new Set() }];
+      next.length > 0;
+    ) {
+      next = next.flatMap(({ key, used }) =>
+        movedTo(key).flatMap(({ from, move }) => {
+          if (used.has(move)) return [];
+          const step = { key: from, used: new Set([...used, move]) };
+          if (visited.has(stateOf(step))) return [];
+          visited.add(stateOf(step));
+          return [step];
+        })
+      );
+      for (const { key } of next) {
+        if (listed.has(key)) continue;
+        listed.add(key);
+        former.push(key);
+      }
+    }
+    return former.map((key) => prefix + key);
+  };
 };
 
 /**
@@ -189,13 +292,19 @@ export const planRepo = async (
   const selected = await selectedPaths(options, deps);
   const entries: PlannedEntry[] = [];
   for (const path of selected) {
+    let entry: PlannedEntry;
     try {
       const source = await deps.readTextFile(join(options.repoRoot, path));
       if (!isEntrySource(source)) continue;
-      entries.push(await planEntry(path, source, root, options, deps));
+      entry = await planEntry(path, source, root, options, deps);
     } catch (error) {
-      entries.push({ path, status: "failed", reason: reasonOf(error) });
+      entry = { path, status: "failed", reason: reasonOf(error) };
     }
+    // Recorded whatever became of the entry, so a moved file that fails or
+    // has no description still keeps its old path's lineage from being
+    // withdrawn.
+    const formerPaths = options.formerPaths?.(path) ?? [];
+    entries.push(formerPaths.length > 0 ? { ...entry, formerPaths } : entry);
   }
   return { entries, selected };
 };

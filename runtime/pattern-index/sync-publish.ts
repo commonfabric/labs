@@ -16,7 +16,9 @@
  * since one lives only minutes.
  *
  * Exits 1 when any entry failed to compile or publish, or when it could not
- * run, after writing the report; exits 2 for a usage error.
+ * run, after writing the report; exits 2 for a usage error. An entry with no
+ * description or too large for the index is reported, not a failure
+ * (`syncFailed` in `src/repo-sync.ts`).
  */
 
 import { parseArgs } from "@std/cli/parse-args";

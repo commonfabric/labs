@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { context, trace } from "@opentelemetry/api";
 import {
@@ -9,6 +8,7 @@ import {
 } from "@opentelemetry/sdk-trace-base";
 import { AsyncHooksContextManager } from "@opentelemetry/context-async-hooks";
 import createApp from "@/lib/create-app.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /**
  * Runs `body` with a global tracer provider that records every finished span,

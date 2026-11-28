@@ -6,7 +6,6 @@
  * the listing, the preflight, the write — and the exit discipline of both.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   ApplyReport,
@@ -15,6 +14,12 @@ import type {
   RestoreOutcome,
 } from "@commonfabric/piece/ops";
 import { decode } from "@commonfabric/text/utf8";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { runRestore, runRollback } from "../lib/bulk.ts";
 import { resetUnreportedRunGuardsForTest } from "../lib/unreported-run.ts";

@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { JSONSchema } from "@commonfabric/api";
 import { NAME } from "@commonfabric/runner";
@@ -16,6 +15,7 @@ import {
   pieceDescribeLines,
 } from "../commands/piece.ts";
 import { decode } from "@commonfabric/text/utf8";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A result schema shaped as the generator emits a board-like pattern's: an
  * inline root carrying its interface's doc comment, a stream-marked verb

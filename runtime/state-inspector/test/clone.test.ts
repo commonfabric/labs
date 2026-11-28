@@ -10,6 +10,7 @@ import {
   resolveMemoryEngineStoreRootUrl,
   resolveSpaceStoreUrl,
 } from "@commonfabric/memory/v2/storage-path";
+import { test } from "@commonfabric/test-support/test";
 import { Database } from "@db/sqlite";
 
 import {
@@ -151,7 +152,7 @@ async function withDirs(
   }
 }
 
-Deno.test("a clone is servable, recorded, and leaves the source untouched", async () => {
+test("a clone is servable, recorded, and leaves the source untouched", async () => {
   await withDirs(async ({ source, clone }) => {
     const before = await Deno.readFile(source);
     const manifest = await createClone({
@@ -193,7 +194,7 @@ Deno.test("a clone is servable, recorded, and leaves the source untouched", asyn
   });
 });
 
-Deno.test("a clean migration keeps the fingerprint even as commits climb", async () => {
+test("a clean migration keeps the fingerprint even as commits climb", async () => {
   // The whole reason generated cells are excluded. A pattern update rotates
   // them and adds commits; content is unchanged, so verify must still pass.
   await withDirs(async ({ source, clone }) => {
@@ -215,7 +216,7 @@ Deno.test("a clean migration keeps the fingerprint even as commits climb", async
   });
 });
 
-Deno.test("verify reports WHAT moved, not merely that something did", async () => {
+test("verify reports WHAT moved, not merely that something did", async () => {
   // The headline hash cannot distinguish a successful migration from data
   // loss: a schema update rewrites every piece result, so it always differs.
   // `removed` is the unambiguous alarm, and the per-kind tally is what lets an
@@ -237,7 +238,7 @@ Deno.test("verify reports WHAT moved, not merely that something did", async () =
   });
 });
 
-Deno.test("a migration-shaped change is a PASS, not a failure", async () => {
+test("a migration-shaped change is a PASS, not a failure", async () => {
   // The verdict and the message have to agree. An earlier version reported
   // "this is the EXPECTED result of a migration" while returning ok=false, so
   // the CLI exited nonzero — meaning a rehearsal script written from the
@@ -267,7 +268,7 @@ Deno.test("a migration-shaped change is a PASS, not a failure", async () => {
   });
 });
 
-Deno.test("a cell a migration adopts as generated is not a removal", async () => {
+test("a cell a migration adopts as generated is not a removal", async () => {
   // Measured on a 5 GB clone of the real Topics store: `verify` reported 114
   // owned cells REMOVED — "durable content was destroyed", the loudest verdict
   // it has — while every one of them was present at head in BOTH stores. The
@@ -297,7 +298,7 @@ Deno.test("a cell a migration adopts as generated is not a removal", async () =>
   });
 });
 
-Deno.test("an adoption in one scope does not excuse a removal in another", async () => {
+test("an adoption in one scope does not excuse a removal in another", async () => {
   // The reclassification has to key by (id, scope) for the same reason the
   // diff does. A manifest link carries an id and no scope, so adopting a cell
   // excludes EVERY scope holding that id from the working fingerprint —
@@ -339,7 +340,7 @@ Deno.test("an adoption in one scope does not excuse a removal in another", async
   });
 });
 
-Deno.test("verify catches a real content change", async () => {
+test("verify catches a real content change", async () => {
   await withDirs(async ({ source, clone }) => {
     await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
     const paths = clonePaths(clone, SPACE);
@@ -362,7 +363,7 @@ Deno.test("verify catches a real content change", async () => {
   });
 });
 
-Deno.test("reset discards the attempt, including WAL companions", async () => {
+test("reset discards the attempt, including WAL companions", async () => {
   await withDirs(async ({ source, clone }) => {
     await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
     const paths = clonePaths(clone, SPACE);
@@ -396,7 +397,7 @@ Deno.test("reset discards the attempt, including WAL companions", async () => {
   });
 });
 
-Deno.test("reset refuses while a server still holds the working copy", async () => {
+test("reset refuses while a server still holds the working copy", async () => {
   // The defect this pins: unlinking a file does not reach a process that
   // already has it open. A toolshed keeps reading and writing the unlinked
   // inode while every NEW reader — including the verify that `cf space reset`
@@ -434,7 +435,7 @@ Deno.test("reset refuses while a server still holds the working copy", async () 
   });
 });
 
-Deno.test("reset removes the databases an attempt created beside the working copy", async () => {
+test("reset removes the databases an attempt created beside the working copy", async () => {
   // A link into another space makes the server create a store for that space
   // on demand, beside the working copy, and the pass writes into it; the server
   // keeps cell-derived databases there too. `verify` reads only the cloned
@@ -488,7 +489,7 @@ Deno.test("reset removes the databases an attempt created beside the working cop
   });
 });
 
-Deno.test("reset refuses while a server still holds another space's store", async () => {
+test("reset refuses while a server still holds another space's store", async () => {
   // The same stale-inode hazard as the working copy: removing a store a server
   // still has open would not reach the server. And nothing is removed before
   // every store has been probed, so the refusal leaves the clone as it was.
@@ -523,7 +524,7 @@ Deno.test("reset refuses while a server still holds another space's store", asyn
   });
 });
 
-Deno.test("reset restores a working copy that was deleted outright", async () => {
+test("reset restores a working copy that was deleted outright", async () => {
   // Nothing to hold open, and nothing to unlink. The probe must not treat an
   // absent file as a reason to fail — and must not create one just to ask.
   await withDirs(async ({ source, clone }) => {
@@ -535,7 +536,7 @@ Deno.test("reset restores a working copy that was deleted outright", async () =>
   });
 });
 
-Deno.test("reset recreates an engine directory that was deleted outright", async () => {
+test("reset recreates an engine directory that was deleted outright", async () => {
   // The same remedy as a deleted working copy, one level up: nothing is beside
   // the working copy to clear, and the restore puts the directory back.
   await withDirs(async ({ source, clone }) => {
@@ -551,7 +552,7 @@ Deno.test("reset recreates an engine directory that was deleted outright", async
   });
 });
 
-Deno.test("reset works when the working path cannot be opened at all", async () => {
+test("reset works when the working path cannot be opened at all", async () => {
   // The probe fails at open rather than at lock — a different branch from a
   // file that opens and turns out not to be a database, and the same verdict:
   // whatever is in the way, restoring from pristine is the remedy.
@@ -566,7 +567,7 @@ Deno.test("reset works when the working path cannot be opened at all", async () 
   });
 });
 
-Deno.test("reset still works on a working copy that is not a database", async () => {
+test("reset still works on a working copy that is not a database", async () => {
   // The mirror image of the guard above: a probe that refuses whenever it
   // cannot take the lock would refuse hardest on a corrupt working copy, which
   // is precisely when a reset is the remedy rather than the risk.
@@ -580,7 +581,7 @@ Deno.test("reset still works on a working copy that is not a database", async ()
   });
 });
 
-Deno.test("verify reports a corrupted baseline rather than trusting it", async () => {
+test("verify reports a corrupted baseline rather than trusting it", async () => {
   await withDirs(async ({ source, clone }) => {
     await createClone({ source, space: SPACE, targetDir: clone, now: NOW });
     const paths = clonePaths(clone, SPACE);
@@ -594,7 +595,7 @@ Deno.test("verify reports a corrupted baseline rather than trusting it", async (
   });
 });
 
-Deno.test("refuses to write into the live store directory", async () => {
+test("refuses to write into the live store directory", async () => {
   await withDirs(async ({ root, source, clone }) => {
     const live = `${root}/live-memory`;
     await Deno.mkdir(live);
@@ -614,7 +615,7 @@ Deno.test("refuses to write into the live store directory", async () => {
   });
 });
 
-Deno.test("the live-store refusal survives a RELATIVE target path", async () => {
+test("the live-store refusal survives a RELATIVE target path", async () => {
   // Regression: every other fixture here uses absolute temp-dir paths, and the
   // rail passed for all of them while a relative `--to` sailed straight
   // through — a relative path can never overlap an absolute forbidden one, so
@@ -644,7 +645,7 @@ Deno.test("the live-store refusal survives a RELATIVE target path", async () => 
   });
 });
 
-Deno.test("a symlinked spelling of the live store is still refused", async () => {
+test("a symlinked spelling of the live store is still refused", async () => {
   // On macOS `/tmp` is a symlink to `/private/tmp`, so the same directory has
   // two spellings. Comparing them unresolved would miss the overlap.
   await withDirs(async ({ root, source }) => {
@@ -669,7 +670,48 @@ Deno.test("a symlinked spelling of the live store is still refused", async () =>
   });
 });
 
-Deno.test("refuses to clone into the snapshot's own directory", async () => {
+test("a target several levels from existing resolves through a symlinked ancestor", async () => {
+  await withDirs(async ({ root, source }) => {
+    const real = `${await Deno.realPath(root)}/real`;
+    await Deno.mkdir(real);
+    const alias = `${root}/alias`;
+    await Deno.symlink(real, alias);
+
+    // Neither the target nor the forbidden directory exists yet; both still
+    // resolve to the same place, so the overlap is caught.
+    await assertRejects(
+      () =>
+        createClone({
+          source,
+          space: SPACE,
+          targetDir: `${alias}/a/b/c`,
+          forbiddenDirs: [`${real}/a`],
+          now: NOW,
+        }),
+      Error,
+      "overlaps the live store directory",
+    );
+    assertEquals(await exists(`${real}/a`), false);
+
+    // The missing components are re-appended in order beneath the resolved
+    // ancestor, and the clone records that resolved spelling.
+    await createClone({
+      source,
+      space: SPACE,
+      targetDir: `${alias}/a/b/c`,
+      forbiddenDirs: [`${real}/x`],
+      now: NOW,
+    });
+    const dir = `${real}/a/b/c`;
+    assert(await exists(clonePaths(dir, SPACE).workingPath));
+    assertEquals(await exists(`${real}/c`), false);
+    const marker = await Deno.readTextFile(`${dir}/.cf-clone`);
+    assert(marker.includes(`cf space reset ${dir}\n`), marker);
+    assert(!marker.includes(`cf space reset ${alias}`), marker);
+  });
+});
+
+test("refuses to clone into the snapshot's own directory", async () => {
   await withDirs(async ({ source }) => {
     await assertRejects(
       () =>
@@ -685,7 +727,7 @@ Deno.test("refuses to clone into the snapshot's own directory", async () => {
   });
 });
 
-Deno.test("refuses a non-empty target rather than merging into it", async () => {
+test("refuses a non-empty target rather than merging into it", async () => {
   await withDirs(async ({ source, clone }) => {
     await Deno.mkdir(clone, { recursive: true });
     await Deno.writeTextFile(`${clone}/something.txt`, "prior contents");
@@ -697,7 +739,7 @@ Deno.test("refuses a non-empty target rather than merging into it", async () => 
   });
 });
 
-Deno.test("the per-kind tally respects scope, not just id", async () => {
+test("the per-kind tally respects scope, not just id", async () => {
   // One id can hold a shared space value AND per-user overrides that are
   // genuinely different entities; `diffFingerprints` keys by id AND scope.
   // Keying the kind lookup by id alone let the last scope win and misclassify
@@ -732,7 +774,7 @@ Deno.test("the per-kind tally respects scope, not just id", async () => {
   });
 });
 
-Deno.test("a clone taken before the baseline sidecar still verifies", async () => {
+test("a clone taken before the baseline sidecar still verifies", async () => {
   // Backward compatibility: clones made before per-entity baselines were
   // recorded have no sidecar, and must still produce a real diff by
   // recomputing from the pristine snapshot rather than silently comparing
@@ -756,7 +798,7 @@ Deno.test("a clone taken before the baseline sidecar still verifies", async () =
   });
 });
 
-Deno.test("a corrupted-but-PARSEABLE sidecar is caught by its hash", async () => {
+test("a corrupted-but-PARSEABLE sidecar is caught by its hash", async () => {
   // The dangerous case is not unparseable JSON — it is valid JSON with wrong
   // contents. The sidecar feeds `diff` and therefore `okAfterMigration`, the
   // verdict a rehearsal gates on, so a silently wrong baseline would produce a
@@ -780,7 +822,7 @@ Deno.test("a corrupted-but-PARSEABLE sidecar is caught by its hash", async () =>
   });
 });
 
-Deno.test("a corrupt baseline sidecar fails loudly rather than recomputing", async () => {
+test("a corrupt baseline sidecar fails loudly rather than recomputing", async () => {
   // Absent is ordinary — an older clone simply has no sidecar. UNREADABLE is
   // not: silently falling back to recomputation would produce a correct-looking
   // verdict while hiding that the clone directory is damaged, and verify's job
@@ -795,7 +837,7 @@ Deno.test("a corrupt baseline sidecar fails loudly rather than recomputing", asy
   });
 });
 
-Deno.test("an IO error while clearing the working set is surfaced", async () => {
+test("an IO error while clearing the working set is surfaced", async () => {
   // reset probes the working copy and its `-wal`/`-shm` companions; only
   // "absent" is an ordinary answer. A component that is not a directory yields NotADirectory, which
   // must propagate rather than be read as "nothing there" — treating it as
@@ -816,7 +858,7 @@ Deno.test("an IO error while clearing the working set is surfaced", async () => 
   });
 });
 
-Deno.test("a directory without a manifest is not a clone", async () => {
+test("a directory without a manifest is not a clone", async () => {
   await withDirs(async ({ root }) => {
     await assertRejects(
       () => verifyClone(root),
@@ -826,7 +868,7 @@ Deno.test("a directory without a manifest is not a clone", async () => {
   });
 });
 
-Deno.test("reset works on a clone that was never opened", async () => {
+test("reset works on a clone that was never opened", async () => {
   // The common case at the START of a rehearsal: no engine has run yet, so
   // there are no WAL companions to remove. Absent companions are not an error.
   await withDirs(async ({ source, clone }) => {
@@ -839,7 +881,7 @@ Deno.test("reset works on a clone that was never opened", async () => {
   });
 });
 
-Deno.test("a clone records the fingerprint scheme its baseline was taken under", async () => {
+test("a clone records the fingerprint scheme its baseline was taken under", async () => {
   // Version 2 is what an older tool refuses; the scheme is what a newer one
   // checks before comparing anything against the baseline.
   await withDirs(async ({ source, clone }) => {
@@ -859,7 +901,7 @@ Deno.test("a clone records the fingerprint scheme its baseline was taken under",
   });
 });
 
-Deno.test("a clone fingerprinted under another scheme is refused, not compared", async () => {
+test("a clone fingerprinted under another scheme is refused, not compared", async () => {
   // Two fingerprints computed different ways can differ with no change to the
   // content, or agree across one. The reset is refused too, before restoring
   // anything, since the verify that judges it would be.
@@ -883,7 +925,7 @@ Deno.test("a clone fingerprinted under another scheme is refused, not compared",
   });
 });
 
-Deno.test("a version-2 manifest without a scheme is refused as damaged", async () => {
+test("a version-2 manifest without a scheme is refused as damaged", async () => {
   // Only a version-1 clone may lack the scheme. A version-2 one without it
   // would otherwise pass as unknown and be verified or reset under a scheme
   // nobody can name.
@@ -915,7 +957,7 @@ Deno.test("a version-2 manifest without a scheme is refused as damaged", async (
   });
 });
 
-Deno.test("a clone taken before the scheme was recorded verifies, and says so", async () => {
+test("a clone taken before the scheme was recorded verifies, and says so", async () => {
   // Version-1 clones carry no scheme. They stay usable, but the result reports
   // the baseline's scheme as unknown rather than as this tool's.
   await withDirs(async ({ source, clone }) => {
@@ -938,7 +980,7 @@ Deno.test("a clone taken before the scheme was recorded verifies, and says so", 
   });
 });
 
-Deno.test("a manifest from a future tool version is refused, not guessed at", async () => {
+test("a manifest from a future tool version is refused, not guessed at", async () => {
   // Reading a newer layout with older rules could reset to the wrong file or
   // compare against a fingerprint computed a different way.
   await withDirs(async ({ source, clone }) => {
@@ -958,7 +1000,7 @@ Deno.test("a manifest from a future tool version is refused, not guessed at", as
   });
 });
 
-Deno.test("an unreadable manifest surfaces its real error", async () => {
+test("an unreadable manifest surfaces its real error", async () => {
   // Only ENOENT means "not a clone". Any other IO failure must not be
   // reported as a missing manifest — that would send an operator looking in
   // the wrong place.
@@ -973,7 +1015,7 @@ Deno.test("an unreadable manifest surfaces its real error", async () => {
   });
 });
 
-Deno.test("a filesystem error other than 'absent' is surfaced, not swallowed", async () => {
+test("a filesystem error other than 'absent' is surfaced, not swallowed", async () => {
   // Only ENOENT means "nothing there". Treating any other failure as absent
   // would let `createClone` merge onto occupied ground, or let `reset` skip a
   // file it failed to delete and call the clone pristine. A path whose parent
@@ -999,7 +1041,7 @@ Deno.test("a filesystem error other than 'absent' is surfaced, not swallowed", a
   });
 });
 
-Deno.test("an empty forbidden-directory entry is ignored, not treated as '/'", async () => {
+test("an empty forbidden-directory entry is ignored, not treated as '/'", async () => {
   // The CLI builds this list from the environment, where an unset variable can
   // arrive as "". Treating that as a path prefix would refuse every target.
   await withDirs(async ({ source, clone }) => {

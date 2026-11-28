@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import {
   COMPILE_INTERLEAVES_EVENT_LOOP,
   interleaveCompileYield,
 } from "../src/harness/compile-interleave.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("compile-interleave", () => {
   // The compile pipeline's yield points run through interleaveCompileYield. The

@@ -1,7 +1,7 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { resolveGmailPushSettings } from "./gmail-push.config.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const SERVICE_SPACE =
   "did:key:z6MkGmailPushConfigTestServiceSpaceAAAAAAAAAAAAAA";

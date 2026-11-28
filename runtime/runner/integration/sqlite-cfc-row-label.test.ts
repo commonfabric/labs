@@ -11,7 +11,10 @@
  * onExceed:"skip" returns exactly the fitting rows.
  */
 
+import { equal } from "@std/assert";
+import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 import { cfcLabelViewForDereferenceTraces } from "../src/cfc/label-view.ts";
@@ -139,6 +142,10 @@ async function runTest(base: URL) {
       const row0 = await rowLabel(0);
       const row1 = await rowLabel(1);
 
+      // `principal()` and `dbOwner()` name readers as the CFC `User{subject}`
+      // atom (spec §15.2), not the bare DID.
+      const user = (subject: string) => ({ type: CFC_ATOM_TYPE.User, subject });
+
       const expectAtoms = (
         got: unknown[],
         want: unknown[],
@@ -146,14 +153,14 @@ async function runTest(base: URL) {
         what: string,
       ) => {
         for (const w of want) {
-          if (!got.some((g) => JSON.stringify(g) === JSON.stringify(w))) {
+          if (!got.some((g) => equal(g, w))) {
             throw new Error(
               `${what}: missing ${JSON.stringify(w)} in ${JSON.stringify(got)}`,
             );
           }
         }
         for (const w of wantAbsent) {
-          if (got.some((g) => JSON.stringify(g) === JSON.stringify(w))) {
+          if (got.some((g) => equal(g, w))) {
             throw new Error(
               `${what}: unexpected ${JSON.stringify(w)} in ${
                 JSON.stringify(got)
@@ -168,8 +175,12 @@ async function runTest(base: URL) {
       // gated authored-by claim minted.
       expectAtoms(
         row0.conf,
-        ["did:mailto:alice@a.example", "did:mailto:bob@example.com", owner],
-        ["did:mailto:carol@c.example", "did:mailto:dave@d.example"],
+        [
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+          user(owner),
+        ],
+        [user("did:mailto:carol@c.example"), user("did:mailto:dave@d.example")],
         "row 0 confidentiality",
       );
       expectAtoms(
@@ -187,12 +198,15 @@ async function runTest(base: URL) {
       expectAtoms(
         row1.conf,
         [
-          "did:mailto:carol@c.example",
-          "did:mailto:dave@d.example",
-          "did:mailto:erin@e.example",
-          owner,
+          user("did:mailto:carol@c.example"),
+          user("did:mailto:dave@d.example"),
+          user("did:mailto:erin@e.example"),
+          user(owner),
         ],
-        ["did:mailto:alice@a.example", "did:mailto:bob@example.com"],
+        [
+          user("did:mailto:alice@a.example"),
+          user("did:mailto:bob@example.com"),
+        ],
         "row 1 confidentiality",
       );
       expectAtoms(
@@ -271,7 +285,7 @@ async function runTest(base: URL) {
   }
 }
 
-Deno.test({
+test({
   name: "sqlite per-row data-derived CFC labels (end to end)",
   fn: async () => {
     const server = Deno.serve({ port: 0 }, app.fetch);

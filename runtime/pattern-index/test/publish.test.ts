@@ -1,10 +1,15 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { createSession, Identity } from "@commonfabric/identity";
 import { PiecesController } from "@commonfabric/piece/ops";
 import { Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import {
   compileLocalPattern,
   patternDocMetadata,
@@ -125,6 +130,16 @@ describe("publish", () => {
         priorPatternId: "id-0",
         remixedFrom: "id-r",
       });
+    });
+
+    it("returns `standalone` only when the caller states it", () => {
+      expect(Object.hasOwn(publishRequestFor(fields), "standalone")).toBe(
+        false,
+      );
+      expect(publishRequestFor({ ...fields, standalone: true }).standalone)
+        .toBe(true);
+      expect(publishRequestFor({ ...fields, standalone: false }).standalone)
+        .toBe(false);
     });
 
     it("returns no dependency a data file's text names", () => {

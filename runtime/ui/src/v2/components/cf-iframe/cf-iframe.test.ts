@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import type { PropertyValues } from "lit";
 
 import {
@@ -10,6 +9,7 @@ import {
   type RuntimeClient,
 } from "@commonfabric/runtime-client";
 import type { FabricBridge } from "@commonfabric/iframe-sandbox";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import { runtimeContext } from "../../runtime-context.ts";
 import { CFIframe } from "./index.ts";
@@ -93,6 +93,172 @@ describe("CFIframe", () => {
     expect(templateValues(element)[4]).toBe(
       "document.body.dataset.glaze = 'maple';",
     );
+  });
+
+  describe("assets", () => {
+    // The sixth binding is the sandbox's `assets`, after its bridge, source,
+    // outer frame, presentation and script.
+
+    const GLAZE = "data:image/png;base64,iVBORw0KGgo=";
+
+    const assetsChange = (): PropertyValues<CFIframe> =>
+      new Map([["assets", null]]) as PropertyValues<CFIframe>;
+
+    it("forwards a record of base64 `data:` URLs to the sandbox, with the source", () => {
+      const element = new CFIframe();
+      element.src = '<img src="cf-asset:glaze">';
+      expect(element.assets).toBeNull();
+      expect(templateValues(element)[5]).toEqual({});
+      element.assets = { glaze: GLAZE };
+
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe('<img src="cf-asset:glaze">');
+      expect(templateValues(element)[5]).toEqual({ glaze: GLAZE });
+    });
+
+    for (
+      const [what, value, description] of [
+        [
+          "a URL that is not a base64 `data:` URL",
+          { glaze: "https://example.com/glaze.png" },
+          'The asset `glaze` is not a base64 `data:` URL: `"https://example.com/glaze.png"`',
+        ],
+        [
+          "a name outside `[A-Za-z0-9_-]+`",
+          { "glaze.png": GLAZE },
+          'The asset name `"glaze.png"` does not match `[A-Za-z0-9_-]+`.',
+        ],
+        [
+          "a value that is not a record",
+          GLAZE,
+          "Assets are a record from a name to a base64 `data:` URL, not " +
+          '`"data:image/png;base64,iVBORw0KGgo="`.',
+        ],
+      ] as const
+    ) {
+      it(`refuses ${what}, saying why and holding the guest closed`, () => {
+        const element = new CFIframe();
+        element.src = "<p>guest</p>";
+        Reflect.set(element, "assets", value);
+
+        internals(element).willUpdate(assetsChange());
+
+        expect(element._errorDetails).toEqual({
+          description,
+          source: "cf-iframe assets",
+          lineno: 0,
+          colno: 0,
+          stacktrace: description,
+        });
+        expect(templateValues(element)[1]).toBe("");
+        expect(templateValues(element)[5]).toEqual({});
+      });
+    }
+
+    it("keeps the guest closed when a refusal is dismissed", () => {
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      internals(element).willUpdate(assetsChange());
+
+      internals(element).dismissError();
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("opens the guest and clears the refusal once the assets are a record of base64 `data:` URLs", () => {
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      internals(element).willUpdate(assetsChange());
+      expect(element._errorDetails?.source).toBe("cf-iframe assets");
+
+      element.assets = { glaze: GLAZE };
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toBeNull();
+      expect(templateValues(element)[1]).toBe("<p>guest</p>");
+      expect(templateValues(element)[5]).toEqual({ glaze: GLAZE });
+    });
+
+    it("keeps a context failure when the assets are refused, and reports the refusal once it is dismissed", () => {
+      // Dismissing a context failure retries the context, which a refusal
+      // written over it would lose.
+
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      const contextFailure = {
+        description: "no context",
+        source: "cf-iframe context",
+        lineno: 0,
+        colno: 0,
+        stacktrace: "no context",
+      };
+      internals(element).onError(
+        new CustomEvent("common-iframe-error", { detail: contextFailure }),
+      );
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toEqual(contextFailure);
+
+      internals(element).dismissError();
+
+      expect(element._errorDetails?.source).toBe("cf-iframe assets");
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("reports a refusal held behind a context failure once a new source clears that failure", () => {
+      // A new source retries the context and clears its failure, which leaves
+      // the guest closed by the refusal alone.
+
+      const element = new CFIframe();
+      element.src = "<p>guest</p>";
+      internals(element).onError(
+        new CustomEvent("common-iframe-error", {
+          detail: {
+            description: "no context",
+            source: "cf-iframe context",
+            lineno: 0,
+            colno: 0,
+            stacktrace: "no context",
+          },
+        }),
+      );
+      element.assets = { glaze: "https://example.com/glaze.png" };
+      element.src = "<p>another guest</p>";
+
+      internals(element).willUpdate(
+        new Map([["assets", null], ["src", "<p>guest</p>"]]) as PropertyValues<
+          CFIframe
+        >,
+      );
+
+      expect(element._errorDetails?.source).toBe("cf-iframe assets");
+      expect(templateValues(element)[1]).toBe("");
+    });
+
+    it("leaves an error the guest raised in place when the assets change", () => {
+      const element = new CFIframe();
+      const error = {
+        description: "broken",
+        source: "guest.js",
+        lineno: 3,
+        colno: 5,
+        stacktrace: "broken at guest.js:3:5",
+      };
+      internals(element).onError(
+        new CustomEvent("common-iframe-error", { detail: error }),
+      );
+
+      element.assets = { glaze: GLAZE };
+      internals(element).willUpdate(assetsChange());
+
+      expect(element._errorDetails).toEqual(error);
+    });
   });
 
   it("reports a non-Error context failure and clears it on replacement", async () => {

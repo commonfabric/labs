@@ -1,11 +1,11 @@
 import { ChangeSet } from "@codemirror/state";
 import { Database } from "@db/sqlite";
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { toFileUrl } from "@std/path";
 import type { FabricValue } from "@commonfabric/api";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
 import { taggedHashStringOf } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   applyCommit,
   applyWaveCommit,
@@ -41,6 +41,7 @@ import {
   type ConfirmedRead,
   decodeMemoryBoundary,
   encodeMemoryBoundary,
+  type OpCursor,
   type Operation,
   operationAnchorsDocId,
   resetServerExecutionConfig,
@@ -813,7 +814,7 @@ describe("v2-operation-engine", () => {
     }
   });
 
-  it("rejects collaborative fields on child branches", async () => {
+  it("starts a field on a fork from the value the fork inherits", async () => {
     const { engine, path } = await openTestEngine();
 
     try {
@@ -831,63 +832,276 @@ describe("v2-operation-engine", () => {
       });
       createBranch(engine, "feature");
 
-      expect(() =>
-        queryOperationField(engine, {
-          id: "of:branch",
+      expect(queryOperationField(engine, {
+        id: "of:branch",
+        branch: "feature",
+        path: toValuePath(["body"]),
+      })).toMatchObject({
+        branch: "feature",
+        active: false,
+        materialized: "a",
+      });
+
+      applyCommit(engine, {
+        sessionId: "session:feature",
+        commit: {
           branch: "feature",
-          path: toValuePath(["body"]),
-        })
-      ).toThrow(ProtocolError);
-      expect(() =>
-        applyCommit(engine, {
-          sessionId: "session:feature",
-          commit: {
-            branch: "feature",
-            localSeq: 1,
-            reads: { confirmed: [], pending: [] },
-            operations: [{
-              op: "apply-op",
-              id: "of:branch",
-              path: toValuePath(["body"]),
-              codec: CODEMIRROR_CHANGESET_CODEC,
-              submissionId: "feature:1",
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "apply-op",
+            id: "of:branch",
+            path: toValuePath(["body"]),
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            submissionId: "feature:1",
+            base: null,
+            baselineHash: operationBaselineHash("a"),
+            payload: {
+              updates: [{
+                clientId: "feature",
+                changes: changes(1, 1, "b"),
+              }],
+            },
+          }],
+        },
+      });
+
+      expect(queryOperationField(engine, {
+        id: "of:branch",
+        branch: "feature",
+        path: toValuePath(["body"]),
+      })).toMatchObject({
+        active: true,
+        cursor: { epoch: 1, version: 1 },
+        materialized: "ab",
+      });
+      expect(read(engine, { id: "of:branch", branch: "feature" })?.value)
+        .toEqual({ body: "ab" });
+      expect(read(engine, { id: "of:branch" })?.value).toEqual({ body: "a" });
+      expect(queryOperationField(engine, {
+        id: "of:branch",
+        path: toValuePath(["body"]),
+      })).toMatchObject({ active: false, materialized: "a" });
+    } finally {
+      close(engine);
+      await Deno.remove(path);
+    }
+  });
+
+  describe("a fork taken while its parent's field is active", () => {
+    // 06-branching.md §6.18: a fork inherits a field's value and none of its
+    // epoch, and the two branches then edit under their own cursors.
+
+    const field = { id: "of:forked", path: toValuePath(["body"]) };
+    const onFork = { ...field, branch: "feature" };
+
+    /** Inserts `insert` at `from` in the field's text of `length`. */
+    const edit = (
+      engine: Engine,
+      submissionId: string,
+      at: { base: OpCursor } | { baseline: string },
+      [length, from, insert]: [number, number, string],
+      branch?: string,
+    ) =>
+      applyCommit(engine, {
+        sessionId: `session:${submissionId}`,
+        commit: {
+          ...(branch === undefined ? {} : { branch }),
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "apply-op",
+            ...field,
+            codec: CODEMIRROR_CHANGESET_CODEC,
+            submissionId,
+            ...("base" in at ? { base: at.base } : {
               base: null,
-              baselineHash: operationBaselineHash("a"),
-              payload: {
-                updates: [{
-                  clientId: "feature",
-                  changes: changes(1, 1, "b"),
-                }],
-              },
-            }],
-          },
-        })
-      ).toThrow(ProtocolError);
-      expect(() =>
+              baselineHash: operationBaselineHash(at.baseline),
+            }),
+            payload: {
+              updates: [{
+                clientId: submissionId,
+                changes: changes(length, from, insert),
+              }],
+            },
+          }],
+        },
+      });
+
+    /**
+     * An engine whose default branch holds the field as `"ab"`, active at
+     * version 1 of epoch 1, and a branch `feature` forked there.
+     */
+    const openForked = async () => {
+      const opened = await openTestEngine();
+      applyCommit(opened.engine, {
+        sessionId: "session:setup",
+        commit: {
+          localSeq: 1,
+          reads: { confirmed: [], pending: [] },
+          operations: [{
+            op: "set",
+            id: field.id,
+            value: { value: { body: "a" } },
+          }],
+        },
+      });
+      edit(opened.engine, "parent:1", { baseline: "a" }, [1, 1, "b"]);
+      createBranch(opened.engine, "feature");
+      return opened;
+    };
+
+    it("holds the parent's value in an inactive field with no cursor", async () => {
+      const { engine, path } = await openForked();
+
+      try {
+        expect(queryOperationField(engine, onFork)).toMatchObject({
+          branch: "feature",
+          active: false,
+          cursor: null,
+          materialized: "ab",
+        });
+        expect(queryOperationField(engine, field)).toMatchObject({
+          active: true,
+          cursor: { epoch: 1, version: 1 },
+          materialized: "ab",
+        });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("throws `OpCursorMismatchError` for a fork's edit at the parent's cursor", async () => {
+      const { engine, path } = await openForked();
+
+      try {
+        expect(() =>
+          edit(
+            engine,
+            "feature:1",
+            { base: { epoch: 1, version: 1 } },
+            [2, 2, "!"],
+            "feature",
+          )
+        ).toThrow(OpCursorMismatchError);
+        expect(queryOperationField(engine, onFork)).toMatchObject({
+          active: false,
+          materialized: "ab",
+        });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("starts the fork's own epoch from the inherited value, and applies each branch's edits under that branch's cursor", async () => {
+      const { engine, path } = await openForked();
+
+      try {
+        edit(engine, "parent:2", { base: { epoch: 1, version: 1 } }, [
+          2,
+          2,
+          "c",
+        ]);
+        const started = edit(
+          engine,
+          "feature:1",
+          { baseline: "ab" },
+          [2, 0, "x"],
+          "feature",
+        );
+        expect(started.operationResolutions?.[0]).toMatchObject({
+          from: { epoch: 1, version: 0 },
+          to: { epoch: 1, version: 1 },
+        });
+        edit(engine, "parent:3", { base: { epoch: 1, version: 2 } }, [
+          3,
+          3,
+          "d",
+        ]);
+        edit(
+          engine,
+          "feature:2",
+          { base: { epoch: 1, version: 1 } },
+          [3, 3, "y"],
+          "feature",
+        );
+
+        expect(queryOperationField(engine, onFork)).toMatchObject({
+          active: true,
+          cursor: { epoch: 1, version: 2 },
+          materialized: "xaby",
+        });
+        expect(queryOperationField(engine, field)).toMatchObject({
+          active: true,
+          cursor: { epoch: 1, version: 3 },
+          materialized: "abcd",
+        });
+        expect(read(engine, { id: field.id, branch: "feature" })?.value)
+          .toEqual({ body: "xaby" });
+        expect(read(engine, { id: field.id })?.value).toEqual({ body: "abcd" });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
+
+    it("ends the fork's epoch on a release there, and leaves the parent's field active", async () => {
+      const { engine, path } = await openForked();
+
+      try {
+        edit(engine, "feature:1", { baseline: "ab" }, [2, 0, "x"], "feature");
+
         applyCommit(engine, {
-          sessionId: "session:feature-release",
+          sessionId: "session:release",
           commit: {
             branch: "feature",
             localSeq: 1,
             reads: { confirmed: [], pending: [] },
             operations: [{
               op: "release-op-field",
-              id: "of:branch",
-              path: toValuePath(["body"]),
+              ...field,
               codec: CODEMIRROR_CHANGESET_CODEC,
               cursor: { epoch: 1, version: 1 },
+            }, {
+              op: "patch",
+              id: field.id,
+              patches: [{
+                op: "replace",
+                path: "/value/body",
+                value: "released",
+              }],
             }],
           },
-        })
-      ).toThrow(ProtocolError);
-      expect(queryOperationField(engine, {
-        id: "of:branch",
-        path: toValuePath(["body"]),
-      })).toMatchObject({ active: false, operations: [] });
-    } finally {
-      close(engine);
-      await Deno.remove(path);
-    }
+        });
+
+        expect(queryOperationField(engine, onFork)).toMatchObject({
+          active: false,
+          cursor: null,
+          materialized: "released",
+        });
+        expect(queryOperationField(engine, field)).toMatchObject({
+          active: true,
+          cursor: { epoch: 1, version: 1 },
+          materialized: "ab",
+        });
+        const reopened = edit(
+          engine,
+          "feature:2",
+          { baseline: "released" },
+          [8, 8, "!"],
+          "feature",
+        );
+        expect(reopened.operationResolutions?.[0]).toMatchObject({
+          from: { epoch: 2, version: 0 },
+          to: { epoch: 2, version: 1 },
+        });
+      } finally {
+        close(engine);
+        await Deno.remove(path);
+      }
+    });
   });
 
   it("requires release before an ordinary write changes an active field", async () => {

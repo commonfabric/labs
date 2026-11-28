@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { afterAll, beforeEach, describe, it } from "@std/testing/bdd";
 import { context, trace } from "@opentelemetry/api";
 import {
   BasicTracerProvider,
@@ -22,6 +21,12 @@ import {
   type DIDKey,
   issueDelegation,
 } from "@commonfabric/identity";
+import {
+  afterAll,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { Server } from "../v2/server.ts";
 import type { SessionDescriptor, SessionOpenResult } from "../v2.ts";
@@ -42,6 +47,7 @@ const createServer = (
     mode: "off" | "enforce";
     serviceDids?: readonly string[];
     delegatingDids?: readonly string[];
+    isDelegatingPeer?: (principal: string) => boolean;
   },
 ) =>
   new Server({
@@ -254,6 +260,28 @@ describe("v2-server-session-person", () => {
         { user: bob.did(), person: undefined },
         { user: alice.did(), person: undefined },
         { user: undefined, person: undefined },
+      ]);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("decides a session's `enduser.id` with the delegating class as it is at each span", async () => {
+    const peers = new Set<string>([bob.did()]);
+    const server = createServer("memory://person-peer", {
+      mode: "off",
+      isDelegatingPeer: (principal) => peers.has(principal),
+    });
+    try {
+      const peer = await connectPeer(server);
+      const opened = await open(peer, bob.did());
+      await set(peer, opened.sessionId, "of:doc:5", { while: "listed" }, 1);
+      peers.delete(bob.did());
+      await set(peer, opened.sessionId, "of:doc:6", { once: "unlisted" }, 2);
+
+      expect(attribution("memory.transact")).toEqual([
+        { user: bob.did(), person: undefined },
+        { user: bob.did(), person: bob.did() },
       ]);
     } finally {
       await server.close();

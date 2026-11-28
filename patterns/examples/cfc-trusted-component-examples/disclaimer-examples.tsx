@@ -1,3 +1,10 @@
+/**
+ * A gallery of fourteen untrusted host patterns that embed trusted
+ * disclaimer-acknowledgment, source-provenance review, influence-disclosure,
+ * and fact-check release surfaces. Each host also shows a lookalike control
+ * that is visible but cannot update the protected acknowledgment or review
+ * outputs.
+ */
 import {
   Cell,
   computed,

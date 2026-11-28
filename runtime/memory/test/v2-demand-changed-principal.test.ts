@@ -7,8 +7,9 @@ import {
   testSessionOpenAuthFactory,
   testSessionOpenServerOptions,
 } from "./v2-auth-test-helpers.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test("memory v2 demandChanged carries the session principal (watch + push-growth) so the host can drop the service session", async () => {
+test("memory v2 demandChanged carries the session principal (watch + push-growth) so the host can drop the service session", async () => {
   // W1 (d′) review MINOR-4: the push-growth / watch `demandChanged` notify
   // carries the CHANGED SESSION's principal, so the ExecutorHost can drop the
   // serving runtime's own loopback (service-principal) session — its

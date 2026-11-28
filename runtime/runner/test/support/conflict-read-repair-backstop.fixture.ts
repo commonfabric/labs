@@ -6,8 +6,9 @@
 // `conflict-read-repair-backstop-scenario.ts`, shared with the reset fixture.
 
 import { rideReadRepairBackstop } from "./conflict-read-repair-backstop-scenario.ts";
+import { test } from "@commonfabric/test-support/test";
 
-Deno.test(
+test(
   "a conflict retry that only the backstop can release",
   rideReadRepairBackstop,
 );

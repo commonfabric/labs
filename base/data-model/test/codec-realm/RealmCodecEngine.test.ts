@@ -9,12 +9,12 @@
  * instance of the right class rather than a shape that happens to match.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import { IndexTrackingStack } from "@commonfabric/collections/index-tracking-stack";
 import { terminateWorker } from "@commonfabric/platform/worker-lifetime";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import type { FabricValue } from "@";
 import {

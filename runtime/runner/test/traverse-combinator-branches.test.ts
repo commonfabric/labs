@@ -6,12 +6,17 @@
  * inline one, so the `anyOf` cases are stated for both.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import type { FabricValue } from "@commonfabric/data-model";
 import { internSchema } from "@commonfabric/data-model-schema";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
 import {
@@ -128,6 +133,20 @@ describe("traverse-combinator-branches", () => {
     it("returns the boolean an external `$ref` names", () => {
       expect(canBranchMatch(falseRef, 1)).toBe(false);
       expect(canBranchMatch(trueRef, 1)).toBe(true);
+    });
+
+    it("does not require a value to carry a property whose `$ref` declares a default", () => {
+      const branch = (count: JSONSchema): JSONSchema => ({
+        $defs: { Count: count },
+        type: "object",
+        properties: { count: { $ref: "#/$defs/Count" } },
+        required: ["count"],
+      });
+      expect(canBranchMatch(branch({ type: "number", default: 3 }), {}))
+        .toBe(true);
+      expect(canBranchMatch(branch({ type: "number" }), {})).toBe(false);
+      expect(canBranchMatch(branch({ type: "number" }), { count: 1 }))
+        .toBe(true);
     });
   });
 });

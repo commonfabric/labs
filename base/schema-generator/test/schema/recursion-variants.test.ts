@@ -1,9 +1,9 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { SchemaGenerationDiagnostic } from "../../src/interface.ts";
 import { SchemaGenerator } from "../../src/schema-generator.ts";
 import { MAX_EXPANDING_READINGS } from "../../src/typescript/expanding-recursion.ts";
 import { asObjectSchema, getTypeFromCode } from "../utils.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("Schema: Recursion variants", () => {
   it("simple recursive: next?: Node", async () => {

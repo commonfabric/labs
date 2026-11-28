@@ -21,6 +21,7 @@ The server deployment entrypoints are:
 | --- | --- | --- | --- |
 | `deploy` | `.github/workflows/rapids-release.yml` | `/opt/cf/deploy-rapids.sh "$INFRA_SHA"` | infra dispatch on Labs `main`, naming the candidate's infra commit |
 | `deploy-estuary` | `.github/workflows/deploy-production.yml` | `/opt/cf/deploy.sh <environment> <Labs SHA>` | dispatch on `main` naming a full SHA, by Loom when its Labs pin changes or by hand |
+| `deploy` | `.github/workflows/estuary-replica-service.yml` | `/opt/cf/deploy-replica-service.sh "$INFRA_SHA"` | dispatch on `main` by hand, naming the infra commit whose selection to install |
 
 The production job reads the environment name from a repository variable rather
 than naming it, because the variable is defined on the GitHub environment the
@@ -50,19 +51,27 @@ reviewers approves each run before it starts. Concurrent Estuary runs serialize
 without cancelling an in-progress run.
 
 After deployment, or immediately in verification-only mode, the workflow uses
-the existing bastion connection to read `/api/meta` from all 21 Estuary workers
-on ports 8001–8021 and from `https://estuary.saga-castor.ts.net/api/meta`. Every
-response must be HTTP 200 at the requested URL and report the selected SHA.
-The verification makes one request per endpoint and fails on an unavailable or
-mismatched endpoint.
+the existing bastion connection to read `/api/meta` from every Estuary worker
+and from `https://estuary.saga-castor.ts.net/api/meta`. Which workers those are
+comes from the host: infra records the Toolshed layout Estuary last completed
+in `/opt/cf/releases/toolshed-capacity.json`, as an object of `api` and
+`storage` instance counts, and the workers listen on consecutive ports from
+8001. Only the two layouts infra supports are accepted: 5 API and 16 storage
+instances (ports 8001–8021), which a host without the file runs, and 4 API and
+12 storage instances (ports 8001–8016), which server-side execution selects.
+Any other recorded layout fails the verification. Every response must be HTTP
+200 at the requested URL and report the selected SHA. The verification makes
+one request per endpoint and fails on an unavailable or mismatched endpoint.
 
 Successful verification uploads `receipt.json` in the GitHub artifact
 `estuary-deployment-<run_id>-<run_attempt>`. It records `repository`,
 `workflow_sha`, `run_id`, `run_attempt`, `verify_only`, `labs_sha`,
-`verified_at`, `expected_workers`, `workers`, and `https`.
-Each worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
-The receipt is uploaded only after the complete worker set and HTTPS result
-have been validated.
+`verified_at`, `capacity`, `expected_workers`, `workers`, and `https`.
+`capacity` is the layout the host recorded, with `api` and `storage`. Each
+worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
+The receipt is uploaded only after its layout has been checked against the
+supported ones and the complete worker set for that layout and the HTTPS
+result have been validated.
 
 ## Coordinated Rapids releases
 
@@ -71,7 +80,7 @@ Labs CI publishes binaries and attestations on green pushes to `main`.
 paired `producer=commonfabric/labs` and `run_id` hints:
 
 - `commonfabric/infra`: `rapids.yml`, which reconciles the release candidate.
-- `commonfabric/loom`: `rapids-dependencies.yml`, which integrates verified
+- `commonfabric/cfs`: `rapids-dependencies.yml`, which integrates verified
   producer dependencies and resolves their revisions independently.
 
 Each notification uses a separate repository-scoped Actions-write token from
@@ -129,8 +138,8 @@ command has a 45-minute limit. The receiver performs these steps in order:
    `rapids-deployment-<run_id>-<run_attempt>`, retained for 90 days. A failed
    validation or deployment stops this sequence before proof is uploaded.
 
-The evidence token is read-only for contents and Actions in `infra`, `loom`,
-`labs`, `commonfabric-weaver`, and `gvisor`. The bastion receives that token,
+The evidence token is read-only for contents and Actions in `infra`, `cfs`,
+`labs`, `weaver`, and `gvisor`. The bastion receives that token,
 `INFRA_SHA`, and the Labs orchestrator's `GITHUB_SHA`, `GITHUB_REPOSITORY`,
 `GITHUB_RUN_ID`, and `GITHUB_RUN_ATTEMPT`.
 
@@ -201,7 +210,16 @@ are the ones built in. The binary is built with
 `--interpreted-frames-native-stack`: V8 writes each compiled function's name to
 `/tmp/perf-<pid>.map`, so `sudo perf record -t <thread> -g` and `perf report`
 on the host name the JavaScript a thread runs, a stalled serving worker's
-included. The map grows for as long as the process runs. A toolshed runs a serving worker per served space, up to
+included. The map grows for as long as the process runs.
+`--perf-basic-prof-only-functions` also switches on V8's event log, so the
+binary is built with `--no-logfile-per-isolate` and `--logfile=+` as well: each
+isolate writes its log to an unnamed temporary file rather than to an
+`isolate-<address>-<pid>-v8.log` file in the working directory. The system frees
+a serving worker's file when the worker ends, and the main thread's when the
+process ends. The log has a line for each chunk of memory V8 allocates or
+frees, so it grows for as long as its isolate runs. On Linux the file is in
+`/tmp`, where a directory listing does not show it; `ls -l /proc/<pid>/fd` does.
+A toolshed runs a serving worker per served space, up to
 `SERVER_EXECUTION_MAX_WORKERS` of them (default 4; more only while spaces
 separated at a heap limit each hold a worker of their own, until one of those
 closes) and
@@ -294,11 +312,52 @@ a later time still. A toolshed therefore refuses to start with a time more than
 five minutes ahead of its own clock, which allows for skew between the host that
 deploys and the hosts that run.
 
+## Estuary's replica service
+
+Loom's replica service runs on Estuary beside the toolshed and holds owners'
+copies of connector stores for hosted patterns. It is not a Labs artifact: Loom
+builds it, and the infra repository selects which build runs
+(`ansible/vars/replica-service-release.yml` there) and installs it with its
+own play. `estuary-replica-service.yml` exists so that installing a landed
+selection doesn't wait for one person at their own machine: the bastion can
+run that play, and this workflow asks it to.
+
+Dispatch it on `main` with the full infra commit:
+
+```sh
+gh workflow run estuary-replica-service.yml --ref main -f infra_sha=<infra SHA>
+```
+
+The job asks for no approval yet. It declares the `toolshed` environment,
+which holds the bastion credentials and has no reviewers, as the Rapids
+release does. While the service is being brought up no hosted pattern reads
+from it yet, and an install applies only what infra's `main` selects now. Once
+the service is in use, the job should declare `estuary` instead, which holds
+the same credentials behind the reviewers a production deployment needs.
+
+Before it connects, it checks the SHA's form, asks GitHub whether the commit is
+on infra's `main`, and requires the commit's
+`ansible/vars/replica-service-release.yml` to be the file `main` has now. With
+no reviewer, that last check is what keeps a dispatch from choosing an older
+build by naming an older commit: going back means landing the older selection
+on infra's `main`. It checks out and runs nothing on the runner. On the bastion,
+`/opt/cf/deploy-replica-service.sh` checks the commit against infra's `main`
+again, runs infra's play from a clean worktree of that commit, and the play
+verifies the build's checksum and provenance before it touches Estuary. The
+bastion receives a short-lived token that reads `infra` and `cfs` contents,
+because the play asks whether the pinned Loom commit is on Loom's `main`.
+
+It has a concurrency group of its own, so an install runs independently of
+production deployments. In the production deployment's group it would not: a
+production run that is waiting for approval holds that group, and an install
+would queue behind it until someone approved or cancelled the run.
+
 ## The wrappers are owned by infra
 
 The [infra repository](https://github.com/commonfabric/infra) generates
-`/opt/cf/deploy.sh` and `/opt/cf/deploy-rapids.sh` in
-`ansible/playbooks/bastion.yml` and installs them on the bastion. Their
+`/opt/cf/deploy.sh`, `/opt/cf/deploy-rapids.sh` and
+`/opt/cf/deploy-replica-service.sh` in `ansible/playbooks/bastion.yml` and
+installs them on the bastion. Their
 implementations and deployment validation tests belong there; Labs checks its
 call sites against their interfaces.
 
@@ -318,7 +377,10 @@ production interface is checked in
 Changes to these interfaces land in order: land the infra implementation,
 apply the bastion playbook so the host has that implementation, then merge the
 Labs call sites. Installing the Rapids wrapper uses the `rapids-deploy-script`
-tag. The deployment transition also blocks the independent `deploy.sh rapids`
+tag, and the replica service's uses `replica-deploy-script`; like the Rapids
+wrapper, that one takes one full infra SHA, and
+[`tasks/rapids-workflows.test.ts`](../../tasks/rapids-workflows.test.ts) checks
+its call site. The deployment transition also blocks the independent `deploy.sh rapids`
 entrypoint so queued CI runs cannot race the coordinated release.
 
 ## The shell inside the binary

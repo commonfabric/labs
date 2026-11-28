@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import type {
   Cell,
   ComparableCell,
@@ -9,6 +8,7 @@ import type {
   WriteonlyCell,
 } from "@commonfabric/api";
 import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 
 interface Item {
   id: string;

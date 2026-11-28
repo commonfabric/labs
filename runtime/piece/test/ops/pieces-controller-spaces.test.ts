@@ -1,6 +1,6 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { assertRejects } from "@std/assert";
+import { stub } from "@std/testing/mock";
 import { siteTableCause, siteTableSchema } from "@commonfabric/home-schemas";
 import {
   createSession,
@@ -13,8 +13,15 @@ import {
   Runtime,
   SpaceNotFoundError,
 } from "@commonfabric/runner";
-import type { MemorySpace } from "@commonfabric/runner";
+import type { Cell, MemorySpace } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { getTransactionWriteAttempts } from "../../../runner/src/storage/transaction-inspection.ts";
 import { PiecesController } from "../../src/ops/pieces-controller.ts";
 
 const signer = await Identity.fromPassphrase("pieces controller spaces");
@@ -151,6 +158,40 @@ describe("pieces-controller", () => {
       return pieces;
     }
 
+    /**
+     * Fails each `editWithRetry` whose action writes the document `target`
+     * names, as its action throwing does, until disposed, counting the edits
+     * it failed. Every other edit commits as it would.
+     */
+    function failEditsWriting(
+      target: Cell<unknown>,
+    ): Disposable & { failed: () => number } {
+      const editWithRetry = runtime.editWithRetry.bind(runtime);
+      let failed = 0;
+      const edits = stub(
+        runtime,
+        "editWithRetry",
+        (fn, maxRetries, options) =>
+          editWithRetry(
+            (tx) => {
+              const result = fn(tx);
+              const writes = getTransactionWriteAttempts(tx) ?? [];
+              if (writes.some((write) => write.id === target.sourceURI)) {
+                failed += 1;
+                throw new Error("edit failed by test");
+              }
+              return result;
+            },
+            maxRetries,
+            options,
+          ),
+      );
+      return {
+        failed: () => failed,
+        [Symbol.dispose]: () => edits.restore(),
+      };
+    }
+
     async function homeSpaces(home: PiecesController): Promise<SpaceEntry[]> {
       const root = (await home.ensureDefaultPattern()).getCell();
       await runtime.idle();
@@ -220,6 +261,21 @@ describe("pieces-controller", () => {
             (await pieces.getDefaultPattern(false))?.equalLinks(root),
           ).toBe(true);
           expect(root.space).toBe(space);
+        });
+
+        it("throws when the root's creation cannot commit and no other root is linked", async () => {
+          const space = await runtime.createSpace();
+          const pieces = await open(space);
+
+          {
+            using failure = failEditsWriting(runtime.getSpaceCell(space));
+            await expect(pieces.ensureDefaultPattern()).rejects.toThrow(
+              "Failed to create or find default pattern",
+            );
+            expect(failure.failed()).toBe(1);
+          }
+
+          expect(await pieces.getDefaultPattern(false)).toBeUndefined();
         });
 
         it("creates the Home space and its root on the identity's first open", async () => {
@@ -407,6 +463,27 @@ describe("pieces-controller", () => {
             did: await legacySpaceDid("Work"),
           }]);
           expect(await siteTable()).toHaveLength(1);
+        });
+
+        it("throws when the site table cannot record the adopted space, which Home still lists", async () => {
+          const home = await open(signer.did());
+          await seedSpaces(home, [["Work", { name: "Work" }]]);
+
+          {
+            using failure = failEditsWriting(
+              runtime.getCell(signer.did(), siteTableCause(signer.did())),
+            );
+            await expect(home.adoptLegacySpaces()).rejects.toThrow(
+              "edit failed by test",
+            );
+            expect(failure.failed()).toBe(1);
+          }
+
+          expect(await homeSpaces(home)).toEqual([{
+            name: "Work",
+            did: await legacySpaceDid("Work"),
+          }]);
+          expect(await siteTable()).toEqual([]);
         });
 
         it("leaves the rows of a Home that cannot adopt as they are", async () => {

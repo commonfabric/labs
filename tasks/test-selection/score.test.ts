@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import {
@@ -20,6 +19,7 @@ import {
   parseContext,
   percentile90,
   readCostsForward,
+  readDisagreementsForward,
   readNewRealTestFailuresForward,
   renameInContext,
   sampledPercentile90,
@@ -42,9 +42,12 @@ import {
   VALUE_FLOOR,
 } from "./policy.ts";
 import {
+  type CiJob,
+  type Disagreement,
   type TestIdentity,
   testIdentityKey,
 } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 
 const TEST = { k: "unit", s: "memory", n: "space > writes a fact" };
 const KEY = testIdentityKey(TEST);
@@ -329,7 +332,7 @@ describe("score", () => {
       ]);
       context.outcomesAtCommit.set("old", {
         day: "2020-01-01",
-        identities: new Map([["k", new Set(["fail"])]]),
+        identities: new Map([["k", new Map([["fail", undefined]])]]),
       });
       trimContext(context, "2026-08-20");
       expect([...context.failures.keys()]).toEqual(["k here"]);
@@ -384,6 +387,45 @@ describe("score", () => {
         saw("fail", { commit: "c2", place: "pr", source: "fix-writes" }),
       ]);
       expect(state.prCatches).toBe(1);
+    });
+
+    it("counts a failure apart only where it was on main", () => {
+      // A failure on a branch may be the change being worked on breaking
+      // the test; one on the default branch is the test failing where
+      // every test runs.
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-19", commit: "c0" }),
+        saw("fail", { commit: "c2", place: "pr", source: "fix-writes" }),
+      ]);
+      expect(state.failuresByDay).toEqual({ "2026-08-19": 1, "2026-08-20": 1 });
+      expect(state.mainFailuresByDay).toEqual({ "2026-08-19": 1 });
+    });
+
+    it("counts a breakage on main on every day it goes on failing", () => {
+      const state = stateFrom([
+        saw("fail", { day: "2026-08-18", commit: "c1" }),
+        saw("fail", { day: "2026-08-19", commit: "c2" }),
+        saw("fail", { commit: "c3" }),
+      ]);
+      expect(state.mainFailuresByDay).toEqual({
+        "2026-08-18": 1,
+        "2026-08-19": 1,
+        "2026-08-20": 1,
+      });
+    });
+
+    it("counts a disagreement on main as failing there, whichever batch its rerun is in", () => {
+      // The count is of failures, whatever the fold later makes of them,
+      // so where the passing rerun is folded does not change it.
+      const together = stateFrom([saw("pass"), saw("fail")]);
+      const failed = foldObservations([saw("fail")], { prior: holding() });
+      const apart = foldObservations([saw("pass")], { prior: failed }).get(
+        KEY,
+      )!;
+      for (const state of [together, apart]) {
+        expect(state.flakesByDay).toEqual({ "2026-08-20": 1 });
+        expect(state.mainFailuresByDay).toEqual({ "2026-08-20": 1 });
+      }
     });
 
     it("reads a pass and a failure at one commit as a flake", () => {
@@ -1094,9 +1136,12 @@ describe("score", () => {
       const state = emptyState();
       state.runsByDay["2026-01-01"] = 1;
       state.runsByDay["2026-08-20"] = 1;
+      state.mainFailuresByDay["2026-01-01"] = 1;
+      state.mainFailuresByDay["2026-08-20"] = 1;
       sealDay(state, "2026-01-01", samplesOf([10]));
       trimWindows(state, "2026-08-20");
       expect(Object.keys(state.runsByDay)).toEqual(["2026-08-20"]);
+      expect(Object.keys(state.mainFailuresByDay)).toEqual(["2026-08-20"]);
       expect(Object.keys(state.costByDay)).toEqual([]);
     });
 
@@ -1908,6 +1953,19 @@ describe("a run that newly breaks a crowd of tests", () => {
     }
   });
 
+  it("still counts each of them as failing on main when the run is on main", () => {
+    // The count says the test failed there, whatever made it fail.
+    const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES);
+    const folded = foldObservations(
+      failing(crowd, { place: "main", source: "main" }),
+      { prior: holding(crowd) },
+    );
+    for (const test of crowd) {
+      expect(folded.get(testIdentityKey(test))!.mainFailuresByDay)
+        .toEqual({ "2026-08-20": 1 });
+    }
+  });
+
   it("credits each of them when the crowd is one short", () => {
     const crowd = crowdOf(MASS_FAILURE_MIN_IDENTITIES - 1);
     expect(
@@ -2282,7 +2340,10 @@ describe("how far back the fold remembers where a test passed", () => {
     );
     const held = context.outcomesAtCommit.get("c0");
     expect(held).toBeDefined();
-    expect([...held!.identities.get(KEY)!].sort()).toEqual(["fail", "pass"]);
+    expect([...held!.identities.get(KEY)!.keys()].sort()).toEqual([
+      "fail",
+      "pass",
+    ]);
   });
 
   it("drops the window along with the days it aged out", () => {
@@ -2305,7 +2366,7 @@ describe("the two windows the context ages on", () => {
     context.failures.set("k", [{ day: "2026-08-20", source: "a" }]);
     context.outcomesAtCommit.set("c1", {
       day: "2026-08-20",
-      identities: new Map([["k", new Set(["pass"])]]),
+      identities: new Map([["k", new Map([["pass", undefined]])]]),
     });
     const past = new Date(
       Date.parse("2026-08-20T00:00:00Z") +
@@ -2461,6 +2522,7 @@ describe("moveHistory()", () => {
       runsByDay: { "2026-08-10": 4, "2026-08-14": 5 },
       failuresByDay: { "2026-08-10": 1 },
       flakesByDay: { "2026-08-14": 1 },
+      mainFailuresByDay: { "2026-08-10": 1, "2026-08-14": 2 },
       costByDay: {
         "2026-08-10": { ...samplesOf([40]), rule: COST_RULE },
         "2026-08-14": { ...samplesOf([50]), rule: COST_RULE },
@@ -2477,6 +2539,8 @@ describe("moveHistory()", () => {
     expect(Object.keys(into.newRealTestFailureDays)).toEqual(["2026-08-10"]);
     expect(into.runsByDay).toEqual({ "2026-08-10": 4 });
     expect(into.failuresByDay).toEqual({ "2026-08-10": 1 });
+    expect(into.mainFailuresByDay).toEqual({ "2026-08-10": 1 });
+    expect(from.mainFailuresByDay).toEqual({ "2026-08-14": 2 });
     expect(into.localCatches).toBe(1);
     expect(into.lastCatch).toBe("2026-08-10");
     expect(Object.keys(from.newRealTestFailureDays)).toEqual(["2026-08-14"]);
@@ -2592,7 +2656,10 @@ describe("renameInContext()", () => {
     const context = emptyContext();
     context.outcomesAtCommit.set("c1#7", {
       day: "2026-08-10",
-      identities: new Map([[KEY, new Set(["fail"])], [TO, new Set(["pass"])]]),
+      identities: new Map([
+        [KEY, new Map([["fail", undefined]])],
+        [TO, new Map([["pass", undefined]])],
+      ]),
     });
     // A failure at a point is the commit being broken there, whichever
     // name saw it, and a pass beside it does not clear that.
@@ -2616,7 +2683,7 @@ describe("renameInContext()", () => {
     context.credited.set(`${TO} c1 a`, "2026-08-12");
     renameInContext(context, (key) => key === KEY ? TO : key);
     expect([...context.outcomesAtCommit.get("c1#7")!.identities]).toEqual([
-      [TO, new Set(["pass", "fail"])],
+      [TO, new Map([["pass", undefined], ["fail", undefined]])],
     ]);
     expect(context.mainAtCommit.get(`${TO} c1#7`)?.outcome).toBe("fail");
     expect(context.mainAtCommit.get(`${TO} c2#7`)?.outcome).toBe("fail");
@@ -2656,5 +2723,184 @@ describe("renameInContext()", () => {
     );
     expect([...context.mainAtCommit.keys()]).toEqual([`${TO} c1#7`]);
     expect([...context.crowds.get("c1 a")!.identities]).toEqual([TO]);
+  });
+});
+
+describe("the disagreements a state keeps", () => {
+  /** The job of attempt `attempt` of workflow run `run`. */
+  function job(run: string, attempt = 1): CiJob {
+    return { runId: run, runAttempt: attempt, job: "Test (1/8)" };
+  }
+
+  /** A disagreement on `day` at `commit`, failing on a workstation. */
+  function local(day: string, commit = "c1"): Disagreement {
+    return { day, commit, failed: { place: "local" } };
+  }
+
+  it("names the failing and the passing run of a disagreement in one batch", () => {
+    const failed = job("11", 1);
+    const passed = job("11", 2);
+    const state = stateFrom([
+      saw("fail", { commit: "c1", seed: 7, place: "pr", ci: failed }),
+      saw("pass", { commit: "c1", seed: 7, place: "pr", ci: passed }),
+    ]);
+    expect(state.flakesByDay["2026-08-20"]).toBe(1);
+    expect(state.disagreements).toEqual([{
+      day: "2026-08-20",
+      commit: "c1",
+      seed: 7,
+      failed: { place: "pr", ci: failed },
+      passed: { place: "pr", ci: passed },
+    }]);
+  });
+
+  it("keeps none for a failure that nothing at its commit passed", () => {
+    const state = stateFrom([
+      saw("pass", { commit: "c1", place: "pr", ci: job("11") }),
+      saw("fail", { commit: "c2", place: "pr", ci: job("12") }),
+    ]);
+    expect(state.flakesByDay).toEqual({});
+    expect(state.disagreements).toBeUndefined();
+  });
+
+  it("names a pass an earlier batch saw, through the stored context", () => {
+    // The context travels between publisher runs as JSON, so the run it
+    // remembers has to survive that as well.
+    const context = emptyContext();
+    const first = foldObservations([
+      saw("pass", { commit: "c1", place: "pr", ci: job("21") }),
+    ], { context, prior: holding() });
+    const stored = parseContext(
+      JSON.parse(JSON.stringify(serializeContext(context))),
+    );
+    const second = foldObservations([
+      saw("fail", { commit: "c1", place: "pr", ci: job("22") }),
+    ], { context: stored, prior: first });
+    expect(second.get(KEY)!.disagreements).toEqual([{
+      day: "2026-08-20",
+      commit: "c1",
+      failed: { place: "pr", ci: job("22") },
+      passed: { place: "pr", ci: job("21") },
+    }]);
+  });
+
+  it("names the runs of a failure on main that a later batch's pass judges", () => {
+    const context = emptyContext();
+    const first = foldObservations([
+      saw("fail", { commit: "c1", ci: job("31") }),
+    ], { context });
+    const second = foldObservations([
+      saw("pass", { commit: "c1", ci: job("31", 2) }),
+    ], { context, prior: first });
+    expect(second.get(KEY)!.disagreements).toEqual([{
+      day: "2026-08-20",
+      commit: "c1",
+      failed: { place: "main", ci: job("31") },
+      passed: { place: "main", ci: job("31", 2) },
+    }]);
+  });
+
+  it("keeps once a job's repeated failures beside one pass, and counts each", () => {
+    const state = stateFrom([
+      saw("fail", { commit: "c1", place: "pr", ci: job("41") }),
+      saw("pass", { commit: "c1", place: "pr", ci: job("41") }),
+      saw("fail", { commit: "c1", place: "pr", ci: job("41") }),
+      saw("fail", { commit: "c1", place: "pr", ci: job("41", 2) }),
+    ]);
+    expect(state.flakesByDay["2026-08-20"]).toBe(3);
+    expect(state.disagreements!.map((held) => held.failed.ci)).toEqual([
+      job("41"),
+      job("41", 2),
+    ]);
+  });
+
+  it("keeps the newest ten, oldest first", () => {
+    const observations = Array.from({ length: 12 }, (_, at) => {
+      const day = `2026-08-${String(at + 1).padStart(2, "0")}`;
+      return [
+        saw("pass", { day, commit: `c${at}`, place: "pr", ci: job(`${at}`) }),
+        saw("fail", { day, commit: `c${at}`, place: "pr", ci: job(`${at}`) }),
+      ];
+    }).flat();
+    const state = stateFrom(observations);
+    expect(Object.values(state.flakesByDay).length).toBe(12);
+    expect(state.disagreements!.map((held) => held.day)).toEqual(
+      Array.from(
+        { length: 10 },
+        (_, at) => `2026-08-${String(at + 3).padStart(2, "0")}`,
+      ),
+    );
+  });
+
+  it("ages them over the flake window", () => {
+    const state = emptyState();
+    state.disagreements = [local("2026-06-01"), local("2026-08-01")];
+    trimWindows(state, "2026-08-20");
+    expect(state.disagreements).toEqual([local("2026-08-01")]);
+    trimWindows(state, "2026-12-01");
+    expect(state.disagreements).toBeUndefined();
+  });
+
+  it("moves those of the days that move, and keeps the rest", () => {
+    const from = emptyState();
+    const into = emptyState();
+    from.disagreements = [local("2026-08-01", "a"), local("2026-08-10", "b")];
+    into.disagreements = [local("2026-08-05", "c")];
+    moveHistory(from, into, (day) => day < "2026-08-05");
+    expect(from.disagreements).toEqual([local("2026-08-10", "b")]);
+    expect(into.disagreements).toEqual([
+      local("2026-08-01", "a"),
+      local("2026-08-05", "c"),
+    ]);
+  });
+
+  it("reads forward only those a stored state holds that read as one", () => {
+    const state = emptyState();
+    Object.assign(state, {
+      disagreements: [
+        local("2026-08-01"),
+        { day: "2026-02-31", commit: "c1", failed: { place: "local" } },
+        { day: "2026-08-02", commit: "c1", failed: { place: "elsewhere" } },
+        "not one",
+      ],
+    });
+    readDisagreementsForward(state);
+    expect(state.disagreements).toEqual([local("2026-08-01")]);
+    Object.assign(state, { disagreements: "not a list" });
+    readDisagreementsForward(state);
+    expect(state.disagreements).toBeUndefined();
+  });
+
+  it("reads forward only the jobs a stored pending failure names that read as one", () => {
+    // Each becomes the failing run of a disagreement once a pass judges it.
+    const state = emptyState();
+    const pending = { day: "2026-08-20", commit: "c1", source: "main" };
+    state.pendingMain = [
+      { ...pending, ci: job("51") },
+      { ...pending, ci: { ...job("52"), runAttempt: 0 } },
+    ];
+    readDisagreementsForward(state);
+    expect(state.pendingMain).toEqual([{ ...pending, ci: job("51") }, pending]);
+  });
+
+  it("reads a stored context naming no runs as one whose runs are unknown", () => {
+    const back = parseContext({
+      outcomesAtCommit: [["c1", {
+        day: "2026-08-20",
+        identities: [[KEY, ["pass", "fail"]], ["k", ["pass"], [5]]],
+        runs: [{ place: "nowhere" }],
+      }]],
+    });
+    const seen = back.outcomesAtCommit.get("c1")!.identities;
+    expect([...seen.get(KEY)!]).toEqual([
+      ["pass", undefined],
+      ["fail", undefined],
+    ]);
+    expect([...seen.get("k")!]).toEqual([["pass", undefined]]);
+    // Written again, an unknown run stays unknown rather than taking
+    // another outcome's.
+    const again = parseContext(serializeContext(back));
+    expect([...again.outcomesAtCommit.get("c1")!.identities.get(KEY)!])
+      .toEqual([["pass", undefined], ["fail", undefined]]);
   });
 });

@@ -4,17 +4,19 @@
  * from `piece.ts`, whose other commands should not load the compiler.
  */
 
-import { collectDataFileNames } from "@commonfabric/js-compiler";
+import { collectDataReads } from "@commonfabric/js-compiler";
 import { TARGET } from "@commonfabric/js-compiler/typescript";
 import type { RuntimeProgram } from "@commonfabric/runner";
+import { dataFileAssets } from "@commonfabric/text/data-file";
 
 import { shellWord } from "./shell-quote.ts";
 
 /**
  * The data files a later `setsrc` would have to be told about.
  *
- * A file the recovered source reads by name is declared, so rebuilding the
- * package from this directory attaches it again on its own. A file the source
+ * A file the recovered source reads by name is declared, and so is an asset
+ * in a directory it reads with `dataFile.urls()`, so rebuilding the package
+ * from this directory attaches it again on its own. A file the source
  * cannot name — one read by a computed path, or one that ships with a pattern
  * that does not read it — is on disk with nothing recording that it was data,
  * and would come back as an ordinary file nobody stores. Naming those is what
@@ -24,10 +26,17 @@ export function undeclaredDataFiles(program: RuntimeProgram): string[] {
   // A data file is never parsed. One already attached sits in `files` like any
   // other entry, and its bytes may happen to read as a `dataFile()` call.
   const attached = new Set(program.dataFiles ?? []);
-  const declared = new Set(
-    program.files.filter((file) => !attached.has(file.name))
-      .flatMap((file) => collectDataFileNames(file, TARGET)),
-  );
+  const declared = new Set<string>();
+  for (const file of program.files) {
+    if (attached.has(file.name)) continue;
+    const { files, directories } = collectDataReads(file, TARGET);
+    for (const name of files) declared.add(name);
+    for (const directory of directories) {
+      for (const name of dataFileAssets(directory, attached).values()) {
+        declared.add(name);
+      }
+    }
+  }
   return [...attached].filter((name) => !declared.has(name));
 }
 

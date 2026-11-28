@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import {
   type HarnessLoomRetrievalConfig,
@@ -15,6 +14,7 @@ import type {
   ProcessRunRequest,
   ProcessRunResult,
 } from "../src/sandbox/process-runner.ts";
+import { describe, it } from "@commonfabric/test-support/test";
 
 /** A broker-routed host configuration. */
 const broker: HarnessLoomRetrievalConfig = {

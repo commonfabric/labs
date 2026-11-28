@@ -5,9 +5,9 @@ import {
   assertStringIncludes,
   assertThrows,
 } from "@std/assert";
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { describe, it, test } from "@commonfabric/test-support/test";
 import {
   OPENAI_CODEX_MODELS_URL,
   OpenAICodexResponsesClient,
@@ -48,7 +48,7 @@ const sse = (...events: unknown[]): Response =>
     { status: 200, headers: { "content-type": "text/event-stream" } },
   );
 
-Deno.test("Codex Responses client rejects conflicting credential owner bindings", () => {
+test("Codex Responses client rejects conflicting credential owner bindings", () => {
   const owner = {
     type: "cf-harness.credential-owner-ref" as const,
     version: 1 as const,
@@ -85,7 +85,7 @@ Deno.test("Codex Responses client rejects conflicting credential owner bindings"
   );
 });
 
-Deno.test("Codex Responses client sends the pinned owner-authenticated request", async () => {
+test("Codex Responses client sends the pinned owner-authenticated request", async () => {
   let request: { input: URL | RequestInfo; init?: RequestInit } | undefined;
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -137,7 +137,7 @@ Deno.test("Codex Responses client sends the pinned owner-authenticated request",
   assertEquals(body.prompt_cache_key, "run-123");
 });
 
-Deno.test("Codex Responses supports stable affinity and reasoning controls", async () => {
+test("Codex Responses supports stable affinity and reasoning controls", async () => {
   let body: Record<string, unknown> | undefined;
   let headers: Headers | undefined;
   const client = new OpenAICodexResponsesClient({
@@ -175,7 +175,61 @@ Deno.test("Codex Responses supports stable affinity and reasoning controls", asy
   assertEquals(body?.prompt_cache_options, undefined);
 });
 
-Deno.test("Codex Responses asks for a reasoning summary and carries it beside the message", async () => {
+test("Codex Responses sends the first system message as instructions and each later one as its own developer message", async () => {
+  const bodies: Record<string, unknown>[] = [];
+  const client = new OpenAICodexResponsesClient({
+    transportRetries: 0,
+    credentialResolver: { resolve: () => Promise.resolve(credential) },
+    fetchFn: (_input, init) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Promise.resolve(sse({
+        type: "response.completed",
+        response: {
+          status: "completed",
+          output: [{
+            type: "message",
+            content: [{ type: "output_text", text: "done" }],
+          }],
+        },
+      }));
+    },
+  });
+  const turn = (transcript: HarnessModelTurnRequest["transcript"]) =>
+    client.complete({
+      model: "gpt-6.1-sol",
+      transcript,
+      tools: [],
+      nativeModelToolIds: [],
+      runId: "run-1",
+      cacheAffinityKey: "stable-session",
+    });
+
+  await turn([
+    { role: "system", content: "Standing instructions." },
+    { role: "system", content: "Result schema (JSON):\ntrue" },
+    { role: "system", content: "" },
+    { role: "user", content: "Do the task." },
+  ]);
+  await turn([
+    { role: "system", content: "Standing instructions." },
+    { role: "user", content: "Do the task." },
+  ]);
+
+  assertEquals(bodies[0].instructions, "Standing instructions.");
+  assertEquals(bodies[0].input, [
+    {
+      role: "developer",
+      content: [{ type: "input_text", text: "Result schema (JSON):\ntrue" }],
+    },
+    { role: "user", content: [{ type: "input_text", text: "Do the task." }] },
+  ]);
+  assertEquals(bodies[1].instructions, "Standing instructions.");
+  assertEquals(bodies[1].input, [
+    { role: "user", content: [{ type: "input_text", text: "Do the task." }] },
+  ]);
+});
+
+test("Codex Responses asks for a reasoning summary and carries it beside the message", async () => {
   let body: Record<string, unknown> | undefined;
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -223,7 +277,7 @@ Deno.test("Codex Responses asks for a reasoning summary and carries it beside th
   assertEquals(result.assistant.content, "");
 });
 
-Deno.test("Codex Responses replays reasoning to the model without its summary", async () => {
+test("Codex Responses replays reasoning to the model without its summary", async () => {
   const bodies: Array<Record<string, unknown>> = [];
   const outputs = [[{
     type: "reasoning",
@@ -282,7 +336,7 @@ Deno.test("Codex Responses replays reasoning to the model without its summary", 
   assertEquals(input.includes("PRIVATE SUMMARY"), false);
 });
 
-Deno.test("Codex Responses leaves out reasoning a turn has no summary of", async () => {
+test("Codex Responses leaves out reasoning a turn has no summary of", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -315,7 +369,7 @@ Deno.test("Codex Responses leaves out reasoning a turn has no summary of", async
   assertEquals("reasoning" in result.assistant, false);
 });
 
-Deno.test("Codex Responses rejects API prompt cache mode controls", async () => {
+test("Codex Responses rejects API prompt cache mode controls", async () => {
   let resolvedCredential = false;
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -343,7 +397,7 @@ Deno.test("Codex Responses rejects API prompt cache mode controls", async () => 
   assertEquals(resolvedCredential, false);
 });
 
-Deno.test("Codex Responses client bounds stable run affinity identifiers", async () => {
+test("Codex Responses client bounds stable run affinity identifiers", async () => {
   const longRunId = `${"parent-run-".repeat(8)}subagent.123`;
   const requests: Array<{ headers: Headers; body: Record<string, unknown> }> =
     [];
@@ -403,7 +457,7 @@ Deno.test("Codex Responses client bounds stable run affinity identifiers", async
   assertEquals(requestIds[0] === requestIds[1], false);
 });
 
-Deno.test("Codex Responses client recovers streamed output items when store:false empties the terminal output", async () => {
+test("Codex Responses client recovers streamed output items when store:false empties the terminal output", async () => {
   // The ChatGPT Codex backend streams each completed item via
   // `response.output_item.done` but, with `store: false`, returns an EMPTY
   // `output` array on `response.completed`. The client must fall back to the
@@ -453,7 +507,7 @@ Deno.test("Codex Responses client recovers streamed output items when store:fals
   assertEquals(result.assistant.toolCalls?.[0]?.function.name, "bash");
 });
 
-Deno.test("Codex Responses records the terminal status and streamed item types in the attempt", async () => {
+test("Codex Responses records the terminal status and streamed item types in the attempt", async () => {
   // A blank turn: the provider completes with a reasoning item and an empty
   // message, which normalizes to no words and no tool call.
   const attempts: HarnessModelAttemptDiagnostic[] = [];
@@ -499,7 +553,7 @@ Deno.test("Codex Responses records the terminal status and streamed item types i
   assertEquals(attempts[0].outputItemTypes, ["reasoning", "message"]);
 });
 
-Deno.test("Codex Responses client recovers streamed output items when the terminal output is null", async () => {
+test("Codex Responses client recovers streamed output items when the terminal output is null", async () => {
   // The same backend has also been observed returning `output: null` (not just
   // an empty array) with valid streamed items. Treat null like empty.
   const client = new OpenAICodexResponsesClient({
@@ -535,7 +589,7 @@ Deno.test("Codex Responses client recovers streamed output items when the termin
   assertEquals(result.assistant.toolCalls?.[0]?.function.name, "bash");
 });
 
-Deno.test("Codex Responses client normalizes tool calls and preserves encrypted continuation", async () => {
+test("Codex Responses client normalizes tool calls and preserves encrypted continuation", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -625,7 +679,7 @@ Deno.test("Codex Responses client normalizes tool calls and preserves encrypted 
   );
 });
 
-Deno.test("Codex Responses client rejects cross-model continuation before resolving credentials", async () => {
+test("Codex Responses client rejects cross-model continuation before resolving credentials", async () => {
   let credentialResolutions = 0;
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -668,7 +722,7 @@ Deno.test("Codex Responses client rejects cross-model continuation before resolv
   assertEquals(credentialResolutions, 0);
 });
 
-Deno.test("Codex Responses client surfaces refusal-only output", async () => {
+test("Codex Responses client surfaces refusal-only output", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -699,7 +753,7 @@ Deno.test("Codex Responses client surfaces refusal-only output", async () => {
   assertEquals(result.assistant.content, "I cannot help with that request.");
 });
 
-Deno.test("Codex Responses client rejects streams without a terminal event", async () => {
+test("Codex Responses client rejects streams without a terminal event", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -723,7 +777,7 @@ Deno.test("Codex Responses client rejects streams without a terminal event", asy
   );
 });
 
-Deno.test("Codex Responses client rejects malformed SSE JSON", async () => {
+test("Codex Responses client rejects malformed SSE JSON", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -747,7 +801,7 @@ Deno.test("Codex Responses client rejects malformed SSE JSON", async () => {
   );
 });
 
-Deno.test("Codex Responses client keeps multiple tool calls and failure outputs ordered", async () => {
+test("Codex Responses client keeps multiple tool calls and failure outputs ordered", async () => {
   const requestBodies: Array<Record<string, unknown>> = [];
   let requestCount = 0;
   const client = new OpenAICodexResponsesClient({
@@ -825,7 +879,7 @@ Deno.test("Codex Responses client keeps multiple tool calls and failure outputs 
   );
 });
 
-Deno.test("Codex Responses client maps bounded image attachments", async () => {
+test("Codex Responses client maps bounded image attachments", async () => {
   const directory = await Deno.makeTempDir();
   try {
     const imagePath = `${directory}/tiny.png`;
@@ -874,7 +928,7 @@ Deno.test("Codex Responses client maps bounded image attachments", async () => {
   }
 });
 
-Deno.test("Codex Responses client rejects incomplete tool calls", async () => {
+test("Codex Responses client rejects incomplete tool calls", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -906,7 +960,7 @@ Deno.test("Codex Responses client rejects incomplete tool calls", async () => {
   );
 });
 
-Deno.test("Codex Responses client parses CRLF SSE split across byte boundaries", async () => {
+test("Codex Responses client parses CRLF SSE split across byte boundaries", async () => {
   const payload = JSON.stringify({
     type: "response.completed",
     response: {
@@ -950,7 +1004,7 @@ Deno.test("Codex Responses client parses CRLF SSE split across byte boundaries",
   });
 });
 
-Deno.test("Codex Responses client rejects conflicting duplicate tool-call ids", async () => {
+test("Codex Responses client rejects conflicting duplicate tool-call ids", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -988,7 +1042,7 @@ Deno.test("Codex Responses client rejects conflicting duplicate tool-call ids", 
   );
 });
 
-Deno.test("Codex model discovery is live, owner-authenticated, and ordered", async () => {
+test("Codex model discovery is live, owner-authenticated, and ordered", async () => {
   let requestedUrl = "";
   let requestedHeaders = new Headers();
   let requestedRedirect: RequestRedirect | undefined;
@@ -1041,7 +1095,7 @@ Deno.test("Codex model discovery is live, owner-authenticated, and ordered", asy
   assertEquals(models[0].supportedReasoningEfforts, ["high"]);
 });
 
-Deno.test("Codex model discovery classifies provider failures", async () => {
+test("Codex model discovery classifies provider failures", async () => {
   for (
     const [fetchFn, expectedCode] of [
       [
@@ -1070,7 +1124,7 @@ Deno.test("Codex model discovery classifies provider failures", async () => {
   }
 });
 
-Deno.test("Codex Responses quota errors are concise and do not retain response bodies", async () => {
+test("Codex Responses quota errors are concise and do not retain response bodies", async () => {
   const attempts: unknown[] = [];
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -1112,7 +1166,7 @@ Deno.test("Codex Responses quota errors are concise and do not retain response b
   assertStringIncludes(serialized, '"httpStatus":429');
 });
 
-Deno.test("Codex Responses classifies provider HTTP failures", async () => {
+test("Codex Responses classifies provider HTTP failures", async () => {
   for (
     const [status, expectedCode] of [
       [401, "provider-auth-required"],
@@ -1139,7 +1193,7 @@ Deno.test("Codex Responses classifies provider HTTP failures", async () => {
   }
 });
 
-Deno.test("Codex transport errors redact credential and account values", async () => {
+test("Codex transport errors redact credential and account values", async () => {
   const attempts: unknown[] = [];
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -1174,7 +1228,7 @@ Deno.test("Codex transport errors redact credential and account values", async (
   assertStringIncludes(serialized, "[redacted]");
 });
 
-Deno.test("Codex Responses bounds failures while reading provider error bodies", async () => {
+test("Codex Responses bounds failures while reading provider error bodies", async () => {
   const body = new ReadableStream<Uint8Array>({
     pull(controller) {
       controller.error(new Error("provider-body-secret-sentinel"));
@@ -1200,7 +1254,7 @@ Deno.test("Codex Responses bounds failures while reading provider error bodies",
   assertEquals(errorGraphText(error).includes("secret-sentinel"), false);
 });
 
-Deno.test("Codex Responses preserves abort during provider error diagnostics", async () => {
+test("Codex Responses preserves abort during provider error diagnostics", async () => {
   const controller = new AbortController();
   const reason = new Error("abort during provider diagnostics");
   const client = new OpenAICodexResponsesClient({
@@ -1226,7 +1280,7 @@ Deno.test("Codex Responses preserves abort during provider error diagnostics", a
   assertStrictEquals(error, reason);
 });
 
-Deno.test("Codex Responses abort cancels an active stream without retry", async () => {
+test("Codex Responses abort cancels an active stream without retry", async () => {
   let canceled = false;
   let requests = 0;
   let markRequested!: () => void;
@@ -1269,7 +1323,7 @@ Deno.test("Codex Responses abort cancels an active stream without retry", async 
   assertEquals(requests, 1);
 });
 
-Deno.test("Codex Responses preserves non-DOM abort reasons when stream cancellation rejects", async () => {
+test("Codex Responses preserves non-DOM abort reasons when stream cancellation rejects", async () => {
   let markRequested!: () => void;
   const requested = new Promise<void>((resolve) => {
     markRequested = resolve;
@@ -1304,7 +1358,7 @@ Deno.test("Codex Responses preserves non-DOM abort reasons when stream cancellat
   assertStrictEquals(error, reason);
 });
 
-Deno.test("Codex Responses preserves abort after credential resolution", async () => {
+test("Codex Responses preserves abort after credential resolution", async () => {
   const controller = new AbortController();
   let releaseCredential!: () => void;
   const heldCredential = new Promise<void>((resolve) => {
@@ -1347,7 +1401,7 @@ Deno.test("Codex Responses preserves abort after credential resolution", async (
   assertEquals(requests, 0);
 });
 
-Deno.test("Codex Responses returns on the first terminal event and cancels a keep-alive stream", async () => {
+test("Codex Responses returns on the first terminal event and cancels a keep-alive stream", async () => {
   let canceled = false;
   const payload = JSON.stringify({
     type: "response.completed",
@@ -1385,7 +1439,7 @@ Deno.test("Codex Responses returns on the first terminal event and cancels a kee
   assertEquals(canceled, true);
 });
 
-Deno.test("Codex Responses recognizes response.failed as terminal", async () => {
+test("Codex Responses recognizes response.failed as terminal", async () => {
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
     credentialResolver: { resolve: () => Promise.resolve(credential) },
@@ -1410,7 +1464,7 @@ Deno.test("Codex Responses recognizes response.failed as terminal", async () => 
   );
 });
 
-Deno.test("Codex Responses cancels the stream after malformed SSE", async () => {
+test("Codex Responses cancels the stream after malformed SSE", async () => {
   let canceled = false;
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
@@ -1482,7 +1536,7 @@ const completedMessage = (text: string) =>
     },
   });
 
-Deno.test("Codex Responses issues again an attempt whose stream a machine sleep cut off", async () => {
+test("Codex Responses issues again an attempt whose stream a machine sleep cut off", async () => {
   const sleep = handSleepWatch();
   const attempts: HarnessModelAttemptDiagnostic[] = [];
   let canceled = false;
@@ -1547,7 +1601,7 @@ Deno.test("Codex Responses issues again an attempt whose stream a machine sleep 
   );
 });
 
-Deno.test("Codex Responses issues again an attempt a machine sleep cut off before the response began", async () => {
+test("Codex Responses issues again an attempt a machine sleep cut off before the response began", async () => {
   const sleep = handSleepWatch();
   const attempts: HarnessModelAttemptDiagnostic[] = [];
   let requests = 0;
@@ -1594,7 +1648,7 @@ Deno.test("Codex Responses issues again an attempt a machine sleep cut off befor
   assertStringIncludes(String(attempts[0].errorDetail), "the machine slept");
 });
 
-Deno.test("Codex Responses records the sleep that cut off reading an error response's body", async () => {
+test("Codex Responses records the sleep that cut off reading an error response's body", async () => {
   const sleep = handSleepWatch();
   const attempts: HarnessModelAttemptDiagnostic[] = [];
   let requests = 0;
@@ -1648,7 +1702,7 @@ Deno.test("Codex Responses records the sleep that cut off reading an error respo
   assertStringIncludes(String(attempts[0].errorDetail), "the machine slept");
 });
 
-Deno.test("Codex Responses fails, rather than waits, when a machine sleep cuts off its last attempt", async () => {
+test("Codex Responses fails, rather than waits, when a machine sleep cuts off its last attempt", async () => {
   const sleep = handSleepWatch();
   let markStreaming!: () => void;
   const streaming = new Promise<void>((resolve) => {
@@ -1687,7 +1741,7 @@ Deno.test("Codex Responses fails, rather than waits, when a machine sleep cuts o
   assertStringIncludes(error.message, "the machine slept for 600 s");
 });
 
-Deno.test("Codex Responses leaves an attempt the machine did not sleep through alone, and stops its watch", async () => {
+test("Codex Responses leaves an attempt the machine did not sleep through alone, and stops its watch", async () => {
   const sleep = handSleepWatch();
   const client = new OpenAICodexResponsesClient({
     transportRetries: 0,
@@ -2093,7 +2147,7 @@ const assertAuthRequired = async (run: () => Promise<unknown>) => {
   assertEquals((error as HarnessControlError).code, "provider-auth-required");
 };
 
-Deno.test("Codex Responses issues a refused request again with a refreshed token", async () => {
+test("Codex Responses issues a refused request again with a refreshed token", async () => {
   const { client, seen, request } = rejectionHarness(
     [refusedToken(), completedHello()],
     { credential: refreshedCredential, fresh: true },
@@ -2123,7 +2177,30 @@ Deno.test("Codex Responses issues a refused request again with a refreshed token
   );
 });
 
-Deno.test("Codex Responses reports a refresh that could not be completed, not the refusal", async () => {
+test("Codex Responses stops, issuing nothing again, when aborted as it reports a refused token", async () => {
+  const { client, seen, request } = rejectionHarness(
+    [refusedToken(), completedHello()],
+    { credential: refreshedCredential, fresh: true },
+  );
+  const controller = new AbortController();
+  const reason = new Error("the caller stopped");
+  const error = await assertRejects(() =>
+    client.complete({
+      ...request,
+      signal: controller.signal,
+      onAttempt: (attempt: HarnessModelAttemptDiagnostic) => {
+        seen.attempts.push(attempt);
+        if (attempt.retry?.kind === "credential_refused") {
+          controller.abort(reason);
+        }
+      },
+    })
+  );
+  assertEquals(error, reason);
+  assertEquals(seen.tokens, ["Bearer access-secret"]);
+});
+
+test("Codex Responses reports a refresh that could not be completed, not the refusal", async () => {
   const attempts: HarnessModelAttemptDiagnostic[] = [];
   let requests = 0;
   const client = new OpenAICodexResponsesClient({
@@ -2161,7 +2238,7 @@ Deno.test("Codex Responses reports a refresh that could not be completed, not th
   );
 });
 
-Deno.test("Codex Responses records the refusal when the caller aborts during the refresh or the mark", async () => {
+test("Codex Responses records the refusal when the caller aborts during the refresh or the mark", async () => {
   for (const during of ["refresh", "mark"]) {
     const controller = new AbortController();
     const attempts: HarnessModelAttemptDiagnostic[] = [];
@@ -2203,7 +2280,47 @@ Deno.test("Codex Responses records the refusal when the caller aborts during the
   }
 });
 
-Deno.test("Codex Responses keeps the whole retry schedule for the request a refused token is issued again as", async () => {
+test("Codex Responses passes on an unexpected resolver failure during the refresh or the mark", async () => {
+  for (const during of ["refresh", "mark"]) {
+    const attempts: HarnessModelAttemptDiagnostic[] = [];
+    let requests = 0;
+    const broken = new Error("resolver broke");
+    const client = new OpenAICodexResponsesClient({
+      transportRetries: 0,
+      credentialResolver: {
+        resolve: () => Promise.resolve(credential),
+        refreshRejected: () =>
+          during === "refresh"
+            ? Promise.reject(broken)
+            : Promise.resolve({ credential: refreshedCredential, fresh: true }),
+        markRejected: () => Promise.reject(broken),
+      },
+      fetchFn: () => {
+        requests += 1;
+        return Promise.resolve(refusedToken());
+      },
+    });
+
+    const error = await assertRejects(() =>
+      client.complete({
+        ...helloRequest,
+        onAttempt: (attempt) => {
+          attempts.push(attempt);
+        },
+      })
+    );
+
+    // the failure is neither reported as the refusal nor recorded as one
+    assertEquals(error, broken);
+    assertEquals(requests, during === "refresh" ? 1 : 2);
+    assertEquals(
+      attempts.map((a) => [a.httpStatus, a.retry?.kind]),
+      during === "refresh" ? [] : [[401, "credential_refused"]],
+    );
+  }
+});
+
+test("Codex Responses keeps the whole retry schedule for the request a refused token is issued again as", async () => {
   const delays: number[] = [];
   const attempts: HarnessModelAttemptDiagnostic[] = [];
   const responses = [
@@ -2256,7 +2373,7 @@ Deno.test("Codex Responses keeps the whole retry schedule for the request a refu
   );
 });
 
-Deno.test("Codex Responses marks a credential whose refreshed token is refused too", async () => {
+test("Codex Responses marks a credential whose refreshed token is refused too", async () => {
   const { client, seen } = rejectionHarness(
     [refusedToken(), refusedToken()],
     { credential: refreshedCredential, fresh: true },
@@ -2270,7 +2387,7 @@ Deno.test("Codex Responses marks a credential whose refreshed token is refused t
   assertEquals(seen.marked, ["access-refreshed"]);
 });
 
-Deno.test("Codex Responses does not mark a refused token another process stored", async () => {
+test("Codex Responses does not mark a refused token another process stored", async () => {
   const { client, seen } = rejectionHarness(
     [refusedToken(), refusedToken()],
     { credential: refreshedCredential, fresh: false },
@@ -2282,7 +2399,7 @@ Deno.test("Codex Responses does not mark a refused token another process stored"
   assertEquals(seen.marked, []);
 });
 
-Deno.test("Codex Responses fails a refused request when no other credential is offered", async () => {
+test("Codex Responses fails a refused request when no other credential is offered", async () => {
   for (const withRefresh of [true, false]) {
     const { client, seen } = rejectionHarness(
       [refusedToken()],
@@ -2297,7 +2414,7 @@ Deno.test("Codex Responses fails a refused request when no other credential is o
   }
 });
 
-Deno.test("Codex Responses refreshes on a refused token only, not on a 403", async () => {
+test("Codex Responses refreshes on a refused token only, not on a 403", async () => {
   const { client, seen } = rejectionHarness(
     [refusedToken(403)],
     { credential: refreshedCredential, fresh: true },

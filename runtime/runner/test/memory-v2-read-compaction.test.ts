@@ -6,7 +6,6 @@
  */
 
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { toDocumentPath } from "@commonfabric/memory/v2";
 import {
@@ -15,6 +14,7 @@ import {
 } from "@commonfabric/memory/v2/engine";
 import { dataUriFromValue } from "@commonfabric/data-model/codec-data-uri";
 import { Identity } from "@commonfabric/identity";
+import { describe, it } from "@commonfabric/test-support/test";
 import { StorageManager } from "../src/storage/cache.deno.ts";
 import { coarsenCommitReads, type SpaceReplica } from "../src/storage/v2.ts";
 import { Runtime } from "../src/runtime.ts";

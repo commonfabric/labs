@@ -20,10 +20,10 @@
  * picking those returns up silently. These assertions fail if that happens.
  */
 
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type { Cell, Stream } from "@commonfabric/api";
 import type { MustBeTrue, Same } from "@commonfabric/js-values/types";
+import { describe, it } from "@commonfabric/test-support/test";
 import { action } from "../src/builder/module.ts";
 
 interface AddTopic {

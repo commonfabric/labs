@@ -11,6 +11,7 @@ import {
 } from "@commonfabric/memory/v2/acl-heads";
 import { decodeHollowedPayload } from "@commonfabric/memory/v2/compact";
 import { COMPACTION_SESSION_PREFIX } from "@commonfabric/memory/v2/engine";
+import { storedReadCounts } from "@commonfabric/memory/v2/stored-commit";
 import { rowLimit } from "./model.ts";
 import { branchReadChain, owningLink } from "./reconstruct.ts";
 import { utf8Compare } from "@commonfabric/text/utf8";
@@ -66,15 +67,9 @@ export function summarizeSpace(space: SpaceDb): SpaceSummary {
     .all<{ scope_key: string; count: number }>();
 
   const hasSched = hasSchedulerBasisTable(db);
-  let schedulerBasisRows = 0;
-  if (hasSched) {
-    try {
-      schedulerBasisRows =
-        one<{ n: number }>(`SELECT count(*) n FROM scheduler_basis`).n;
-    } catch {
-      schedulerBasisRows = 0;
-    }
-  }
+  const schedulerBasisRows = hasSched
+    ? one<{ n: number }>(`SELECT count(*) n FROM scheduler_basis`).n
+    : 0;
 
   // A store from before the head table has no ACL head to read.
   const acl = tableNames(db).includes("head") ? readAclHeads(db) : [];
@@ -158,7 +153,6 @@ export function listCommits(
       } else {
         const parsed = decodeStored(r.original) as {
           operations?: unknown[];
-          reads?: { confirmed?: unknown[]; pending?: unknown[] };
           compaction?: {
             runId?: unknown;
             report?: {
@@ -179,8 +173,10 @@ export function listCommits(
           compactionRun = parsed.compaction.runId;
         }
         ops = Array.isArray(parsed.operations) ? parsed.operations.length : 0;
-        reads = (parsed.reads?.confirmed?.length ?? 0) +
-          (parsed.reads?.pending?.length ?? 0);
+        // A commit stored with a digest in place of its reads records their
+        // counts in the digest.
+        const counts = storedReadCounts(parsed);
+        reads = counts === undefined ? 0 : counts.confirmed + counts.pending;
       }
     } catch {
       // leave zeroed if payload is unparseable

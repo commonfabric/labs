@@ -43,13 +43,13 @@ name: `allowCustom`, `defaultSize`, `className`, `htmlFor`. Three kinds of name
 are not properties and keep their hyphens: `data-*` and `aria-*`, which are set
 as attributes, and an event prop, which starts with `on` and is spelled with the
 event's own name (`onClick`, `oncf-change`). Any other hyphenated prop sets
-nothing, since no property has that name, and the compiler warns of it, naming
+nothing, since no property has that name, and the compiler refuses it, naming
 the property to write. Because the property name is the only spelling, TypeScript checks every
 prop against the component's declared props.
 
 ```tsx
 // Shown for illustration only.
-<cf-autocomplete allow-custom={true} />  // warning: write `allowCustom`
+<cf-autocomplete allow-custom={true} />  // error: write `allowCustom`
 <cf-autocomplete allowCustom={true} />
 ```
 
@@ -118,7 +118,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-autolayout` | Responsive multi-panel layout | |
 | `cf-autostart` | Zero-UI element that emits a `start` event once on connect | |
 | `cf-avatar` | Avatar showing image bytes, a data-URI image, an emoji glyph, or initials | |
-| `cf-avatar-input` | Picks an image and fires it as profile-picture bytes, cropped square and scaled down | |
+| `cf-avatar-input` | Picks an image, cropped square and scaled down, stores it as a blob, and fires its bytes and the blob | |
 | `cf-badge` | Status indicator / label with visual variants | |
 | `cf-bar-mark` | Bar mark rendered inside `cf-chart` | `$data` |
 | `cf-blob-link` | Link that downloads a blob from a space's blob store, given its reference `{ space, id }` (see [files](../capabilities/files.md)) | |
@@ -135,7 +135,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-checkbox` | Binary selection input with indeterminate support | `$checked` |
 | `cf-chevron-button` | Minimal chevron button rotating between up/down | |
 | `cf-chip` | Compact pill/label for status, tags, and filters | |
-| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. With `mode="prose"`, its `math` attribute draws `$…$` and `$$…$$` TeX in Markdown with KaTeX, showing a formula's TeX where the cursor or a selection touches it. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection. Its element children are shown in a margin beside the text, each child whose `data-anchor` names one of the field's anchors beside the text at that anchor | `$value`, `$mentionable`, `$mentioned` |
+| `cf-code-editor` | Code/prose editor with syntax highlighting and `[[`-mention completion. With `mode="prose"`, its `math` attribute draws `$…$` and `$$…$$` TeX in Markdown with KaTeX, showing a formula's TeX where the cursor or a selection touches it. Its `highlights` attribute marks ranges of a collaborative field's text, each from one of the field's anchors to another (see [`anchorsOf`](../concepts/types-and-schemas/writable.md#anchoring-text-anchorsof)); `cf-highlight-click` names the highlight a click lands on, and `cf-selection-change` reports the selection with the editor's whole text, which a handler compares with the field before anchoring the selection. `cf-edit` tells an edit the viewer made, where `cf-change` also tells what another collaborator or the bound cell changed. Its element children are shown in a margin beside the text, each child whose `data-anchor` names one of the field's anchors beside the text at that anchor | `$value`, `$mentionable`, `$mentioned` |
 | `cf-collapsible` | Single collapsible section with trigger and content | |
 | `cf-copy-button` | Copy-to-clipboard button with visual feedback | |
 | `cf-custody-seal` | Native confirmation that seals the actor's draft into a custody room, showing the runtime-verified room, readers, seats, policy and sources beside what the terms say (see [custody seal](#cf-custody-seal)) | `$draft`, `$terms`, `$policy`, `$sources`, `$box` |
@@ -159,7 +159,7 @@ cell means none confirmed — check the component source before assuming.
 | `cf-hover-reveal` | Content whose `actions` slot appears on hover or focus (see [cf-hover-reveal](#cf-hover-reveal)) | |
 | `cf-hscroll` | Horizontal scroll container | |
 | `cf-hstack` | Horizontal stack layout (flexbox) (see [stacks](#cf-vstack--cf-hstack)) | |
-| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
+| `cf-iframe` | Sandboxed guest with explicit cell, stream, SQLite, service, or presence-room capabilities, bound as one record of cells, and static `assets` (see [iframe-first patterns](../ai/iframe-pattern-guide.md)) | `$context` |
 | `cf-image` | Image from raw `bytes` and a `media-type`, or from a blob reference `{ space, id }` (see [files](../capabilities/files.md)) | |
 | `cf-image-input` | Image capture/upload with compression and camera support | |
 | `cf-input` | Text input with validation and reactive binding | `$value` |
@@ -1156,10 +1156,15 @@ Untrusted avatar primitive — safe for any code to render, for any person.
 ```tsx
 // Shown for illustration only.
 <cf-avatar name="Ada Lovelace" bytes={person.picture} size="sm" /> // image bytes
+<cf-avatar name="Ada Lovelace" blob={face.pictureBlob} />           // a blob
 <cf-avatar name="Grace Hopper" src="🦊" />                          // emoji glyph
 <cf-avatar name="Alan Turing" />                                    // initials "AT"
 ```
 
+- `blob`: a blob holding a raster image, `{ space, id }`, such as a profile's
+  `pictureBlob`, shown as the image its space's host serves (`cf-image`'s
+  `blob`). A blob that names a space and an id takes precedence over `bytes`
+  and `src`.
 - `bytes`: the bytes of a raster image, such as a profile's `picture`.
   Non-empty bytes take precedence over `src`.
 - `src`: a `data:` URI image, an emoji/glyph, or `""`. **Only `data:` URIs render
@@ -1175,11 +1180,13 @@ contributing it), prefer `cf-profile-badge`.
 
 ### cf-avatar-input
 
-A button that picks an image file and fires `cf-change` with
-`{ bytes: FabricBytes }`: the image's centered square, scaled to 128 pixels on
-each side. A profile's edit form binds it to the profile's `setPicture` stream,
-which reads `detail.bytes`. A file that is not an image fires `cf-error` with
-`{ message }` instead.
+A button that picks an image file, makes it the image's centered square,
+scaled to 128 pixels on each side, stores that as a blob in the blob store of
+the space it is shown in, as `cf-file-input` stores a file, and fires
+`cf-change` with `{ bytes: FabricBytes, blob: { space, id } }`. A profile's
+edit form binds it to the profile's `setPicture` stream, which keeps the blob.
+A file that is not an image, or one that cannot be stored, fires `cf-error`
+with `{ message }` instead.
 
 ```tsx
 // Shown for illustration only.

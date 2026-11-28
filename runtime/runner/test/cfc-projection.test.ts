@@ -1,4 +1,3 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
@@ -6,7 +5,9 @@ import { Runtime } from "../src/runtime.ts";
 import { parseLink } from "../src/link-utils.ts";
 import type { JSONSchema } from "../src/builder/types.ts";
 import { CFC_ATOM_TYPE } from "@commonfabric/api/cfc";
+import { describe, it } from "@commonfabric/test-support/test";
 import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
+import { storedLabelEntries } from "./cfc-stored-labels.ts";
 
 const signer = await Identity.fromPassphrase("runner-cfc-projection");
 
@@ -49,7 +50,12 @@ describe("CFC projection claims", () => {
         };
       } | undefined;
     };
-    return replica.getDocument(persistedId)?.cfc?.labelMap?.entries;
+    const document = replica.getDocument(persistedId);
+    return document?.cfc === undefined ? undefined : storedLabelEntries<
+      NonNullable<NonNullable<typeof document.cfc>["labelMap"]>["entries"][
+        number
+      ]
+    >(document.cfc, (labelId) => replica.getDocument(labelId));
   };
 
   const gpsSchema = {

@@ -2,8 +2,9 @@ import { assert, assertEquals, assertExists, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 import type { JSONSchema } from "@commonfabric/api";
-import { taggedHashStringOf } from "@commonfabric/data-model";
+import { type FabricValue, taggedHashStringOf } from "@commonfabric/data-model";
 import { internSchemaAsTaggedHashString } from "@commonfabric/data-model-schema";
+import { test } from "@commonfabric/test-support/test";
 import { encodeMemoryBoundary } from "../v2.ts";
 import {
   applyCommit,
@@ -48,7 +49,7 @@ const authorization = {
   access: { "proof:1": {} },
 };
 
-Deno.test("memory v2 query keys carry the scope INSTANCE (stage E)", () => {
+test("memory v2 query keys carry the scope INSTANCE (stage E)", () => {
   // The doc-key constructor builds the middle segment from the shared
   // scope_key vocabulary, resolved against the querying session's
   // identity; fromDocKey recovers the scope NAME from the instance key.
@@ -116,7 +117,7 @@ Deno.test("memory v2 query keys carry the scope INSTANCE (stage E)", () => {
   );
 });
 
-Deno.test("memory v2 queryGraph reads the declared scoped root instance", async () => {
+test("memory v2 queryGraph reads the declared scoped root instance", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-scopes";
 
@@ -174,7 +175,7 @@ Deno.test("memory v2 queryGraph reads the declared scoped root instance", async 
   }
 });
 
-Deno.test("memory v2 query extends a tracked graph to what one evaluation of both roots tracks, keeping no memo", async () => {
+test("memory v2 query extends a tracked graph to what one evaluation of both roots tracks, keeping no memo", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-watch-growth";
   const fixture = createGraphFixture(space);
@@ -250,7 +251,7 @@ Deno.test("memory v2 query extends a tracked graph to what one evaluation of bot
   }
 });
 
-Deno.test("memory v2 query reports read and traversal stats", async () => {
+test("memory v2 query reports read and traversal stats", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-stats";
   const fixture = createGraphFixture(space);
@@ -307,7 +308,7 @@ Deno.test("memory v2 query reports read and traversal stats", async () => {
   }
 });
 
-Deno.test("memory v2 query does not include linked opaque cells in graph entities", async () => {
+test("memory v2 query does not include linked opaque cells in graph entities", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-opaque-link";
   const rootId = "of:opaque-link-root";
@@ -398,7 +399,7 @@ Deno.test("memory v2 query does not include linked opaque cells in graph entitie
   }
 });
 
-Deno.test("memory v2 query does not walk nested links inside inline opaque cells", async () => {
+test("memory v2 query does not walk nested links inside inline opaque cells", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-inline-opaque-link";
   const rootId = "of:inline-opaque-link-root";
@@ -501,7 +502,7 @@ Deno.test("memory v2 query does not walk nested links inside inline opaque cells
   }
 });
 
-Deno.test("memory v2 query delivers a named document's metadata links as data without following them", async () => {
+test("memory v2 query delivers a named document's metadata links as data without following them", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-meta-link-schema";
   const rootPiece = "of:root-piece";
@@ -598,7 +599,7 @@ Deno.test("memory v2 query delivers a named document's metadata links as data wi
   }
 });
 
-Deno.test("memory v2 query refresh delivers a changed metadata link as data without following it", async () => {
+test("memory v2 query refresh delivers a changed metadata link as data without following it", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-meta-link-refresh";
   const rootPiece = "of:root-piece";
@@ -712,7 +713,7 @@ Deno.test("memory v2 query refresh delivers a changed metadata link as data with
   }
 });
 
-Deno.test("memory v2 query reuses a persistent manager cache for shared source growth", async () => {
+test("memory v2 query reuses a persistent manager cache for shared source growth", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-manager-growth";
   const pieceA = "of:piece-a";
@@ -786,7 +787,7 @@ Deno.test("memory v2 query reuses a persistent manager cache for shared source g
   }
 });
 
-Deno.test("memory v2 query refresh skips already-covered stable linked docs", async () => {
+test("memory v2 query refresh skips already-covered stable linked docs", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-refresh-covered-links";
   const fixture = createGraphFixture(space);
@@ -856,7 +857,7 @@ Deno.test("memory v2 query refresh skips already-covered stable linked docs", as
   }
 });
 
-Deno.test("memory v2 query treats schema true as covering narrower selectors", async () => {
+test("memory v2 query treats schema true as covering narrower selectors", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-true-covers-narrower";
   const rootId = "of:true-covers-narrower-root";
@@ -916,7 +917,7 @@ Deno.test("memory v2 query treats schema true as covering narrower selectors", a
   }
 });
 
-Deno.test("memory v2 query detects graph queries covered by tracked state", async () => {
+test("memory v2 query detects graph queries covered by tracked state", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-covered-graph";
   const rootId = "of:covered-graph-root";
@@ -994,7 +995,7 @@ Deno.test("memory v2 query detects graph queries covered by tracked state", asyn
   }
 });
 
-Deno.test("memory v2 query refresh delivers what a write newly made reachable", async () => {
+test("memory v2 query refresh delivers what a write newly made reachable", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-refresh";
   const fixture = createGraphFixture(space);
@@ -1063,7 +1064,7 @@ Deno.test("memory v2 query refresh delivers what a write newly made reachable", 
   }
 });
 
-Deno.test("memory v2 query refresh updates the growth manager cache for later watch adds", async () => {
+test("memory v2 query refresh updates the growth manager cache for later watch adds", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-manager-refresh";
   const pieceA = "of:piece-a";
@@ -1166,7 +1167,7 @@ Deno.test("memory v2 query refresh updates the growth manager cache for later wa
   }
 });
 
-Deno.test("memory v2 queryGraph honors atSeq", async () => {
+test("memory v2 queryGraph honors atSeq", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-history";
   const fixture = createGraphFixture(space);
@@ -1235,7 +1236,7 @@ Deno.test("memory v2 queryGraph honors atSeq", async () => {
   }
 });
 
-Deno.test("memory v2 queryGraph supports branch-scoped atSeq reads", async () => {
+test("memory v2 queryGraph supports branch-scoped atSeq reads", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-branch-history";
   const rootId = "of:branch-root";
@@ -1300,7 +1301,7 @@ Deno.test("memory v2 queryGraph supports branch-scoped atSeq reads", async () =>
   }
 });
 
-Deno.test("loadedAddresses preserves entity ids containing '/' (the cache key is scopeKey/id/type; only the scopeKey prefix is delimiter-safe)", async () => {
+test("loadedAddresses preserves entity ids containing '/' (the cache key is scopeKey/id/type; only the scopeKey prefix is delimiter-safe)", async () => {
   const { engine, path } = await createEngine();
   try {
     // An id with '/' segments — URI-shaped ids carry them routinely.
@@ -1342,7 +1343,7 @@ Deno.test("loadedAddresses preserves entity ids containing '/' (the cache key is
   }
 });
 
-Deno.test("memory v2 schema-closure assembly fails loudly on a corrupted dependency", async () => {
+test("memory v2 schema-closure assembly fails loudly on a corrupted dependency", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-schema-corruption";
   try {
@@ -1437,7 +1438,7 @@ Deno.test("memory v2 schema-closure assembly fails loudly on a corrupted depende
   }
 });
 
-Deno.test("memory v2 schema-closure assembly fails loudly on malformed `schema` metadata", async () => {
+test("memory v2 schema-closure assembly fails loudly on malformed `schema` metadata", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-schema-meta-malformed";
   try {
@@ -1518,7 +1519,7 @@ Deno.test("memory v2 schema-closure assembly fails loudly on malformed `schema` 
   }
 });
 
-Deno.test("memory v2 extendTrackedGraph delivers the schema closure a new root introduces", async () => {
+test("memory v2 extendTrackedGraph delivers the schema closure a new root introduces", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-extend-closure";
   try {
@@ -1577,7 +1578,7 @@ Deno.test("memory v2 extendTrackedGraph delivers the schema closure a new root i
   }
 });
 
-Deno.test("memory v2 refreshTrackedGraph delivers the schema closure a new document version introduces", async () => {
+test("memory v2 refreshTrackedGraph delivers the schema closure a new document version introduces", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-refresh-closure";
   try {
@@ -1653,7 +1654,7 @@ Deno.test("memory v2 refreshTrackedGraph delivers the schema closure a new docum
   }
 });
 
-Deno.test("memory v2 assembly catches a reference patched inside an existing link schema", async () => {
+test("memory v2 assembly catches a reference patched inside an existing link schema", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-patch-gap";
   try {
@@ -1749,7 +1750,7 @@ Deno.test("memory v2 assembly catches a reference patched inside an existing lin
   }
 });
 
-Deno.test("memory v2 schema scan and verification caches stay bounded at scale", async () => {
+test("memory v2 schema scan and verification caches stay bounded at scale", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-cache-bounds";
   try {
@@ -1826,7 +1827,7 @@ Deno.test("memory v2 schema scan and verification caches stay bounded at scale",
   }
 });
 
-Deno.test("memory v2 delivers a label schema document that arrives after the document naming it", async () => {
+test("memory v2 delivers a label schema document that arrives after the document naming it", async () => {
   const opened = await createEngine();
   const { path } = opened;
   let engine = opened.engine;
@@ -1932,7 +1933,7 @@ Deno.test("memory v2 delivers a label schema document that arrives after the doc
   }
 });
 
-Deno.test("memory v2 delivers the label documents a version-2 CFC envelope references", async () => {
+test("memory v2 delivers the label documents a version-2 CFC envelope references", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-label-document-delivery";
   const referrer = "of:label-document-referrer";
@@ -2077,7 +2078,7 @@ Deno.test("memory v2 delivers the label documents a version-2 CFC envelope refer
   }
 });
 
-Deno.test("memory v2 resolves a selector schema reference against the stored closure", async () => {
+test("memory v2 resolves a selector schema reference against the stored closure", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-selector-ref";
   try {
@@ -2118,7 +2119,7 @@ Deno.test("memory v2 resolves a selector schema reference against the stored clo
   }
 });
 
-Deno.test("memory v2 rejects a selector referencing a schema document the space does not hold", async () => {
+test("memory v2 rejects a selector referencing a schema document the space does not hold", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-selector-ref-absent";
   try {
@@ -2160,7 +2161,7 @@ Deno.test("memory v2 rejects a selector referencing a schema document the space 
   }
 });
 
-Deno.test("memory v2 treats an $alias-shaped record as plain data in delivery", async () => {
+test("memory v2 treats an $alias-shaped record as plain data in delivery", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-alias-data";
   try {
@@ -2210,7 +2211,7 @@ Deno.test("memory v2 treats an $alias-shaped record as plain data in delivery", 
   }
 });
 
-Deno.test("memory v2 selector validation meets a shared dependency once and rejects forged storage", async () => {
+test("memory v2 selector validation meets a shared dependency once and rejects forged storage", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-selector-diamond";
   try {
@@ -2312,7 +2313,7 @@ Deno.test("memory v2 selector validation meets a shared dependency once and reje
   }
 });
 
-Deno.test("memory v2 refreshTrackedGraph double-role retirement: a key that is both an absent watch ROOT and a link-hop MISS survives a flicker AS A MISS — the root's re-added seq-0 marker is no arrival witness — and its birth delivers the miss-walked closure (unit isolation: no sessions, no incidental full re-evaluation can mask this path; mutation: retiring on tracker membership reds both asserts)", async () => {
+test("memory v2 refreshTrackedGraph double-role retirement: a key that is both an absent watch ROOT and a link-hop MISS survives a flicker AS A MISS — the root's re-added seq-0 marker is no arrival witness — and its birth delivers the miss-walked closure (unit isolation: no sessions, no incidental full re-evaluation can mask this path; mutation: retiring on tracker membership reds both asserts)", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-double-role";
   const nodeSchema = {
@@ -2439,7 +2440,7 @@ Deno.test("memory v2 refreshTrackedGraph double-role retirement: a key that is b
   }
 });
 
-Deno.test("memory v2 traversal stats charge one root's cost to that root", async () => {
+test("memory v2 traversal stats charge one root's cost to that root", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-root-attribution-single";
 
@@ -2496,7 +2497,78 @@ Deno.test("memory v2 traversal stats charge one root's cost to that root", async
   }
 });
 
-Deno.test("memory v2 traversal stats name the root that spent the time", async () => {
+test("memory v2 traversal stats count the positions a root hands to the traversal's own stack", async () => {
+  const { engine, path } = await createEngine();
+  const space = "did:key:z6Mk-memory-v2-root-attribution-deep";
+
+  try {
+    // Documents nested `depth` levels, whose deepest level links to another,
+    // so the query walks every level to reach it.
+    const nested = (depth: number): FabricValue => {
+      let value: FabricValue = {
+        name: "leaf",
+        child: { "/": { "link@1": { id: "of:leaf", path: [], space } } },
+      };
+      for (let i = 0; i < depth; i++) value = { name: `${i}`, child: value };
+      return value;
+    };
+    applyCommit(engine, {
+      sessionId: "session:alice",
+      principal: "did:key:alice",
+      commit: {
+        localSeq: 1,
+        reads: { confirmed: [], pending: [] },
+        operations: [
+          { op: "set", id: "of:deep", value: { value: nested(200) } },
+          { op: "set", id: "of:deeper", value: { value: nested(600) } },
+          { op: "set", id: "of:shallow", value: { value: nested(3) } },
+          { op: "set", id: "of:leaf", value: { value: { name: "far" } } },
+        ],
+      },
+    });
+    const statsFrom = (...ids: string[]) =>
+      trackGraph(space, engine, {
+        roots: ids.map((id) => ({
+          id,
+          selector: {
+            path: [],
+            schema: {
+              $defs: {
+                Node: {
+                  type: "object",
+                  properties: {
+                    name: { type: "string" },
+                    child: { $ref: "#/$defs/Node" },
+                  },
+                },
+              },
+              $ref: "#/$defs/Node",
+            },
+          },
+        })),
+      }).stats;
+
+    const deep = statsFrom("of:deep", "of:deeper");
+    const shallow = statsFrom("of:shallow");
+
+    // Both deep roots hand positions over, so the slowest root's share is
+    // some of the query's count but not all of it.
+    const slowest = deep.slowestRoot;
+    assertExists(slowest);
+    assert(
+      slowest.walk.nativeDepthHandoffs > 0 &&
+        slowest.walk.nativeDepthHandoffs < deep.nativeDepthHandoffs,
+      `a share of ${deep.nativeDepthHandoffs}, got ${slowest.walk.nativeDepthHandoffs}`,
+    );
+    assertEquals(shallow.managerReads, 2, "the shallow root reached the leaf");
+    assertEquals(shallow.nativeDepthHandoffs, 0);
+  } finally {
+    close(engine);
+    await Deno.remove(path);
+  }
+});
+
+test("memory v2 traversal stats name the root that spent the time", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-root-attribution-slowest";
   const realNow = performance.now.bind(performance);
@@ -2580,7 +2652,7 @@ Deno.test("memory v2 traversal stats name the root that spent the time", async (
   }
 });
 
-Deno.test("memory v2 extendTrackedGraph attributes the roots it adds", async () => {
+test("memory v2 extendTrackedGraph attributes the roots it adds", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-root-attribution-extend";
 
@@ -2620,7 +2692,7 @@ Deno.test("memory v2 extendTrackedGraph attributes the roots it adds", async () 
   }
 });
 
-Deno.test("memory v2 query loads the label schema document for every document it delivers, and nothing else of its metadata", async () => {
+test("memory v2 query loads the label schema document for every document it delivers, and nothing else of its metadata", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-meta-roots";
   const link = (id: string) => ({ "/": { "link@1": { id, path: [], space } } });
@@ -2875,7 +2947,7 @@ Deno.test("memory v2 query loads the label schema document for every document it
 
 // The memory engine owns scope partitions and drives the runner's graph walk,
 // so this boundary test makes an inherited metadata scope observable.
-Deno.test("memory v2 query loads CFC schemas from space scope", async () => {
+test("memory v2 query loads CFC schemas from space scope", async () => {
   const { engine, path } = await createEngine();
   const space = "did:key:z6Mk-memory-v2-query-cfc-schema-scope";
   const identity = { principal: "did:key:alice", sessionId: "session:alice" };

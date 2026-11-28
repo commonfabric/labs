@@ -210,8 +210,9 @@ profile. Snapshotting the `#profileName` value and the profile's face instead
 is the self-containment fallback (renders with remote profile spaces offline).
 `profileFace(profile)`, from `patterns/system/profile-face/profile-face.ts`,
 reads the face to copy: the picture, or else the avatar text, only as the
-profile's owner set it. Anyone can
-write a profile's picture, so a picture copied another way may be a visitor's.
+profile's owner set it. A stored picture may not be its owner's: earlier
+releases let anyone set one through `setPicture`, and bytes can be stored
+without a label, so a picture copied another way may be someone else's.
 The copy itself carries no claim: only a live `<cf-profile-badge>` checks the
 face it draws.
 See
@@ -286,11 +287,17 @@ user's home space):
 ```tsx
 // Shown inside a pattern body.
 const profileWish = wish<
-  Writable<{ name?: string; picture?: FabricBytes; avatar?: string }>
+  Writable<{
+    name?: string;
+    pictureBlob?: { space?: string; id?: string };
+    picture?: FabricBytes;
+    avatar?: string;
+  }>
 >({ query: "#profile" }); // the viewer's profile CELL
 const profileNameWish = wish<string>({ query: "#profileName" });
 const myName = computed(() => (profileNameWish.result ?? "").trim());
-const myFace = computed(() => profileFace(profileWish.result)); // { picture } or { avatar } or {}
+// { pictureBlob }, { picture }, { avatar } or {}
+const myFace = computed(() => profileFace(profileWish.result));
 const hasProfile = computed(() => profileWish.result !== undefined);
 ```
 
@@ -311,9 +318,11 @@ The viewer is whoever the runtime says they are; `#profile` is how you read it.
 `cf-profile-badge` renders **any** participant, not just the viewer: bind the live
 profile cell you stored for them on join. Cross-space profile reads resolve for
 every authorized viewer (CT-1667/1687), so each badge stays current and carries the
-verified seal. Fall back to `<cf-avatar bytes={p.picture} src={p.avatar} name={p.name} />` only when
+verified seal. Fall back to `<cf-avatar blob={p.pictureBlob} bytes={p.picture} src={p.avatar} name={p.name} />` only when
 you deliberately hold just a snapshot — a self-contained piece, or a participant
-whose remote profile space is offline.
+whose remote profile space is offline. A snapshot of a picture held as a blob is
+its reference, not its bytes, so it draws only while the blob's space's host is
+reachable, and shows initials otherwise.
 
 > ⚠️ **`$profile` must be at a STATIC `[UI]` position** — like every `$`-binding
 > (`$value` / `$checked`). Bind it where the JSX is built once; **never inside a
@@ -769,10 +778,12 @@ an empty list. Call it where `spaceAccess(target)` can be called. In a
 computation the value is the viewer's own, and updates when the access list
 changes.
 
-It lists principals, not people. To show each member by the profile they joined
-with, match the space's roster against it with `principalOf()` (see
-[Build the roster by join](#build-the-roster-by-join)), and show a member with
-no matching profile by their DID.
+It lists principals, not people. To show each member by the profiles they
+joined with, join the space's roster (see
+[Build the roster by join](#build-the-roster-by-join)) to it with
+`joinSpaceMembers(roster, members, profileOwnerOf, equalsKey)`, which gives each
+member the roster's profiles of their own, and show a member with none by their
+DID.
 [`space-access.md`](../../features/space-access.md#a-spaces-members) has the
 details.
 
@@ -1045,9 +1056,9 @@ See:
 
 ## Good Examples
 
-- `patterns/examples/scoped-group-chat/main-plain-inputs.tsx`: data-shaped
+- `patterns/examples/scoped-group-chat/plain-inputs/main.tsx`: data-shaped
   scoped inputs.
-- `patterns/examples/scoped-group-chat/main-with-writable-inputs.tsx`: scoped
+- `patterns/examples/scoped-group-chat/writable-inputs/main.tsx`: scoped
   writable aliases for mutation-heavy UI.
 - `patterns/examples/scoped-user-directory/`: per-user pointer into a shared
   directory.

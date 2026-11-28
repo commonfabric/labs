@@ -14,14 +14,16 @@ export const TEST_ASSET_CONTENT = "interface AddEventListenerOptions";
 
 /**
  * Creates a cache for a test that targets both Deno and the browser, as the
- * tests run under deno-web-test do. It reads assets from the file system under
- * Deno, and from `/static` on the page origin elsewhere.
+ * tests run under deno-web-test do. It reads assets from the file system when
+ * `scope` is Deno, and from `/static` on the page origin of `scope` otherwise.
  */
-export function createTestStaticCache(): StaticCache {
-  if (isDeno()) {
+export function createTestStaticCache(
+  scope: { location: { origin: string } } = globalThis,
+): StaticCache {
+  if (isDeno(scope)) {
     return StaticCache.fromFileSystem();
   }
-  const url = new URL(globalThis.location.origin);
+  const url = new URL(scope.location.origin);
   url.pathname = "static";
   return new StaticCache(url);
 }

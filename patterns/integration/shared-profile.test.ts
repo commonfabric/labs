@@ -3,7 +3,12 @@ import { createTestSpace, env, Page } from "@commonfabric/integration";
 import { type DID, Identity } from "@commonfabric/identity";
 import { ShellIntegration } from "@commonfabric/integration/shell-utils";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 import { join } from "@std/path";
 import {
   initializePiecesController,

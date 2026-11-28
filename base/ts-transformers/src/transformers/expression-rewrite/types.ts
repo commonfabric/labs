@@ -30,13 +30,6 @@ export interface RewriteParams {
   readonly containerKind?: ExpressionContainerKind;
 
   /**
-   * True when inside a safe callback wrapper (action, handler, computed, etc.)
-   * where opaque reading is allowed. In safe contexts, we still need to apply
-   * semantic transformations (&&->when, ||->unless) but NOT lift-applied wrappers.
-   */
-  readonly inSafeContext?: boolean;
-
-  /**
    * When true, reactive compute wrappers introduced during rewriting should
    * be emitted as a lift-applied form bound to its captured inputs
    * (`__cfHelpers.lift(cb)(inputs)`) rather than a zero-input thunk
@@ -53,7 +46,6 @@ export interface RewriteParams {
 
 export interface EmitterContext extends RewriteParams {
   readonly dataFlows: readonly NormalizedDataFlow[];
-  readonly inSafeContext: boolean;
   readonly reactiveContextKind: ReactiveContextKind;
   readonly containerKind?: ExpressionContainerKind;
   readonly preferInputBoundWrappers: boolean;

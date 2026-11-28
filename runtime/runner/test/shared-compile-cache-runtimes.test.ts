@@ -5,10 +5,15 @@
  * compile that fails is not taken for one that succeeded.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
 import { CompilerError } from "@commonfabric/js-compiler/errors";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { setCompileCacheRuntimeVersionForTesting } from "../src/compilation-cache/cell-cache.ts";
 import { openSharedCompileCache } from "../src/compilation-cache/shared-compile-cache.deno.ts";

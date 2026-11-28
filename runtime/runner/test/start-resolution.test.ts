@@ -1,8 +1,17 @@
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { expect } from "@std/expect";
 import { Identity } from "@commonfabric/identity";
+import {
+  resetServerExecutionConfig,
+  setServerExecutionConfig,
+} from "@commonfabric/memory/v2";
 import type * as MemoryV2Server from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import type { Pattern } from "../src/builder/types.ts";
 import type { Cell } from "../src/cell.ts";
@@ -156,6 +165,96 @@ describe("start()", () => {
       runtime.runner.stop(runtime.getCell(space, "an unrelated document"));
       // The target holds nothing, which only a start that reached it reports.
       await expect(started).rejects.toThrow("No data at cell");
+    });
+
+    describe("to a piece in a space under view replication", () => {
+      // A web client under server execution starts a piece in a space whose
+      // view replication is active by reporting whether it already runs. The
+      // link is written by another runtime, and the client's load of it is
+      // held, so the target is in place before the start reaches it.
+
+      const startThroughLink = async (
+        beforeTheLinkLoads: (viewer: Runtime, target: Cell<unknown>) => unknown,
+      ) => {
+        setServerExecutionConfig(true);
+        try {
+          const storage = EmulatedStorageManager.connectTo(server, {
+            as: signer,
+          });
+          const viewer = new Runtime({
+            apiUrl: new URL(import.meta.url),
+            storageManager: storage,
+            clientClass: "web",
+            experimental: {
+              serverExecution: true,
+              viewScopedReplication: true,
+            },
+          });
+          runtimes.push({ runtime: viewer, storage });
+          const viewSpace = (await Identity.fromPassphrase("view space"))
+            .did();
+          const pattern = await viewer.patternManager.compilePattern({
+            main: "/main.tsx",
+            files: [{
+              name: "/main.tsx",
+              contents: [
+                "import { pattern } from 'commonfabric';",
+                "export default pattern<Record<string, never>, { marker: string }>(",
+                "  () => ({ marker: 'running' }),",
+                ");",
+                "",
+              ].join("\n"),
+            }],
+          }, { space: viewSpace });
+          const target = viewer.getCell(viewSpace, "view-replicated target");
+          await viewer.runSynced(target, pattern, {});
+          await viewer.idle();
+          await storeLink(
+            newRuntime(),
+            "link to a view-replicated piece",
+            target,
+          );
+          const link = viewer.getCell(space, "link to a view-replicated piece");
+
+          const loading = Promise.withResolvers<void>();
+          const load = Promise.withResolvers<void>();
+          const syncCell = storage.syncCell.bind(storage);
+          using _sync = stub(storage, "syncCell", async (cell, ...args) => {
+            if (cell.equals(link)) {
+              loading.resolve();
+              await load.promise;
+            }
+            return await syncCell(cell, ...args);
+          });
+          const started = viewer.runner.start(link);
+          await loading.promise;
+          await beforeTheLinkLoads(viewer, target);
+          expect(await viewer.viewReplication.enable(viewSpace)).toBe(true);
+          load.resolve();
+          return {
+            started: await started,
+            running: viewer.runner.isRunning(target),
+          };
+        } finally {
+          resetServerExecutionConfig();
+        }
+      };
+
+      it("resolves to `true` when the piece runs", async () => {
+        expect(await startThroughLink(() => {})).toEqual({
+          started: true,
+          running: true,
+        });
+      });
+
+      it("resolves to `false` when the piece is stopped and started again while the link loads", async () => {
+        expect(
+          await startThroughLink(async (viewer, target) => {
+            viewer.runner.stop(target);
+            expect(await viewer.runner.start(target)).toBe(true);
+          }),
+        ).toEqual({ started: false, running: true });
+      });
     });
   });
 

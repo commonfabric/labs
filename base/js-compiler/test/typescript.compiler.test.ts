@@ -1,9 +1,9 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 
 import { StaticCache } from "@commonfabric/static";
 import { transformCfDirective } from "@commonfabric/ts-transformers";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import ts from "typescript";
 
@@ -48,18 +48,18 @@ const TESTS: TestDef[] = [
     expectedError: "Declaration or statement expected.",
   },
   {
-    // `noCheck` skips type-checking, never parsing. With noEmitOnError off,
-    // this explicit gate is the only thing between malformed source and a
-    // malformed emit.
+    // `noCheck` skips type-checking, never parsing. With TypeScript's emit
+    // veto off, this explicit gate is the only thing between malformed source
+    // and a malformed emit.
     name: "Throws: syntax error still fatal under noCheck",
     source: "export const x = ;",
     noCheck: true,
     expectedError: "Expression expected.",
   },
   {
-    // The most permissive mode combination: storedSource turns noEmitOnError
-    // off and noCheck skips semantics — the explicit syntactic gate is the
-    // ONLY thing standing, and it must still stand.
+    // The most permissive mode combination: storedSource drops hygiene codes
+    // and noCheck skips semantics — the explicit syntactic gate is the ONLY
+    // thing standing, and it must still stand.
     name: "Throws: syntax error still fatal under storedSource + noCheck",
     source: "export const x = ;",
     storedSource: true,
@@ -496,20 +496,18 @@ export function render() {
       }),
     );
     const collected = compiler.compileToModulesCollecting(resolved);
-    // The emit pass re-reports per-file diagnostics, so assert the SET of
-    // attributed files rather than exact multiplicity.
-    expect([...new Set(collected.diagnostics.map((d) => d.file))].sort())
-      .toEqual([
-        "/bad.ts",
-        "/main.ts",
-      ]);
-    const byFile = Object.fromEntries(
-      collected.diagnostics.map((d) => [d.file, d.message]),
-    );
-    expect(byFile["/main.ts"]).toContain("Unused '@ts-expect-error'");
-    expect(byFile["/bad.ts"]).toContain(
-      "Type 'string' is not assignable to type 'number'.",
-    );
+    expect(
+      collected.diagnostics.toSorted((a, b) => a.file.localeCompare(b.file)),
+    ).toEqual([
+      {
+        file: "/bad.ts",
+        message: "1: Type 'string' is not assignable to type 'number'.",
+      },
+      {
+        file: "/main.ts",
+        message: "3: Unused '@ts-expect-error' directive.",
+      },
+    ]);
   });
 
   it("throws a program-wide diagnostic, such as a missing type library", () => {
@@ -523,7 +521,7 @@ export function render() {
     ).toThrow("File '$types/es2023.d.ts' not found.");
   });
 
-  it("compileToModulesCollecting reports a program-wide diagnostic under no file", () => {
+  it("compileToModulesCollecting reports a program-wide diagnostic once, under no file", () => {
     // A compiler given no type libraries misses the ones the options name,
     // which is a diagnostic about the program rather than about a file.
     const compiler = new TypeScriptCompiler({});
@@ -533,10 +531,11 @@ export function render() {
       files: [{ name: "/main.ts", contents: "export default 1;" }],
     });
 
-    expect(collected.diagnostics).toContainEqual({
-      file: "",
-      message: expect.stringContaining("File '$types/es2023.d.ts' not found."),
-    });
+    expect(
+      collected.diagnostics.filter((d) =>
+        d.message.includes("File '$types/es2023.d.ts' not found.")
+      ),
+    ).toEqual([{ file: "", message: expect.any(String) }]);
     expect(collected.diagnostics.some((d) => d.file === "/main.ts")).toBe(
       false,
     );
@@ -640,6 +639,27 @@ export function render() {
     );
   });
 
+  it("compileToModulesCollecting emits a module for each file that checks clean and none for a file with an error", () => {
+    const compiler = new TypeScriptCompiler(types);
+
+    const collected = compiler.compileToModulesCollecting({
+      main: "/main.ts",
+      files: [
+        { name: "/main.ts", contents: "export const ok: number = 1;" },
+        { name: "/bad.ts", contents: "export const bad: number = 'nope';" },
+      ],
+    });
+
+    expect([...collected.modules.keys()]).toEqual(["/main.ts"]);
+    expect(collected.modules.get("/main.ts")!.js).toContain("exports.ok = 1;");
+    expect(collected.diagnostics).toEqual([
+      {
+        file: "/bad.ts",
+        message: "1: Type 'string' is not assignable to type 'number'.",
+      },
+    ]);
+  });
+
   it("compileToModulesCollecting times each authored file separately", async () => {
     // What a batch caller charges each of the programs it unioned. Only
     // authored files carry a figure: the declaration libs emit nothing and
@@ -706,6 +726,30 @@ export function render() {
     expect(() => compiler.compileToModules(resolved)).toThrow(expected);
     await expect(compiler.compileToModulesInterleaved(resolved)).rejects
       .toThrow(expected);
+  });
+
+  it("noCheck emits a program with a type error that a checked compile refuses, in both drivers", async () => {
+    const compiler = new TypeScriptCompiler(types);
+    const program = {
+      main: "/main.ts",
+      files: [{
+        name: "/main.ts",
+        contents:
+          "const add = (x: number, y: number): number => x + y;\nexport default add(`0`, 2);",
+      }],
+    };
+
+    expect(() => compiler.compileToModules(program)).toThrow(
+      "Argument of type 'string' is not assignable to parameter of type 'number'.",
+    );
+    const sync = compiler.compileToModules(program, { noCheck: true });
+    const interleaved = await compiler.compileToModulesInterleaved(program, {
+      noCheck: true,
+    });
+    expect(sync.get("/main.ts")!.js).toContain(
+      "exports.default = add(`0`, 2);",
+    );
+    expect(interleaved.get("/main.ts")!.js).toBe(sync.get("/main.ts")!.js);
   });
 
   it("aggregates type errors across multiple files identically in both drivers", async () => {

@@ -1,5 +1,4 @@
 import { expect } from "@std/expect";
-import { describe, it } from "@std/testing/bdd";
 
 import { fabricFromRealmValue } from "@commonfabric/data-model/codecs";
 import { Identity } from "@commonfabric/identity";
@@ -13,6 +12,7 @@ import {
   type IPCClientMessage,
   RequestType,
 } from "@commonfabric/runtime-client";
+import { describe, it } from "@commonfabric/test-support/test";
 
 import "../src/globals.ts";
 

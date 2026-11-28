@@ -61,8 +61,12 @@ export interface Gate {
   /** What runs it, as the arguments Deno takes beyond its own path. */
   run: readonly string[];
 
-  /** Further arguments, for a gate that reads the base revision. */
-  args?: (context: { baseRef: string }) => string[];
+  /**
+   * Further arguments, for a gate that reads the base revision. `base` is
+   * the revision the lane names, or nothing where it names none, which
+   * leaves the gate to its own default.
+   */
+  args?: (context: { base: readonly string[] }) => string[];
 
   /** Where it runs, repository-relative, when that is not the root. */
   cwd?: string;
@@ -190,6 +194,7 @@ export const WORKING_TREE_GATES: readonly Gate[] = [
       ".github/workflows/benchmarks.yml",
       "dashboard/bench-report.ts",
       "dashboard/machine-calibration.bench.ts",
+      "patterns/integration/fabrichat-setup.bench.ts",
       "patterns/integration/topic-board-navigation.bench.ts",
       "patterns/integration/topic-board-scale.bench.ts",
       "tasks/check-bench-workflow.ts",
@@ -423,8 +428,8 @@ export const HISTORY_GATES: readonly Gate[] = [
     name: `check-cause-assignments ${at + 1} of ${CAUSE_ASSIGNMENT_PARTS}`,
     kind: "gate",
     run: ["task", "check-cause-assignments"],
-    args: ({ baseRef }) => [
-      baseRef,
+    args: ({ base }) => [
+      ...base,
       "--part",
       `${at + 1}/${CAUSE_ASSIGNMENT_PARTS}`,
     ],
@@ -437,7 +442,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     name: "check-baselines-append-only",
     kind: "gate",
     run: ["task", "check-baselines-append-only"],
-    args: ({ baseRef }) => [baseRef],
+    args: ({ base }) => [...base],
     // The baselines. A deleted pattern file is what excuses deleting
     // the baselines beside it, so it can turn this gate's verdict from
     // a failure into a pass but never the other way, and reaches the
@@ -454,7 +459,7 @@ export const HISTORY_GATES: readonly Gate[] = [
     name: "check-test-aliases",
     kind: "gate",
     run: ["task", "check-test-aliases"],
-    args: ({ baseRef }) => [baseRef],
+    args: ({ base }) => [...base],
     // The alias files, and the module holding the line format the task
     // parses and the graph rules it applies; the task itself is a
     // `git show` wrapper around those. The `.jsonl` file beside the
@@ -508,7 +513,7 @@ function gateSuite(
         : undefined;
     },
     command(requests, context): Promise<Invocation[]> {
-      const baseRef = context.baseRef ?? "origin/main";
+      const base = context.baseRef === undefined ? [] : [context.baseRef];
       const invocations: Invocation[] = [];
       for (const request of requests) {
         const gate = byName.get(request.unit);
@@ -524,7 +529,7 @@ function gateSuite(
             "--",
             Deno.execPath(),
             ...gate.run,
-            ...gate.args?.({ baseRef }) ?? [],
+            ...gate.args?.({ base }) ?? [],
           ],
           cwd: gate.cwd === undefined
             ? context.root

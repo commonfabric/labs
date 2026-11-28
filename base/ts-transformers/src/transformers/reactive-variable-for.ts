@@ -12,7 +12,6 @@ import {
   getTypeAtLocationWithFallback,
   hasReactiveCollectionProvenance,
   isCellLikeType,
-  isReactiveValueExpression,
 } from "../ast/mod.ts";
 import { HelpersOnlyTransformer, TransformationContext } from "../core/mod.ts";
 import {
@@ -790,27 +789,23 @@ function isReactiveArrayMethodCall(
     return true;
   }
 
+  // A classified array method's callee is always a member access.
   const target = unwrapExpression(call.expression);
-  if (
-    !ts.isPropertyAccessExpression(target) &&
-    !ts.isElementAccessExpression(target)
-  ) {
-    return false;
-  }
-
-  return hasReactiveCollectionProvenance(
-    target.expression,
-    context.checker,
-    {
-      allowTypeBasedRoot: false,
-      allowImplicitReactiveParameters: false,
-      allowReactiveArrayCallbackParameters: false,
-      sameScope: getEnclosingFunctionLikeDeclaration(call),
-      typeRegistry: context.state.typeRegistry,
-      syntheticReactiveCollectionRegistry: context.state
-        .syntheticReactiveCollectionRegistry,
-    },
-  ) || isExplicitReactiveCall(target.expression, context);
+  return (ts.isPropertyAccessExpression(target) ||
+    ts.isElementAccessExpression(target)) &&
+    (hasReactiveCollectionProvenance(
+      target.expression,
+      context.checker,
+      {
+        allowTypeBasedRoot: false,
+        allowImplicitReactiveParameters: false,
+        allowReactiveArrayCallbackParameters: false,
+        sameScope: getEnclosingFunctionLikeDeclaration(call),
+        typeRegistry: context.state.typeRegistry,
+        syntheticReactiveCollectionRegistry: context.state
+          .syntheticReactiveCollectionRegistry,
+      },
+    ) || isExplicitReactiveCall(target.expression, context));
 }
 
 function isExplicitReactiveCall(
@@ -842,11 +837,7 @@ function shouldRetargetReactiveReference(
     context.checker,
     context.state.typeRegistry,
   );
-  if (type) {
-    return isCellByType(target, type, context);
-  }
-
-  return isReactiveValueExpression(target, context.checker);
+  return isCellByType(target, type, context);
 }
 
 function shouldPreserveStructuralCallArgumentReferences(

@@ -7,6 +7,7 @@ import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 import type { FabricValue } from "@commonfabric/data-model";
 import { jsonFromFabricValue } from "@commonfabric/data-model/codecs";
+import { test } from "@commonfabric/test-support/test";
 
 import { openSpace } from "../db.ts";
 import {
@@ -147,7 +148,7 @@ function seed(path: string) {
   db.close();
 }
 
-Deno.test("time travel: diff + timelines", async (t) => {
+test("time travel: diff + timelines", async (t) => {
   const dir = await Deno.makeTempDir({ prefix: "state-inspector-tt-" });
   const dbPath = `${dir}/space.sqlite`;
   try {
@@ -238,6 +239,31 @@ Deno.test("time travel: diff + timelines", async (t) => {
           annotationCollision: true,
           beforeValueKind: "bigint",
           afterValueKind: "object",
+        }]);
+        // `null` annotates to itself alone, so it never collides.
+        const others: FabricValue[] = ["null", {}, [], 0, false];
+        for (const other of others) {
+          const pairs: [FabricValue, FabricValue][] = [
+            [null, other],
+            [other, null],
+          ];
+          for (const [before, after] of pairs) {
+            assertEquals(diffValues(before, after), [{
+              path: "",
+              pathSegments: [],
+              kind: "changed",
+              before,
+              after,
+            }]);
+          }
+        }
+        assertEquals(diffValues({ stored: null }, { stored: undefined }), [{
+          path: "stored",
+          pathSegments: ["stored"],
+          kind: "changed",
+          before: null,
+          after: { $undefined: true },
+          afterIsUndefined: true,
         }]);
         assertEquals(diffValues({ $stream: true }, "$stream"), [{
           path: "",

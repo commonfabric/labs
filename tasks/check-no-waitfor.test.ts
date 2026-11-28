@@ -1,5 +1,6 @@
 import { assert, assertEquals } from "@std/assert";
-import { join } from "@std/path";
+import { expect } from "@std/expect";
+import { fromFileUrl, join } from "@std/path";
 import {
   ALLOWLIST,
   importsPollingWaitFor,
@@ -7,6 +8,8 @@ import {
   main,
   scan,
 } from "./check-no-waitfor.ts";
+import { test } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 // Writes a single integration test file with the given contents into a fresh
 // temp tree and returns its root. The caller removes the tree.
@@ -41,7 +44,7 @@ async function captureConsole(
   return { out: out.join("\n"), err: err.join("\n") };
 }
 
-Deno.test("importsPollingWaitFor detects a single-line named import", () => {
+test("importsPollingWaitFor detects a single-line named import", () => {
   assert(
     importsPollingWaitFor(
       'import { env, waitFor } from "@commonfabric/integration";',
@@ -49,7 +52,7 @@ Deno.test("importsPollingWaitFor detects a single-line named import", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor detects a multi-line named import", () => {
+test("importsPollingWaitFor detects a multi-line named import", () => {
   const source = [
     "import {",
     "  env,",
@@ -61,7 +64,7 @@ Deno.test("importsPollingWaitFor detects a multi-line named import", () => {
   assert(importsPollingWaitFor(source));
 });
 
-Deno.test("importsPollingWaitFor detects an aliased import", () => {
+test("importsPollingWaitFor detects an aliased import", () => {
   assert(
     importsPollingWaitFor(
       'import { waitFor as poll } from "@commonfabric/integration";',
@@ -76,7 +79,7 @@ Deno.test("importsPollingWaitFor detects an aliased import", () => {
 // runs, so it cannot poll. The value forms below it still have to be caught.
 //
 
-Deno.test("importsPollingWaitFor ignores a type-only import statement", () => {
+test("importsPollingWaitFor ignores a type-only import statement", () => {
   assertEquals(
     importsPollingWaitFor(
       'import type { waitFor } from "@commonfabric/integration";',
@@ -85,7 +88,7 @@ Deno.test("importsPollingWaitFor ignores a type-only import statement", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor ignores a type-only import by relative path", () => {
+test("importsPollingWaitFor ignores a type-only import by relative path", () => {
   assertEquals(
     importsPollingWaitFor(
       'import type { waitFor } from "../../integration/utils.ts";',
@@ -94,7 +97,7 @@ Deno.test("importsPollingWaitFor ignores a type-only import by relative path", (
   );
 });
 
-Deno.test("importsPollingWaitFor ignores an inline type member", () => {
+test("importsPollingWaitFor ignores an inline type member", () => {
   assertEquals(
     importsPollingWaitFor(
       'import { type waitFor } from "@commonfabric/integration";',
@@ -103,7 +106,7 @@ Deno.test("importsPollingWaitFor ignores an inline type member", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor ignores an aliased inline type member", () => {
+test("importsPollingWaitFor ignores an aliased inline type member", () => {
   // The erased member binds the local name `waitFor`, so dropping only the
   // `type` keyword would leave the name behind and flag this.
   assertEquals(
@@ -114,7 +117,7 @@ Deno.test("importsPollingWaitFor ignores an aliased inline type member", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor detects a value waitFor beside a type member", () => {
+test("importsPollingWaitFor detects a value waitFor beside a type member", () => {
   assert(
     importsPollingWaitFor(
       'import { type Page, waitFor } from "@commonfabric/integration";',
@@ -122,7 +125,7 @@ Deno.test("importsPollingWaitFor detects a value waitFor beside a type member", 
   );
 });
 
-Deno.test("importsPollingWaitFor detects a value waitFor after a type member on its own line", () => {
+test("importsPollingWaitFor detects a value waitFor after a type member on its own line", () => {
   const source = [
     "import {",
     "  type Page,",
@@ -140,7 +143,7 @@ Deno.test("importsPollingWaitFor detects a value waitFor after a type member on 
 // exists to find.
 //
 
-Deno.test("importsPollingWaitFor ignores waitFor-prefixed helpers", () => {
+test("importsPollingWaitFor ignores waitFor-prefixed helpers", () => {
   assertEquals(
     importsPollingWaitFor(
       'import { waitForCondition, waitForText } from "@commonfabric/integration";',
@@ -149,7 +152,7 @@ Deno.test("importsPollingWaitFor ignores waitFor-prefixed helpers", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor ignores a subpath specifier", () => {
+test("importsPollingWaitFor ignores a subpath specifier", () => {
   assertEquals(
     importsPollingWaitFor(
       'import { waitFor } from "@commonfabric/integration/shell-utils";',
@@ -158,7 +161,7 @@ Deno.test("importsPollingWaitFor ignores a subpath specifier", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor ignores a harness.waitFor member call", () => {
+test("importsPollingWaitFor ignores a harness.waitFor member call", () => {
   const source = [
     'import { MultiRuntimeHarness } from "./multi-runtime-harness.ts";',
     "await harness.waitFor(() => true);",
@@ -174,7 +177,7 @@ Deno.test("importsPollingWaitFor ignores a harness.waitFor member call", () => {
 // rather than an import. None of these shapes may be flagged.
 //
 
-Deno.test("importsPollingWaitFor ignores a commented-out member", () => {
+test("importsPollingWaitFor ignores a commented-out member", () => {
   const source = [
     "import {",
     "  env,",
@@ -184,7 +187,7 @@ Deno.test("importsPollingWaitFor ignores a commented-out member", () => {
   assertEquals(importsPollingWaitFor(source), false);
 });
 
-Deno.test("importsPollingWaitFor ignores an import in a line comment", () => {
+test("importsPollingWaitFor ignores an import in a line comment", () => {
   assertEquals(
     importsPollingWaitFor(
       '// import { waitFor } from "@commonfabric/integration";',
@@ -193,7 +196,7 @@ Deno.test("importsPollingWaitFor ignores an import in a line comment", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor ignores an import in a block comment", () => {
+test("importsPollingWaitFor ignores an import in a block comment", () => {
   assertEquals(
     importsPollingWaitFor(
       '/* import { waitFor } from "@commonfabric/integration"; */',
@@ -202,7 +205,7 @@ Deno.test("importsPollingWaitFor ignores an import in a block comment", () => {
   );
 });
 
-Deno.test("importsPollingWaitFor ignores an import quoted in JSDoc prose", () => {
+test("importsPollingWaitFor ignores an import quoted in JSDoc prose", () => {
   const source = [
     "/**",
     ' * Do not: import { waitFor } from "@commonfabric/integration"',
@@ -212,13 +215,13 @@ Deno.test("importsPollingWaitFor ignores an import quoted in JSDoc prose", () =>
   assertEquals(importsPollingWaitFor(source), false);
 });
 
-Deno.test("importsPollingWaitFor ignores an import inside a string", () => {
+test("importsPollingWaitFor ignores an import inside a string", () => {
   const source =
     `const banned = 'import { waitFor } from "@commonfabric/integration";';`;
   assertEquals(importsPollingWaitFor(source), false);
 });
 
-Deno.test("importsPollingWaitFor ignores an import inside a template literal", () => {
+test("importsPollingWaitFor ignores an import inside a template literal", () => {
   const source = [
     "const sample = `",
     'import { waitFor } from "@commonfabric/integration";',
@@ -233,7 +236,7 @@ Deno.test("importsPollingWaitFor ignores an import inside a template literal", (
 // The blanking of comments and strings must not swallow the code around them.
 //
 
-Deno.test("importsPollingWaitFor detects an import after a comment holding an apostrophe and a brace", () => {
+test("importsPollingWaitFor detects an import after a comment holding an apostrophe and a brace", () => {
   const source = [
     "// Don't use this: it polls { every 50ms }.",
     'import { waitFor } from "@commonfabric/integration";',
@@ -241,7 +244,7 @@ Deno.test("importsPollingWaitFor detects an import after a comment holding an ap
   assert(importsPollingWaitFor(source));
 });
 
-Deno.test("importsPollingWaitFor detects an import after a template literal", () => {
+test("importsPollingWaitFor detects an import after a template literal", () => {
   const source = [
     "const selector = `#${id} > .row`;",
     'import { waitFor } from "@commonfabric/integration";',
@@ -249,7 +252,7 @@ Deno.test("importsPollingWaitFor detects an import after a template literal", ()
   assert(importsPollingWaitFor(source));
 });
 
-Deno.test("importsPollingWaitFor detects an import after a nested template literal", () => {
+test("importsPollingWaitFor detects an import after a nested template literal", () => {
   // A template literal ends at its own closing backtick even when it holds a
   // nested one, so what follows is read as code again.
   const source = [
@@ -259,7 +262,7 @@ Deno.test("importsPollingWaitFor detects an import after a nested template liter
   assert(importsPollingWaitFor(source));
 });
 
-Deno.test("importsPollingWaitFor ignores an import in a line-continued string", () => {
+test("importsPollingWaitFor ignores an import in a line-continued string", () => {
   // A string may carry a newline through a trailing backslash, so the scan
   // cannot simply stop looking at the end of the line.
   const source = 'const sample = "\\\n' +
@@ -272,7 +275,7 @@ Deno.test("importsPollingWaitFor ignores an import in a line-continued string", 
 // Relative paths that reach the same `waitFor`, and those that do not
 //
 
-Deno.test("importsPollingWaitFor detects a relative import of the package's utils.ts", () => {
+test("importsPollingWaitFor detects a relative import of the package's utils.ts", () => {
   assert(
     importsPollingWaitFor(
       'import { waitFor } from "../../integration/utils.ts";',
@@ -280,7 +283,7 @@ Deno.test("importsPollingWaitFor detects a relative import of the package's util
   );
 });
 
-Deno.test("importsPollingWaitFor detects a relative import of the package's index.ts", () => {
+test("importsPollingWaitFor detects a relative import of the package's index.ts", () => {
   assert(
     importsPollingWaitFor(
       'import { env, waitFor } from "../../../../integration/index.ts";',
@@ -288,7 +291,7 @@ Deno.test("importsPollingWaitFor detects a relative import of the package's inde
   );
 });
 
-Deno.test("importsPollingWaitFor ignores a relative import of a module that lacks waitFor", () => {
+test("importsPollingWaitFor ignores a relative import of a module that lacks waitFor", () => {
   // shell-utils.ts imports waitFor for its own use but does not re-export it,
   // so naming waitFor in an import of it would not resolve. The clause has to
   // name waitFor for this to test the specifier rather than the clause.
@@ -300,7 +303,7 @@ Deno.test("importsPollingWaitFor ignores a relative import of a module that lack
   );
 });
 
-Deno.test("importsPollingWaitFor ignores a sibling utils.ts outside the package", () => {
+test("importsPollingWaitFor ignores a sibling utils.ts outside the package", () => {
   assertEquals(
     importsPollingWaitFor('import { waitFor } from "./utils.ts";'),
     false,
@@ -311,7 +314,7 @@ Deno.test("importsPollingWaitFor ignores a sibling utils.ts outside the package"
 // Scoping to integration test files
 //
 
-Deno.test("isIntegrationTestFile scopes to integration test files", () => {
+test("isIntegrationTestFile scopes to integration test files", () => {
   assert(isIntegrationTestFile("runtime/shell/integration/piece.test.ts"));
   assert(
     isIntegrationTestFile("patterns/integration/counter.test.ts"),
@@ -323,7 +326,7 @@ Deno.test("isIntegrationTestFile scopes to integration test files", () => {
   );
 });
 
-Deno.test("isIntegrationTestFile excludes the integration package itself", () => {
+test("isIntegrationTestFile excludes the integration package itself", () => {
   // runtime/integration/ defines and re-exports waitFor.
   assertEquals(
     isIntegrationTestFile("runtime/integration/utils.ts"),
@@ -335,7 +338,7 @@ Deno.test("isIntegrationTestFile excludes the integration package itself", () =>
   );
 });
 
-Deno.test("isIntegrationTestFile excludes non-integration and non-ts files", () => {
+test("isIntegrationTestFile excludes non-integration and non-ts files", () => {
   assertEquals(
     isIntegrationTestFile("runtime/runner/test/scheduler.test.ts"),
     false,
@@ -359,7 +362,7 @@ Deno.test("isIntegrationTestFile excludes non-integration and non-ts files", () 
 // the ALLOWLIST exactly.
 //
 
-Deno.test("no un-allowlisted polling waitFor in integration tests", async () => {
+test("no un-allowlisted polling waitFor in integration tests", async () => {
   const { violations } = await scan();
   assertEquals(
     violations,
@@ -370,7 +373,7 @@ Deno.test("no un-allowlisted polling waitFor in integration tests", async () => 
   );
 });
 
-Deno.test("the polling-waitFor ALLOWLIST has no stale entries", async () => {
+test("the polling-waitFor ALLOWLIST has no stale entries", async () => {
   const { allowlisted } = await scan();
   const seen = new Set(allowlisted);
   const stale = [...ALLOWLIST].filter((path) => !seen.has(path)).sort();
@@ -387,9 +390,10 @@ Deno.test("the polling-waitFor ALLOWLIST has no stale entries", async () => {
 //
 // The next two tests drive the command entry point over a temp fixture tree, so
 // they cover the clean and violation paths without depending on the real tree.
+// The last two run the script itself as a separate process.
 //
 
-Deno.test(
+test(
   "check-no-waitfor main reports success and returns 0 on a clean tree",
   async () => {
     const root = await fixtureTree(
@@ -409,7 +413,7 @@ Deno.test(
   },
 );
 
-Deno.test("main reports the offender and returns 1 on a violation", async () => {
+test("main reports the offender and returns 1 on a violation", async () => {
   const root = await fixtureTree(
     "bad.test.ts",
     'import { waitFor } from "@commonfabric/integration";\n',
@@ -426,4 +430,59 @@ Deno.test("main reports the offender and returns 1 on a violation", async () => 
   } finally {
     await Deno.remove(root, { recursive: true });
   }
+});
+
+/**
+ * Runs the script with the task's permissions over a tree holding one
+ * integration test file, returning its exit code and what it printed.
+ */
+async function runScript(fileName: string, contents: string) {
+  const root = await fixtureTree(fileName, contents);
+  const repo = fromFileUrl(new URL("..", import.meta.url));
+  try {
+    const output = await runDenoCommandWithTemporaryLock({
+      root: repo,
+      args: (lockPath) => [
+        "run",
+        "--config",
+        join(repo, "deno.jsonc"),
+        "--lock",
+        lockPath,
+        "--allow-read",
+        join(repo, "tasks/check-no-waitfor.ts"),
+        root,
+      ],
+    });
+    return {
+      code: output.code,
+      stdout: new TextDecoder().decode(output.stdout),
+      stderr: new TextDecoder().decode(output.stderr),
+    };
+  } finally {
+    await Deno.remove(root, { recursive: true });
+  }
+}
+
+test("exits 1 as a command-line program and names the offender in the repository it is given", async () => {
+  const { code, stdout, stderr } = await runScript(
+    "bad.test.ts",
+    'import { waitFor } from "@commonfabric/integration";\n',
+  );
+  expect(code).toBe(1);
+  expect(stdout).toBe("");
+  expect(stderr).toContain("runtime/foo/integration/bad.test.ts");
+});
+
+test("exits 0 as a command-line program for a repository it is given with no polling `waitFor`", async () => {
+  expect(
+    await runScript(
+      "good.test.ts",
+      'import { waitForCondition } from "@commonfabric/integration";\n',
+    ),
+  ).toEqual({
+    code: 0,
+    stdout: `No new polling waitFor in integration tests ` +
+      `(${ALLOWLIST.size} allowlisted exception(s)).\n`,
+    stderr: "",
+  });
 });

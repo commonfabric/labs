@@ -66,7 +66,7 @@ that matches only an `it()` description matches nothing, and the package's
 `test` task then fails, saying the filter matched no test.
 
 The flag is passed to the `deno test` that the package's own task invokes, so
-the preload, the permissions, and the file globs that package's tests need are
+the preloads, the permissions, and the file globs that package's tests need are
 all still applied. The same holds for the packages that run their tests through
 a script, `runtime/cli` and `runtime/piece` among them. Each of those scripts
 passes on the arguments it receives.
@@ -126,14 +126,44 @@ has the detail.
 
 A continuous-integration lane selects individual tests, not whole files. A lane
 given one `it()` out of a file registers every other test in the file as
-ignored, and the file's `beforeAll` and `afterAll` hooks all still run —
-including those of a `describe()` whose every test was ignored, which pays for
-that suite's setup and runs none of its tests. Only `beforeEach` and
-`afterEach` narrow, to the surviving test. So what a test needs comes from a
-hook or from the test itself, and never from a test above it. A page another
+ignored. A `describe()` some of whose tests run still runs its `beforeAll` and
+`afterAll` hooks, once, and a `describe()` none of whose tests run runs none of
+them. `beforeEach` and `afterEach` run around each test that runs. So what a
+test needs comes from a hook or from the test itself, and never from a test
+above it. A page another
 test navigated to a view, a cell another test set to a value, and a piece
 another test created are all things a test has to arrange for itself.
 [Test selection](test-selection.md) describes the machinery that picks them.
+
+So setup that only some of a file's tests need belongs to those tests, not to a
+`beforeAll`. Each test that reads such a scenario calls one function that sets
+it up on its first call and hands every later call the same result. The
+pattern integration tests take that function, `once`, from
+`patterns/integration/multi-runtime-harness.ts`, and the
+`patterns/integration/fabrichat-room-list-*.test.ts` files arrange their
+scenarios this way. A lane running one test then sets up only that test's
+scenario and the scenarios it builds on, and a run of the whole file still sets
+up each scenario once. Setup that every test in a file needs stays in the
+file's `beforeAll`, where it is charged to every test as it should be.
+
+Teardown stays in an `afterAll`. That runs whenever any test in its `describe()`
+runs, which need not be one that set the scenario up, so it disposes of only
+what a scenario actually set up, and never calls the scenario's function, which
+would set the scenario up in that lane. A `describe()` none of whose tests a
+lane runs runs no hooks at all, so a scenario that a later `describe()` built on
+is disposed of by the teardown of the block around both. In the room-list files,
+`RoomListServer` keeps track of each client it starts, and the file's own
+teardown disposes of every one still running. A scenario's function keeps
+handing back its result after a teardown has disposed of the clients in it. So a
+scenario that builds on one torn down in an earlier `describe()` uses that one's
+clients only to dispose of them.
+
+A scenario's time is counted in whichever test runs it first. A run of the
+whole file measures the tests after that one as costing next to nothing, so
+the packer undercharges a lane holding one of them without the first, which
+then sets the scenario up, and any scenario it builds on. A lane is
+undercharged by at most the setup of those scenarios, where a `beforeAll` makes
+every lane pay for the whole file's setup.
 
 Such a test fails by waiting. The waits an integration test uses resolve on an
 event, and the event never comes, so the wait runs to its stuck-condition safety
@@ -184,7 +214,7 @@ suite of four tests pays for four of them, which is a cost a section about
 what selection charges should not leave out.
 
 Reproducing one of these locally takes the skip list rather than `--filter`.
-`--filter` matches the name of a `Deno.test`, which for a file using
+`--filter` matches the name of a top-level registration, which for a file using
 `describe()` and `it()` is a top-level `describe()`, so the least it can select
 is a whole suite. `CF_TEST_SKIP_LIST` names a JSON file mapping a
 repository-relative test file to the test names inside it to ignore, each
@@ -198,18 +228,16 @@ written as its full describe chain:
 }
 ```
 
-Reading that file is the registration preload's job, and `tasks/integration.ts`
-hands `deno test` that preload on every run. The name after the package selects
-test files rather than tests:
+The test module, `@commonfabric/test-support/test`, reads that file as each test
+file loads, so it applies to every `deno test` run. The name after the package
+selects test files rather than tests:
 
 ```bash
 HEADLESS=1 CF_TEST_SKIP_LIST=/tmp/skip.json \
   deno task integration patterns cf-render
 ```
 
-A name in the list that is the title of a file's outermost `describe()`,
-or `global` in a file declaring a hook outside every `describe()`,
-ignores every test inside it.
+A name in the list that names a `describe()` ignores every test inside it.
 
 Check the output says `ignored (0ms)` beside each test the list names. Where
 nothing reads the list every test runs, and a file that still depends on a
@@ -261,6 +289,18 @@ an order-dependent test fails every time its commit is run, until somebody
 fixes it. The test records carry the seed each run used, and
 [test selection](test-selection.md) compares outcomes only between runs that
 agree on it, so a run under an override is not read as a flake either.
+
+The tests withheld as flaky, with the runs each one passed and failed in at one
+commit, are served by the dashboard as JSON at `/test-selection/flaky.json`, on
+the dashboard's tailnet host, `https://dashboard.<tailnet>.ts.net`.
+["Flaky tests as JSON"](../../dashboard/README.md#flaky-tests-as-json)
+defines its fields. Start fixing a flaky test from there. A recent
+`lastFailure` says the test failed lately, so it has probably not been fixed. A
+`lastFailure` that is weeks old suggests the test has been fixed and is waiting
+for its share to fall. An old `lastRun` suggests the test is no longer in the
+tree. A failing run's `url` opens its workflow
+run attempt on GitHub, and the failure is in the log of the job its `job` names.
+A run on a workstation has no `url`.
 
 #### Tomorrow's seed, run a day ahead
 
@@ -315,8 +355,7 @@ the run printed.
 #### What gets reordered
 
 `deno test --shuffle=<seed>` reorders the files of a run, and within each file
-the top-level registrations — a `Deno.test()` call, or a top-level
-`describe()`. It does not reorder the steps inside a registration, and an
+the top-level registrations — a `test()` call, or a top-level `describe()`. It does not reorder the steps inside a registration, and an
 `it()` inside a `describe()` is a step.
 
 What each of those can catch follows from how Deno runs a file. Each test file
@@ -966,17 +1005,17 @@ terminated.
 
 ### Test Structure
 
-- **Unit tests**: Use `@std/testing/bdd` (`describe`/`it`) with `@std/expect` for assertions
+- **Unit tests**: Use `describe`/`it` from `@commonfabric/test-support/test` with `@std/expect` for assertions
 - **Integration tests**: Executable scripts that test end-to-end workflows against a running API
 - **Test files**: Named `*.test.ts`
 
 **Unit test example:**
 
 ```typescript
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 
 import { isDeepFrozen } from "@commonfabric/data-model";
+import { describe, it } from "@commonfabric/test-support/test";
 
 describe("deep-freeze", () => {
   describe("isDeepFrozen()", () => {
@@ -1011,7 +1050,7 @@ const { API_URL } = env;
 
 console.log("=== TEST: My Integration Test ===");
 
-async function test() {
+async function runScenario() {
   const identity = await Identity.fromPassphrase("test operator");
 
   const runtime = new Runtime({
@@ -1030,7 +1069,7 @@ async function test() {
   // Return results or throw on failure
 }
 
-await test();
+await runScenario();
 console.log("Done");
 Deno.exit(0);
 ```

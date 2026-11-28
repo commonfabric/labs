@@ -6,7 +6,6 @@ import {
   type FabricValue,
   toStructuredDebugValue,
 } from "@commonfabric/data-model";
-import { newDefaultJsonCodecEngine } from "@commonfabric/data-model/codecs";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import {
   type SiteTable,
@@ -37,6 +36,7 @@ import {
 } from "@commonfabric/memory/v2/client";
 import { presenceRoomForField } from "@commonfabric/memory/v2/presence";
 import {
+  type CommitSummary,
   dbNeedsColumnProvenance,
   DEFAULT_BRANCH,
   eventAttentionEntryKey,
@@ -84,7 +84,6 @@ import {
   loadDocument,
   markDurableReadTx,
   type NormalizedFullLink,
-  normalizeSpaceHost,
   parseLink,
   PatternCoverageCollector,
   popFrame,
@@ -99,9 +98,7 @@ import {
   RuntimeTelemetryEvent,
   sendEvent,
   setPatternEnvironment,
-  type SigilLink,
   SlugResolutionError,
-  SpaceHostValidationError,
   SpaceNotFoundError,
   transactionFailureMessage,
 } from "@commonfabric/runner";
@@ -132,9 +129,15 @@ import {
   publishCustodyAnswer,
   readCustodyAnswer,
 } from "@commonfabric/runner/cfc/custody-seal";
+import {
+  blobSuffix,
+  storeBlob,
+  storedBlobPath,
+} from "@commonfabric/runner/blob-record";
 import { cfcSchemaGivesNoShape } from "@commonfabric/runner/cfc/schema-primitives";
 import { defaultDisplayCeiling } from "@commonfabric/runner/cfc/default-display-ceiling";
 import { hashStringForEntityAddress } from "@commonfabric/runner/entity-kind";
+import { readHttpOrigin } from "@commonfabric/runner/space-host";
 import { offerProfileSuggestion } from "@commonfabric/runner/profile-suggestion";
 import { bindNativeUiControl } from "@commonfabric/runner/native-ui";
 import {
@@ -143,6 +146,7 @@ import {
   viewPieceSchema,
 } from "@commonfabric/runner/schemas";
 import { linkRefPayload } from "@commonfabric/runner/shared";
+import { historySteps } from "@commonfabric/runner/history-steps";
 import { StorageManager } from "@commonfabric/runner/storage/cache";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import {
@@ -310,10 +314,17 @@ import {
   type SnapshotSharePrepareRequest,
   type SnapshotSharePreview,
   type SpaceAclResponse,
+  type SpaceBranchCreateRequest,
+  type SpaceBranchDeleteRequest,
   type SpaceGetAclRequest,
+  type SpaceHistoryListRequest,
+  type SpaceHistoryListResponse,
+  type SpaceHistoryWatchRequest,
   type SpaceHostRegistrationResponse,
   type SpaceRemoveAclEntryRequest,
   type SpaceResponse,
+  type SpaceRestoreRequest,
+  type SpaceRestoreResponse,
   type SpaceRootPatternResponse,
   type SpaceSetAclEntryRequest,
   type SqliteExecRequest,
@@ -334,6 +345,7 @@ import {
 import type { RemoteResponse, VDomOp } from "@/protocol/types.ts";
 import {
   type EveryFieldOf,
+  normalizeBranches,
   normalizeMemoryUrl,
   normalizeOrigin,
   normalizeSpaceHostMap,
@@ -390,21 +402,28 @@ export function subscribeEventAttentionNotifications(
  */
 const MAX_CONSOLE_DEBUG_DEPTH = 7;
 
-const blobUploadCodec = newDefaultJsonCodecEngine();
+/** How many commits of a space's history one page of its steps reads. */
+const HISTORY_PAGE_COMMITS = 500;
 
-/** Each registered logger's enabled state and level. */
-function loggerMetadata(): LoggerMetadata {
+/**
+ * The loggers registered in this realm, by name. The registry lives on
+ * `globalThis`, where `getLogger()` keeps it.
+ */
+function registeredLoggers(): Record<string, Logger> {
   const global = globalThis as unknown as {
     commonfabric?: { logger?: Record<string, Logger> };
   };
+  return global.commonfabric?.logger ?? {};
+}
+
+/** Each registered logger's enabled state and level. */
+function loggerMetadata(): LoggerMetadata {
   const result: LoggerMetadata = {};
-  if (global.commonfabric?.logger) {
-    for (const [name, logger] of Object.entries(global.commonfabric.logger)) {
-      result[name] = {
-        enabled: !logger.disabled,
-        level: (logger.level ?? "info") as LogLevel,
-      };
-    }
+  for (const [name, logger] of Object.entries(registeredLoggers())) {
+    result[name] = {
+      enabled: !logger.disabled,
+      level: (logger.level ?? "info") as LogLevel,
+    };
   }
   return result;
 }
@@ -671,6 +690,10 @@ export function renderConfidentialityResolverFor(
     // the reconciler's, so the manifests it watches and the ones this
     // resolves are one cache.
     modulePolicyResolver: modulePolicySource?.resolve,
+    // A committed policy subject nominates the derivation space it digests,
+    // pending commonfabric/specs#110.
+    committedSubjectCandidates:
+      runtime.experimental.cfcCommittedSubjectCandidates === true,
   });
 }
 
@@ -719,14 +742,9 @@ export function renderModulePolicySourceFor(
  * Returns a string like "[Cell: of:fid1:abc.../path/to/prop]"
  */
 function formatCellLink(cell: Cell<unknown>): string {
-  try {
-    const link: SigilLink = cell.getAsLink();
-    const inner = linkRefPayload(link);
-    const pathStr = inner.path?.length ? `/${inner.path.join("/")}` : "";
-    return `[Cell: ${inner.id ?? "?"}${pathStr}]`;
-  } catch {
-    return "[Cell]";
-  }
+  const inner = linkRefPayload(cell.getAsLink());
+  const pathStr = inner.path?.length ? `/${inner.path.join("/")}` : "";
+  return `[Cell: ${inner.id ?? "?"}${pathStr}]`;
 }
 
 /**
@@ -898,6 +916,7 @@ export function securityContextFrom(
     apiUrl: normalizeOrigin(data.apiUrl),
     memoryUrl: normalizeMemoryUrl(data.memoryUrl, data.apiUrl),
     spaceHostMap: normalizeSpaceHostMap(data.spaceHostMap),
+    branches: normalizeBranches(data.branches),
     spaceDid: data.spaceDid,
     experimental: data.experimental,
     cfcEnforcementMode: data.cfcEnforcementMode,
@@ -916,17 +935,11 @@ export function securityContextFrom(
  * The message reporting a host that did not answer the boot-time health
  * check. The check gives one verdict over the backend and every space host,
  * so the message names them all where there is more than one. Hosts are
- * compared as the check compares them, as parsed URLs; one that does not
- * parse is named as written, since that is what failed the check.
+ * compared as the check compares them, as parsed URLs. Every one of them
+ * parses, since the runtime the check ran in refuses a host that does not.
  */
 function unreachableHostMessage(data: InitializationData): string {
-  const asChecked = (host: string) => {
-    try {
-      return new URL(host).toString();
-    } catch {
-      return host;
-    }
-  };
+  const asChecked = (host: string) => new URL(host).toString();
   const backend = asChecked(data.apiUrl);
   const spaceHosts = new Set<string>();
   for (const host of Object.values(data.spaceHostMap ?? {})) {
@@ -1098,6 +1111,12 @@ export class RuntimeProcessor {
   /** One abort per commit in flight, aborted when its client detaches. */
   #custodySealCommits = new Map<string, AbortController>();
   #detachedClients = new WeakSet<WorkerClient>();
+
+  /**
+   * What stops each client's report of a space's seq, keyed by the client
+   * and the space (`clientScopedKey`).
+   */
+  #historyWatches = new Map<string, () => void>();
   #telemetry: RuntimeTelemetry;
 
   /**
@@ -1499,17 +1518,15 @@ export class RuntimeProcessor {
               ) {
                 continue;
               }
-              let host: URL;
-              try {
-                host = normalizeSpaceHost(entry.host);
-              } catch (error) {
-                if (!(error instanceof SpaceHostValidationError)) throw error;
+              const read = readHttpOrigin(entry.host, "space host");
+              if ("refused" in read) {
                 console.warn(
                   `[RuntimeProcessor] Ignoring invalid site-table entry for ${entry.did}:`,
-                  error.message,
+                  read.refused,
                 );
                 continue;
               }
+              const host = read.origin;
               // A loopback entry names the toolshed from the machine that
               // wrote it, so a page served from anywhere else cannot reach it
               // — and a browser on an https page refuses the ws:// socket it
@@ -1642,6 +1659,8 @@ export class RuntimeProcessor {
           cancel();
         }
         this.#subscriptions.clear();
+        for (const cancel of this.#historyWatches.values()) cancel();
+        this.#historyWatches.clear();
         for (const subscription of this.#operationSubscriptions.values()) {
           subscription.cancelled = true;
           subscription.cancel?.();
@@ -1751,6 +1770,12 @@ export class RuntimeProcessor {
       if (key.startsWith(prefix)) commit.abort(custodySealingUnavailable());
     }
 
+    for (const [key, cancel] of [...this.#historyWatches]) {
+      if (!key.startsWith(prefix)) continue;
+      cancel();
+      this.#historyWatches.delete(key);
+    }
+
     for (const [key, cancel] of [...this.#subscriptions]) {
       if (!key.startsWith(prefix)) continue;
       cancel();
@@ -1784,7 +1809,7 @@ export class RuntimeProcessor {
 
     for (const [subscriptionId, membership] of [...this.#presenceMemberships]) {
       if (membership.client.id !== client.id) continue;
-      void this.#endPresenceMembership(subscriptionId);
+      void this.#endPresenceMembership(subscriptionId, membership);
     }
 
     this.#releaseIdleSpaceContexts();
@@ -2256,13 +2281,15 @@ export class RuntimeProcessor {
     if (state === undefined || state.client.id !== client.id) {
       return { value: false };
     }
-    await this.#endPresenceMembership(request.subscriptionId);
+    await this.#endPresenceMembership(request.subscriptionId, state);
     return { value: true };
   }
 
-  async #endPresenceMembership(subscriptionId: string): Promise<void> {
-    const state = this.#presenceMemberships.get(subscriptionId);
-    if (state === undefined) return;
+  /** Forgets the membership `state` held at `subscriptionId`, and leaves it. */
+  async #endPresenceMembership(
+    subscriptionId: string,
+    state: RuntimePresenceMembership,
+  ): Promise<void> {
     this.#presenceMemberships.delete(subscriptionId);
     state.ended = true;
     await state.membership?.leave();
@@ -2757,12 +2784,33 @@ export class RuntimeProcessor {
     return { value: false };
   }
 
-  handleCellResolveAsCell(request: CellResolveAsCellRequest): CellResponse {
-    return {
-      cell: resolvedCellRef(
-        getCell(this.#runtime, request.cell).resolveAsCell(),
-      ),
-    };
+  /**
+   * Answers where `request.cell`'s links lead, from what the replica holds
+   * now. With `loaded`, the documents they pass through that the replica has
+   * no basis for are loaded first, as a send's are, so a cold chain answers
+   * its end rather than the first document still to arrive; only then is the
+   * answer a promise.
+   *
+   * @throws The promise rejects with a `DocumentLoadError` when such a load
+   *   fails.
+   */
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest & { loaded?: undefined },
+  ): CellResponse;
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResponse | Promise<CellResponse>;
+  handleCellResolveAsCell(
+    request: CellResolveAsCellRequest,
+  ): CellResponse | Promise<CellResponse> {
+    const target = getCell(this.#runtime, request.cell);
+    const answer = (): CellResponse => ({
+      cell: resolvedCellRef(target.resolveAsCell()),
+    });
+    const loading = request.loaded === true
+      ? this.#loadLinkedDocuments(target)
+      : undefined;
+    return loading === undefined ? answer() : loading.then(answer);
   }
 
   /** Keeps release authority in this backend while the host shows a preview. */
@@ -4315,17 +4363,12 @@ export class RuntimeProcessor {
   }
 
   #getLoggers(loggerName?: string): Logger[] {
-    const global = globalThis as unknown as {
-      commonfabric?: { logger?: Record<string, Logger> };
-    };
-    if (!global.commonfabric?.logger) {
-      return [];
-    }
+    const loggers = registeredLoggers();
     if (loggerName) {
-      const logger = global.commonfabric.logger[loggerName];
+      const logger = loggers[loggerName];
       return logger ? [logger] : [];
     }
-    return Object.values(global.commonfabric.logger);
+    return Object.values(loggers);
   }
 
   #onTelemetry = (event: Event) => {
@@ -4377,24 +4420,25 @@ export class RuntimeProcessor {
     this.#runtime.scheduler.setBreakpoints(request.actionIds);
   }
 
+  /**
+   * Stores the request's blob in the request's space with `storeBlob()`, on
+   * this runtime's session there, and returns its id and the URL that space's
+   * host serves it at.
+   *
+   * @throws Error when the request is malformed, or when `storeBlob()` refuses
+   *   or fails to store its record.
+   */
   async handleUploadBlob(
     request: UploadBlobRequest,
   ): Promise<UploadBlobResponse> {
-    // A request arrives as data, so its `space` is checked here. A request
-    // whose `space` is not a DID fails with an error that says so. Without the
-    // check, a request with no `space` would build an upload URL whose path
-    // begins `/undefined/blobs/`.
+    // A request arrives as data, so its fields are checked here, each with an
+    // error that says what is wrong.
     if (!isDID(request.space)) {
       throw new Error("uploadBlob requires a space DID");
     }
-    // With no suffix, the upload names no blob in its path, and the store
-    // chooses the suffix itself.
-    const suffix = request.suffix?.replace(/^\./, "");
-    const blobPath = suffix ? `/upload.${encodeURIComponent(suffix)}` : "";
-    // The blob belongs to the named space, so it uploads to — and its
-    // returned URL resolves against — THAT space's host.
-    const host = this.#runtime.hostForSpace(request.space);
-    const target = new URL(`/${request.space}/blobs${blobPath}`, host);
+    if (typeof request.contentType !== "string") {
+      throw new Error("uploadBlob requires a media type");
+    }
     // The envelope's decode already produced this; `request.body` is a
     // `FabricBytes` by the time it arrives, and a handler owns the values its
     // request carries per `BaseRequest`, so nothing else is reading it. The
@@ -4404,37 +4448,30 @@ export class RuntimeProcessor {
     if (!(bytes instanceof FabricBytes)) {
       throw new Error("uploadBlob requires bytes as its body");
     }
-    if (request.name !== undefined && typeof request.name !== "string") {
-      throw new Error(
-        "uploadBlob requires any name it is given to be a string",
-      );
-    }
-    // Blob upload payloads must preserve FabricBytes even when the wider
-    // process is running with legacy memory JSON flags. A blob with no name
-    // has no `name` key at all, since its id is the hash of exactly what is
-    // sent.
-    const body = blobUploadCodec.encode({
+    // A blob with no name has no `name` key at all, since its id is the hash
+    // of exactly the record stored.
+    const record = {
       type: request.contentType,
       body: bytes,
       ...(request.name === undefined ? {} : { name: request.name }),
-    });
-    const response = await fetch(target, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body,
-    });
-    if (!response.ok) {
-      throw new Error(
-        `Blob upload failed: ${response.status} ${await response.text()}`,
-      );
-    }
-    const result = await response.json() as Partial<UploadBlobResponse>;
-    if (typeof result.id !== "string" || typeof result.url !== "string") {
-      throw new Error("Blob upload returned an invalid response");
-    }
+    };
+    const space = request.space;
+    const id = await storeBlob(this.#runtime, space, record);
+
+    // A requested suffix is the extension of a name made of it alone, and
+    // without one the extension comes from the blob's own name.
+    const suffix = request.suffix?.replace(/^\./, "");
+    const host = this.#runtime.hostForSpace(space);
     return {
-      id: result.id,
-      url: resolveBlobUrl(result.url, host, request.space),
+      id,
+      url: resolveBlobUrl(
+        storedBlobPath(
+          id,
+          blobSuffix(suffix ? `.${suffix}` : request.name, record.type),
+        ),
+        host,
+        space,
+      ),
     };
   }
 
@@ -4461,6 +4498,125 @@ export class RuntimeProcessor {
         host,
         request.space,
       ),
+    };
+  }
+
+  /**
+   * Returns the steps of the requested space's history that the next page of
+   * its commit log holds.
+   */
+  async handleSpaceHistoryList(
+    request: SpaceHistoryListRequest,
+  ): Promise<SpaceHistoryListResponse> {
+    const provider = this.#historyProvider(request.space);
+    const served = this.#runtime.experimental.serverExecution === true;
+    const commits: CommitSummary[] = [];
+    let before = request.before;
+    for (;;) {
+      const page = await provider.listHistory({
+        limit: HISTORY_PAGE_COMMITS,
+        ...(before !== undefined ? { before } : {}),
+      });
+      for (const commit of page) commits.push(commit);
+      const steps = historySteps(commits, { served });
+      const exhausted = page.length < HISTORY_PAGE_COMMITS;
+      // A page holding the first commit of no step is the middle of one, so
+      // the listing reads on until it has that step whole.
+      if (steps.length === 0 && !exhausted) {
+        before = page.at(-1)!.seq;
+        continue;
+      }
+      // A full page may have cut its oldest step's predecessor off, whose
+      // commits the next request holds from that step's first commit down.
+      const next = exhausted ? undefined : steps.at(-1)!.startSeq;
+      return { steps, ...(next !== undefined ? { next } : {}) };
+    }
+  }
+
+  /** Forks a branch of the requested space. */
+  async handleSpaceBranchCreate(
+    request: SpaceBranchCreateRequest,
+  ): Promise<void> {
+    await this.#historyProvider(request.space).createBranch(request.name, {
+      forkSeq: request.forkSeq,
+    });
+  }
+
+  /** Deletes a branch of the requested space. */
+  async handleSpaceBranchDelete(
+    request: SpaceBranchDeleteRequest,
+  ): Promise<void> {
+    await this.#historyProvider(request.space).deleteBranch(request.name);
+  }
+
+  /**
+   * Starts or stops reporting to `client` each time the newest seq of the
+   * requested space the runtime has learned of moves forward.
+   */
+  handleSpaceHistoryWatch(
+    request: SpaceHistoryWatchRequest,
+    client: WorkerClient,
+  ): void {
+    if (!isDID(request.space)) {
+      throw new Error("space history requires a space DID");
+    }
+    const key = clientScopedKey(client, request.space);
+    if (!request.watch) {
+      this.#historyWatches.get(key)?.();
+      this.#historyWatches.delete(key);
+      return;
+    }
+    if (this.#historyWatches.has(key)) return;
+    const provider = this.#runtime.storageManager.open(request.space);
+    if (provider.subscribeServerSeq === undefined) {
+      throw new Error("the space's storage serves no history");
+    }
+    const space = request.space;
+    this.#historyWatches.set(
+      key,
+      provider.subscribeServerSeq((seq) => {
+        if (this.#isDisposed || this.#detachedClients.has(client)) return;
+        client.post({ type: NotificationType.SpaceSeqAdvanced, space, seq });
+      }),
+    );
+  }
+
+  /** Restores the requested space to a point of history. */
+  async handleSpaceRestore(
+    request: SpaceRestoreRequest,
+  ): Promise<SpaceRestoreResponse> {
+    const seq = await this.#historyProvider(request.space).restoreBranch({
+      ...(request.seq !== undefined ? { sourceSeq: request.seq } : {}),
+    });
+    return seq === undefined ? {} : { seq };
+  }
+
+  /**
+   * Helper for the space history handlers, which returns the history and
+   * branch methods of the storage provider of `space`.
+   *
+   * @throws When `space` is no DID, or its storage serves no history.
+   */
+  #historyProvider(space: DID): Required<
+    Pick<
+      ReturnType<Runtime["storageManager"]["open"]>,
+      "listHistory" | "createBranch" | "deleteBranch" | "restoreBranch"
+    >
+  > {
+    if (!isDID(space)) throw new Error("space history requires a space DID");
+    const provider = this.#runtime.storageManager.open(space);
+    const { listHistory, createBranch, deleteBranch, restoreBranch } = provider;
+    if (
+      listHistory === undefined || createBranch === undefined ||
+      deleteBranch === undefined || restoreBranch === undefined
+    ) {
+      throw new Error("the space's storage serves no history");
+    }
+    return {
+      listHistory: listHistory.bind(provider),
+      createBranch: createBranch.bind(provider),
+      deleteBranch: deleteBranch.bind(provider),
+      restoreBranch: restoreBranch.bind(provider),
     };
   }
 
@@ -4567,7 +4723,7 @@ export class RuntimeProcessor {
       case RequestType.CellUnsubscribe:
         return this.handleCellUnsubscribe(request, client);
       case RequestType.CellResolveAsCell:
-        return this.handleCellResolveAsCell(request);
+        return await this.handleCellResolveAsCell(request);
       case RequestType.CellGetCfcLabel:
         return await this.handleCellGetCfcLabel(request);
       case RequestType.CellFields:
@@ -4734,6 +4890,16 @@ export class RuntimeProcessor {
         return await this.handleUploadBlob(request);
       case RequestType.BlobUrl:
         return this.handleBlobUrl(request);
+      case RequestType.SpaceHistoryList:
+        return await this.handleSpaceHistoryList(request);
+      case RequestType.SpaceHistoryWatch:
+        return this.handleSpaceHistoryWatch(request, client);
+      case RequestType.SpaceBranchCreate:
+        return await this.handleSpaceBranchCreate(request);
+      case RequestType.SpaceBranchDelete:
+        return await this.handleSpaceBranchDelete(request);
+      case RequestType.SpaceRestore:
+        return await this.handleSpaceRestore(request);
       case RequestType.VDomMount:
         return this.handleVDomMount(request, client);
       case RequestType.VDomUnmount:
@@ -5018,12 +5184,36 @@ export class RuntimeProcessor {
       space: data.spaceDid,
     };
 
+    // No serving loop runs a branch, so a runtime that takes its derived
+    // state from one would see a branch that never computes anything.
+    if (
+      normalizeBranches(data.branches) !== undefined &&
+      data.experimental?.serverExecution !== false
+    ) {
+      throw new Error(
+        "a runtime that opens a space on a branch computes what the branch " +
+          "stores itself, and declares `experimental.serverExecution` false",
+      );
+    }
+
+    // A runtime showing a fork keeps what it writes to every space apart, so
+    // a space the listing leaves out is opened on the listed branch as well,
+    // which the server forks there on the first open.
+    const listedBranches = new Set(
+      Object.values(normalizeBranches(data.branches) ?? {}),
+    );
+    const forkBranch = listedBranches.size === 1
+      ? [...listedBranches][0]
+      : undefined;
+
     const storageManager = StorageManager.open({
       as: identity,
       clientBuild: data.clientBuild ??
         { application: "runtime-client", gitSha: null },
       memoryHost,
       spaceHostMap: data.spaceHostMap,
+      ...(data.branches !== undefined ? { branches: data.branches } : {}),
+      ...(forkBranch !== undefined ? { forkBranch } : {}),
       // Host dogfood toggle (commonfabric.concurrentWatchRefresh): overlap
       // watch-refresh round trips up to a bounded window. Off unless the host
       // set it; the default is strict single-flight.

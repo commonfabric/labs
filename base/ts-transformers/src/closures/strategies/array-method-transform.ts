@@ -1,7 +1,6 @@
 import ts from "typescript";
 
 import {
-  classifyArrayMethodCall,
   getLoweredArrayMethodName,
   getTypeAtLocationWithFallback,
   preserveLineage,
@@ -34,6 +33,7 @@ import {
   rewriteCallbackBody,
 } from "./array-method-utils.ts";
 import type { ComputedAliasInfo } from "./array-method-utils.ts";
+import type { SourceArrayMethodCall } from "./array-method-policy.ts";
 
 export interface ArrayMethodCallbackTransformOptions {
   readonly rewriteTransformedBody?: (
@@ -87,7 +87,7 @@ function lowerMapReceiverMemberAccess(
 }
 
 function createPatternCallWithParams(
-  methodCall: ts.CallExpression,
+  methodCall: SourceArrayMethodCall,
   callback: ts.ArrowFunction | ts.FunctionExpression,
   transformedBody: ts.ConciseBody,
   elemParam: ts.ParameterDeclaration | undefined,
@@ -198,8 +198,9 @@ function createPatternCallWithParams(
     }
   }
 
-  const family = classifyArrayMethodCall(methodCall)?.family;
-  if ((family === "groupBy" || family === "keyBy") && resultTypeNode) {
+  const family = methodCall.expression.name.text;
+  const isSelector = family === "groupBy" || family === "keyBy";
+  if (isSelector && resultTypeNode) {
     resultTypeNode = factory.createTypeLiteralNode([
       factory.createPropertySignature(
         undefined,
@@ -216,11 +217,9 @@ function createPatternCallWithParams(
     ]);
   }
 
-  const selectorFamily = classifyArrayMethodCall(methodCall)?.family;
-  const bodyWithKeyValues =
-    selectorFamily === "groupBy" || selectorFamily === "keyBy"
-      ? tagSelectorReturns(transformedBody, context, "evaluate", resultTypeNode)
-      : transformedBody;
+  const bodyWithKeyValues = isSelector
+    ? tagSelectorReturns(transformedBody, context, "evaluate", resultTypeNode)
+    : transformedBody;
   const bodyForRewrite = options.rewriteTransformedBody
     ? options.rewriteTransformedBody(bodyWithKeyValues, context)
     : bodyWithKeyValues;
@@ -262,12 +261,6 @@ function createPatternCallWithParams(
 
   const paramsObject = buildCaptureParamsObject(filteredCaptureTree, factory);
 
-  if (!ts.isPropertyAccessExpression(methodCall.expression)) {
-    throw new Error(
-      "Expected methodCall.expression to be a PropertyAccessExpression",
-    );
-  }
-
   const visitedArrayExpr = ts.visitNode(
     methodCall.expression.expression,
     visitor,
@@ -278,28 +271,15 @@ function createPatternCallWithParams(
     context,
   );
 
-  const originalMethodName = classifyArrayMethodCall(methodCall);
-  if (!originalMethodName || originalMethodName.lowered) {
-    throw new Error("Expected methodCall to be a source array method call");
-  }
-  const targetMethodName = getLoweredArrayMethodName(
-    originalMethodName.family,
-  );
   const mapWithPatternAccess = factory.createPropertyAccessExpression(
     loweredArrayExpr,
-    factory.createIdentifier(targetMethodName),
+    factory.createIdentifier(getLoweredArrayMethodName(family)),
   );
 
   const args: ts.Expression[] = [patternCall, paramsObject];
-  if (methodCall.arguments.length > 1) {
-    const thisArg = ts.visitNode(
-      methodCall.arguments[1],
-      visitor,
-      ts.isExpression,
-    );
-    if (thisArg) {
-      args.push(thisArg);
-    }
+  const thisArg = methodCall.arguments[1];
+  if (thisArg) {
+    args.push(ts.visitNode(thisArg, visitor, ts.isExpression) ?? thisArg);
   }
 
   const mapWithPatternCall = preserveLineage(
@@ -330,10 +310,7 @@ function tagSelectorReturns(
 ): ts.ConciseBody {
   const tag = (value: ts.Expression) => {
     if (phase === "evaluate") {
-      if (!ts.isCallExpression(value) || value.arguments.length !== 1) {
-        throw new Error("Expected a tagged collection selector return");
-      }
-      const analysis = context.getDataFlowAnalyzer()(value.arguments[0]!);
+      const analysis = context.getDataFlowAnalyzer()(value);
       const reads = context.getRelevantDataFlowsFromAnalysis(analysis);
       return createReactiveWrapperForExpression(value, reads, context, {
         allowDirectExpressionWrap: true,
@@ -392,7 +369,7 @@ function tagSelectorReturns(
  * captures, to ensure callback parameters become opaque.
  */
 export function transformArrayMethodCallback(
-  methodCall: ts.CallExpression,
+  methodCall: SourceArrayMethodCall,
   callback: ts.ArrowFunction | ts.FunctionExpression,
   context: TransformationContext,
   visitor: ts.Visitor,
@@ -410,7 +387,7 @@ export function transformArrayMethodCallback(
   const indexParam = originalParams[1];
   const arrayParam = originalParams[2];
 
-  const family = classifyArrayMethodCall(methodCall)?.family;
+  const family = methodCall.expression.name.text;
   const body = family === "groupBy" || family === "keyBy"
     ? tagSelectorReturns(callback.body, context)
     : callback.body;

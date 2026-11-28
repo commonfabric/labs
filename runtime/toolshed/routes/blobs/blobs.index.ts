@@ -6,16 +6,15 @@ import {
   asStoredBlobRecord,
   blobDocumentId,
   type BlobRecord,
+  blobSuffix,
   isBlobFileName,
+  MAX_BLOB_RECORD_BYTES,
+  storedBlobPath,
 } from "@commonfabric/runner/blob-record";
 import { isObjectNotArray } from "@commonfabric/js-values/types";
 import type { Context } from "@hono/hono";
 import { cors } from "@hono/hono/cors";
 
-// Blob routes are intentionally unauthenticated for the MVP. Anyone can POST a
-// blob into any space DID; content addressing prevents overwriting a different
-// payload, but callers can inject blobs and consume storage. Anyone with a hash
-// can GET the blob. Revisit this before any production exposure.
 import { createRouter } from "@/lib/create-app.ts";
 import { memoryServer } from "@/routes/storage/memory.ts";
 
@@ -39,22 +38,12 @@ for (const path of ["/:spaceDid/blobs", "/:spaceDid/blobs/*"]) {
   );
 }
 
-const DEFAULT_SUFFIX_BY_TYPE: Record<string, string> = {
-  "image/gif": "gif",
-  "image/jpeg": "jpg",
-  "image/png": "png",
-  "image/webp": "webp",
-  "image/svg+xml": "svg",
-};
-
-const MAX_BLOB_UPLOAD_BYTES = 10 * 1024 * 1024;
 const SAFE_RESPONSE_TYPES = new Set([
   "image/gif",
   "image/jpeg",
   "image/png",
   "image/webp",
 ]);
-const VALID_SUFFIX = /^[A-Za-z0-9]{1,8}$/;
 
 class BlobPayloadTooLarge extends Error {
   constructor() {
@@ -97,14 +86,6 @@ const parseBlobName = (
   return { id, hash: id.slice("fid1:".length) };
 };
 
-const suffixFor = (blobName: string | undefined, type: string): string => {
-  const extension = blobName?.includes(".")
-    ? blobName.split(".").pop()
-    : undefined;
-  if (extension && VALID_SUFFIX.test(extension)) return extension;
-  return DEFAULT_SUFFIX_BY_TYPE[type] ?? "bin";
-};
-
 const safeResponseType = (type: string): string =>
   SAFE_RESPONSE_TYPES.has(type) ? type : "application/octet-stream";
 
@@ -141,7 +122,7 @@ const contentDispositionFor = (
 
 const readLimitedText = async (request: Request): Promise<string> => {
   const contentLength = Number(request.headers.get("Content-Length"));
-  if (Number.isFinite(contentLength) && contentLength > MAX_BLOB_UPLOAD_BYTES) {
+  if (Number.isFinite(contentLength) && contentLength > MAX_BLOB_RECORD_BYTES) {
     throw new BlobPayloadTooLarge();
   }
 
@@ -158,7 +139,7 @@ const readLimitedText = async (request: Request): Promise<string> => {
       break;
     }
     total += value.byteLength;
-    if (total > MAX_BLOB_UPLOAD_BYTES) {
+    if (total > MAX_BLOB_RECORD_BYTES) {
       await reader.cancel();
       throw new BlobPayloadTooLarge();
     }
@@ -214,16 +195,32 @@ const upload = async (c: Context) => {
 
   const id = hashOf(contents).toString();
   const blobName = c.req.param("blobName") as string | undefined;
-  const suffix = suffixFor(blobName ?? contents.name, contents.type);
-  const hash = id.slice("fid1:".length);
+  const suffix = blobSuffix(blobName ?? contents.name, contents.type);
   await memoryServer.writeDocument(spaceDid, blobDocumentId(id), contents);
 
-  return c.json({ id, url: `blobs/${hash}.${suffix}` }, 201);
+  return c.json({ id, url: storedBlobPath(id, suffix) }, 201);
 };
 
+// The upload route takes no credential: anyone can POST a blob into any space
+// that already exists, and the record is written directly into the space's
+// store (`Server.writeDocument()`), with no principal for the space's access
+// list to judge. Content addressing keeps an upload from replacing another
+// blob's bytes, but not from adding blobs or taking up a space's storage. So
+// while the route is served, a space's access list does not decide who writes
+// its blobs, and the FabriFile design's prerequisite that a blob write be
+// admitted only for a principal the space admits
+// (`docs/specs/fabrifile/README.md`, "Authorized blob reads") is unmet. That
+// makes the route a candidate for removal. The authenticated upload is the
+// runtime client's, `RuntimeProcessor.handleUploadBlob()` in
+// `runtime/runtime-client/src/backends/runtime-processor.ts`: it stages the
+// record with `stageContentAddressedDocument()` in a transaction it commits on
+// the uploading session, signed by that session's principal, so the memory
+// server admits the write only for a principal holding `WRITE` on the space.
 router.post("/:spaceDid/blobs", upload);
 router.post("/:spaceDid/blobs/:blobName", upload);
 
+// A blob read takes no credential either: anyone who knows a blob's id can
+// fetch its bytes from its space.
 router.get("/:spaceDid/blobs/:blobName", async (c) => {
   const spaceDid = c.req.param("spaceDid");
   if (!isDID(spaceDid)) {

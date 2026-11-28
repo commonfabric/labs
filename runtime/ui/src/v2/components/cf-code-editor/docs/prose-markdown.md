@@ -91,9 +91,9 @@ draws it is `features/prose-math.ts`, and KaTeX itself is reached only through
   otherwise a widget drawing KaTeX's output replaces it. A `$$` formula with its
   lines to itself is replaced as a block, `cm-prose-math-block`, covering those
   whole lines; any other formula is replaced inline, `cm-prose-math`. TeX that
-  KaTeX cannot parse is shown as written, `cm-prose-math-error`, with KaTeX's
-  message as its tooltip. A click on a formula places the cursor beside it,
-  which shows its TeX.
+  KaTeX cannot set, because it cannot parse it or because it nests too deeply,
+  is shown as written, `cm-prose-math-error`, with the error as its tooltip. A
+  click on a formula places the cursor beside it, which shows its TeX.
 - **`proseMath(hasFocus, render)`** draws each formula with `render`, which is
   `katex-render.ts`'s `renderFormula`, and provides the decorations from a state
   field rather than a view plugin, because a block formula replaces line breaks,

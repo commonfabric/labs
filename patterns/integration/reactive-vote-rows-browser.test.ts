@@ -10,7 +10,7 @@ import {
 import { login } from "@commonfabric/integration/shell-utils";
 import type { Cell } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
-import { describe, it } from "@std/testing/bdd";
+import { describe, it } from "@commonfabric/test-support/test";
 import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { initializePiecesController } from "./pieces-controller.ts";

@@ -1,13 +1,18 @@
 // Engine-side execution against a real @db/sqlite database: guarded query/write
 // and additive DDL. Proves the SQL half of Phase 1/2 without the websocket.
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { Database } from "@db/sqlite";
 
 import { GuardError } from "../v2/sqlite/guard.ts";
 import { cfLink, table } from "../v2/sqlite/schema.ts";
 import { ensureTables, runQuery, runWrite } from "../v2/sqlite/exec.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("engine-side exec", () => {
   let db: Database;
@@ -26,6 +31,51 @@ describe("engine-side exec", () => {
 
   afterEach(() => {
     db.close();
+  });
+
+  it("adds a column an existing table's declaration has gained", () => {
+    runWrite(db, "INSERT INTO messages (body, ts) VALUES (?, ?)", ["hi", 1]);
+    ensureTables(db, {
+      messages: table({
+        id: "integer primary key",
+        author_cf_link: cfLink(),
+        body: "text",
+        ts: "integer",
+        pinned: "integer default 0",
+      }),
+    });
+
+    expect(runQuery(db, "SELECT body, pinned FROM messages")).toEqual([
+      { body: "hi", pinned: 0 },
+    ]);
+  });
+
+  it("throws on a gained column an existing table cannot take", () => {
+    expect(() =>
+      ensureTables(db, {
+        messages: table({
+          id: "integer primary key",
+          author_cf_link: cfLink(),
+          body: "text",
+          ts: "integer",
+          slug: "text not null",
+        }),
+      })
+    ).toThrow("cannot be added");
+  });
+
+  it("creates the indexes a table declares", () => {
+    ensureTables(db, {
+      edges: table({ source: "text", target: "text" }, undefined, {
+        indexes: [["target"]],
+      }),
+    });
+    const plan = db.prepare(
+      "EXPLAIN QUERY PLAN SELECT source FROM edges WHERE target = ?",
+    ).all("x") as { detail: string }[];
+    expect(plan.map((row) => row.detail).join(" ")).toContain(
+      "edges__idx(target)",
+    );
   });
 
   it("creates declared tables (additive)", () => {

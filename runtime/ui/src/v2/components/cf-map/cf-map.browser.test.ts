@@ -14,6 +14,7 @@ import {
 } from "../../test-utils/mock-cell-handle.ts";
 import { CFMap } from "./index.ts";
 import type { Bounds, CfBoundsChangeDetail, MapValue } from "./types.ts";
+import { test } from "@commonfabric/test-support/test";
 
 /** A box around Paris, far from cf-map's default view of San Francisco. */
 const PARIS: Bounds = { north: 48.9, south: 48.82, east: 2.42, west: 2.27 };
@@ -198,7 +199,7 @@ function wheel(map: CFMap): void {
 // Opening on the bound bounds
 //
 
-Deno.test("cf-map opens on the bounds its bounds cell holds", async () => {
+test("cf-map opens on the bounds its bounds cell holds", async () => {
   using page = await mounted((map) => {
     map.bounds = createMockCellHandle(PARIS);
   });
@@ -207,12 +208,12 @@ Deno.test("cf-map opens on the bounds its bounds cell holds", async () => {
   expect(await showsMarkerAt(page.map, NEAR_PARIS)).toBe(false);
 });
 
-Deno.test("cf-map with no bounds opens on its default view", async () => {
+test("cf-map with no bounds opens on its default view", async () => {
   using page = await mounted(() => {});
   expect(await showsMarkerAt(page.map, PARIS_CENTER)).toBe(false);
 });
 
-Deno.test("cf-map moved elsewhere in the page draws its map again", async () => {
+test("cf-map moved elsewhere in the page draws its map again", async () => {
   using page = await mounted((map) => {
     map.bounds = createMockCellHandle(PARIS);
   });
@@ -226,7 +227,7 @@ Deno.test("cf-map moved elsewhere in the page draws its map again", async () => 
   }
 });
 
-Deno.test("bound bounds win over a bound center and zoom at mount", async () => {
+test("bound bounds win over a bound center and zoom at mount", async () => {
   using page = await mounted((map) => {
     map.bounds = createMockCellHandle(PARIS);
     map.center = createMockCellHandle({ lat: 37.7749, lng: -122.4194 });
@@ -238,7 +239,7 @@ Deno.test("bound bounds win over a bound center and zoom at mount", async () => 
   expect(await showsMarkerAt(page.map, PARIS_CENTER)).toBe(true);
 });
 
-Deno.test("opening on the bound bounds reports no move and writes no cell", async () => {
+test("opening on the bound bounds reports no move and writes no cell", async () => {
   const bounds = createMockCellHandle(PARIS);
   const map = sizedMap((map) => {
     map.bounds = bounds;
@@ -257,7 +258,7 @@ Deno.test("opening on the bound bounds reports no move and writes no cell", asyn
   }
 });
 
-Deno.test("cf-map mounted hidden opens on its bound bounds once it is shown", async () => {
+test("cf-map mounted hidden opens on its bound bounds once it is shown", async () => {
   const hidden = document.createElement("div");
   hidden.style.display = "none";
   document.body.append(hidden);
@@ -289,7 +290,7 @@ Deno.test("cf-map mounted hidden opens on its bound bounds once it is shown", as
 // Who moved the map
 //
 
-Deno.test("an animated fit to the features is reported as cf-map's own move", async () => {
+test("an animated fit to the features is reported as cf-map's own move", async () => {
   const map = sizedMap((map) => {
     map.value = NEAR_DEFAULT;
     map.fitToBounds = true;
@@ -304,7 +305,7 @@ Deno.test("an animated fit to the features is reported as cf-map's own move", as
   }
 });
 
-Deno.test("a resize of the container is reported as cf-map's own move", async () => {
+test("a resize of the container is reported as cf-map's own move", async () => {
   using page = await mounted(() => {});
   const change = nextBoundsChange(page.map);
   page.map.style.width = "200px";
@@ -318,7 +319,7 @@ Deno.test("a resize of the container is reported as cf-map's own move", async ()
   expect(detail.userInitiated).toBe(false);
 });
 
-Deno.test("a wheel zoom is a person's move", async () => {
+test("a wheel zoom is a person's move", async () => {
   using page = await mounted(() => {});
   const zoom = nextBoundsChange(page.map);
   wheel(page.map);
@@ -327,7 +328,7 @@ Deno.test("a wheel zoom is a person's move", async () => {
   expect(detail.userInitiated).toBe(true);
 });
 
-Deno.test("a drag is a person's move", async () => {
+test("a drag is a person's move", async () => {
   using page = await mounted(() => {});
   const pan = nextBoundsChange(page.map);
   press(page.map);
@@ -336,7 +337,7 @@ Deno.test("a drag is a person's move", async () => {
   expect((await pan).userInitiated).toBe(true);
 });
 
-Deno.test("a feature fit after a person's move is cf-map's own", async () => {
+test("a feature fit after a person's move is cf-map's own", async () => {
   using page = await fittedTo(NEAR_DEFAULT);
   const pan = nextBoundsChange(page.map);
   press(page.map);
@@ -349,7 +350,7 @@ Deno.test("a feature fit after a person's move is cf-map's own", async () => {
   expect((await fit).userInitiated).toBe(false);
 });
 
-Deno.test("a press that moves nothing leaves cf-map's next fit its own", async () => {
+test("a press that moves nothing leaves cf-map's next fit its own", async () => {
   using page = await fittedTo(NEAR_DEFAULT);
   press(page.map);
   release(page.map, 0);
@@ -358,7 +359,7 @@ Deno.test("a press that moves nothing leaves cf-map's next fit its own", async (
   expect((await fit).userInitiated).toBe(false);
 });
 
-Deno.test("a window resize after a press that moves nothing is cf-map's own", async () => {
+test("a window resize after a press that moves nothing is cf-map's own", async () => {
   using page = await mounted(() => {});
   // Past the mount's own resize frame, which would report the size change
   // before the window's resize could.
@@ -372,7 +373,7 @@ Deno.test("a window resize after a press that moves nothing is cf-map's own", as
   expect((await change).userInitiated).toBe(false);
 });
 
-Deno.test("a resize after a wheel zoom is cf-map's own", async () => {
+test("a resize after a wheel zoom is cf-map's own", async () => {
   using page = await mounted(() => {});
   const zoom = nextBoundsChange(page.map);
   wheel(page.map);
@@ -382,7 +383,7 @@ Deno.test("a resize after a wheel zoom is cf-map's own", async () => {
   expect((await resize).userInitiated).toBe(false);
 });
 
-Deno.test("features that arrive during a drag neither move the map nor take the drag", async () => {
+test("features that arrive during a drag neither move the map nor take the drag", async () => {
   using page = await fittedTo(NEAR_DEFAULT);
   press(page.map);
   moveTo(page.map, 40);
@@ -403,7 +404,7 @@ Deno.test("features that arrive during a drag neither move the map nor take the 
   expect(drawsMarkerInside(page.map)).toBe(false);
 });
 
-Deno.test("a resize during a drag leaves the drag the person's", async () => {
+test("a resize during a drag leaves the drag the person's", async () => {
   using page = await fittedTo(NEAR_DEFAULT);
   press(page.map);
   moveTo(page.map, 40);
@@ -423,7 +424,7 @@ Deno.test("a resize during a drag leaves the drag the person's", async () => {
   expect(drawsMarkerInside(page.map)).toBe(false);
 });
 
-Deno.test("a fit asked for during a drag runs once the drag ends", async () => {
+test("a fit asked for during a drag runs once the drag ends", async () => {
   using page = await mounted((map) => {
     map.value = { markers: [{ position: PARIS_CENTER }] };
   });
@@ -444,7 +445,7 @@ Deno.test("a fit asked for during a drag runs once the drag ends", async () => {
 // The stored view and a fit to the features
 //
 
-Deno.test("a fit to the features wins over stored bounds there at mount", async () => {
+test("a fit to the features wins over stored bounds there at mount", async () => {
   using page = await mounted((map) => {
     map.bounds = createMockCellHandle(PARIS);
     map.value = NEAR_DEFAULT;
@@ -455,7 +456,7 @@ Deno.test("a fit to the features wins over stored bounds there at mount", async 
   expect(drawsMarkerInside(page.map)).toBe(true);
 });
 
-Deno.test("stored bounds that load after mount do not undo a fit to the features", async () => {
+test("stored bounds that load after mount do not undo a fit to the features", async () => {
   const bounds = createMockCellHandle<Bounds>();
   using page = await mounted((map) => {
     map.bounds = bounds;
@@ -476,7 +477,7 @@ Deno.test("stored bounds that load after mount do not undo a fit to the features
   expect(detail.center.lng).toBeCloseTo(2.6, 1);
 });
 
-Deno.test("stored bounds apply when the map does not fit to its features", async () => {
+test("stored bounds apply when the map does not fit to its features", async () => {
   const bounds = createMockCellHandle<Bounds>();
   using page = await mounted((map) => {
     map.bounds = bounds;
@@ -491,7 +492,7 @@ Deno.test("stored bounds apply when the map does not fit to its features", async
 // Moves already under way, and moves asked for while a person moves
 //
 
-Deno.test("a press during cf-map's own fit leaves that fit cf-map's", async () => {
+test("a press during cf-map's own fit leaves that fit cf-map's", async () => {
   using page = await fittedTo(NEAR_DEFAULT);
   const fit = nextBoundsChange(page.map);
   page.map.value = NEAR_DEFAULT_NUDGED;
@@ -502,7 +503,7 @@ Deno.test("a press during cf-map's own fit leaves that fit cf-map's", async () =
   expect((await fit).userInitiated).toBe(false);
 });
 
-Deno.test("panTo during a drag does not move the map under it", async () => {
+test("panTo during a drag does not move the map under it", async () => {
   using page = await mounted(() => {});
   press(page.map);
   moveTo(page.map, 40);
@@ -514,7 +515,7 @@ Deno.test("panTo during a drag does not move the map under it", async () => {
   expect(detail.center.lat).toBeCloseTo(37.77, 1);
 });
 
-Deno.test("turning fitToBounds off drops a fit still waiting for a size", async () => {
+test("turning fitToBounds off drops a fit still waiting for a size", async () => {
   const hidden = document.createElement("div");
   hidden.style.display = "none";
   document.body.append(hidden);
@@ -536,7 +537,7 @@ Deno.test("turning fitToBounds off drops a fit still waiting for a size", async 
   }
 });
 
-Deno.test("fitBounds() asked for while hidden runs once the map is shown", async () => {
+test("fitBounds() asked for while hidden runs once the map is shown", async () => {
   const hidden = document.createElement("div");
   hidden.style.display = "none";
   document.body.append(hidden);

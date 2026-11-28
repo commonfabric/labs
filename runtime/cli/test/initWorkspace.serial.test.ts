@@ -4,12 +4,17 @@
  * `console.warn` to read the warning.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { exists } from "@std/fs/exists";
 import { join } from "@std/path";
 
 import { initWorkspace } from "../commands/init.ts";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 describe("initWorkspace()", () => {
   let dir: string;

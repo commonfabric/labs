@@ -6,6 +6,7 @@ import { Identity } from "@commonfabric/identity";
 import { type JSONSchema, Runtime } from "@commonfabric/runner";
 import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { defer } from "@commonfabric/async/defer";
+import { test } from "@commonfabric/test-support/test";
 
 import app from "../../toolshed/app.ts";
 
@@ -27,7 +28,7 @@ const createRuntime = (identity: Identity, base: URL) =>
     }),
   });
 
-Deno.test("memory v2 runner discovers newly linked documents", async () => {
+test("memory v2 runner discovers newly linked documents", async () => {
   const identity = await Identity.fromPassphrase(
     `runner-memory-v2-new-link-${Date.now()}`,
   );
@@ -122,7 +123,7 @@ Deno.test("memory v2 runner discovers newly linked documents", async () => {
   }
 });
 
-Deno.test("memory v2 runner propagates linked document changes", async () => {
+test("memory v2 runner propagates linked document changes", async () => {
   const identity = await Identity.fromPassphrase(
     `runner-memory-v2-linked-update-${Date.now()}`,
   );
@@ -222,7 +223,7 @@ Deno.test("memory v2 runner propagates linked document changes", async () => {
   }
 });
 
-Deno.test("memory v2 runner keeps deep linked chains live", async () => {
+test("memory v2 runner keeps deep linked chains live", async () => {
   const identity = await Identity.fromPassphrase(
     `runner-memory-v2-deep-link-${Date.now()}`,
   );

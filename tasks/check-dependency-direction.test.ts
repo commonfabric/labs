@@ -1,9 +1,12 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
-import { join } from "@std/path";
+import { dirname, fromFileUrl, join } from "@std/path";
 
 import { findViolations, main } from "./check-dependency-direction.ts";
+import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+
+const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
 /**
  * A workspace holding a `base/low` package, a `runtime/high` package, and the
@@ -177,6 +180,63 @@ describe("check-dependency-direction", () => {
         "  patterns/system -> patterns/apps: patterns/system/home/home.tsx" +
           "  <-  ../../apps/topics/topic.tsx",
       );
+    });
+  });
+
+  describe("the script", () => {
+    /**
+     * Runs the script with the task's permissions over a tree holding
+     * `files`, returning its exit code and what it printed.
+     */
+    async function runScript(files: Record<string, string>) {
+      const root = await fixtureTree(files);
+      try {
+        const output = await runDenoCommandWithTemporaryLock({
+          root: REPO_ROOT,
+          args: (lockPath) => [
+            "run",
+            "--config",
+            join(REPO_ROOT, "deno.jsonc"),
+            "--lock",
+            lockPath,
+            "--allow-read",
+            "--allow-run=git",
+            join(REPO_ROOT, "tasks/check-dependency-direction.ts"),
+            root,
+          ],
+        });
+        return {
+          code: output.code,
+          stdout: new TextDecoder().decode(output.stdout),
+          stderr: new TextDecoder().decode(output.stderr),
+        };
+      } finally {
+        await Deno.remove(root, { recursive: true });
+      }
+    }
+
+    it("exits 1 and names the import that runs against the order in the repository it is given", async () => {
+      const { code, stdout, stderr } = await runScript({
+        "base/low/mod.ts": 'import "@commonfabric/high";\n',
+      });
+
+      expect(code).toBe(1);
+      expect(stdout).toBe("");
+      expect(stderr).toContain(
+        "  low -> high: base/low/mod.ts  <-  @commonfabric/high",
+      );
+    });
+
+    it("exits 0 and says so for a repository it is given whose imports run in order", async () => {
+      expect(
+        await runScript({
+          "runtime/high/mod.ts": 'import "@commonfabric/low";\n',
+        }),
+      ).toEqual({
+        code: 0,
+        stdout: "Production imports run in the layout's order.\n",
+        stderr: "",
+      });
     });
   });
 });

@@ -1,7 +1,7 @@
-import { afterEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import type { FabricPlainObject } from "@commonfabric/api";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import { connect, loopback } from "../v2/client.ts";
 import { ROUTED_PART_BYTES, ROUTED_QUEUE_LIMIT } from "../v2/routed-limits.ts";
 import {
@@ -23,6 +23,7 @@ const AUDIENCE = "did:key:z6Mk-served-audience";
 const SPACE = "did:key:z6Mk-served-space";
 const SERVICE = "did:key:z6Mk-served-service";
 const ALICE = "did:key:z6Mk-served-alice";
+const PEER = "did:key:z6Mk-served-peer";
 
 /** A raw connection to `server`, which records what the server sends. */
 class Wire {
@@ -109,8 +110,14 @@ describe("served", () => {
     for (const server of servers.splice(0)) await server.close();
   });
 
-  /** A server whose delegating class is `SERVICE` alone. */
-  const newServer = (mode: "off" | "enforce" = "off"): Server => {
+  /**
+   * A server whose delegating class is `SERVICE`, and whichever principals
+   * `isDelegatingPeer` names.
+   */
+  const newServer = (
+    mode: "off" | "enforce" = "off",
+    isDelegatingPeer?: (principal: string) => boolean,
+  ): Server => {
     const server = new Server({
       store: new URL(`memory://served-${crypto.randomUUID()}`),
       subscriptionRefreshDelayMs: 0,
@@ -119,7 +126,11 @@ describe("served", () => {
         return typeof issuer === "string" ? issuer : undefined;
       },
       sessionOpenAuth: { audience: AUDIENCE },
-      acl: { mode, delegatingDids: [SERVICE] },
+      acl: {
+        mode,
+        delegatingDids: [SERVICE],
+        ...(isDelegatingPeer === undefined ? {} : { isDelegatingPeer }),
+      },
     });
     servers.push(server);
     return server;
@@ -250,6 +261,49 @@ describe("served", () => {
         message: expect.any(String),
       });
       expect(calls).toEqual([]);
+    });
+
+    it("admits a principal `isDelegatingPeer` names, and refuses it with `forbidden` once it is no longer named", async () => {
+      const peers = new Set([PEER]);
+      const server = newServer("off", (principal) => peers.has(principal));
+      const { calls, handler } = recording();
+      server.setServedRequestHandler(handler);
+      const { wire, sessionId } = await openSession(server, PEER);
+
+      const admitted = await wire.response(await request(wire, sessionId));
+      peers.clear();
+      const refused = await wire.response(await request(wire, sessionId));
+
+      expect(admitted.ok).toEqual({ seq: 7, deduped: false });
+      expect(refused.error?.code).toBe("forbidden");
+      expect(calls.map((call) => call.principal)).toEqual([PEER]);
+    });
+
+    it("opens a session acting as the space's owner under `enforce` for a principal `isDelegatingPeer` names, and refuses one it does not name", async () => {
+      const server = newServer("enforce", (principal) => principal === PEER);
+      const open = async (principal: string) => {
+        const { wire, hello } = await greet(server);
+        const requestId = crypto.randomUUID();
+        await wire.receive({
+          type: "session.open",
+          requestId,
+          space: SPACE,
+          session: { actingAs: "space-owner" },
+          invocation: {
+            iss: principal,
+            aud: hello.sessionOpen!.audience,
+            challenge: hello.sessionOpen!.challenge.value,
+          },
+        });
+        return await wire.response(requestId);
+      };
+
+      const admitted = await open(PEER);
+      const refused = await open(ALICE);
+
+      expect(admitted.error).toBeUndefined();
+      expect(refused.error?.name).toBe("AuthorizationError");
+      expect(refused.error?.message).toContain("not a delegating principal");
     });
 
     it("refuses with `unavailable` when no handler is installed", async () => {

@@ -1,16 +1,17 @@
 import { expect } from "@std/expect";
-import { afterEach, describe, it } from "@std/testing/bdd";
-import { toFileUrl } from "@std/path";
+import { fromFileUrl, join, toFileUrl } from "@std/path";
 import { Window } from "happy-dom";
 import type { BridgeCell, BridgeMethod } from "@commonfabric/iframe-sandbox";
 
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
+import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
   ManualFrames,
   MemoryCell,
   MemorySqlite,
   openGuestPage,
   patchProperty,
+  readAssets,
   taskTurn,
 } from "./iframe-guest.ts";
 
@@ -24,13 +25,38 @@ function cellOf(cell: MemoryCell): BridgeCell {
 /** Writes a guest module whose source is `source`, and returns its address. */
 async function guestModule(source: string): Promise<URL> {
   const file = await Deno.makeTempFile({ suffix: ".js" });
-  guestFiles.push(file);
+  temporaryPaths.push(file);
   await Deno.writeTextFile(file, source);
   return toFileUrl(file);
 }
 
-/** The guest modules the tests wrote, which go once each test is done. */
-const guestFiles: string[] = [];
+/**
+ * The guest modules and directories the tests wrote, which go once each test
+ * is done.
+ */
+const temporaryPaths: string[] = [];
+
+/**
+ * Writes a directory holding `files`, each at its relative path, and returns
+ * its address.
+ */
+async function directoryOf(
+  files: Record<string, Uint8Array | string>,
+): Promise<URL> {
+  const directory = await Deno.makeTempDir();
+  temporaryPaths.push(directory);
+  const url = toFileUrl(`${directory}/`);
+  for (const [path, contents] of Object.entries(files)) {
+    const file = new URL(path, url);
+    await Deno.mkdir(new URL(".", file), { recursive: true });
+    if (typeof contents === "string") await Deno.writeTextFile(file, contents);
+    else await Deno.writeFile(file, contents);
+  }
+  return url;
+}
+
+/** A base64 `data:` URL of a PNG, holding the bytes 1, 2 and 3. */
+const GLAZE = "data:image/png;base64,AQID";
 
 /** Resolves once the event loop has run `count` turns of tasks. */
 async function taskTurns(count: number): Promise<void> {
@@ -46,7 +72,9 @@ function methodOf(database: MemorySqlite, name: string): BridgeMethod {
 
 describe("iframe-guest", () => {
   afterEach(async () => {
-    for (const file of guestFiles.splice(0)) await Deno.remove(file);
+    for (const path of temporaryPaths.splice(0)) {
+      await Deno.remove(path, { recursive: true });
+    }
   });
 
   describe("MemoryCell", () => {
@@ -220,6 +248,141 @@ describe("iframe-guest", () => {
       cellOf(memory).key?.("left").set?.(4);
 
       expect(heard).toEqual([1, 4]);
+    });
+  });
+
+  describe("readAssets()", () => {
+    it("returns each file directly inside the directory that has a media type, by its name without the extension", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+        "menu.svg": "<svg/>",
+        "notes.txt": "Not an asset.",
+        "nested/sprinkles.png": new Uint8Array([4]),
+      });
+
+      expect(await readAssets(directory)).toEqual({
+        glaze: GLAZE,
+        menu: `data:image/svg+xml;base64,${btoa("<svg/>")}`,
+      });
+    });
+
+    it("leaves out a hidden file", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+        "._glaze.png": new Uint8Array([0]),
+      });
+
+      expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
+    });
+
+    it("reads a directory whose address has no trailing slash", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+      });
+
+      expect(await readAssets(new URL(directory.href.slice(0, -1)))).toEqual({
+        glaze: GLAZE,
+      });
+    });
+
+    it("returns a file a symbolic link names, and leaves out a link to a directory", async () => {
+      const directory = await directoryOf({
+        "originals/glaze.png": new Uint8Array([1, 2, 3]),
+      });
+      const path = fromFileUrl(directory);
+      await Deno.symlink(
+        join(path, "originals", "glaze.png"),
+        join(path, "glaze.png"),
+      );
+      await Deno.symlink(join(path, "originals"), join(path, "menu.png"));
+
+      expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
+    });
+
+    it("leaves out a symbolic link that names nothing", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+      });
+      const path = fromFileUrl(directory);
+      await Deno.symlink(join(path, "missing.png"), join(path, "menu.png"));
+
+      expect(await readAssets(directory)).toEqual({ glaze: GLAZE });
+    });
+
+    it("throws the error a symbolic link that cannot be followed raises", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+      });
+      const path = fromFileUrl(directory);
+      await Deno.symlink(join(path, "menu.png"), join(path, "loop.png"));
+      await Deno.symlink(join(path, "loop.png"), join(path, "menu.png"));
+
+      await expect(readAssets(directory)).rejects.toThrow(
+        Deno.errors.FilesystemLoop,
+      );
+    });
+
+    it("throws for two files that would be the same asset", async () => {
+      const directory = await directoryOf({
+        "glaze.png": new Uint8Array([1, 2, 3]),
+        "glaze.webp": new Uint8Array([1, 2, 3]),
+      });
+
+      await expect(readAssets(directory)).rejects.toThrow(
+        "would both be the asset `glaze`.",
+      );
+    });
+  });
+
+  describe("assets", () => {
+    it("replaces each `cf-asset:` reference in the document with its asset's URL", async () => {
+      const page = await openGuestPage({
+        guest: await guestModule(""),
+        html: '<!doctype html><html><body><img src="cf-asset:glaze"></body>' +
+          "</html>",
+        assets: { glaze: GLAZE },
+        resources: {},
+      });
+
+      expect(document.querySelector("img")?.getAttribute("src")).toBe(GLAZE);
+      await page.close();
+    });
+
+    it("gives the guest's `fabric.asset()` the assets", async () => {
+      const page = await openGuestPage({
+        guest: await guestModule(`
+          import { connectFabric } from "@commonfabric/iframe-sandbox/guest";
+          const glaze = connectFabric().asset("glaze");
+          document.body.textContent = glaze.mediaType + " " + glaze.bytes();
+        `),
+        html: "<!doctype html><html><body></body></html>",
+        assets: { glaze: GLAZE },
+        resources: {},
+      });
+
+      expect(document.body.textContent).toBe("image/png 1,2,3");
+      await page.close();
+    });
+
+    it("throws for a document that refers to an asset it was not given", async () => {
+      await expect(openGuestPage({
+        guest: await guestModule(""),
+        html: '<img src="cf-asset:glaze"><img src="cf-asset:menu">',
+        assets: { glaze: GLAZE },
+        resources: {},
+      })).rejects.toThrow(
+        "The guest's document refers to assets it was not given: " +
+          "`cf-asset:menu`.",
+      );
+    });
+
+    it("throws for an asset that is not a base64 `data:` URL", async () => {
+      await expect(openGuestPage({
+        guest: await guestModule(""),
+        html: "<!doctype html><html><body></body></html>",
+        assets: { glaze: "https://example.com/glaze.png" },
+        resources: {},
+      })).rejects.toThrow("The asset `glaze` is not a base64 `data:` URL");
     });
   });
 

@@ -1,10 +1,10 @@
-import { describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import type {
   BuiltInLLMContent,
   BuiltInLLMMessage,
   JSONSchema,
 } from "@commonfabric/api";
+import { describe, it } from "@commonfabric/test-support/test";
 import {
   DEFAULT_GENERATE_OBJECT_MODEL,
   DEFAULT_MODEL_NAME,

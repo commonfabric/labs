@@ -393,7 +393,14 @@ A pattern-owned cell narrower than its result starts from its declared default
 for each actor instance. The setup that first declares the cell commits its
 manifest and default together. On a later independently owned start, an accepted
 manifest authorizes filling an absent actor instance in a separate transaction
-for that cell, before execution. Reading another private argument or another
+for that cell, before execution. An instance a first write created before
+any fill reached it carries no owner link and holds only the fields written:
+it gains its owner link, even when no field is missing, and the object
+default's fields it lacks, at any depth, and keeps every field it holds. An instance carrying its owner
+link was initialized, and a default field missing from it is one its writers
+removed, so it is left as it is. A serving runtime's own start names no actor
+and fills no instance; a demander's instance is filled by the arrival seed
+(`server-side-execution/scopes.md`). Reading another private argument or another
 actor's cell during setup must not taint this constant default. The default
 does carry the label on its owning piece's root, which the filling transaction
 reads on its own, and no label of the piece's fields. The current
@@ -584,6 +591,14 @@ while each reader follows that link to a different scoped instance.
 The narrower scoped result is a separate storage instance for the same causal
 id. The broader output document stores a scoped link to that instance rather
 than copying the narrower value into the broader document.
+
+An instance of a pattern-owned derived cell carries the `result` back-link to
+its owning result cell, as the cell's other instances do. A setup writes it onto
+the instances it runs under. A serving runtime's computation for a demander
+writes the demander's instance, which no setup may have run under, so where that
+instance holds no back-link, the computation's write carries one with the value.
+The serving runtime so never leaves a demander's instance holding the back-link
+alone, which would read as an instance already produced.
 
 This applies to auxiliary result cells created to represent structured or
 captured reactive outputs as well as direct scalar outputs. Any intermediate or

@@ -1,6 +1,5 @@
 import { expect } from "@std/expect";
-import { dirname, fromFileUrl } from "@std/path";
-import { describe, it } from "@std/testing/bdd";
+import { dirname, fromFileUrl, join } from "@std/path";
 import {
   candidateSurfaces,
   check,
@@ -15,7 +14,9 @@ import {
   UsageError,
   workflowRecords,
 } from "./check-test-topology.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { AliasResolver } from "@commonfabric/test-support/records";
+import { describe, it } from "@commonfabric/test-support/test";
 import type { Suite } from "./test-topology/suite.ts";
 import { loadTopology } from "./test-topology.ts";
 import { coverageGateSuite } from "./test-topology/coverage-gates.ts";
@@ -1063,16 +1064,21 @@ describe("reading a run's gathered artifacts", () => {
   });
 
   it("leaves records nameless where the facts beside them name nothing", async () => {
-    // Facts without a commit, and no facts at all, are both a file that
-    // cannot say which tree produced it. The store half refuses those
-    // rather than reading them as this tree's.
+    // Facts without a commit, facts that are not a record of a job, and
+    // no facts at all, are each a file that cannot say which tree
+    // produced it. The store half refuses those rather than reading them
+    // as this tree's.
     const root = await Deno.makeTempDir({ prefix: "artifacts-" });
     try {
       await artifact(root, "no-commit", { job: "A" }, ["one"]);
       await artifact(root, "no-facts", undefined, ["two"]);
       await artifact(root, "blank", { job: "C", commit: "" }, ["three"]);
+      await artifact(root, "null", null, ["four"]);
+      await artifact(root, "bare", "c0ffee", ["five"]);
       const records = await readRecords([root], new AliasResolver([]));
       expect(records.map((record) => record.commit)).toEqual([
+        undefined,
+        undefined,
         undefined,
         undefined,
         undefined,
@@ -1296,8 +1302,8 @@ function recordsAt(commit: string): string {
 describe("running the check and saying what it found", () => {
   it("runs the store half only when a run's records are named", () => {
     expect(parseCheckArgs([], "/repo")).toEqual({ root: "/repo" });
-    expect(() => parseCheckArgs(["--records", "a.ndjson", "b.ndjson"], "/repo"))
-      .toThrow(UsageError);
+    expect(parseCheckArgs(["--records", "a.ndjson", "b.ndjson"], "/repo"))
+      .toBeInstanceOf(UsageError);
   });
 
   it("reads the commit the named records were produced at", () => {
@@ -1316,19 +1322,21 @@ describe("running the check and saying what it found", () => {
     // Without it nothing says whether the records describe this tree, and
     // a tree read against an earlier run's records disagrees with them
     // over every test deleted since.
-    expect(() => parseCheckArgs(["--records", "a.ndjson"], "/repo"))
-      .toThrow(UsageError);
-    expect(() => parseCheckArgs(["--commit", "c1"], "/repo"))
-      .toThrow(UsageError);
+    expect(parseCheckArgs(["--records", "a.ndjson"], "/repo")).toBeInstanceOf(
+      UsageError,
+    );
+    expect(parseCheckArgs(["--commit", "c1"], "/repo")).toBeInstanceOf(
+      UsageError,
+    );
   });
 
   it("refuses an argument it does not understand", () => {
     // A record file passed over leaves the store half judging part of a
     // run and reporting that the topology accounts for everything.
-    expect(() => parseCheckArgs(["a.ndjson"], "/repo")).toThrow(UsageError);
-    expect(() => parseCheckArgs(["--commit"], "/repo")).toThrow(UsageError);
-    expect(() => parseCheckArgs(["--commit", "--records", "a"], "/repo"))
-      .toThrow(UsageError);
+    expect(parseCheckArgs(["a.ndjson"], "/repo")).toBeInstanceOf(UsageError);
+    expect(parseCheckArgs(["--commit"], "/repo")).toBeInstanceOf(UsageError);
+    expect(parseCheckArgs(["--commit", "--records", "a"], "/repo"))
+      .toBeInstanceOf(UsageError);
   });
 
   it("says a record path may be a directory, wherever it says it", () => {
@@ -1337,13 +1345,8 @@ describe("running the check and saying what it found", () => {
     // wording is what stops it describing the argument it used to take.
     // The refusal and the usage text are read one after the other and
     // pinned one at a time, so neither can answer for the other.
-    let refusal = "";
-    try {
-      parseCheckArgs(["--commit", "abc", "--records"], "/repo");
-    } catch (error) {
-      refusal = (error as UsageError).message;
-    }
-    expect(refusal).toBe("--records takes a file or a directory of them");
+    expect(parseCheckArgs(["--commit", "abc", "--records"], "/repo"))
+      .toEqual(new UsageError("--records takes a file or a directory of them"));
     expect(USAGE).toContain("--records <path>...");
     expect(USAGE).not.toContain("--records <file>...");
     expect(USAGE).toContain("a file of records or a directory of them");
@@ -1353,19 +1356,15 @@ describe("running the check and saying what it found", () => {
     // Taking the last of two commits, or reading `--records` with no
     // file as no store half at all, is the same silence in a different
     // place: the command line asked for something it did not get.
-    expect(() => parseCheckArgs(["--records"], "/repo")).toThrow(UsageError);
-    expect(() =>
-      parseCheckArgs(
-        ["--commit", "c1", "--commit", "c2", "--records", "a"],
-        "/repo",
-      )
-    ).toThrow(UsageError);
-    expect(() =>
-      parseCheckArgs(
-        ["--records", "a", "--records", "b", "--commit", "c1"],
-        "/repo",
-      )
-    ).toThrow(UsageError);
+    expect(parseCheckArgs(["--records"], "/repo")).toBeInstanceOf(UsageError);
+    expect(parseCheckArgs(
+      ["--commit", "c1", "--commit", "c2", "--records", "a"],
+      "/repo",
+    )).toBeInstanceOf(UsageError);
+    expect(parseCheckArgs(
+      ["--records", "a", "--records", "b", "--commit", "c1"],
+      "/repo",
+    )).toBeInstanceOf(UsageError);
   });
 
   it("keeps reading record files after the commit is named", () => {
@@ -1474,6 +1473,42 @@ describe("running the check and saying what it found", () => {
     }
     expect(said.join("\n")).toContain("--commit");
     expect(said.join("\n")).toContain("usage:");
+  });
+
+  it("exits from the command line with the status main answers", async () => {
+    // Runs the script the way `deno task check-test-topology` does, with
+    // the permissions that task grants, which the calls to main() above
+    // do not: they would still pass if the entry point never ran the
+    // check, dropped its status, or needed a permission the task lacks.
+    const run = (args: readonly string[]) =>
+      runDenoCommandWithTemporaryLock({
+        root: REPOSITORY,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          join(REPOSITORY, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "--allow-read",
+          "--allow-env",
+          "--allow-net",
+          "--allow-run=git",
+          join(REPOSITORY, "tasks/check-test-topology.ts"),
+          ...args,
+        ],
+      });
+    const decode = (bytes: Uint8Array) => new TextDecoder().decode(bytes);
+
+    const accounted = await run([]);
+    expect(accounted.code).toBe(0);
+    expect(decode(accounted.stdout)).toContain(
+      "Topology accounts for every test surface",
+    );
+
+    const refused = await run(["--records", "a.ndjson"]);
+    expect(refused.code).toBe(2);
+    expect(decode(refused.stdout)).toBe("");
+    expect(decode(refused.stderr)).toContain("usage:");
   });
 
   it("accounts for this repository's own tree", async () => {

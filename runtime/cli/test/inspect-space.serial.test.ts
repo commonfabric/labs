@@ -1,10 +1,19 @@
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
+
+import { encodeStoredCommit } from "@commonfabric/memory/v2/stored-commit";
+import type { ClientCommit } from "@commonfabric/memory/v2";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   ALICE,
   ALICE_S1,
   BOB,
+  BOB_S2,
   LONG_TEXT,
   MODULE_CODE,
   runInspect,
@@ -15,6 +24,7 @@ import {
   seedRichSpace,
   seedSpace,
   seedTimelineSpace,
+  sessionOf,
 } from "./inspect-fixtures.ts";
 import { stripAnsi } from "./utils.ts";
 
@@ -214,6 +224,41 @@ describe("inspect-space", () => {
         "  seq=8\tset\tz6MkIn…AAAA/aaaaaaaa\t2026-01-01 00:07:00",
         "",
         "(no anomalous stale reads — store is consistent)",
+      ]);
+    });
+
+    it("does not call an entity consistent when a later commit keeps only a digest of its reads", async () => {
+      // Alice and Bob each write of:x; Alice's third commit reads it and is
+      // stored with a digest in place of its reads.
+      const space = `${dir}/digested.sqlite`;
+      const alice = sessionOf(ALICE, ALICE_S1);
+      const reader = encodeStoredCommit(
+        {
+          localSeq: 3,
+          reads: { confirmed: [{ id: "of:x", path: [], seq: 2 }], pending: [] },
+          operations: [{ op: "set", id: "of:y", value: { value: 1 } }],
+        } as unknown as ClientCommit,
+        false,
+      );
+      seedSpace(
+        space,
+        [
+          { session: alice, revisions: [{ id: "of:x", document: { n: 1 } }] },
+          {
+            session: sessionOf(BOB, BOB_S2),
+            revisions: [{ id: "of:x", document: { n: 2 } }],
+          },
+          { session: alice, revisions: [{ id: "of:y", document: 1 }] },
+        ],
+        `UPDATE "commit" SET original = '${
+          reader.replaceAll("'", "''")
+        }' WHERE seq = 3;`,
+      );
+
+      expect((await lines(["conflicts", space, "of:x"])).slice(-3)).toEqual([
+        "(no anomalous stale reads among the reads kept)",
+        "",
+        "? 1 later commit(s) hold reads this check cannot replay (a digest, compacted history, or an unreadable payload), so whether they read this entity stale was not checked.",
       ]);
     });
 

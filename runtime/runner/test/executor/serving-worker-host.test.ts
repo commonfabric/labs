@@ -1,13 +1,14 @@
 /**
  * A `ServingWorkerPool` over stand-in workers and a stand-in memory server, in
  * the cases `ServingWorkerPool.test.ts` and `serving-worker-recovery.test.ts`
- * leave out: the view changes it routes, a verb whose worker fails as it is
- * issued, a close that meets a worker's host closing on its own, and what
- * the pool does when an observer, a store read or a teardown fails.
+ * leave out: the view, demand and currency changes it routes, a verb whose
+ * worker fails as it is issued, a close that meets a worker's host closing on
+ * its own, what the pool does when an observer, a store read or a teardown
+ * fails, the heap profiles it gathers, the runs it keeps the identities of,
+ * and a collection whose worker fails as its answer arrives.
  */
 
 import { expect } from "@std/expect";
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { stub } from "@std/testing/mock";
 import { defer } from "@commonfabric/async/defer";
 import { Identity } from "@commonfabric/identity";
@@ -16,12 +17,20 @@ import {
   loggerCountsBreakdownOf,
 } from "@commonfabric/logger";
 import type { ServerExecutionObserver } from "@commonfabric/memory/v2/server";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
+import { clock } from "@commonfabric/test-support/fake-clock";
 import { SpaceNotServedError } from "../../src/executor/host.ts";
 import type { ServingLoopDiagnostics } from "../../src/executor/serving-port-protocol.ts";
 import {
   ServingWorkerPool,
   type ServingWorkerPoolOptions,
 } from "../../src/executor/serving-worker-host.ts";
+import { startServingThread } from "../../src/executor/serving-thread.ts";
 import {
   emptyServingLoopStats,
   type ServingLoopStats,
@@ -37,13 +46,17 @@ const identity = await Identity.fromPassphrase("serving-worker-host");
 const alpha = "did:key:z6MkServingWorkerHostAlpha" as MemorySpace;
 const beta = "did:key:z6MkServingWorkerHostBeta" as MemorySpace;
 const gamma = "did:key:z6MkServingWorkerHostGamma" as MemorySpace;
+const MB = 1024 * 1024;
 
 /** What the pool's realm has logged under `key`, at the warn level. */
 const warnings = (key: string): number =>
   getLoggerCountsByKey()["serving-worker-host"]?.[key]?.warn ?? 0;
 
-/** A stand-in memory server that also reports a session's view changes. */
-class ViewReportingServer extends FakeMemoryServer {
+/**
+ * A stand-in memory server that also reports a session's view and demand
+ * changes, and a space's currency changes.
+ */
+class ChangeReportingServer extends FakeMemoryServer {
   #observer: ServerExecutionObserver | undefined;
 
   /** @inheritDoc */
@@ -58,6 +71,23 @@ class ViewReportingServer extends FakeMemoryServer {
   changeViews(space: string, sessionId: string): void {
     this.#observer?.viewsChanged?.(space, sessionId);
   }
+
+  /** Reports that `sessionId`'s watch on `space` changed what it demands. */
+  changeDemand(space: string, sessionId: string): void {
+    this.#observer?.demandChanged?.(
+      space,
+      "watch",
+      "did:key:client",
+      sessionId,
+      undefined,
+      true,
+    );
+  }
+
+  /** Reports that `space`'s currency index changed from outside its loop. */
+  changeCurrency(space: string): void {
+    this.#observer?.currencyChanged?.(space);
+  }
 }
 
 /** What a stand-in host that closed hands back from `host.retire`. */
@@ -70,7 +100,7 @@ const retired = (
 
 describe("serving-worker-host", () => {
   let fakes: ReturnType<typeof fakeServingWorkers>;
-  let server: ViewReportingServer;
+  let server: ChangeReportingServer;
   let pool: ServingWorkerPool | undefined;
 
   /** The stand-in workers spawned so far. */
@@ -92,7 +122,7 @@ describe("serving-worker-host", () => {
 
   beforeEach(() => {
     fakes = fakeServingWorkers();
-    server = new ViewReportingServer();
+    server = new ChangeReportingServer();
     pool = undefined;
   });
 
@@ -114,6 +144,132 @@ describe("serving-worker-host", () => {
       { space: alpha, sessionId: "session-a" },
     ]);
     expect(onBeta.receivedOf("observer.viewsChanged")).toEqual([]);
+  });
+
+  it("sends a space's demand and currency changes to the worker the space is placed on and to no other", async () => {
+    start();
+    server.openSession(alpha, "session-a");
+    server.openSession(beta, "session-b");
+    await clock.settle();
+    const [onAlpha, onBeta] = workers();
+    server.changeDemand(alpha, "session-a");
+    server.changeCurrency(alpha);
+    server.changeDemand(gamma, "session-g");
+    server.changeCurrency(gamma);
+    await clock.settle();
+    expect(onAlpha.receivedOf("observer.demandChanged")).toEqual([{
+      space: alpha,
+      reason: "watch",
+      principal: "did:key:client",
+      sessionId: "session-a",
+      servingOwn: undefined,
+      notDemand: true,
+    }]);
+    expect(onAlpha.receivedOf("observer.currencyChanged")).toEqual([
+      { space: alpha },
+    ]);
+    expect(onBeta.receivedOf("observer.demandChanged")).toEqual([]);
+    expect(onBeta.receivedOf("observer.currencyChanged")).toEqual([]);
+    expect(workers()).toHaveLength(2);
+  });
+
+  it("gathers each worker's heap profile or why it wrote none, leaving out a worker that failed before it answered", async () => {
+    const started = start();
+    server.openSession(alpha, "session-a");
+    server.openSession(beta, "session-b");
+    server.openSession(gamma, "session-g");
+    await clock.settle();
+    const [onAlpha, onBeta, onGamma] = workers();
+    onAlpha.host.onRequest("host.heapProfile", ({ directory }) => ({
+      path: `${directory}/alpha.heapprofile`,
+    }));
+    onBeta.host.onRequest("host.heapProfile", () => {
+      throw new Error("the profiler is unavailable");
+    });
+    onGamma.host.onRequest("host.heapProfile", () => new Promise(() => {}));
+
+    const profiles = started.heapProfiles("/profiles");
+    await clock.settle();
+    onGamma.fail();
+    expect(await profiles).toEqual([
+      { outcome: { path: "/profiles/alpha.heapprofile" }, spaces: [alpha] },
+      {
+        outcome: {
+          error: expect.stringContaining("the profiler is unavailable"),
+        },
+        spaces: [beta],
+      },
+    ]);
+  });
+
+  it("keeps the identity of only the last served handler's run for an event on a worker, beside those of its actions", async () => {
+    const started = start();
+    server.openSession(alpha, "session-a");
+    await clock.settle();
+    const [worker] = workers();
+    const placed = started.accessForTestingOnly.placements.get(alpha)!;
+    const actions = () => [...placed.runs.values()].map(({ action }) => action);
+
+    worker.startRun(alpha, "first-handler", {
+      sidecarId: "of:sidecar",
+      eventId: "evt-first",
+      seq: 1,
+    });
+    worker.endRun();
+    worker.startRun(alpha, "derivation");
+    worker.endRun();
+    await clock.settle();
+    expect(actions()).toEqual(["first-handler", "derivation"]);
+
+    worker.startRun(alpha, "second-handler", {
+      sidecarId: "of:sidecar",
+      eventId: "evt-second",
+      seq: 2,
+    });
+    worker.endRun();
+    await clock.settle();
+    expect(actions()).toEqual(["derivation", "second-handler"]);
+  });
+
+  it("logs a collection that brought a worker under its heap limit only while the worker is in the pool", async () => {
+    fakes[Symbol.dispose]();
+    fakes = fakeServingWorkers((worker) => worker.serve(16_480 * MB));
+    const started = start({
+      heapLimitMb: 100,
+      collectBeforeEnding: true,
+      startThread: (module, { onFailed }) =>
+        startServingThread(module, { onFailed }),
+    });
+    server.openSession(alpha, "session-a");
+    await clock.settle();
+    const [worker] = workers();
+    let asked = 0;
+    worker.host.onRequest("host.collectedMemory", () => {
+      asked += 1;
+      return { heapUsed: 40 * MB, external: 0 };
+    });
+    // From the second collection on, the worker fails in the turn its answer
+    // reaches the pool, once the answer has settled the pool's request.
+    worker.addEventListener("message", () => {
+      if (asked >= 2 && !worker.terminated) worker.fail();
+    });
+    const collectedBefore = warnings("heap-collected");
+
+    worker.beat(150 * MB);
+    await clock.settle();
+    expect(asked).toBe(1);
+    expect(worker.terminated).toBe(false);
+    expect(warnings("heap-collected")).toBe(collectedBefore + 1);
+
+    worker.beat(150 * MB);
+    await clock.settle();
+    expect(asked).toBe(2);
+    expect(worker.terminated).toBe(true);
+    expect(warnings("heap-collected")).toBe(collectedBefore + 1);
+    expect(started.stats().workers).toMatchObject({
+      failed: 1,
+      heapLimited: 0,
+    });
   });
 
   it("throws `SpaceNotServedError` for a verb whose space's worker fails as the verb is issued", async () => {

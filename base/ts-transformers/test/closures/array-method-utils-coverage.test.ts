@@ -12,6 +12,7 @@ import {
   type ElementBindingAnalysis,
   rewriteCallbackBody,
 } from "../../src/closures/strategies/array-method-utils.ts";
+import { test } from "@commonfabric/test-support/test";
 
 function createProgram(source: string): {
   sourceFile: ts.SourceFile;
@@ -135,7 +136,7 @@ function returnsIdentifier(node: ts.Node, name: string): boolean {
   );
 }
 
-Deno.test("analyzeElementBinding synthesizes `element` when the callback takes no parameter", () => {
+test("analyzeElementBinding synthesizes `element` when the callback takes no parameter", () => {
   const { checker } = createProgram("const x = 1;");
   const captureTree = new Map<string, CaptureTreeNode>();
   const analysis = analyzeElementBinding(
@@ -151,7 +152,7 @@ Deno.test("analyzeElementBinding synthesizes `element` when the callback takes n
   assertEquals(analysis.computedAliases.length, 0);
 });
 
-Deno.test("analyzeElementBinding avoids the `element` name when the capture tree already uses it", () => {
+test("analyzeElementBinding avoids the `element` name when the capture tree already uses it", () => {
   const { checker } = createProgram("const x = 1;");
   const captureTree = new Map<string, CaptureTreeNode>([
     ["element", { properties: new Map(), path: [] }],
@@ -166,7 +167,7 @@ Deno.test("analyzeElementBinding avoids the `element` name when the capture tree
   assertEquals(analysis.elementIdentifier.text, "__cf_element");
 });
 
-Deno.test("analyzeElementBinding reuses a bare identifier parameter directly", () => {
+test("analyzeElementBinding reuses a bare identifier parameter directly", () => {
   const { sourceFile, checker } = createProgram(
     "const f = (item) => item.name;",
   );
@@ -184,7 +185,7 @@ Deno.test("analyzeElementBinding reuses a bare identifier parameter directly", (
   assertEquals(analysis.destructureStatement, undefined);
 });
 
-Deno.test("analyzeElementBinding normalizes a plain object destructuring parameter without aliases", () => {
+test("analyzeElementBinding normalizes a plain object destructuring parameter without aliases", () => {
   const { sourceFile, checker } = createProgram(
     "const f = ({ name, value }) => name;",
   );
@@ -204,7 +205,7 @@ Deno.test("analyzeElementBinding normalizes a plain object destructuring paramet
   assertEquals(boundNames(analysis.bindingName), ["name", "value"]);
 });
 
-Deno.test("analyzeElementBinding walks nested object and array binding patterns", () => {
+test("analyzeElementBinding walks nested object and array binding patterns", () => {
   const { sourceFile, checker } = createProgram(
     "const f = ({ outer: { inner }, tuple: [first] }) => first;",
   );
@@ -224,7 +225,7 @@ Deno.test("analyzeElementBinding walks nested object and array binding patterns"
   assert(names.has("first"));
 });
 
-Deno.test("analyzeElementBinding handles renamed and string-keyed object properties", () => {
+test("analyzeElementBinding handles renamed and string-keyed object properties", () => {
   const { sourceFile, checker } = createProgram(
     'const f = ({ label: renamed, "weird-key": ok }) => renamed;',
   );
@@ -244,7 +245,7 @@ Deno.test("analyzeElementBinding handles renamed and string-keyed object propert
   assert(names.has("ok"));
 });
 
-Deno.test("analyzeElementBinding preserves array holes and rest elements", () => {
+test("analyzeElementBinding preserves array holes and rest elements", () => {
   const { sourceFile, checker } = createProgram(
     "const f = ([, second, ...rest]) => second;",
   );
@@ -265,7 +266,7 @@ Deno.test("analyzeElementBinding preserves array holes and rest elements", () =>
   assert(hasRestElement(analysis.bindingName));
 });
 
-Deno.test("analyzeElementBinding recurses into array elements that are themselves binding patterns", () => {
+test("analyzeElementBinding recurses into array elements that are themselves binding patterns", () => {
   const { sourceFile, checker } = createProgram(
     "const f = ([[a, b], { c }]) => a;",
   );
@@ -286,10 +287,12 @@ Deno.test("analyzeElementBinding recurses into array elements that are themselve
   assert(names.has("c"));
 });
 
-Deno.test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an array", () => {
+test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an array", () => {
   // The inner `{ [k]: chosen }` produces no residual binding element, so the
-  // nested walk returns undefined and the surrounding array element is left as
-  // its original node while the computed key is lifted into an alias.
+  // nested walk returns undefined and the surrounding array element becomes a
+  // hole, which keeps `kept` at its position, while the computed key is lifted
+  // into an alias. The destructure binds `chosen` nowhere, since the alias
+  // declares it.
   const { sourceFile, checker } = createProgram(
     "declare const k: string;\n" +
       "const f = ([{ [k]: chosen }, kept]) => chosen;",
@@ -304,11 +307,41 @@ Deno.test("analyzeElementBinding drops nested object patterns that hold only a c
   );
   assertEquals(analysis.computedAliases.length, 1);
   assertEquals(analysis.computedAliases[0].aliasName, "chosen");
+  assertEquals(analysis.computedAliases[0].path, ["0"]);
   assert(analysis.destructureStatement);
-  assert(boundNames(analysis.destructureStatement).includes("kept"));
+  assertEquals(boundNames(analysis.destructureStatement), ["kept"]);
+  const [pattern] = collect(
+    analysis.destructureStatement,
+    ts.isArrayBindingPattern,
+  );
+  assert(pattern);
+  assert(ts.isOmittedExpression(pattern.elements[0]!));
 });
 
-Deno.test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an object", () => {
+test("analyzeElementBinding reads a computed key nested in an array element from that element", () => {
+  // `chosen` is `element[1][k]`: the alias's path and template both name the
+  // array index the pattern sits at.
+  const { sourceFile, checker } = createProgram(
+    "declare const k: string;\n" +
+      "const f = ([kept, { [k]: chosen }]) => chosen;",
+  );
+  const analysis = analyzeElementBinding(
+    firstArrowParam(sourceFile),
+    new Map(),
+    testContext(checker),
+    new Set<string>(),
+    passthroughBindingId,
+  );
+  assertEquals(analysis.computedAliases.length, 1);
+  const [alias] = analysis.computedAliases;
+  assertEquals(alias.path, ["1"]);
+  const template = alias.baseTemplate;
+  assert(template && ts.isElementAccessExpression(template));
+  assert(ts.isNumericLiteral(template.argumentExpression));
+  assertEquals(template.argumentExpression.text, "1");
+});
+
+test("analyzeElementBinding drops nested object patterns that hold only a computed key inside an object", () => {
   // The inner `{ [k]: chosen }` yields no residual, so its walk returns
   // undefined and the enclosing object property is skipped entirely.
   const { sourceFile, checker } = createProgram(
@@ -333,7 +366,7 @@ Deno.test("analyzeElementBinding drops nested object patterns that hold only a c
   );
 });
 
-Deno.test("analyzeElementBinding lifts a computed key into an alias with a residual destructure", () => {
+test("analyzeElementBinding lifts a computed key into an alias with a residual destructure", () => {
   const { sourceFile, checker } = createProgram(
     "declare const k: string;\n" +
       "const f = ({ [k]: chosen, other }) => chosen;",
@@ -358,7 +391,7 @@ Deno.test("analyzeElementBinding lifts a computed key into an alias with a resid
   assert(identifierTexts(analysis.destructureStatement).has("element"));
 });
 
-Deno.test("rewriteCallbackBody returns the body unchanged when there are no computed aliases", () => {
+test("rewriteCallbackBody returns the body unchanged when there are no computed aliases", () => {
   const { sourceFile, checker } = createProgram(
     "const f = (item) => item.name;",
   );
@@ -372,7 +405,7 @@ Deno.test("rewriteCallbackBody returns the body unchanged when there are no comp
   assertEquals(result, body);
 });
 
-Deno.test("rewriteCallbackBody injects alias and key prologues around an expression body", () => {
+test("rewriteCallbackBody injects alias and key prologues around an expression body", () => {
   const { sourceFile, checker } = createProgram(
     "declare const k: string;\n" +
       "const f = ({ [k]: chosen }) => chosen;",
@@ -396,7 +429,7 @@ Deno.test("rewriteCallbackBody injects alias and key prologues around an express
   assert(returnsIdentifier(result, "chosen"));
 });
 
-Deno.test("rewriteCallbackBody reuses an existing block body when injecting alias prologues", () => {
+test("rewriteCallbackBody reuses an existing block body when injecting alias prologues", () => {
   const { sourceFile, checker } = createProgram(
     "declare const k: string;\n" +
       "const f = ({ [k]: chosen }) => { return chosen; };",

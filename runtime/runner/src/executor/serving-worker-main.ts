@@ -2,7 +2,8 @@
  * What a serving worker's entry module does once loaded: installs the port's
  * endpoint on the worker's global scope, waits for the `worker.init` request,
  * which carries the service key and the host's options, builds the
- * `ExecutorHost` over a `ServingPlane`, and answers once the host serves. The
+ * `ExecutorHost` over a `ServingPlane`, with the serving runtimes marking their
+ * runs on the run beacon the init carries, and answers once the host serves. The
  * runner's own entry (`serving-worker.ts`) calls this bare; an entry in a
  * higher layer calls it with the lifecycle verbs it can build and the fetch
  * and module cache its deployment uses. Where the init says so, the serving
@@ -17,6 +18,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import type { ClientBuild } from "@commonfabric/memory/v2/client-info";
 import { adoptProcessInstanceId } from "@commonfabric/memory/v2/execution-lease";
 import { holdWorkerLifetimeLock } from "@commonfabric/platform/worker-lifetime";
+import { setLLMUrl } from "@commonfabric/llm";
 import { setPatternEnvironment } from "../builder/env.ts";
 import { startHeapSampling, writeThreadHeapProfile } from "../heap-profile.ts";
 import { threadId } from "@node/worker_threads";
@@ -26,6 +28,7 @@ import type { ModuleCompileWorker } from "../harness/module-compile-worker.ts";
 import type { ModuleByteCache, RuntimeFetch } from "../runtime.ts";
 import { ExecutorHost } from "./host.ts";
 import { webSocketRoute } from "./routed-plane.ts";
+import { RunBeacon } from "./run-beacon.ts";
 import { servingLoopDiagnostics } from "./serving-loop-diagnostics.ts";
 import { ServingPlane, servingPlaneEndpoint } from "./serving-port-plane.ts";
 import type {
@@ -107,10 +110,19 @@ export function serveFromPort(
     // realm's, so it is set here to what the process that started the worker
     // serves patterns from, as that process sets its own.
     setPatternEnvironment({ apiUrl: new URL(init.apiUrl) });
+    // LLM calls from this worker go to the toolshed, not `location` (a file:
+    // URL in a Deno worker), as the browser runtime sets in runtime-processor.
+    setLLMUrl(init.apiUrl);
     const identity = await Identity.fromKeyPair(
       keyPairFromRealmValue(init.serviceKeyPair, "the serving worker's key"),
     );
     const plane = new ServingPlane(endpoint);
+    const runBeacon = init.runBeacon === undefined ? undefined : new RunBeacon(
+      init.runBeacon,
+      (identity) => plane.reportRunNamed(identity),
+      (runs) => plane.reportRunsForgotten(runs),
+    );
+    runBeacon?.countReads();
     const shared = init.compileCacheDir === undefined
       ? undefined
       : openSharedCompileCache(init.compileCacheDir);
@@ -139,6 +151,7 @@ export function serveFromPort(
           ? {}
           : { compileClaims: shared.compileClaims }),
         ...(moduleCompiler === undefined ? {} : { moduleCompiler }),
+        ...(runBeacon === undefined ? {} : { runBeacon }),
       }),
       ...(init.policy === undefined ? {} : { policy: init.policy }),
       ...(init.ensureSpaceRoots === undefined
@@ -181,6 +194,7 @@ export function serveFromPort(
         writeThreadHeapProfile(directory, `worker-${threadId}`),
       occupancy: () => host.occupancy,
       noteSpaceAclChanged: (space) => host.noteSpaceAclChanged(space),
+      failEvent: (space, event, reason) => host.failEvent(space, event, reason),
       runLifecycleVerb: (space, verb) => {
         if (options.runLifecycleVerb === undefined) {
           return Promise.reject(

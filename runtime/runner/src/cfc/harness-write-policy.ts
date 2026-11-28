@@ -16,11 +16,9 @@ export interface HarnessWriteFileAuthorizationRequest {
   mode?: "replace" | "append";
 }
 
-export interface HarnessWriteFileAuthorizationDecision {
-  allowed: boolean;
-  warningDetail?: string;
-  denialDetail?: string;
-}
+export type HarnessWriteFileAuthorizationDecision =
+  | { allowed: true; warningDetail?: string }
+  | { allowed: false; denialDetail: string };
 
 const hasDirectCommandAuthorization = (
   promptSlot?: HarnessPromptSlotLike,

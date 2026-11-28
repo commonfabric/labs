@@ -5,7 +5,6 @@
 
 import { expect } from "@std/expect";
 import { join } from "@std/path";
-import { afterAll, beforeAll, describe, it } from "@std/testing/bdd";
 
 import { ConsoleEvent } from "@astral/astral";
 import { entityRefToString } from "@commonfabric/data-model/cell-rep";
@@ -26,6 +25,12 @@ import { getEntityId, isCell, UI } from "@commonfabric/runner";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { rendererVDOMSchema } from "@commonfabric/runner/schemas";
 import { withStuckNet } from "@commonfabric/test-support/stuck-net";
+import {
+  afterAll,
+  beforeAll,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import {
   clickMarked,

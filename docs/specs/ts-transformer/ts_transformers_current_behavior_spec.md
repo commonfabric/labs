@@ -296,6 +296,14 @@ behavior they change:
 - `state` and `diagnosticsCollector` — cross-stage communication and diagnostic
   collection (§2)
 
+`AssertDiagnosticsTransformer` records a method call's receiver when the call
+has no argument worth recording. It leaves a receiver within an optional chain
+intact, including when the `?.` occurs earlier than the method access, as in
+`entry?.revision.startsWith("1:")`. The chain retains its nullish
+short-circuiting, receiver binding, and single evaluation; arguments remain
+unevaluated when the chain short-circuits. An enclosing operator can still
+record the whole call's result (`test/assert-diagnostics.test.ts`).
+
 ## 5. Call Kind Detection Contract
 
 `detectCallKind()` drives multiple transformers. The set of recognized Common
@@ -326,8 +334,9 @@ list — is the authoritative source. As of this writing it recognizes:
   `fetchJsonUnchecked`, `fetchText`, `fetchBinary` — `fetchProgram`,
   `streamData`, `cellFromUrl`,
   `compileAndRun`, `navigateTo`, and the SQLite builtins `sqliteDatabase` /
-  `sqliteQuery` (`sqliteQuery<Row>` additionally gets dedicated type-argument
-  schema injection)
+  `sqliteQuery` / `indexedCollections`
+  (`sqliteQuery<Row>` additionally gets
+  dedicated type-argument schema injection)
 - `patternTool` — recognized, but explicitly **not** a reactive origin
   (`reactiveOrigin: false`)
 
@@ -920,7 +929,7 @@ Diagnostics emitted in all modes:
   `pattern-context:var-declaration`
   - statement-boundary imperative structure in top-level pattern-owned code —
     assignments, early returns, `let`/`var` declarations, and loops each
-    report a dedicated id (`pattern-context-validation.ts:539-633`). These
+    report a dedicated id (`pattern-context-validation.ts:728-838`). These
     enforce the target-language matrix's "statement-boundary imperative
     constructs" Unsupported row and have been live since the boundary PR
     (#3154).
@@ -1259,7 +1268,7 @@ callback diagnostic would.
 `JsxPropNameValidationTransformer` (stage 10) reports a JSX prop whose name
 can name no property of the element it is written on:
 
-- **Warning** `jsx:misnamed-prop`
+- **Error** `jsx:misnamed-prop`
   (`src/transformers/jsx-prop-name-validation.ts`) — a prop on an intrinsic
   element (a tag starting with a lower-case letter or holding a hyphen) whose
   name holds a hyphen and is neither an event prop (`on…`, such as
@@ -1278,9 +1287,10 @@ are event, attribute and misnamed props is decided by
 too. A component's props are not checked: they are its parameter's fields,
 which may hold any name.
 
-It is a warning rather than an error because a pattern source already stored
-in a space may hold such a prop, and a stored source has to keep compiling; the
-prop does nothing either way.
+Under `TransformationOptions.storedSource` it reports as a **Warning**, as the
+other authoring-shape gates do: a pattern source already stored in a space may
+hold such a prop, and its reload has to keep compiling. The prop does nothing
+either way.
 
 The stage walks every node, including the expression inside a JSX expression
 container, and changes nothing.
@@ -1400,11 +1410,11 @@ report these through the same collector (deduplicated via §2.2's
   `base/schema-generator/test/schema/cfc-authoring.test.ts`, and the
   runner's `test/cfc-labeled-cell-input.test.ts`.
 - **Error** `pattern-context:receiver-method-call`
-  (`pattern-body-reactive-root-lowering.ts:162`) — the pattern-body
+  (`pattern-body-reactive-root-lowering.ts:197`) — the pattern-body
   reactive-root seam could not admit a receiver-method call on a tracked
   reactive root at that site
 - **Error** `pattern-context:inline-reactive-root-access`
-  (`pattern-body-reactive-root-lowering.ts:1467`) — an inline tracked
+  (`pattern-body-reactive-root-lowering.ts:1414`) — an inline tracked
   reactive-root read at a position that stage cannot lower
 - **Error** `pattern-result:unknown-type` (`reportUnknownPatternResult()` in
   `schema-injection.ts`) — see §6.6; demoted to a **Warning** under
@@ -1415,7 +1425,7 @@ report these through the same collector (deduplicated via §2.2's
   root; demoted to a **Warning** under `TransformationOptions.storedSource`
   (an identity-pinned reload of durable stored source admits nothing new, so
   the report keeps its visibility and loses its veto); see §6.12
-- **Error** `reactive-capture:unknown-type` (`src/ast/type-building.ts:681`) —
+- **Error** `reactive-capture:unknown-type` (`src/ast/type-building.ts:1545`) —
   a captured reactive value's inferred type is `unknown`, so its schema would
   be `{ type: "unknown" }` and the runner would not materialize it, reading it
   back as an opaque reference carrying no properties; the message directs
@@ -1536,6 +1546,11 @@ The rewriter uses normalized data-flow dependencies and ordered emitters:
 6. element access
 7. prefix unary
 8. container expression
+
+The prefix unary emitter lifts `!`, `-`, `+`, and `~` applied to a reactive
+operand. It leaves `++` and `--` in place: they assign to their operand, and a
+lift reruns its callback whenever an input changes, which would repeat the
+assignment.
 
 The container emitter owns a literal that holds other expressions, and a
 transparent wrapper around one: it rewrites the children and leaves the
@@ -1798,10 +1813,13 @@ Transforms `action(...)` to handler factory invocation:
   emitted `handler`, which is where the declared result would otherwise be
   lost: the rewritten call carries schemas rather than the authored type
   arguments. SchemaInjection lowers that slot (§10.3).
-- callback extraction supports arrow callbacks only, and reaches the arrow
-  through the transparent wrapper set (parentheses, `as`, `<T>x`, `satisfies`, `!`, and partially emitted nodes). The whole set comes off: a spelling left on hides the callback
-  from this strategy, and `action(...)` then survives into the emitted module,
-  where the runtime throws because `action` exists only to be lowered here
+- callback extraction supports a single arrow callback only, and reaches the
+  arrow through the transparent wrapper set (parentheses, `as`, `<T>x`, `satisfies`, `!`, and partially emitted nodes). The whole set comes off: a spelling left on hides the callback
+  from this strategy. Any other argument list — a named function reference, a
+  function expression, no argument, or extra arguments — is reported as
+  **Error** `action:unsupported-callback`, because `action(...)` would
+  otherwise survive into the emitted module, where the runtime throws since
+  `action` exists only to be lowered here
 
 ### 9.4 Array-method strategy
 
@@ -1998,9 +2016,9 @@ Primary behaviors:
   (`hasStaticKeyType()`) when it is a literal; a well-known Common Fabric
   key, the set `COMMON_FABRIC_KEY_NAMES` in
   `base/schema-generator/src/typescript/property-name.ts` defines (as of
-  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`); or an expression whose
-  type is a single string or number literal, such as a reference to
-  `const KEY = "k"`. What is emitted follows the kind of key
+  this writing `NAME`, `UI`, `SELF`, `FS`, `VIEWS`, `SUGGESTIONS`); or an
+  expression whose type is a single string or number literal, such as a
+  reference to `const KEY = "k"`. What is emitted follows the kind of key
   (`getStaticKeySegment()`): a literal as its string, a numeric one under its
   decimal name (`groups[1e2]` -> `.key("groups", "100")`); a well-known key as
   its `__cfHelpers` member (`row[NAME]` -> `row.key(__cfHelpers.NAME)`,
@@ -2319,7 +2337,7 @@ Injected behaviors:
   - the typed form lowers the `T` type argument to an injected `schema`
     property on the options object (parallel to `generateObject`)
   - an untyped `fetchJson(...)` call is a hard **Error**
-    `fetch-json:missing-type-argument` (`schema-injection.ts:4015`), directing
+    `fetch-json:missing-type-argument` (`schema-injection.ts:5198`), directing
     authors to add a type argument or use `fetchJsonUnchecked` for JSON whose
     shape is not declared as a type. `fetchText` / `fetchBinary` /
     `fetchJsonUnchecked` receive no dedicated injection.
@@ -2879,7 +2897,7 @@ defaulting to read. When a cell
 argument reaches an imported parameter whose capability the contract cannot
 classify, the capability would be silently lost, so the transformer reports
 **Error** `capability:unreadable-cell-argument`
-(`schema-injection.ts:269`, via `reportDiagnosticOnce`). The design narrative
+(`schema-injection.ts:286`, via `reportDiagnosticOnce`). The design narrative
 lives in `docs/history/packages/ts-transformers/SCHEMA_INJECTION_NOTES.md`
 (a point-in-time design record; "Imported Cell
 Parameters Are a Capability Contract").
@@ -3561,11 +3579,10 @@ export default pattern((state) => ({
 Inside object-literal properties (only there), a *reference* to an existing
 reactive value is re-caused at its result location: after visiting, a bare
 identifier whose type is a cell in every arm a value can take (`isCellByType`,
-as for the variable-position fallback in §13.2) — or, absent type information,
-is a reactive value expression (`isReactiveValueExpression`) — gets
-`.for(<path>, true)` appended (`shouldRetargetReactiveReference`). An
-identifier whose type has a plain-value arm beside a cell arm is re-rooted
-only when it is a reactive node by provenance (`isReactiveNodeByProvenance`):
+as for the variable-position fallback in §13.2) gets `.for(<path>, true)`
+appended (`shouldRetargetReactiveReference`). An identifier whose type has a
+plain-value arm beside a cell arm is re-rooted only when it is a reactive
+node by provenance (`isReactiveNodeByProvenance`):
 a parameter of a reactive scope — the callback of a pattern builder call or
 of a reactive array method, through any parentheses or other transparent
 wrapper around the callback (`isReactiveScopeParameter`; a handler's, lift's,
@@ -4962,7 +4979,8 @@ null when it does not apply. Current built-in behavior:
    result types can degrade schema precision (type arguments may be
    intentionally omitted).
 2. Action and JSX inline handler callback extraction currently unwraps arrow
-   functions only.
+   functions only; an `action` given anything else is reported as
+   `action:unsupported-callback`.
 3. Non-static destructuring defaults, rest destructuring, and unsupported
    computed destructuring keys in pattern callbacks remain non-lowerable and
    produce pattern-context diagnostics.

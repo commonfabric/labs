@@ -6,11 +6,14 @@
  * profiles are made by `createProfile()`, as profile-create.test.ts drives it.
  */
 
-import { afterEach, beforeEach, describe, it } from "@std/testing/bdd";
 import { expect } from "@std/expect";
 import { stub } from "@std/testing/mock";
 import { fromFileUrl } from "@std/path";
 
+import {
+  type FabricPlainObject,
+  isFabricPlainObject,
+} from "@commonfabric/data-model";
 import { FabricBytes } from "@commonfabric/data-model/fabric-primitives";
 import { Identity } from "@commonfabric/identity";
 import { isWellFormedDID } from "@commonfabric/identity/did";
@@ -30,7 +33,14 @@ import {
   EmulatedStorageManager,
   newLoopbackServer,
 } from "@commonfabric/runner/storage/cache.deno";
+import { blobDocumentId } from "@commonfabric/runner/blob-record";
 import { createCompileByteCache } from "@commonfabric/test-support/compile-byte-cache";
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  it,
+} from "@commonfabric/test-support/test";
 
 import { PiecesController } from "@commonfabric/piece/ops";
 
@@ -72,6 +82,8 @@ const picture = new Uint8Array([
   0,
   13,
 ]);
+// Another picture, by the same check.
+const otherPicture = new Uint8Array([...picture, 1]);
 const space = signer.did();
 
 /** A list of profile links, each read as the link it is. */
@@ -406,6 +418,37 @@ describe("profile management", () => {
     return documentSpace;
   }
 
+  /** The document the `name` of the profile at `profile` resolves to. */
+  async function nameDocument(
+    profile: { space: string; id: string },
+  ): Promise<NormalizedFullLink> {
+    const cell = runtime.getCellFromEntityId(spaceOf(profile), profile.id);
+    await cell.sync();
+    const name = cell.key("name").resolveAsCell();
+    await name.sync();
+    return { ...name.getAsNormalizedFullLink(), path: [] };
+  }
+
+  /**
+   * Replaces the label envelope stored on `document` with what `change`
+   * makes of it, beneath the runtime's write checks.
+   */
+  async function rewriteEnvelope(
+    document: NormalizedFullLink,
+    change: (cfc: FabricPlainObject) => FabricPlainObject,
+  ): Promise<void> {
+    const tx = runtime.edit();
+    const stored = storedFields(tx, document);
+    const { cfc } = stored;
+    if (!isFabricPlainObject(cfc)) {
+      throw new Error(`${document.id} carries no label.`);
+    }
+    seedStoredEnvelope(tx, document, { ...stored, cfc: change(cfc) });
+    runtime.prepareTxForCommit(tx);
+    expect((await tx.commit().settled).error).toBeUndefined();
+    await runtime.idle();
+  }
+
   describe("listProfiles()", () => {
     it("returns no profiles for a person who has none", async () => {
       expect(await listProfiles(CONFIG, { loadPieces })).toEqual([]);
@@ -666,6 +709,37 @@ describe("profile management", () => {
       expect(await listedNames()).toEqual(["Ada", "Alan"]);
     });
 
+    it("throws, saying Home's list did not change, when Home finds the profile retired already", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+      const alan = await createProfile({ ...CONFIG, name: "Alan" }, {
+        loadPieces,
+      });
+      // The retired list holds a link in the home space that leads to Alan's
+      // profile: Home follows it and finds Alan retired, though the list
+      // holds no link into Alan's space.
+      const tx = runtime.edit();
+      const redirect = runtime.getCell<unknown>(
+        space,
+        "a link to Alan's profile",
+        undefined,
+        tx,
+      );
+      redirect.set(runtime.getCellFromLink(listedLink(alan.space)));
+      expect((await tx.commit().settled).error).toBeUndefined();
+      await listInHome(redirect.getAsNormalizedFullLink(), "retiredProfiles");
+
+      await expect(
+        retireProfile({ ...CONFIG, profileSpace: alan.space }, { loadPieces }),
+      ).rejects.toThrow(
+        `Retiring profile ${alan.space} committed, but Home's list did not ` +
+          "change.",
+      );
+      expect(
+        (host.key("retiredProfiles").asSchema(linkListSchema).get() ?? [])
+          .map((each) => each.getAsNormalizedFullLink().space),
+      ).toEqual([space]);
+    });
+
     it("refuses a listed profile that is another identity's", async () => {
       await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
       await createProfile({ ...CONFIG, name: "Alan" }, { loadPieces });
@@ -776,6 +850,72 @@ describe("profile management", () => {
       await restoreProfile(target, { loadPieces });
 
       expect(await listedNames()).toEqual(["Ada", "Alan"]);
+    });
+
+    it("throws when the applied inspection leaves the name attested to another principal besides the identity", async () => {
+      await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
+      const older = await listProfileWithUnlabeledName("Alan");
+      const target = { ...CONFIG, profileSpace: older.space };
+      const first = await attestProfileName(target, { loadPieces });
+      if (first.status !== "inspected") throw new Error("Not inspected.");
+      await attestProfileName(
+        { ...target, expectedInspection: first.inspection },
+        { loadPieces },
+      );
+      // The name's protection stays in place, so the repair has nothing to
+      // apply, and its label names the stranger as well as the owner.
+      await rewriteEnvelope(await nameDocument(older), (cfc) => {
+        const { labelMap } = cfc;
+        if (!isFabricPlainObject(labelMap)) throw new Error("No label map.");
+        return {
+          ...cfc,
+          labelMap: {
+            ...labelMap,
+            entries: [...storedList(labelMap.entries), {
+              path: [],
+              label: {
+                integrity: [{
+                  kind: "represents-principal",
+                  subject: stranger.did(),
+                }],
+              },
+              origin: "derived",
+            }],
+          },
+        };
+      });
+
+      const inspected = await attestProfileName(target, { loadPieces });
+      expect(inspected).toMatchObject({ status: "inspected", name: "Alan" });
+      if (inspected.status !== "inspected") throw new Error("Not inspected.");
+      await expect(
+        attestProfileName(
+          { ...target, expectedInspection: inspected.inspection },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(
+        `Attesting the name of profile ${older.space} committed, but its ` +
+          `name is still not attested to ${space}.`,
+      );
+    });
+
+    it("throws, naming the profile, when the label of its name cannot be read", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      const target = { ...CONFIG, profileSpace: ada.space };
+      expect(await attestProfileName(target, { loadPieces })).toEqual({
+        status: "already",
+        name: "Ada",
+      });
+      await rewriteEnvelope(
+        await nameDocument(ada),
+        (cfc) => ({ ...cfc, version: 3 }),
+      );
+
+      await expect(attestProfileName(target, { loadPieces })).rejects.toThrow(
+        `Could not read the label of ${ada.id}.`,
+      );
     });
 
     it("returns `already`, changing nothing, for a name attested to the identity", async () => {
@@ -897,6 +1037,41 @@ describe("profile management", () => {
       expect(await listedNames()).toEqual(["Ada"]);
     });
 
+    it("throws, naming the act, when another name has replaced the new one by the time it is read back", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
+      // Another writer renames the profile once the rename has reached
+      // storage, before the profile is stopped and its name read back.
+      const racing: typeof loadPiecesOf = async (config) => {
+        const pieces = await loadPieces(config);
+        if (config.space !== ada.space) return pieces;
+        const stop = pieces.stopPiece.bind(pieces);
+        stub(pieces, "stopPiece", async (piece) => {
+          if (typeof piece === "string") throw new Error("A piece's id.");
+          const tx = pieces.runtime.edit();
+          piece.withTx(tx).asSchema(undefined).key("setName").send({
+            name: "Augusta",
+          });
+          expect((await tx.commit().settled).error).toBeUndefined();
+          await pieces.runtime.idle();
+          return stop(piece);
+        });
+        return pieces;
+      };
+
+      await expect(
+        renameProfile(
+          { ...CONFIG, profileSpace: ada.space, name: "Countess" },
+          { loadPieces: racing },
+        ),
+      ).rejects.toThrow(
+        `Renaming profile ${ada.space} committed, but the profile did not ` +
+          "change.",
+      );
+      expect(await listedNames()).toEqual(["Augusta"]);
+    });
+
     it("refuses a retired profile", async () => {
       await createProfile({ ...CONFIG, name: "Ada" }, { loadPieces });
       const alan = await createProfile({ ...CONFIG, name: "Alan" }, {
@@ -1002,47 +1177,81 @@ describe("profile management", () => {
         .toBeUndefined();
     });
 
-    it("reports a picture another principal set as not the owner's", async () => {
+    it("uploads a picture of 200 KiB as a blob in the profile's own space, and holds no bytes of it inline", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
       });
-      // The profile's space lets anyone write, and the picture's writer
-      // labels the value with whoever wrote it.
-      profileSigner = stranger;
+      const large = new Uint8Array(200 * 1024);
+      large.set(picture);
+
+      await setProfilePicture(
+        { ...CONFIG, profileSpace: ada.space, bytes: large },
+        { loadPieces },
+      );
+
+      const [listed] = await listProfiles(CONFIG, { loadPieces });
+      expect(listed.picture).toEqual(large);
+      expect(listed.pictureByOwner).toBe(true);
+      const profile = runtime.getCellFromEntityId<{
+        picture?: FabricBytes;
+        pictureBlob?: { space?: string; id?: string };
+      }>(spaceOf(ada), ada.id);
+      await profile.sync();
+      const { picture: inline, pictureBlob } = profile.get() ?? {};
+      expect(inline?.length).toBe(0);
+      expect(pictureBlob?.space).toBe(ada.space);
+      const record = await server.readDocument(
+        spaceOf(ada),
+        blobDocumentId(pictureBlob?.id ?? ""),
+      );
+      expect(record?.value).toEqual({
+        type: "image/png",
+        body: new FabricBytes(large),
+      });
+    });
+
+    it("refuses a picture another principal sets, and keeps the owner's", async () => {
+      const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
+        loadPieces,
+      });
       await setProfilePicture(
         { ...CONFIG, profileSpace: ada.space, bytes: picture },
         { loadPieces },
       );
+
+      profileSigner = stranger;
+      await expect(
+        setProfilePicture(
+          { ...CONFIG, profileSpace: ada.space, bytes: otherPicture },
+          { loadPieces },
+        ),
+      ).rejects.toThrow(/Only the profile's owner can set its picture/);
       profileSigner = signer;
 
       const [listed] = await listProfiles(CONFIG, { loadPieces });
       expect(listed.picture).toEqual(picture);
-      expect(listed.pictureByOwner).toBe(false);
-
-      await setProfilePicture(
-        { ...CONFIG, profileSpace: ada.space, bytes: picture },
-        { loadPieces },
-      );
-      expect((await listProfiles(CONFIG, { loadPieces }))[0].pictureByOwner)
-        .toBe(true);
+      expect(listed.pictureByOwner).toBe(true);
     });
 
     it("reports a picture stored without a label as not attested to its owner, and attests it with `keepCurrent`", async () => {
       const ada = await createProfile({ ...CONFIG, name: "Ada" }, {
         loadPieces,
       });
-      // A picture as a writer that brings no policy stores it: bytes, and no
-      // label.
+      // A stand-in for a picture stored before the field had a policy: the
+      // stored policy is taken away, and bytes are written with no label.
       const profile = runtime.getCellFromEntityId<{ picture?: unknown }>(
         spaceOf(ada),
         ada.id,
       );
       await profile.sync();
+      const stored = profile.key("picture").resolveAsCell()
+        .getAsNormalizedFullLink();
+      const strip = runtime.edit();
+      seedStoredEnvelope(strip, { ...stored, path: ["cfc"] }, undefined);
+      runtime.prepareTxForCommit(strip);
+      expect((await strip.commit().settled).error).toBeUndefined();
       const tx = runtime.edit();
-      tx.writeValueOrThrow(
-        profile.key("picture").resolveAsCell().getAsNormalizedFullLink(),
-        new FabricBytes(picture),
-      );
+      tx.writeValueOrThrow(stored, new FabricBytes(picture));
       runtime.prepareTxForCommit(tx);
       expect((await tx.commit().settled).error).toBeUndefined();
 

@@ -20,7 +20,7 @@ import type { SyntaxNode, TreeSitterGrammar } from "../treesitter/adapter.ts";
  * capture over a character colors it, and between captures of the same extent
  * the earliest pattern wins.
  */
-const HIGHLIGHT_QUERY = `
+export const PYTHON_HIGHLIGHT_QUERY = `
 (comment) @comment
 
 ((string) @template (#match? @template "^[A-Za-z]*[fFtT][A-Za-z]*[^A-Za-z]"))
@@ -96,7 +96,7 @@ export const pythonGrammar: TreeSitterGrammar = {
   wasmUrl: () =>
     import.meta.resolve("tree-sitter-python/tree-sitter-python.wasm"),
 
-  highlightQuery: HIGHLIGHT_QUERY,
+  highlightQuery: PYTHON_HIGHLIGHT_QUERY,
 
   structureEntry(node) {
     if (
