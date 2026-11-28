@@ -11,9 +11,27 @@
  * has none or is treated as able to cause anything.
  */
 
-import { isAbsolute, join, relative } from "@std/path";
+import { isAbsolute, join, relative, SEPARATOR } from "@std/path";
 
 import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
+
+/**
+ * Where each of `hostPaths` appears in the sandbox, under every mount that
+ * shows it: the workspace, or a host bind. Every side should be canonical, or
+ * a link on one makes the path look outside the mount.
+ */
+export const sandboxPathsUnderMounts = (
+  mounts: readonly { hostPath: string; sandboxPath: string }[],
+  hostPaths: readonly string[],
+): string[] =>
+  hostPaths.flatMap((hostPath) =>
+    mounts.flatMap((mount) => {
+      const inside = relative(mount.hostPath, hostPath);
+      const outside = isAbsolute(inside) || inside === ".." ||
+        inside.startsWith(`..${SEPARATOR}`);
+      return outside ? [] : [join(mount.sandboxPath, inside)];
+    })
+  );
 
 /**
  * The runsc configuration of one sealed call, derived from the configuration
@@ -25,7 +43,7 @@ import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
  *   read-only;
  * - each of `maskedPaths` covered, so the run's artifact root, which no
  *   model-facing tool may read, is not read through a script either (see
- *   {@link sandboxPathsInsideWorkspace});
+ *   {@link sandboxPathsUnderMounts});
  * - a scratch directory of the call's own beside the run's, in the parent
  *   the run's runtime verifies is private, so the runtime built from it, and
  *   closed after the one call, shares no state with the run's.
@@ -36,22 +54,6 @@ import type { RunscSandboxConfig } from "../sandbox/runsc.ts";
  * the mounts. What it writes lands in the container's `/tmp` or in the
  * in-memory overlay over its root filesystem, and both go with the container.
  */
-/**
- * Where each of `hostPaths` that lies inside the workspace appears in the
- * sandbox. Both sides should be canonical, or a link on one makes the path
- * look outside.
- */
-export const sandboxPathsInsideWorkspace = (
-  workspaceHostPath: string,
-  workspaceMountPath: string,
-  hostPaths: readonly string[],
-): string[] =>
-  hostPaths.flatMap((hostPath) => {
-    const inside = relative(workspaceHostPath, hostPath);
-    if (inside.startsWith("..") || isAbsolute(inside)) return [];
-    return [join(workspaceMountPath, inside)];
-  });
-
 export const sealedSkillScriptRunscConfig = (
   config: RunscSandboxConfig,
   callId: string,

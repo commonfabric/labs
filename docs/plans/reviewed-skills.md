@@ -360,25 +360,31 @@ about injection.
   its own runsc runtime, the target is the sandbox, and the call names no
   working directory. It runs on a runtime built for that call from the run's
   configuration, with network mode `none`, no fabric mount, the workspace and
-  every host bind read-only, the artifact root hidden, and a scratch directory
-  of its own; the tool checks
-  the runtime describes itself that way before it runs anything. Its working
-  directory is the read-only workspace, because runsc keeps a call's working
-  directory inside its mounts; what it writes lands in its container's fresh
-  `/tmp` or the root filesystem's in-memory overlay, and dies with the
-  container. Every other call is a side effect: a host-target call, a call that
-  names a working directory, and any call in a run handed its sandbox runtime.
-  Two parts of the definition are met less than fully. The environment is the
-  explicit `CF_HARNESS_*` and `SKILL_*` set plus runsc's `PATH`, `HOME` and
-  `TERM`, rather than one built by `createClearedHostProcessEnv`, which is for
-  the host. And the record names the root filesystem path, not a measured image
-  digest: nothing measures the image yet.
+  every host bind read-only, and a scratch directory of its own; the tool checks
+  that the runtime describes itself that way before it runs anything. The
+  configuration also covers the artifact root, wherever a mount shows it, with
+  an empty tmpfs; the runtime describes no such mask, so the check does not
+  cover it. What the script writes lands in the container's own tmpfs mounts
+  (`/tmp`, `/dev`, `/dev/shm`) or the root filesystem's in-memory overlay, and
+  dies with the container. Every other call is a side effect: a host-target
+  call, a call that names a working directory, and any call in a run handed its
+  sandbox runtime.
+
+  Three parts of the definition are met less than fully. The working directory
+  is the read-only workspace rather than a fresh scratch directory, because
+  runsc keeps a call's working directory inside its mounts; the fresh `/tmp` is
+  the scratch. The environment is the explicit `CF_HARNESS_*` and `SKILL_*` set
+  plus runsc's `PATH`, `HOME` and `TERM`, rather than one built by
+  `createClearedHostProcessEnv`, which is for the host. And the record names the
+  root filesystem path, not a measured image digest: nothing measures the image
+  yet.
 - **The `"side-effect"` literal stays.** The policy gate in `prompt-loop.ts`
   passes the call's computed class. The literal asks a different question:
   whether a side effect would be admitted on this call. `read_value` asks it
   before starting a piece, and `run_skill_script` asks it to decide whether to
-  seal; asked as of `read`, it would always say yes. The loop now asks it once,
-  before computing the class, and hands the answer to both.
+  seal. Asked as of `read`, it would say yes to a `quote`-bound call under
+  `enforce-explicit`, where a side effect would be refused. The loop now asks it
+  once, before computing the class, and hands the answer to both.
 - **A reviewed script descriptor comes later.** Each reviewed script becomes a
   §18.3.2 `ToolDescriptor` whose `contractPredicateDigest` names a §18.2.4.1
   measured contract over the script bytes, the interpreter and the sandbox

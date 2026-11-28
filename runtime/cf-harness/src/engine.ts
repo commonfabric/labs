@@ -260,7 +260,7 @@ import {
   AcquiredSkillDirectoryReadableError,
 } from "./skills/acquired-skill-mount.ts";
 import {
-  sandboxPathsInsideWorkspace,
+  sandboxPathsUnderMounts,
   sealedSkillScriptRunscConfig,
 } from "./skills/sealed-script-sandbox.ts";
 import type { BashToolInput, BashToolOutput } from "./tools/bash.ts";
@@ -724,18 +724,6 @@ type HostSandboxMount = {
   readOnly?: boolean;
 };
 
-/**
- * `path` with its links resolved, so that two paths to one directory compare
- * equal, or `path` as given when it cannot be resolved.
- */
-const canonicalOrGiven = (path: string): string => {
-  try {
-    return canonicalHostPath("artifact root", path);
-  } catch {
-    return path;
-  }
-};
-
 export class CfHarnessEngine {
   readonly config: ResolvedHarnessConfig;
   readonly sandbox: SandboxRuntime;
@@ -1088,12 +1076,30 @@ export class CfHarnessEngine {
           sealedSkillScriptRunscConfig(
             runscConfig,
             crypto.randomUUID(),
+            // Resolved as the mounts are, so a link on either side cannot
+            // make the artifact root look outside them; a root that cannot be
+            // resolved fails the call rather than running it unmasked.
             this.artifactStore?.artifactRoot === undefined
               ? []
-              : sandboxPathsInsideWorkspace(
-                canonicalOrGiven(runscConfig.workspaceHostPath),
-                runscConfig.workspaceMountPath,
-                [canonicalOrGiven(this.artifactStore.artifactRoot)],
+              : sandboxPathsUnderMounts(
+                [
+                  {
+                    hostPath: runscConfig.workspaceHostPath,
+                    sandboxPath: runscConfig.workspaceMountPath,
+                  },
+                  ...runscConfig.additionalMounts.flatMap((mount) =>
+                    mount.kind === "host-bind" ? [mount] : []
+                  ),
+                ].map((mount) => ({
+                  hostPath: canonicalHostPath("sandbox mount", mount.hostPath),
+                  sandboxPath: mount.sandboxPath,
+                })),
+                [
+                  canonicalHostPath(
+                    "artifact root",
+                    this.artifactStore.artifactRoot,
+                  ),
+                ],
               ),
           ),
           options.processRunner,

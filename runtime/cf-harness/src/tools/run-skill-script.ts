@@ -162,6 +162,15 @@ export const runSkillScriptToolDescriptor: HarnessToolDescriptor = {
       registrySizeBytes: { type: "integer", minimum: 0 },
       observedSizeBytes: { type: "integer", minimum: 0 },
       acquisition: { type: "object" },
+      sealed: {
+        type: "object",
+        properties: {
+          networkMode: { type: "string", const: "none" },
+          image: { type: "string" },
+        },
+        required: ["networkMode"],
+        additionalProperties: false,
+      },
       stdout: { type: "string" },
       stderr: { type: "string" },
       exitCode: { type: "number" },

@@ -28,7 +28,7 @@ import {
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
 import {
-  sandboxPathsInsideWorkspace,
+  sandboxPathsUnderMounts,
   sealedSkillScriptRunscConfig,
 } from "../src/skills/sealed-script-sandbox.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
@@ -609,14 +609,20 @@ test("RunscSandboxRuntime runs a sealed skill-script config with no network and 
   );
 });
 
-test("sandboxPathsInsideWorkspace maps a path inside the workspace and drops one outside", () => {
+test("sandboxPathsUnderMounts maps a path under each mount that shows it, and none outside", () => {
   assertEquals(
-    sandboxPathsInsideWorkspace("/host/ws", "/workspace", [
-      "/host/ws/.cf-harness-artifacts",
-      "/host/artifacts",
-      "/host/ws-other",
-    ]),
-    ["/workspace/.cf-harness-artifacts"],
+    sandboxPathsUnderMounts(
+      [
+        { hostPath: "/host/ws", sandboxPath: "/workspace" },
+        { hostPath: "/host", sandboxPath: "/everything" },
+      ],
+      ["/host/ws/..artifacts", "/elsewhere/artifacts", "/host/ws-other"],
+    ),
+    [
+      "/workspace/..artifacts",
+      "/everything/ws/..artifacts",
+      "/everything/ws-other",
+    ],
   );
 });
 
