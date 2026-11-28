@@ -1,0 +1,12 @@
+/**
+ * Holds the `single-bucket` group of Topics read-budget cases to the limits
+ * in `topics-read-budget-limits.ts`. Each case runs the headless Topics
+ * fixture in this process, with no browser and no server.
+ */
+
+import { describeReadBudgetGroup } from "./topics-read-budget-suite.ts";
+import { describe } from "@commonfabric/test-support/test";
+
+describe("topics-read-budget-single-bucket", () => {
+  describeReadBudgetGroup("single-bucket", import.meta.url);
+});

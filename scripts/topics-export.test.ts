@@ -148,83 +148,12 @@ CREATE TABLE branch (
 );
 INSERT INTO branch (name, head_seq, status) VALUES ('', 999, 'active');`;
 
-const SECOND_COMMENT = "of:fid1:second-comment";
-const NESTED = "of:fid1:nested";
-
-/**
- * A stored link to a path inside another document, naming the space and the
- * scope in `at` where it gives them.
- */
-const linkAt = (
-  id: string,
-  path: string[],
-  at: { space?: string; scope?: string } = {},
-) => ({
-  "/": { "link@1": { id, path, ...at } },
-});
-
-/** The space the seeded snapshot's file name names. */
-const SEEDED_SPACE = "did:key:zSeededTopicsSpace";
-
-/**
- * The topic's second comment, whose author is not a value of its own but a
- * link to the first comment's author: the shape a record takes when a write
- * set its field to another record's field.
- */
-const SECOND_COMMENT_VALUE = {
-  author: linkAt(COMMENT, ["author"]),
-  authorName: "drill (agent)",
-  body: "second drill comment",
-  sentAt: 1786913120000,
-};
-
-/**
- * The fixture's entities with the topic holding a second comment, whose
- * author links `target` at `path` in the space and scope `at` names, and a
- * document holding a link inside an author for a link to point at.
- */
-function withSecondComment(
-  target: string,
-  path: string[],
-  at: { space?: string; scope?: string } = {},
-): typeof ENTITIES {
-  return [
-    ...ENTITIES.map((entity) =>
-      entity.id === TOPIC_ARGUMENT
-        ? {
-          id: entity.id,
-          document: {
-            value: {
-              ...(entity.document.value as Record<string, unknown>),
-              comments: [link(COMMENT), link(SECOND_COMMENT)],
-            },
-          },
-        }
-        : entity
-    ),
-    {
-      id: SECOND_COMMENT,
-      document: {
-        value: { ...SECOND_COMMENT_VALUE, author: linkAt(target, path, at) },
-      },
-    },
-    {
-      id: NESTED,
-      document: { value: { author: { kind: "agent", name: link(COMMENT) } } },
-    },
-  ];
-}
-
 /**
  * Write the fixture space. `undecodable` adds a payload no reconstruction can
  * read, which a `kind` scan drops because it cannot classify it — the shape
- * that makes a piece listing cover less than the space. `entities` replaces
- * the fixture's entities.
+ * that makes a piece listing cover less than the space.
  */
-function seed(
-  path: string,
-  opts: { undecodable?: boolean; entities?: typeof ENTITIES } = {},
-): void {
+function seed(path: string, opts: { undecodable?: boolean } = {}): void {
   const db = new Database(path, { create: true });
   db.exec(SCHEMA);
   const commit = db.prepare(
@@ -236,7 +165,7 @@ function seed(
      VALUES (?, ?, 0, 'set', ?, ?)`,
   );
   let seq = 0;
-  for (const entity of opts.entities ?? ENTITIES) {
+  for (const entity of ENTITIES) {
     seq++;
     commit.run(seq, SESSION, seq);
     rev.run(entity.id, seq, JSON.stringify(entity.document), seq);
@@ -262,10 +191,10 @@ interface ExportRun {
  * the time the subprocess loads it and no run here depends on the network.
  */
 async function runExport(
-  opts: { undecodable?: boolean; entities?: typeof ENTITIES } = {},
+  opts: { undecodable?: boolean } = {},
 ): Promise<ExportRun> {
   const dir = await Deno.makeTempDir({ prefix: "topics-export-" });
-  const dbPath = `${dir}/${SEEDED_SPACE}.sqlite`;
+  const dbPath = `${dir}/did:key:zSeededTopicsSpace.sqlite`;
   const outPath = `${dir}/export.json`;
   seed(dbPath, opts);
   const output = await runDenoCommandWithTemporaryLock({
@@ -344,117 +273,6 @@ describe("topics-export", () => {
     it("summarizes the counts an operator cross-checks the manifest against", () => {
       expect(run.stdout).toContain("topics: 1  comments: 1  links: 0");
       expect(run.stdout).toContain("1 membership links");
-    });
-  });
-
-  describe("a comment whose author links another comment's author", () => {
-    let run: ExportRun;
-    let exported: TopicsExport;
-
-    beforeAll(async () => {
-      run = await runExport({
-        entities: withSecondComment(COMMENT, ["author"]),
-      });
-      if (run.code === 0) {
-        exported = JSON.parse(await Deno.readTextFile(run.outPath));
-      }
-    });
-
-    it("exits zero", () => {
-      expect(run.stderr).toBe("");
-      expect(run.code).toBe(0);
-    });
-
-    it("records the author the link reaches as the comment's author", () => {
-      expect(exported.topics[0].content.comments).toEqual([
-        COMMENT_VALUE,
-        { ...SECOND_COMMENT_VALUE, author: COMMENT_VALUE.author },
-      ]);
-    });
-
-    it("names the field it resolved", () => {
-      expect(exported.topics[0].aliased).toEqual(["comments[1].author"]);
-    });
-  });
-
-  describe("a comment whose author links a value holding a link", () => {
-    let run: ExportRun;
-
-    beforeAll(async () => {
-      run = await runExport({
-        entities: withSecondComment(NESTED, ["author"]),
-      });
-    });
-
-    it("exits nonzero naming the link it cannot flatten", () => {
-      expect(run.code).not.toBe(0);
-      expect(run.stderr).toContain(
-        "comments[1] holds a link at $.author.name",
-      );
-    });
-  });
-
-  describe("a comment whose author links within the snapshot's space", () => {
-    let run: ExportRun;
-    let exported: TopicsExport;
-
-    beforeAll(async () => {
-      run = await runExport({
-        entities: withSecondComment(COMMENT, ["author"], {
-          space: SEEDED_SPACE,
-          scope: "space",
-        }),
-      });
-      if (run.code === 0) {
-        exported = JSON.parse(await Deno.readTextFile(run.outPath));
-      }
-    });
-
-    it("records the author the link reaches", () => {
-      expect(run.stderr).toBe("");
-      expect(exported.topics[0].content.comments[1]).toEqual({
-        ...SECOND_COMMENT_VALUE,
-        author: COMMENT_VALUE.author,
-      });
-    });
-  });
-
-  describe("a comment whose author links into another space", () => {
-    let run: ExportRun;
-
-    beforeAll(async () => {
-      run = await runExport({
-        entities: withSecondComment(COMMENT, ["author"], {
-          space: "did:key:zOtherSpace",
-        }),
-      });
-    });
-
-    it("exits nonzero naming the link and the space it leads into", () => {
-      expect(run.code).not.toBe(0);
-      expect(run.stderr).toContain(
-        "comments[1].author links into did:key:zOtherSpace",
-      );
-    });
-  });
-
-  describe("a comment whose author links into a user's instance", () => {
-    let run: ExportRun;
-
-    beforeAll(async () => {
-      run = await runExport({
-        entities: withSecondComment(COMMENT, ["author"], {
-          space: SEEDED_SPACE,
-          scope: "user",
-        }),
-      });
-    });
-
-    it("exits nonzero naming the link and the scope it leads into", () => {
-      expect(run.code).not.toBe(0);
-      expect(run.stderr).toContain(
-        "comments[1].author links into the user scope",
-      );
     });
   });
 

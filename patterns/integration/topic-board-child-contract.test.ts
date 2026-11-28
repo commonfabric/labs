@@ -142,15 +142,10 @@ describe("topic-board-child-contract", () => {
     await citing.result.set({ topic: cited.getCell() }, ["mention"]);
 
     // The edge exists only if `addTopic` handed this child the board's
-    // collection. It is awaited rather than read at once: the collection
-    // follows the mention's commit, and the topic's query follows the
-    // collection.
-    const inbound = await waitForCellValue<{ title: string }[]>(
-      cc.runtime,
-      (await cited.result.getCell()).key("referencedBy"),
-      (value) => ((value ?? []) as unknown[]).length === 1,
-      { stuckLabel: "one backlink on the cited topic" },
-    );
+    // `crossrefs` pivot.
+    const inbound = await cited.result.get(["referencedBy"]) as {
+      title: string;
+    }[];
     expect(inbound.length).toBe(1);
     expect(inbound[0].title).toBe("Citing topic");
 
@@ -178,9 +173,9 @@ describe("topic-board-child-contract", () => {
  * The board's mention pivot, exercised through a board and the topics it
  * created.
  *
- * The board's collection mirrors what each topic mentions, and each topic asks
- * it which topics mention it. Testing that needs two things at the same time:
- * topics that are ON a board, so the collection holds them, and
+ * `crossrefTable()` derives the whole reference graph once on the board, and
+ * each topic reads its own row out of it. Testing that needs two things at the
+ * same time: topics that are ON a board, so the pivot sees them, and
  * `mention` / `unmention` / `referencedBy` on those same topics. Here both
  * hold, because a caller files through the board and then addresses the
  * created topic by its own fid.
@@ -398,9 +393,20 @@ describe("topic-board-pivot-contract", () => {
     },
   });
 
-  // The collection's query leaves a topic out of its own backlinks by
-  // comparing references, so there is no position for the exclusion to be
-  // confused with.
+  // NOTE ON WHAT THIS CANNOT SEPARATE, because the distinction is easy to
+  // assume from the wording: every topic here sits at exactly ONE index, so
+  // this case cannot tell the identity check the pivot's join makes when it
+  // leaves a topic out of its own backlinks (`mentionedByEach()` in
+  // `patterns/apps/topics/main.tsx`, which `mentionedBy()` there states pair
+  // by pair) from a check by array position: both pass it. Only a list naming
+  // one topic at two indices separates them, and the board's pivot joins over
+  // the list `distinctByIdentity()` returns, which names each topic once.
+  // `assert_self_mention_inert_through_a_twin` and
+  // `assert_mentioned_by_each_agrees_with_mentioned_by` in
+  // `patterns/apps/topics/topics.test.tsx` hand the two functions a
+  // duplicated list directly. No case here builds a board listing one topic
+  // twice; the "over a board listing one topic twice" group in
+  // `topics-headless-fixture.test.ts` runs the board's lifts over one.
   it("records a self-mention without earning the topic an inbound edge", async () => {
     // Referencing yourself is not being referenced from somewhere else.
     await target.result.set({ topic: target.getCell() }, ["mention"]);
