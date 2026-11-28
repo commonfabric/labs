@@ -1208,17 +1208,22 @@ holds the measurements and the conditions for revisiting.
   (SC-58). The store admits a session's `creator` record only when it names
   the principal the session authenticated (`pieceCreatorRecord` above), so a
   modified client can no longer write a piece naming another principal as its
-  creator. A member with WRITE who could repoint a piece, rewire its
-  argument or write what it reads releases nothing, because a release is
-  honored only where the creator alone may write; a multi-writer share space
-  is not supported. The flag must stay off in every deployment until the
+  creator. A member with WRITE on the piece's space, or on the written
+  document's space, who could repoint the piece, rewire its argument or write
+  a document there that it reads releases nothing, because a release is
+  honored only where the creator alone may write those two spaces; a
+  multi-writer share space is not supported. A space a release reads from
+  beyond those two is not checked, so a member who may write one of those can
+  still change what it holds. The deployment's service principals, which hold
+  an implicit OWNER on every space, are trusted runtimes and are not counted
+  as other writers. The flag must stay off in every deployment until the
   store enforces space access lists, which that condition rests on, the
   creator-record ruling
   ([specs pull request 87](https://github.com/commonfabric/specs/pull/87))
   lands, and documents created before the flag can be rebuilt, since their
   stored shape stays the creator's alone. The fixture's `PROPOSAL.md`, Risks,
-  lists these and the rest, and its "CFC debt" section the policy the
-  sole-writer condition stands in for.
+  lists these and the rest, and its "CFC debt" section states the policy the sole-writer condition
+  stands in for.
 - **Status on 2026-11-27.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
   `runtime/runner/test/experimental-options.test.ts`. With this flag and

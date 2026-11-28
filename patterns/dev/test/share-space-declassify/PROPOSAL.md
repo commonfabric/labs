@@ -307,6 +307,17 @@ multi-writer release needs.
   commit is not judged by the store. For a reclassification, decision 5 narrows
   this to data the creator alone writes, and a handler a reader fires releases
   nothing.
+- **Only two spaces' access lists are checked.** The guard checks the piece's
+  space and the written document's space. A release that reads a document in any
+  other space, such as the creator's data space, trusts that space's writers: a
+  member who may write there can change what the release reads. Checking every
+  space the transaction read, or the creator's integrity on those reads, would
+  close it.
+- **Service principals are not counted as other writers.** The deployment's
+  service DIDs hold an implicit OWNER on every space and are absent from its
+  access list. They are the deployment's own runtimes, which the store already
+  trusts, so `writableOnlyBy` does not count them; a deployment that grants a
+  service identity to anything less trusted would need them counted.
 - **The access list is read where the release happens.** The releasing runtime
   decides from the access list it holds, so a grant it has not yet synced does
   not stop a release, and the store does not check the condition. It rests on

@@ -2716,7 +2716,9 @@ const reclassifiedFlowConfidentiality = (
   // A run acting for someone else chose what it read, as a handler's event
   // chooses the documents it names (§3.8.4's trigger integrity).
   const snapshot = tx.getCfcState().trustSnapshot;
-  const acting = snapshot === undefined || servedRunActsForNoOne(tx, snapshot)
+  // An empty acting principal names no one, as `#pieceCreatorFor` reads it.
+  const acting = snapshot === undefined || !snapshot.actingPrincipal ||
+      servedRunActsForNoOne(tx, snapshot)
     ? undefined
     : snapshot.actingPrincipal;
   if (acting !== undefined && acting !== creator) {
