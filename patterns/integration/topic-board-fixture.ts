@@ -23,6 +23,7 @@ import {
   streamEntriesDocId,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
+import { callVerb } from "@commonfabric/piece/verb-call";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import type { Immutable } from "@commonfabric/js-values/types";
@@ -282,6 +283,48 @@ export async function topicAt(
   return new PieceController(board.pieces(), row.resolveAsCell());
 }
 
+/**
+ * Waits until the board's index lists `titles`, in that order. The index is a
+ * query over the board's collection, which follows a topic's fields after the
+ * write that changed them, so a board seeded a moment ago can still list a
+ * topic under the name it had before it was named.
+ */
+export async function topicIndexTitles(
+  board: PieceController,
+  titles: readonly string[],
+): Promise<void> {
+  await waitForCellValue(
+    board.pieces().runtime,
+    topicBoardIndex(board),
+    (rows: readonly { title?: string }[] | undefined) =>
+      rows !== undefined && rows.length === titles.length &&
+      rows.every((row, at) => row?.title === titles[at]),
+    { stuckLabel: "the board's index in filing order" },
+  );
+}
+
+/** A topic read for its title and nothing else. */
+const TITLE_SCHEMA = {
+  type: "object",
+  properties: { title: { type: "string" } },
+} as const satisfies JSONSchema;
+
+/**
+ * Returns the cell `cell` resolves to, loading each document on the way. A
+ * link is followed only through documents this replica holds, and a receipt
+ * names the piece its handler made through a cell of the handler's own, which
+ * holds the link to the piece.
+ */
+async function resolveLoaded(cell: Cell<unknown>): Promise<Cell<unknown>> {
+  let current = cell;
+  for (;;) {
+    await current.sync();
+    const next = current.resolveAsCell();
+    if (next.equals(current)) return next;
+    current = next;
+  }
+}
+
 /** What a topic stores of the references its `mention` verb records. */
 export interface TopicMentionState {
   /** The topic's `mentioned` list, raw: one link per referenced piece. */
@@ -411,17 +454,42 @@ export async function seedTopicBoard(
     const pieces: PieceController[] = [];
     for (let index = 0; index < options.topicCount; index++) {
       const title = topicTitle(index);
-      await board.result.set({
-        title,
-        body: topicBody(index, shape),
-        agentName: AGENT_NAME,
-      }, ["addTopic"]);
-      const created = await topicAt(board, index);
+      // The create's receipt names the topic it made, which is how the
+      // Topics tooling addresses a new topic too. The board lists a topic
+      // only once its collection has it, so the board's list is not where a
+      // topic created a moment ago is found.
+      const call = await callVerb(
+        cc.runtime,
+        board.getCell().getAsNormalizedFullLink(),
+        "addTopic",
+        { title, body: topicBody(index, shape), agentName: AGENT_NAME },
+      );
+      if (call.status !== "settled" || call.receipt === undefined) {
+        throw new Error(
+          `addTopic for topic ${index} did not settle with a receipt: ` +
+            JSON.stringify(call),
+        );
+      }
+      // The receipt holds a link to the topic, which resolves to the topic's
+      // own address only once the receipt is in this replica.
+      // Confirmed before it is addressed, as the tooling confirms a create:
+      // the receipt can arrive in this replica ahead of the topic it names.
+      const named = cc.runtime.getCellFromLink(call.receipt).key("topic");
+      await waitForCellValue(
+        cc.runtime,
+        named.asSchema(TITLE_SCHEMA),
+        (value: { title?: string } | undefined) => value?.title === title,
+        { stuckLabel: `the topic addTopic created for index ${index}` },
+      );
+      const created = new PieceController(
+        board.pieces(),
+        await resolveLoaded(named),
+      );
       // Each citation is a REFERENCE, recorded through the topic's own verb.
-      // Writing `See also fid1:…` into the body used to make an edge; nothing
-      // reads prose for addresses now, so a seeded board built that way would
-      // carry the sentences and none of the graph — and every benchmark over it
-      // would quietly measure a board with no crossrefs at all.
+      // Nothing reads prose for addresses, so a board seeded with
+      // `See also fid1:…` sentences would carry the sentences and none of the
+      // graph, and every benchmark over it would measure a board with no
+      // references at all.
       const targets = crossrefTargets(index, shape);
       for (const target of targets) {
         await created.result.set({ topic: pieces[target].getCell() }, [
@@ -429,13 +497,25 @@ export async function seedTopicBoard(
         ]);
       }
       // What a topic publishes — its summary, and the mentions the board's
-      // pivot joins over — is derived by a running topic: a reader that opens
-      // another topic reads this one's published result and runs nothing of
-      // it. One read of the topic's result derives all of it, once per topic
-      // rather than once per write. The result includes the topic's
-      // backlinks, which read the board's crossref table, so this read still
-      // grows with the board.
-      if (!served) await created.result.get();
+      // collection mirrors into its relation tables — is derived by a running
+      // topic: a reader that opens another topic reads this one's published
+      // result and runs nothing of it. So each topic is read once here,
+      // rather than once per write.
+      if (served) {
+        // Only the two values a topic computes, read once so that the
+        // serving runtime derives them: who filed it, and what it points at,
+        // which is what reaches the collection's `topics_mentions` table.
+        // The rest of the result, the backlinks the topic asks the collection
+        // for among it, is not read. A topic filed through the board's page
+        // is read by that page, and the Topics tooling reads the topic it
+        // created to confirm it landed.
+        await created.result.get(["createdBy"]);
+        await created.result.get(["mentions"]);
+      } else {
+        // The whole result, which also runs the topic's backlink query
+        // against the board's collection.
+        await created.result.get();
+      }
       pieces.push(created);
       topics.push({ fid: created.id, title });
       options.onTopic?.(index);
@@ -452,11 +532,11 @@ export async function seedTopicBoard(
         );
       }
     } else {
-      // The board's crossref pivot is what every topic reads its backlinks
-      // from, and a reader that opens one topic runs that topic, not the
-      // board. Derived here once, over the seeded board, so the table a
-      // reader finds is the one these references make; per write it would be
-      // rebuilt as many times as there are topics.
+      // This runtime is what keeps the board's collection current, there
+      // being no serving one, and a reader that opens the board later hears
+      // of no write made before it arrived. So the collection is brought up
+      // to every write above before the runtime that made them goes away.
+      await cc.runtime.settled();
       await board.result.get(["crossrefs"]);
     }
 

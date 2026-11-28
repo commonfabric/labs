@@ -389,6 +389,19 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   openedSpaces?(): MemorySpace[];
 
   /**
+   * Whether the replica of `space` covers the document `id` names under
+   * `scope` (`IStorageProvider.hasLocalDocumentCoverage()`), or `undefined`
+   * when this manager holds no provider for `space`. Unlike `open()`, it opens
+   * nothing and is no use of the space, so a release pass under way can
+   * still release the space.
+   */
+  documentCovered?(
+    space: MemorySpace,
+    id: URI,
+    scope?: CellScope,
+  ): boolean | undefined;
+
+  /**
    * Declares the read ceiling every session this manager opens carries in
    * its signed `session.open` descriptor (`SessionDescriptor.readCeiling`),
    * so a space server serving this runtime's queries bounds them by it. A
@@ -872,15 +885,22 @@ export interface IStorageManager extends IStorageSubscriptionCapability {
   pendingCrossSpacePromiseCount?(): number;
 
   /**
-   * Whether a link target in `space` should be background-pulled because this
-   * replica has never seen the doc (fresh-replica read asymmetry): selector
+   * Whether a link target in `space` should be background-pulled, because
+   * nothing shows that the replica's session watches the doc. One case is a
+   * doc the replica has never seen (fresh-replica read asymmetry): selector
    * driven syncs only deliver what a schema covered, so a link can point at a
    * same-space doc no selector ever walked — without a pull such reads mask
-   * as `undefined`, indistinguishable from absence. Returns true exactly once
-   * per (space, id, scope) per manager lifetime and only when the local
-   * replica holds no state for the doc; the caller kicks the actual sync (see
-   * the link-resolution hop loop). Optional: managers without lazy remote
-   * replication (e.g. test mocks) simply don't implement it.
+   * as `undefined`, indistinguishable from absence. The other is a doc the
+   * replica holds from its own commit alone
+   * (`ISpaceReplica.lacksWatchEvidence()`): the read is served, and without
+   * a pull it keeps returning the replica's own version while other sessions
+   * change the doc. Returns true only in those two cases, and at most once
+   * per (space, id, scope) until the replica drops the doc, the kicked sync
+   * rejects and its caller retracts the reservation
+   * (`retractDocPullKick()`), or the manager releases the space; the caller
+   * kicks the actual sync (see the link-resolution hop loop). Optional: managers
+   * without lazy remote replication (e.g. test mocks) simply don't implement
+   * it.
    */
   shouldPullDoc?(
     space: MemorySpace,
@@ -4113,6 +4133,26 @@ export interface ISpaceReplica extends ISpace {
     scope?: CellScope,
     instance?: ScopeKey,
   ): Promise<Error | PullError | undefined>;
+
+  /**
+   * Whether the replica holds the document from its own commit alone, with
+   * nothing to show that its session watches it: no frame has delivered the
+   * document, and no watch of the replica's is rooted at it. Where no watch
+   * reaches such a document, it stays at the replica's own version while
+   * other sessions change it, until something loads it. The replica cannot
+   * rule out that a watch rooted at another document reaches it, so this
+   * returns `true` in two such cases as well: a document a load reaches
+   * whose answer has not arrived, and one the commit created within the
+   * reach of a watch that already existed, since the refresh that follows a
+   * commit leaves the committing session's own write out of its frame.
+   * `instance` names a scoped document's instance where it is not the
+   * replica's own.
+   */
+  lacksWatchEvidence?(
+    id: URI,
+    scope?: CellScope,
+    instance?: ScopeKey,
+  ): boolean;
 
   /**
    * Whether the replica holds a known stored version of the document, with

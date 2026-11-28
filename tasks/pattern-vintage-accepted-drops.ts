@@ -81,83 +81,56 @@ export const ACCEPTED_STATE_DROPS: readonly AcceptedStateDrop[] = [
   {
     pattern: "apps/topics/main.tsx",
     paths: [
-      // The unsigned caller retires. The per-topic display names it fed go
-      // with it, and are listed once below among the narrowed demand rather
-      // than twice — the two removals take the same paths.
+      // --- the indexed collection (docs/history/topics-adopt-topics-removal-break.md)
+      // The board holds its topics in an indexed collection and no longer as a
+      // list, and an existing board moves by export and recreate on a fresh
+      // board rather than in place. A board updated in place reads a new,
+      // empty collection, so every listing of its topics comes back empty:
+      // `topics`, `topicCount`, `index` and `mentionable` are listed WHOLE.
+      // Each topic survives at its own address with everything it holds, and
+      // the old board's list stays in its argument document; what goes is the
+      // board's view of them. Listing those roots whole retires the element
+      // paths that sat here for the earlier breaks below (`topics[].addComment`
+      // and kin, `index[].refsOut` and kin): the strip never descends past a
+      // dropped root, so an element path under one could forgive nothing and
+      // would fail the liveness guard.
+      "topics",
+      "topicCount",
+      "index",
+      // `mentionable` was already listed whole by the mention-universe index
+      // (docs/history/topics-mentionable-index-break.md), where it stopped
+      // being an alias of `topics` and became a derived document.
+      "mentionable",
+      // --- the unsigned caller retires (docs/history/topics-crossref-identity-break.md)
       "myName",
       "setMyName",
-      // --- the demand narrowing (docs/history/topics-demand-narrowing-break.md)
-      // The board demanded the topic's whole published surface of every stored
-      // topic, three verb streams among them. A holder's required demands are
-      // write-once and a stream cannot carry a default, so a verb named there
-      // priced every future verb as a break of the board. The demand is now the
-      // eight members the board reads.
+      // --- the reference-graph rebuild (docs/history/topics-crossref-identity-break.md)
+      // `crossrefs` is listed WHOLE: the old graph row carried an fid, a
+      // title, summary counts and two edge sets, and the row that replaced it
+      // carries a topic and who mentions it.
       //
-      // These sit in this entry rather than their own because `acceptedDropsFor`
-      // takes the FIRST entry matching a pattern and window: a second entry for
+      // These share one entry because `acceptedDropsFor` takes the FIRST entry
+      // matching a pattern and window: a second entry for
       // `apps/topics/main.tsx` covering the same vintages would shadow this one
-      // instead of adding to it, and the paths above would silently stop
-      // applying. Two breaks on one pattern inside one window share an entry.
-      //
-      // A stored topic loses none of this. What it loses is the board's claim
-      // on it: the fields and verbs stay on the topic, reachable at its own
-      // address, and only the board's view of them narrows.
-      "topics[].addComment",
-      "topics[].addLink",
-      "topics[].bodyUpdatedAt",
-      "topics[].bodyUpdatedBy",
-      "topics[].comments",
-      "topics[].createdByName",
-      "topics[].links",
-      "topics[].setBody",
-      // --- the mention-universe index follows
-      // (docs/history/topics-mentionable-index-break.md)
-      // `mentionable` is listed WHOLE: it was an alias of `topics` — a link,
-      // no state of its own — and is now a derived document of two-string
-      // rows, so nothing of the old value survives to be compared field by
-      // field while the topics themselves survive at their own addresses.
-      // Listing the root retires the per-element demand-narrowing paths that
-      // used to sit here (`mentionable[].addComment` and kin): the strip
-      // never descends past a dropped root, so an element path under it
-      // could forgive nothing and would fail the liveness guard.
-      "mentionable",
-      // --- the reference-graph rebuild follows
+      // instead of adding to it.
       "crossrefs",
-      "index[].refsOut",
-      "index[].referencedBy",
-      "index[].topic",
-      "topics[].crossrefs",
-      // The retired edge row's `mentionable[]` copy needs no path of its
-      // own: the whole-`mentionable` drop above already strips the list it
-      // sat on.
-      // `crossrefs` is listed WHOLE, and that is the honest shape of what
-      // happened: the old graph row carried an fid, a title, summary counts and
-      // two edge sets, and the pivot row that replaced it carries a topic and
-      // who mentions it. Nothing of the old row survives to be compared field
-      // by field.
-      // The old index rows carried the same two edge sets beside their
-      // summaries. The summaries themselves are untouched.
-      // An index row IS its topic now, so the title-only reference that used to
-      // sit beside it goes; the row's own address is the topic's. The copied
-      // `fid` field goes with it, and needs no entry here: no replayed vintage
-      // holds a resolved one.
     ],
-    // The newest topics vintage predating the rebuild AND the mention-universe
-    // index — both replayed fixtures sit at or under it. Anything captured
-    // from here on holds pivot rows and index rows, which owe the comparison
-    // the same answer as anything else.
-    capturedThrough: "2026-08-06T23-04-13.189Z",
+    // The newest Topics vintage, captured before the board moved to the
+    // collection. Anything captured from here on holds a board whose topics
+    // are the collection's, which owes the comparison the same answer as
+    // anything else.
+    capturedThrough: "2026-11-16T05-26-30.295Z",
     reason:
-      "Topics' reference graph was rebuilt on cell identity — see the matching " +
-      "entry in tasks/pattern-compat-accepted-breaks.ts. A topic publishes " +
-      "`referencedBy` instead of deriving its own edge row, so the old row is " +
-      "gone from every child the board lists. The index rows became the topics " +
-      "themselves, which is what retires their copied address and reference. " +
-      "Carried with it, same pattern and window, so one entry: the mention " +
-      "universe became a derived index " +
-      "(docs/history/topics-mentionable-index-break.md), which replaces the " +
-      "`mentionable` alias wholesale.",
-    record: "docs/history/topics-crossref-identity-break.md",
+      "The Topics board holds its topics in an indexed collection, and an " +
+      "existing board moves by export and recreate rather than in place " +
+      "(docs/history/topics-adopt-topics-removal-break.md), so a board " +
+      "updated in place lists no topics. Carried in the same entry, since a " +
+      "second would shadow it: the reference graph rebuilt on cell identity " +
+      "and the unsigned caller's retirement " +
+      "(docs/history/topics-crossref-identity-break.md), and the mention " +
+      "universe becoming a derived index " +
+      "(docs/history/topics-mentionable-index-break.md).",
+    record: "docs/history/topics-adopt-topics-removal-break.md",
   },
   {
     pattern: "apps/topics/topic.tsx",

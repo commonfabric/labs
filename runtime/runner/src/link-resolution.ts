@@ -323,15 +323,20 @@ const capForLinkHop = (
 /**
  * Force a fetch from the server when the local replica cannot serve a hop
  * target: crossing spaces (the origin server never pushes other-space docs), or
- * a same-space doc this replica has never pulled, which `shouldPullDoc`
- * reserves so only the first reader kicks.
+ * a same-space doc nothing shows this replica's session watches, which
+ * `shouldPullDoc` reserves so only the first reader kicks.
  *
- * The second arm is the fresh-replica read-asymmetry fix: selector driven syncs
- * only deliver what a schema covered, so a link can point at a same-space doc
- * no selector ever walked — without this kick such reads mask as `undefined`,
- * indistinguishable from absence. The kick is async; one-shot reads still
- * return the masked value, but `Cell.pull()`'s convergence loop awaits the
- * tracked sync and re-reads.
+ * The second arm covers two cases. One is the fresh-replica read asymmetry:
+ * selector driven syncs only deliver what a schema covered, so a link can
+ * point at a same-space doc no selector ever walked — without this kick such
+ * reads mask as `undefined`, indistinguishable from absence. The kick is
+ * async; one-shot reads still return the masked value, but `Cell.pull()`'s
+ * convergence loop awaits the tracked sync and re-reads. The other is a doc
+ * the replica holds from its own commit alone: the read returns that
+ * version, and the kick registers the watch that brings in what other
+ * sessions store there afterwards. The kick syncs under the link's schema,
+ * which is the schema the read continues under, so the server follows from
+ * the target the links that read goes on to follow.
  *
  * Sync failures are swallowed: the kick is best-effort (the read still resolves
  * from the local replica) and an unhandled rejection here would otherwise

@@ -12,14 +12,6 @@ link-resolved and never registered, with one exception described below: a
 combinator the value's type does not settle is evaluated whole at the position
 where it is accessed.
 
-What that buys is pinned where it is largest.
-`patterns/integration/topics-lazy-lookup-reruns.test.ts` holds the
-Topics board's per-topic backlink lookup, which reads a pivot table declared
-with a default, to re-running only for the topics whose row a mention edit
-changed. A runtime change that materializes a defaulted or nullable subtree
-whole under a view fails it, however faithfully the result matches an eager
-read.
-
 ## Where a view comes from
 
 The transaction decides, not the call site. `tx.markLazyMaterialize(true)` puts
@@ -146,7 +138,6 @@ eager read".
 The first four share one reason: deciding a fallback by evaluating a present
 subtree registers every read below it, and a pattern's optional inputs are
 declared with defaults, so that rule would make every such input read eagerly.
-The Topics test named above is what holds the line.
 
 ## Returning "nothing is there" still owes a read
 

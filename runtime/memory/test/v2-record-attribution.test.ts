@@ -216,6 +216,52 @@ describe("v2-record-attribution", () => {
       expect(await readsWith(32)).toBe(await readsWith(2));
     });
 
+    it("searches no more records on a write that moves one list's link off a document many lists link to", async () => {
+      // As above. The other lists' records still attribute the record of
+      // `of:s`, so the sweep searches back from it for a root, and a root
+      // attributes the first of them the search reads.
+      const sweepVisitsWith = async (lists: number) => {
+        let visits = 0;
+        await withEngine((engine) => {
+          commit(engine, [
+            set("of:s", { name: "s" }),
+            set("of:n", { name: "n" }),
+            ...Array.from(
+              { length: lists },
+              (_, i) => set(`of:l${i}`, { item: link("of:s") }),
+            ),
+          ]);
+          const tracked = trackGraph(
+            space,
+            engine,
+            {
+              roots: Array.from({ length: lists }, (_, i) => ({
+                ...listRoot,
+                id: `of:l${i}`,
+              })),
+            },
+            undefined,
+            identity,
+          );
+          commit(engine, [set("of:l0", { item: link("of:n") })]);
+          const refreshed = refreshTrackedGraph(
+            space,
+            engine,
+            tracked.state,
+            new Set([toDirtyKey("of:l0")]),
+          );
+          expect(ids(refreshed!.removed)).toEqual([]);
+          expect(ids(tracked.state.entities.keys())).toContain("of:s");
+          visits = refreshed!.stats.sweepVisits;
+        });
+        return visits;
+      };
+
+      const visits = await sweepVisitsWith(2);
+      expect(visits).toBeGreaterThan(0);
+      expect(await sweepVisitsWith(32)).toBe(visits);
+    });
+
     it("retracts a cycle between records of a document another of its records keeps", async () => {
       // The list's schema follows `of:x` to `of:y` and back to `of:x` under
       // a record of its own, so once the list lets go, `of:x`'s second

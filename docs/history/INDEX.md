@@ -284,6 +284,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 
 ## Shipped or superseded designs and decision records
 
+- [specs/server-side-execution/valueless-computed-root.md](specs/server-side-execution/valueless-computed-root.md) — decision record for the serving loop starting a stopped piece from a `computed:` document a read reaches that holds no value and that no running node writes: the gap #9559's release left, the alternatives rejected for the cost of a 2,000-topic board, and heap and CPU measured on a 2,000-child board, November 2026.
 - [Pattern Factory build guide](common/ai/pattern-factory-build-guide.md) — what an agent in the Build phase of a Pattern Factory session read, produced, and had to pass before handing off, from May 2026 until the Pattern Factory repository was archived in October 2026.
 - [Compact CFC label maps](plans/compact-cfc-label-maps.md) — proposed 2026-09-28 and superseded unbuilt: a shared-subtree label map and reader-first format migration meant to bound staged-reference diamonds, whose stored growth ended when a link slot began persisting only the reference's own label (#8767).
 
@@ -387,6 +388,7 @@ One line per archived document; [`README.md`](README.md) has the rules for this 
 - [package-layout-module-identity-break.md](package-layout-module-identity-break.md) — decision record for the eight patterns whose module policy references the pattern update check reports as changed after the packages left `packages/` and the patterns were sorted into categories. It explains why a module that moved names the same policy by a different identity, and why the change was accepted for those patterns, October 2026.
 - [system-patterns-subset-types-break.md](system-patterns-subset-types-break.md) — decision record for removing function-typed data and `any` from the system patterns: the `MentionablePiece.mentionable` object alternative and the suggestion's `context` entries read as cells, the update-proof paths each blames, and why no stored piece is stranded, November 2026.
 - [Anchors on collaborative fields](plans/collaborative-field-anchors.md) — 2026-11-03 plan for range anchors that ride an `apply-op` and that patterns add with `addAnchor()`; Memory's part landed, and the remaining packages were superseded the next day by point anchors held only in the anchors document, which a pattern reads and writes as an ordinary cell through `anchorsOf()`.
+- [topics-adopt-topics-removal-break.md](topics-adopt-topics-removal-break.md) — decision record for removing the Topics board's `adoptTopics` verb, its legacy `topics` list and `scripts/topics-bind-board.ts`: an existing board moves by export and recreate on a fresh board, not by adopting its list in place; the accepted break forgives `result.adoptTopics` over the three baselines recorded while #10025 was in review, and `backfillNames` stays, numbering the collection's topics the namespace lacks.
 
 ## Investigations, journals, and working notes
 

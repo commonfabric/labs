@@ -101,6 +101,7 @@ jobs:
             runtime/memory/test/v2-engine-read.bench.ts \
             runtime/memory/test/v2-path.bench.ts \
             runtime/memory/test/v2-refresh-schema-closure.bench.ts \
+            runtime/memory/test/v2-refresh-shared-record.bench.ts \
             runtime/memory/test/v2-query-coverage.bench.ts \
             runtime/memory/test/v2-query-churn.bench.ts \
             base/data-model/bench/hashing.bench.ts \

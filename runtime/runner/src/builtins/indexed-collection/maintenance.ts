@@ -102,9 +102,16 @@ function keyOfLink(cell: Cell<unknown>): string {
  * holding anything but a string, a finite number, or a boolean reads as
  * `null`; a boolean reads as `0` or `1`. A relation field holds a list of
  * cell references, in which a repeated one counts once, or a single
- * reference, or nothing. A field that is absent, on a member or anywhere
- * along a nested path, reads as `null` or as empty. `deps` names every
- * document the reads touched, the member's own included.
+ * reference, or nothing. It holds a list when the value its links lead to is
+ * one. Otherwise it holds a reference when it stores a link, whatever the
+ * cell that link names holds. A write redirect is an alias rather than a
+ * reference: the field holds what the cell it leads to holds, so a field
+ * aliasing the cell a derivation writes, as a piece's result does, holds
+ * nothing until the derivation has run. A field that is absent, on a member
+ * or anywhere along a nested path, reads as `null` or as empty. `deps` names
+ * every document the reads touched, the member's own included, and so the
+ * document of the cell an alias leads to: a derivation that writes that cell
+ * later has the member read again.
  *
  * Throws when a read reaches a value stored per user or per session: the
  * collection's database is shared by every reader of its space, and such a
@@ -148,11 +155,13 @@ export function projectMember(
       }
       return [...keys];
     }
-    // A field that is not a list holds one reference, or nothing. What it
-    // holds is the link stored in the field, whatever the cell that link
-    // names holds.
+    // A field that is not a list holds one reference, or nothing. Reading it
+    // to its write target follows the aliases and stops at a link stored as
+    // a value, which is the reference whatever the cell it names holds.
     const single = field(name);
-    return isCellLink(single.getRaw()) ? [memberKeyOf(single)] : [];
+    return isCellLink(single.getRaw({ lastNode: "writeRedirect" }))
+      ? [memberKeyOf(single)]
+      : [];
   });
   const deps = new Set<string>([
     bound.getAsNormalizedFullLink().id,
