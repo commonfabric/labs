@@ -148,16 +148,19 @@ export class LocalJobBrowserHost implements HarnessBrowserHost {
   #nextId = 0;
 
   /**
-   * Sends `request` to the host and resolves with its answer. Resolves with
+   * Sends `given` to the host and resolves with its answer. Resolves with
    * `invalid`, sending nothing, when the request is malformed, and with
    * `session-ended` when the job has ended, or ends while the operation is
    * outstanding. Rejects with the signal's reason when `signal` aborts first,
    * withdrawing the operation.
    */
   perform<O extends BrowserHostOperation>(
-    request: BrowserHostRequest<O>,
+    given: BrowserHostRequest<O>,
     signal?: AbortSignal,
   ): Promise<BrowserHostResult<O>> {
+    // What is sent, and what the answer is checked against, is the request as
+    // it was when it was made, whatever the caller does with its own copy.
+    const request = structuredClone(given);
     const problem = browserHostRequestProblem(request);
     if (problem !== undefined) {
       return Promise.resolve({ status: "invalid", message: problem });

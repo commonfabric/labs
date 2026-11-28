@@ -123,7 +123,10 @@ export interface LocalJobApiOptions {
   /** Asks a job to stop. */
   cancel: (id: string) => unknown;
 
-  /** The browser host of a job that declared one; none answers 409. */
+  /**
+   * The browser host of a job that declared one. Without one, the stream and
+   * result routes answer 409, and a detach succeeds and changes nothing.
+   */
   browserHost?: (id: string) => LocalJobBrowserHost | undefined;
 
   /** Whether the runner's Fabric lane is running, for `/health`. */

@@ -3,7 +3,7 @@ import { expect } from "@std/expect";
 import { describe, it } from "@commonfabric/test-support/test";
 import {
   type BrowserHostPage,
-  browserHostPageFitsKind,
+  browserHostPageFitsSession,
   type BrowserHostRequest,
   browserHostRequestProblem,
   isBrowserHostResult,
@@ -68,16 +68,26 @@ describe("browser-host", () => {
     });
   });
 
-  describe("browserHostPageFitsKind", () => {
-    it("returns true for a page carrying tls exactly when the session is locked down", () => {
-      expect(browserHostPageFitsKind(LOCKED, "locked-down")).toBe(true);
-      expect(browserHostPageFitsKind(AWAY, "locked-down")).toBe(true);
-      expect(browserHostPageFitsKind(PAGE, "read-only")).toBe(true);
+  describe("browserHostPageFitsSession", () => {
+    const lockedDown = { kind: "locked-down", site: SITE } as const;
+    const readOnly = { kind: "read-only", site: SITE } as const;
+
+    it("returns true for a locked-down page with tls, away exactly when off its site, and a read-only page with neither", () => {
+      expect(browserHostPageFitsSession(LOCKED, lockedDown)).toBe(true);
+      expect(browserHostPageFitsSession(AWAY, lockedDown)).toBe(true);
+      expect(browserHostPageFitsSession(PAGE, readOnly)).toBe(true);
     });
 
-    it("returns false for a locked-down page without tls, or a read-only page with it", () => {
-      expect(browserHostPageFitsKind(PAGE, "locked-down")).toBe(false);
-      expect(browserHostPageFitsKind(LOCKED, "read-only")).toBe(false);
+    it("returns false for a locked-down page without tls, off its site but not away, or away on its site, and a read-only page with tls or away", () => {
+      const offSite = { ...LOCKED, site: "https://cdn.example" };
+      const awayOnSite = { ...AWAY, site: SITE, sites: [SITE] };
+
+      expect(browserHostPageFitsSession(PAGE, lockedDown)).toBe(false);
+      expect(browserHostPageFitsSession(offSite, lockedDown)).toBe(false);
+      expect(browserHostPageFitsSession(awayOnSite, lockedDown)).toBe(false);
+      expect(browserHostPageFitsSession(LOCKED, readOnly)).toBe(false);
+      expect(browserHostPageFitsSession({ ...AWAY, tls: undefined }, readOnly))
+        .toBe(false);
     });
   });
 

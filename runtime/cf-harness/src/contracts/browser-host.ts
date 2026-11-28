@@ -525,15 +525,21 @@ export const isBrowserHostSessionName = (
   typeof value === "string" && SESSION_NAME.test(value);
 
 /**
- * Whether `page` is one a session of `kind` reports: one carrying `tls`
- * exactly when `kind` is `locked-down`. {@link isBrowserHostResult} checks
- * this only for `session-open`, the one request that states the kind, so the
- * harness checks it against the kind it knows for every other result.
+ * Whether `page` is one the named session `session` describes could report: a
+ * read-only session's page carries neither `tls` nor `away`, and a locked-down
+ * session's page carries `tls` and is away exactly when it is on another site
+ * than the bound one. {@link isBrowserHostResult} checks this only for
+ * `session-open`, the one request whose result states the session, so the
+ * harness checks every other result against what it knows of the session.
  */
-export const browserHostPageFitsKind = (
+export const browserHostPageFitsSession = (
   page: BrowserHostPage,
-  kind: BrowserHostSessionKind,
-): boolean => (page.tls !== undefined) === (kind === "locked-down");
+  session: BrowserHostSessionInfo,
+): boolean =>
+  session.kind === "read-only"
+    ? page.tls === undefined && page.away === undefined
+    : page.tls !== undefined &&
+      (page.away === true) === (page.site !== session.site);
 
 /**
  * Whether `value` is written as a site is: `http` or `https`, then a domain of
@@ -644,15 +650,9 @@ export const isBrowserHostResult = <O extends BrowserHostOperation>(
   }
   switch (operation.action) {
     case "session-open":
-      // A locked-down session is away exactly when the page it opened on is
-      // on another site than the one it is bound to, and only a locked-down
-      // session can be away.
       return isSessionInfo(value.session) &&
         value.session.kind === operation.kind &&
-        browserHostPageFitsKind(page, operation.kind) &&
-        (operation.kind === "read-only"
-          ? !away
-          : away === (value.session.site !== page.site));
+        browserHostPageFitsSession(page, value.session);
     case "sign-in":
       return isObjectNotArray(value.signIn) &&
         isCount(value.signIn.copied) &&

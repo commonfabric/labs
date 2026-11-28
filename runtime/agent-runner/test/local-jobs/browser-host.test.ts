@@ -1,6 +1,9 @@
 import { expect } from "@std/expect";
 
-import type { BrowserHostResult } from "@commonfabric/cf-harness/contracts/browser-host";
+import type {
+  BrowserHostRequest,
+  BrowserHostResult,
+} from "@commonfabric/cf-harness/contracts/browser-host";
 import { describe, it } from "@commonfabric/test-support/test";
 
 import { LocalJobBrowserHost } from "../../src/local-jobs/browser-host.ts";
@@ -626,6 +629,26 @@ describe("LocalJobBrowserHost", () => {
       host.acceptResult("1", { status: "failed", message: "withdrawn" });
       expect((await stream.next())?.data.id).toBe("4");
       host.close();
+    });
+
+    it("sends, and checks the answer against, the request as it was made", async () => {
+      const host = new LocalJobBrowserHost();
+      const request: BrowserHostRequest = {
+        session: "a",
+        operation: { action: "session-close" },
+      };
+      const closed = host.perform(request);
+      request.session = "b";
+      request.operation = { action: "reload" };
+      const stream = reader(host.attach());
+
+      expect(await stream.next()).toEqual({
+        event: "request",
+        data: { id: "1", session: "a", operation: { action: "session-close" } },
+      });
+      expect(host.acceptResult("1", { status: "ok" })).toBe("accepted");
+      expect(await closed).toEqual({ status: "ok" });
+      await stream.cancel();
     });
 
     it("returns invalid for a malformed request, and sends the host nothing", async () => {

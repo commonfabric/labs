@@ -1,7 +1,10 @@
 import { expect } from "@std/expect";
 
 import { ConsoleBrowserHost } from "../../console/browser-host.ts";
-import type { BrowserHostResult } from "../../src/contracts/browser-host.ts";
+import type {
+  BrowserHostRequest,
+  BrowserHostResult,
+} from "../../src/contracts/browser-host.ts";
 import { describe, it } from "@commonfabric/test-support/test";
 
 const PAGE = { url: "https://shop.example/", title: "Shop" };
@@ -348,6 +351,21 @@ describe("console/browser-host", () => {
             'event: request\ndata: {"id":"3","operation":{"action":"session-list"}}\n\n' +
             "event: close\ndata: {}\n\n",
         );
+      });
+
+      it("checks the answer against the request as it was made", async () => {
+        const host = new ConsoleBrowserHost("token");
+        host.attach();
+        const request: BrowserHostRequest = {
+          session: "a",
+          operation: { action: "session-close" },
+        };
+        const closed = host.perform(request);
+        request.operation = { action: "reload" };
+
+        expect(host.acceptResult("1", { status: "ok" })).toBe("accepted");
+        expect(await closed).toEqual({ status: "ok" });
+        host.close();
       });
 
       it("returns invalid for a malformed request, and sends the host nothing", async () => {
