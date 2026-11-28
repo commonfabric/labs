@@ -73,6 +73,29 @@ export const spaceReaderRole = (
 };
 
 /**
+ * Whether the ACL document value `acl` lets `principal`, and no other
+ * principal, write its space: it is well formed, names an owner, grants
+ * `principal` WRITE or OWNER, and grants no one else, `"*"` included, more
+ * than READ. A missing or malformed ACL fails closed, as it does for
+ * {@link spaceReaderRole}, since the transport treats a populated space with
+ * no ACL as public. Service principals, which hold an implicit OWNER, are the
+ * deployment's own runtimes and are not counted.
+ */
+export const writableOnlyBy = (
+  acl: ACL | undefined,
+  principal: string,
+): boolean => {
+  if (!isACL(acl) || !hasConcreteOwner(acl)) return false;
+  const byPrincipal = acl as Record<string, Capability | undefined>;
+  const own = byPrincipal[principal];
+  if (own === undefined || !isCapable(own, "WRITE")) return false;
+  return Object.entries(byPrincipal).every(([other, capability]) =>
+    other === principal || capability === undefined ||
+    !isCapable(capability, "WRITE")
+  );
+};
+
+/**
  * A synchronous membership oracle for the render fit (which runs inside a
  * `cell.sink` callback and cannot await). `readerRole` gives a sync snapshot
  * from the local replica; `subscribe` lets a gated render re-evaluate when a

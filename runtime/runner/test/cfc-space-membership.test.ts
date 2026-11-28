@@ -5,6 +5,7 @@ import {
   type AclDocumentSource,
   createRuntimeSpaceMembershipProvider,
   spaceReaderRole,
+  writableOnlyBy,
 } from "../src/cfc/space-membership.ts";
 import type { Cancel } from "../src/cancel.ts";
 
@@ -203,5 +204,36 @@ describe("createRuntimeSpaceMembershipProvider (§4.9.3 provider)", () => {
       SERVICE,
     ]);
     expect(provider.readerRole(SPACE_TEAM)).toBe("owner");
+  });
+});
+
+describe("writableOnlyBy", () => {
+  it("returns true for an access list whose only other grants are READ", () => {
+    expect(writableOnlyBy({ [ALICE]: "OWNER", [MALLORY]: "READ" }, ALICE))
+      .toBe(true);
+    expect(writableOnlyBy({ [ALICE]: "OWNER", "*": "READ" }, ALICE))
+      .toBe(true);
+  });
+
+  it("returns false where anyone else may write", () => {
+    expect(writableOnlyBy({ [ALICE]: "OWNER", [MALLORY]: "WRITE" }, ALICE))
+      .toBe(false);
+    expect(writableOnlyBy({ [ALICE]: "OWNER", "*": "WRITE" }, ALICE))
+      .toBe(false);
+    expect(writableOnlyBy({ [MALLORY]: "OWNER", [ALICE]: "WRITE" }, ALICE))
+      .toBe(false);
+  });
+
+  it("returns false for a principal who may only read", () => {
+    expect(writableOnlyBy({ [MALLORY]: "OWNER", [ALICE]: "READ" }, ALICE))
+      .toBe(false);
+  });
+
+  it("returns false for a missing, malformed or ownerless access list", () => {
+    // A populated space with no access list is public at the transport.
+    expect(writableOnlyBy(undefined, ALICE)).toBe(false);
+    expect(writableOnlyBy({ [ALICE]: "ADMIN" } as unknown as ACL, ALICE))
+      .toBe(false);
+    expect(writableOnlyBy({ [ALICE]: "WRITE" }, ALICE)).toBe(false);
   });
 });

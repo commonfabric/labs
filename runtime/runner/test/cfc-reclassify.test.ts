@@ -10,7 +10,13 @@ import { expect } from "@std/expect";
 
 import { CFC_ATOM_TYPE, cfcAtom } from "@commonfabric/api/cfc";
 import { Identity } from "@commonfabric/identity";
-import type { MemorySpace } from "@commonfabric/memory/interface";
+import {
+  type ACL,
+  aclDocId,
+  type ACLUser,
+  type DID,
+} from "@commonfabric/memory/acl";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
   afterEach,
   beforeEach,
@@ -19,6 +25,7 @@ import {
 } from "@commonfabric/test-support/test";
 
 import type { JSONSchema } from "../src/builder/types.ts";
+import { ACLManager } from "../src/acl-manager.ts";
 import type { Cell } from "../src/cell.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import {
@@ -46,6 +53,10 @@ const alice = await Identity.fromPassphrase("reclassify alice");
 const bob = await Identity.fromPassphrase("reclassify bob");
 const service = await Identity.fromPassphrase("reclassify service");
 const space = alice.did();
+/** A share space of Alice's, which a reader of hers may read. */
+const room = (await Identity.fromPassphrase("reclassify room")).did();
+/** A space Alice owns and Bob may also write. */
+const shared = (await Identity.fromPassphrase("reclassify shared")).did();
 
 /** A pattern with one argument field and nothing about any principal. */
 const PIECE_SOURCE = [
@@ -142,14 +153,14 @@ describe("cfc-reclassify", () => {
   let host: ExecutorHost | undefined;
 
   /** A runtime on the shared server, closed when the test ends. */
-  const connect = (
+  const connect = async (
     as: Identity,
     options: {
       reclassification?: boolean;
       creatorRecord?: boolean;
       servingPosture?: boolean;
     } = {},
-  ): Runtime => {
+  ): Promise<Runtime> => {
     const storageManager = EmulatedStorageManager.connectTo(server, { as });
     managers.push(storageManager);
     const runtime = new Runtime({
@@ -163,7 +174,32 @@ describe("cfc-reclassify", () => {
     });
     runtime.registerCfcPolicyManifests(undefined, [artifact]);
     runtimes.push(runtime);
+    // A release reads the access list of the space it lands in.
+    for (const each of [space, room, shared]) {
+      await runtime.getCellFromLink({
+        space: each,
+        id: aclDocId(each) as URI,
+        path: [],
+      }).sync();
+    }
     return runtime;
+  };
+
+  /** Stores `acl` as the access list of `at`, as Alice. */
+  const storeAccessList = async (at: MemorySpace, acl: ACL) => {
+    const storageManager = EmulatedStorageManager.connectTo(server, {
+      as: alice,
+    });
+    const runtime = new Runtime({
+      apiUrl: new URL("https://fabric.example/"),
+      storageManager,
+    });
+    const manager = new ACLManager(runtime, at as DID);
+    for (const [user, capability] of Object.entries(acl)) {
+      await manager.set(user as ACLUser, capability!);
+    }
+    await runtime.dispose();
+    await storageManager.close();
   };
 
   /**
@@ -381,10 +417,20 @@ describe("cfc-reclassify", () => {
       );
   };
 
-  beforeEach(() => {
+  beforeEach(async () => {
     server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
     managers = [];
     runtimes = [];
+    // Alice alone writes her own space and the share space.
+    await storeAccessList(space, { [alice.did()]: "OWNER" });
+    await storeAccessList(room, {
+      [alice.did()]: "OWNER",
+      [service.did()]: "READ",
+    });
+    await storeAccessList(shared, {
+      [alice.did()]: "OWNER",
+      [bob.did()]: "WRITE",
+    });
   });
 
   afterEach(async () => {
@@ -400,7 +446,7 @@ describe("cfc-reclassify", () => {
 
   describe("a pattern's own lift", () => {
     it("stores the creator's `User` clause alone while the flag is off", async () => {
-      const client = connect(alice, { reclassification: false });
+      const client = await connect(alice, { reclassification: false });
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { shared } = await sharePiece(client, source);
@@ -413,7 +459,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("stores nothing released with the flag on and the creator record off", async () => {
-      const client = connect(alice, { creatorRecord: false });
+      const client = await connect(alice, { creatorRecord: false });
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { shared } = await sharePiece(client, source);
@@ -425,7 +471,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("stores the creator's clause or its module's policy, keeping its `TransformedBy`", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { piece, shared } = await sharePiece(client, source);
@@ -448,7 +494,7 @@ describe("cfc-reclassify", () => {
 
     it("stores the creator's clause or the policy on items it keeps from its argument", async () => {
       expect(FILTERING_SOURCE).toContain("secret.filter");
-      const client = connect(alice);
+      const client = await connect(alice);
       const source = await storeSecret(client, {
         type: "array",
         items: {
@@ -478,9 +524,32 @@ describe("cfc-reclassify", () => {
       expect(stored).not.toContainEqual(cfcAtom.user(alice.did()));
     });
 
+    it("releases nothing in a space another principal may write", async () => {
+      const client = await connect(alice);
+      const source = await storeSecret(client, secretSchema(alice), "fix");
+
+      // Bob may write `shared`, so he could change the piece's pattern, its
+      // argument or anything it reads, and so choose what is released.
+      const { shared: result } = await sharePiece(client, source, shared);
+
+      expect(result.get()).toBe("fix!");
+      const clauses = storedConfidentiality(client, result);
+      expect(clauses.length).toBeGreaterThan(0);
+      // Stored outside Alice's space, every subject is a commitment, so a
+      // release shows as a clause with a policy alternative, whatever its
+      // subject.
+      expect(
+        clauses.some((clause) =>
+          ((clause as { anyOf?: { type?: string }[] }).anyOf ?? []).some(
+            (alternative) => alternative.type === CFC_ATOM_TYPE.Policy,
+          )
+        ),
+      ).toBe(false);
+    });
+
     it("installs its policy's manifest in the space of a piece placed elsewhere", async () => {
-      const client = connect(alice);
-      const elsewhere = bob.did();
+      const client = await connect(alice);
+      const elsewhere = room;
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { shared } = await sharePiece(client, source, elsewhere);
@@ -527,8 +596,8 @@ describe("cfc-reclassify", () => {
     // point query decides: a reader of that space sees the value, anyone else
     // does not, and nor does a reader when the label was read from elsewhere.
     it("releases a value placed elsewhere to a reader of that space at their display", async () => {
-      const client = connect(alice);
-      const elsewhere = bob.did();
+      const client = await connect(alice);
+      const elsewhere = room;
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { shared } = await sharePiece(client, source, elsewhere);
@@ -606,8 +675,62 @@ describe("cfc-reclassify", () => {
   });
 
   describe("a write through a reclassifying schema", () => {
+    for (const runs of ["creator", "other"] as const) {
+      it(
+        runs === "creator"
+          ? "releases from a run that acts for the piece's creator"
+          : "releases nothing from a run that acts for another principal",
+        async () => {
+          const client = await connect(alice);
+          const piece = await createPiece(client);
+          const source = await storeSecret(client, secretSchema(alice), "fix");
+          const { derived } = await deriveFrom(client, source, {
+            piece,
+            identity: writer(patternModule(piece)),
+          });
+          // The same module writes the document again, in a run of Alice's,
+          // or in Bob's runtime, which acts for Bob as a handler he fires
+          // does.
+          const runtime = runs === "creator" ? client : await connect(bob);
+          const again = runtime.getCellFromLink(
+            derived.getAsNormalizedFullLink(),
+          );
+          await again.sync();
+          await runtime.getCell(space, source).sync();
+          await runtime.getCellFromLink(piece.getAsNormalizedFullLink()).sync();
+          await runtime.getCellFromEntityId(
+            space,
+            cfcPolicyManifestDocId(artifact.policyDigest),
+            [],
+          ).sync();
+
+          const { derived: written, error } = await deriveFrom(
+            runtime,
+            source,
+            {
+              identity: writer(patternModule(piece)),
+              into: again,
+              value: "again!",
+            },
+          );
+
+          expect(error).toBeUndefined();
+          // The value entry, which this write sets. The existence entry
+          // keeps the label the document was created with (SC-4).
+          expect(
+            storedEntries(runtime, written)
+              .filter((entry) =>
+                (entry as { observes?: string }).observes === "value"
+              )
+              .flatMap((entry) => entry.label.confidentiality ?? [])
+              .some((clause) => releasesTo(clause, alice, space)),
+          ).toBe(runs === "creator");
+        },
+      );
+    }
+
     it("stores the clause or the policy for a writer of the piece's pattern", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
@@ -622,7 +745,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("keeps a clause naming another principal, and one either may read", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const either = {
         anyOf: [cfcAtom.user(alice.did()), cfcAtom.user(bob.did())],
@@ -660,7 +783,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("leaves the envelope as it was when the same value is written again", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
       const identity = writer(patternModule(piece));
@@ -677,13 +800,13 @@ describe("cfc-reclassify", () => {
     });
 
     it("keeps an existence entry first stored with the flag off", async () => {
-      const off = connect(alice, { reclassification: false });
+      const off = await connect(alice, { reclassification: false });
       const piece = await createPiece(off);
       const source = await storeSecret(off, secretSchema(alice), "fix");
       const identity = writer(patternModule(piece));
       const { derived } = await deriveFrom(off, source, { piece, identity });
       await off.idle();
-      const on = connect(alice);
+      const on = await connect(alice);
       const rewritten = on.getCellFromLink(derived.getAsNormalizedFullLink());
       await rewritten.sync();
       await on.getCell(space, source).sync();
@@ -708,7 +831,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases nothing for a writer of another module", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
@@ -723,7 +846,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases nothing for an unattributed writer", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
@@ -735,7 +858,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases nothing for another writer that relies on the stored declaration", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
       const { derived } = await deriveFrom(client, source, {
@@ -757,7 +880,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("refuses a declaration added to a stored envelope that had none", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
       const { derived } = await deriveFrom(client, source, {
@@ -778,7 +901,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("refuses a declaration added to an existing document that stored no envelope", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
       const tx = client.edit();
@@ -805,7 +928,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("refuses a stored declaration's path written under another policy", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
       const { derived } = await deriveFrom(client, source, {
@@ -830,8 +953,8 @@ describe("cfc-reclassify", () => {
       expect(storedConfidentiality(client, derived)).toEqual(before);
     });
 
-    it("keeps the flag the runtime set when code reaching the transaction tries to turn it on", () => {
-      const client = connect(alice, { reclassification: false });
+    it("keeps the flag the runtime set when code reaching the transaction tries to turn it on", async () => {
+      const client = await connect(alice, { reclassification: false });
       const tx = client.edit();
 
       expect(() => tx.setCfcPatternReclassification(true)).toThrow(
@@ -842,7 +965,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("refuses a malformed declaration with the flag off", async () => {
-      const client = connect(alice, { reclassification: false });
+      const client = await connect(alice, { reclassification: false });
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { error } = await deriveFrom(client, source, {
@@ -858,7 +981,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases nothing for a declaration beneath the written path", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
@@ -881,7 +1004,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases what a write beneath a nested declaration derives", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const piece = await createPiece(client);
       const source = await storeSecret(client, secretSchema(alice), "fix");
       const identity = writer(patternModule(piece));
@@ -910,7 +1033,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases nothing for a document of no piece", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const source = await storeSecret(client, secretSchema(alice), "fix");
 
       const { derived } = await deriveFrom(client, source, {
@@ -923,7 +1046,7 @@ describe("cfc-reclassify", () => {
     });
 
     it("releases nothing of a principal who did not create the piece", async () => {
-      const client = connect(alice);
+      const client = await connect(alice);
       const served = await createPieceFor(bob);
       const piece = client.getCellFromLink(served.getAsNormalizedFullLink());
       await piece.sync();

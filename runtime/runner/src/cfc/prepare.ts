@@ -40,6 +40,7 @@ import {
 } from "@commonfabric/data-model";
 import { linkProbeSubPath } from "@commonfabric/data-model/cell-rep";
 import { isFabricPrimitiveSchemaType } from "@commonfabric/data-model/fabric-primitives";
+import { type ACL, aclDocId } from "@commonfabric/memory/acl";
 import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
   type DocumentPath,
@@ -264,6 +265,7 @@ import {
   resolveCfcSchemaRefRoot,
   resolveCfcSchemaRefs,
 } from "./schema-refs.ts";
+import { writableOnlyBy } from "./space-membership.ts";
 import { createTrustResolver } from "./trust.ts";
 import {
   CFC_ENFORCING_STRICTNESS,
@@ -2410,6 +2412,19 @@ const readPieceMeta = (
     path: [field],
   }, { meta: INTERNAL_VERIFIER_META });
 
+/** The access list of `space` as the transaction holds it, if any. */
+const readAccessList = (
+  tx: IExtendedStorageTransaction,
+  space: MemorySpace,
+): ACL | undefined =>
+  tx.read({
+    space,
+    id: aclDocId(space) as URI,
+    scope: normalizeCellScope(undefined),
+    type: "application/json",
+    path: ["value"],
+  }, { meta: INTERNAL_VERIFIER_META }).ok?.value as ACL | undefined;
+
 /** The well-formed DID `document`'s own `creator` meta field records. */
 const pieceCreatorRecordedOn = (
   tx: IExtendedStorageTransaction,
@@ -2697,6 +2712,30 @@ const reclassifiedFlowConfidentiality = (
   }
   if (!join.some((clause) => isCreatorUserClause(clause, creator))) {
     return unchanged(`no clause is ${creator}'s alone to release`);
+  }
+  // A run acting for someone else chose what it read, as a handler's event
+  // chooses the documents it names (§3.8.4's trigger integrity).
+  const snapshot = tx.getCfcState().trustSnapshot;
+  const acting = snapshot === undefined || servedRunActsForNoOne(tx, snapshot)
+    ? undefined
+    : snapshot.actingPrincipal;
+  if (acting !== undefined && acting !== creator) {
+    return unchanged(`its run acts for ${acting}, not ${creator}`);
+  }
+  // CFC debt (`share-space-declassify/PROPOSAL.md`, "CFC debt"): whoever can
+  // write the piece's space can change its pattern, its argument and
+  // anything it reads, and so choose what is released in the creator's name.
+  // Until the store can attest that the creator chose a release's inputs
+  // (§3.8.4), a release is honored only where no one else can write there,
+  // as the space's access list says.
+  for (
+    const space of new Set([result!.space, target.space])
+  ) {
+    if (!writableOnlyBy(readAccessList(tx, space), creator)) {
+      return unchanged(
+        `${creator} is not the only principal who may write ${space}`,
+      );
+    }
   }
   const policy = resolvePolicyOfValue(
     tx,
