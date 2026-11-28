@@ -188,7 +188,11 @@ decided by how the piece came to be:
   builtin's per-entry piece, names its parent's creator, read from the
   parent's record. The actor whose run happened to instantiate it is not the
   creator of what the parent's code made. `parentPieceRootId` and the
-  instantiating piece's result cell are already in hand at that site.
+  instantiating piece's result cell are already in hand at that site. The
+  store admits a session's record only when it names the session's own
+  principal (`runtime/memory/v2/cfc-creator-record.ts`), so a runtime on a
+  client records the parent's creator only when that is its own identity, and
+  none otherwise; a serving runtime's record is not judged there.
 - A piece a builtin instantiates from a continuation of its action
   (`attributeInitialization: false`) names the instantiating piece's creator
   by the same rule.
