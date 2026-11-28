@@ -5209,10 +5209,23 @@ export class CfHarnessPromptLoop {
       ? deniedToolInputSummary ??
         await summarizeToolInput(toolId, input)
       : await summarizeToolInput(toolId, input);
+    // Asked as of a side effect whatever the call's own class: a tool classed
+    // `read` that can cause one only on some inputs (`read_value` starting a
+    // piece) reads this to learn whether that would be admitted, and asking
+    // it as of `read` would always say yes. `run_skill_script` reads it too,
+    // and runs a script sealed only for a call it does not admit.
+    const sideEffectsAuthorized = evaluateToolPolicy(
+      this.engine.getRunState().cfcEnforcementMode,
+      tool.descriptor,
+      "side-effect",
+      promptSlotBinding,
+      input,
+    ).allowed;
     callEffectClass = await this.engine.builtinToolEffectClass(
       toolId,
       input,
       signal,
+      sideEffectsAuthorized,
     );
     const decision = evaluateToolPolicy(
       this.engine.getRunState().cfcEnforcementMode,
@@ -5530,13 +5543,7 @@ export class CfHarnessPromptLoop {
           toolId,
           input,
           signal,
-          evaluateToolPolicy(
-            this.engine.getRunState().cfcEnforcementMode,
-            tool.descriptor,
-            "side-effect",
-            promptSlotBinding,
-            input,
-          ).allowed,
+          sideEffectsAuthorized,
         );
       signal?.throwIfAborted();
     } catch (error) {

@@ -12,6 +12,7 @@ import {
 } from "../contracts/browser-access.ts";
 import type {
   HarnessAcquiredSkill,
+  HarnessSealedSkillScriptRun,
   HarnessSkillAcquisition,
   HarnessSkillDiagnostic,
   HarnessSkillRecord,
@@ -22,6 +23,7 @@ import type {
   HarnessSkillScriptRuntime,
 } from "../contracts/skill.ts";
 import type { HarnessToolDescriptor } from "../contracts/tool-descriptor.ts";
+import type { SandboxRuntime } from "../sandbox/types.ts";
 import { skillsShValueDigest } from "../skills-sh/acquisition.ts";
 import { acquiredSkillMountBacks } from "../skills/acquired-skill-mount.ts";
 import { harnessSkillScriptMetadata } from "../skills/registry.ts";
@@ -82,6 +84,13 @@ export interface RunSkillScriptToolOutput {
    * acquisition.
    */
   acquisition?: HarnessSkillAcquisition;
+
+  /**
+   * Present when the script ran sealed, every channel out off, which is what
+   * made the call `read` rather than a side effect; see
+   * {@link runsSealedSkillScript}.
+   */
+  sealed?: HarnessSealedSkillScriptRun;
 
   stdout?: string;
   stderr?: string;
@@ -153,6 +162,15 @@ export const runSkillScriptToolDescriptor: HarnessToolDescriptor = {
       registrySizeBytes: { type: "integer", minimum: 0 },
       observedSizeBytes: { type: "integer", minimum: 0 },
       acquisition: { type: "object" },
+      sealed: {
+        type: "object",
+        properties: {
+          networkMode: { type: "string", const: "none" },
+          image: { type: "string" },
+        },
+        required: ["networkMode"],
+        additionalProperties: false,
+      },
       stdout: { type: "string" },
       stderr: { type: "string" },
       exitCode: { type: "number" },
@@ -1112,6 +1130,9 @@ const buildExecutionRecord = (
   ...(options.output.acquisition !== undefined
     ? { acquisition: options.output.acquisition }
     : {}),
+  ...(options.output.sealed !== undefined
+    ? { sealed: options.output.sealed }
+    : {}),
   ...(options.output.registryDigest !== undefined
     ? { registryDigest: options.output.registryDigest }
     : {}),
@@ -1136,11 +1157,91 @@ const buildExecutionRecord = (
     : {}),
 });
 
+/**
+ * What the record says of a sealed run, or why the runtime built for one is
+ * not sealed: it describes a network mode other than `none`, a fabric mount,
+ * or a mount it can write.
+ *
+ * Asked of the runtime that runs the script rather than of the configuration
+ * it was built from, because the runtime is what the script runs in.
+ */
+const sealedRunOf = (
+  runtime: SandboxRuntime,
+): { run: HarnessSealedSkillScriptRun } | { error: string } => {
+  const description = runtime.describe();
+  if (description.kind !== "runsc-cfc") {
+    return {
+      error:
+        `a sealed skill-script run needs a runsc runtime, and its runtime is ${
+          JSON.stringify(description.kind)
+        }`,
+    };
+  }
+  const cfc = description.cfc;
+  if (cfc?.networkMode !== "none") {
+    return {
+      error:
+        `a sealed skill-script run needs network mode "none", and its runtime describes ${
+          JSON.stringify(cfc?.networkMode ?? "no network mode")
+        }`,
+    };
+  }
+  const open = (cfc.mounts ?? []).find((mount) =>
+    mount.kind === "fabric-fuse" || !mount.readOnly
+  );
+  if (open !== undefined) {
+    return {
+      error:
+        `a sealed skill-script run mounts nothing it can write, and its runtime mounts ${open.sandboxPath} ${
+          open.kind === "fabric-fuse" ? "from the fabric" : "writable"
+        }`,
+    };
+  }
+  return {
+    run: {
+      networkMode: "none",
+      ...(cfc.image !== undefined ? { image: cfc.image } : {}),
+    },
+  };
+};
+
+/**
+ * Whether a call runs sealed: in the sandbox, on a runtime built for that one
+ * call with every channel out off, from the workspace it holds read-only.
+ *
+ * Sealing is for the call the run's authority does not admit as a side
+ * effect. A call it does admit, under a direct command or in a run that does
+ * not enforce, runs as it always has, with the run's network and a writable
+ * workspace. A call it does not admit runs sealed where it can: a host script,
+ * a run that cannot build a sealed runtime, and a call that names its own
+ * `cwd` stay side effects, and are refused. The last because a directory named
+ * in the call is one the script expects to work in, and a sealed run can write
+ * nothing that outlives its container.
+ *
+ * The call's effect class is this predicate, never a declaration: `read` when
+ * it holds and `side-effect` otherwise.
+ */
+export const runsSealedSkillScript = (
+  context: Pick<
+    HarnessToolContext,
+    | "sealedSandboxRuntime"
+    | "sideEffectsAuthorized"
+    | "skillScriptExecutionTarget"
+  >,
+  input: { cwd?: unknown },
+): boolean =>
+  context.sideEffectsAuthorized !== true &&
+  context.sealedSandboxRuntime !== undefined &&
+  context.skillScriptExecutionTarget === "sandbox" &&
+  input.cwd === undefined;
+
 export const runSkillScriptTool: HarnessToolDefinition<
   RunSkillScriptToolInput,
   RunSkillScriptToolOutput
 > = {
   descriptor: runSkillScriptToolDescriptor,
+  effectClassOf: (input, context) =>
+    runsSealedSkillScript(context, input) ? "read" : "side-effect",
   async invoke(context, input) {
     const outputId = context.nextOutputId("run_skill_script");
     const executedAt = context.now();
@@ -1421,150 +1522,203 @@ export const runSkillScriptTool: HarnessToolDefinition<
       hostAgentBrowserCdpOrigin = browserLease.origin;
     }
 
-    const cwd = input.cwd !== undefined
-      ? context.resolvePath(input.cwd)
-      : context.sandbox.defaultWorkingDirectory();
-    const hostCwd = executionTarget === "host"
-      ? context.resolveHostPath(cwd)
+    const sealedRuntime = runsSealedSkillScript(context, input)
+      ? context.sealedSandboxRuntime!()
       : undefined;
-    if (
-      hostCwd !== undefined &&
-      (!(await context.isHostPathWithinWorkspace(hostCwd)) ||
-        await context.isHostPathWithinArtifactRoot(hostCwd, {
-          allowMissing: true,
-        }))
-    ) {
-      const output = errorOutput({
-        outputId,
-        skill: skillName,
-        path: normalizedPath,
-        executionTarget,
-        code: "permission_denied",
-        message:
-          "host skill scripts must execute from a workspace path outside cf-harness artifacts",
-        resource,
-        acquisition,
+    // Built for this one call and closed after it, so nothing it held
+    // outlives the call.
+    try {
+      // The call was classed `read` before it reached here, so a runtime that
+      // does not describe itself sealed fails the call rather than running it
+      // with a channel open.
+      const sealed = sealedRuntime === undefined
+        ? undefined
+        : sealedRunOf(sealedRuntime);
+      if (sealed !== undefined && "error" in sealed) {
+        const output = errorOutput({
+          outputId,
+          skill: skillName,
+          path: normalizedPath,
+          executionTarget,
+          code: "permission_denied",
+          message: sealed.error,
+          resource,
+          acquisition,
+          observedDigest,
+          observedSizeBytes,
+        });
+        await context.recordSkillScriptExecution(
+          buildExecutionRecord({
+            output,
+            runId: context.runId,
+            executedAt,
+            resourcePath: resource.resourcePath,
+          }),
+        );
+        return output;
+      }
+      const sandbox = sealedRuntime ?? context.sandbox;
+      const cwd = sealedRuntime !== undefined
+        ? sealedRuntime.defaultWorkingDirectory()
+        : input.cwd !== undefined
+        ? context.resolvePath(input.cwd)
+        : context.sandbox.defaultWorkingDirectory();
+      const hostCwd = executionTarget === "host"
+        ? context.resolveHostPath(cwd)
+        : undefined;
+      if (
+        hostCwd !== undefined &&
+        (!(await context.isHostPathWithinWorkspace(hostCwd)) ||
+          await context.isHostPathWithinArtifactRoot(hostCwd, {
+            allowMissing: true,
+          }))
+      ) {
+        const output = errorOutput({
+          outputId,
+          skill: skillName,
+          path: normalizedPath,
+          executionTarget,
+          code: "permission_denied",
+          message:
+            "host skill scripts must execute from a workspace path outside cf-harness artifacts",
+          resource,
+          acquisition,
+          observedDigest,
+          observedSizeBytes,
+        });
+        await context.recordSkillScriptExecution(
+          buildExecutionRecord({
+            output,
+            runId: context.runId,
+            executedAt,
+            resourcePath: resource.resourcePath,
+          }),
+        );
+        return output;
+      }
+      const sandboxEnv = {
+        CF_HARNESS_RUN_ID: context.runId,
+        SKILL_NAME: skillName,
+        SKILL_DIR: resolution.resolved.sandboxSkillDir,
+        SKILL_SCRIPT: resource.sandboxResourcePath,
+        CF_HARNESS_SKILL_SCRIPT_EXECUTION_TARGET: executionTarget,
+      };
+      const result = executionTarget === "host"
+        ? await context.hostProcessRunner.run({
+          command: scriptExecution.argv[0]!,
+          args: scriptExecution.argv.slice(1),
+          cwd: hostCwd,
+          clearEnv: true,
+          env: createClearedHostProcessEnv({
+            CF_HARNESS_RUN_ID: context.runId,
+            SKILL_NAME: skillName,
+            SKILL_DIR: resolution.resolved.hostSkillDir,
+            SKILL_SCRIPT: resource.resourcePath,
+            CF_HARNESS_SKILL_SCRIPT_EXECUTION_TARGET: executionTarget,
+            ...(hostAgentBrowserCdpOrigin !== undefined
+              ? { AGENT_BROWSER_CDP: hostAgentBrowserCdpOrigin }
+              : {}),
+          }),
+          ...(scriptExecution.stdinText !== undefined
+            ? { stdinText: scriptExecution.stdinText }
+            : {}),
+          timeoutMs,
+        })
+        : await sandbox.run({
+          argv: scriptExecution.argv,
+          cwd,
+          env: sandboxEnv,
+          ...(scriptExecution.stdinText !== undefined
+            ? { stdinText: scriptExecution.stdinText }
+            : {}),
+          timeoutMs,
+          cfcInvocationContext: await context.createCfcInvocationContext({
+            toolId: "run_skill_script",
+            toolOutputId: outputId,
+            operation: "command",
+            cwd,
+            argv: scriptExecution.argv,
+            args,
+            env: sandboxEnv,
+            ...(scriptExecution.stdinText !== undefined
+              ? { stdinText: scriptExecution.stdinText }
+              : {}),
+            // Confidentiality only, and no integrity — including for an
+            // acquired script, whose acquisition minted an ExternalIngest atom
+            // that would otherwise belong on this invocation. A non-empty
+            // `integrity` array in `cfcInputLabels` makes the sandbox fail to
+            // start (CT-2302), so an acquired script labeled with its own
+            // provenance would not run at all. The provenance rides the output
+            // instead, in `acquisition`, and the execution record with it.
+            ...(input.cfcInputLabels !== undefined
+              ? { cfcInputLabels: input.cfcInputLabels }
+              : {}),
+            // Every input the script receives, stdin included: a shebang
+            // script reaches its interpreter on stdin.
+            cfcInputLabelPaths: [
+              ["argv"],
+              ["args"],
+              ...(input.cwd !== undefined ? [["cwd"] as const] : []),
+              ["env"],
+              ...(scriptExecution.stdinText !== undefined
+                ? [["stdin"] as const]
+                : []),
+            ],
+          }),
+        });
+
+      const cfcResult = (result as { cfcResult?: CfcSandboxResult }).cfcResult;
+      const output: RunSkillScriptToolOutput = {
+        ...baseOutput({
+          outputId,
+          skill: skillName,
+          path: normalizedPath,
+          status: "executed",
+          executionTarget,
+        }),
+        runtime: scriptExecution.runtime,
+        argv: scriptExecution.argv,
+        args,
+        cwd,
+        sandboxResourcePath: resource.sandboxResourcePath,
+        // Exactly one of the two, as on a refusal: the registry fields name the
+        // run-start snapshot an acquired script was never in, and `acquisition`
+        // names the pin whose bytes an acquired script was checked against.
+        ...(acquisition !== undefined ? { acquisition } : {
+          registryDigest: resource.digest,
+          digestMatchesRegistry: true,
+          registrySizeBytes: resource.sizeBytes,
+        }),
         observedDigest,
         observedSizeBytes,
-      });
-      await context.recordSkillScriptExecution(
-        buildExecutionRecord({
+        // A host agent-browser script holds the lease endpoint in its
+        // environment and may echo it, so echoes are scrubbed from what the
+        // model reads. The scrub is a backstop: what keeps the endpoint out of
+        // model reach is that only the digest-pinned bundled script holds it.
+        stdout: hostAgentBrowserCdpOrigin !== undefined
+          ? redactCdpEndpoint(result.stdout, hostAgentBrowserCdpOrigin)
+          : result.stdout,
+        stderr: hostAgentBrowserCdpOrigin !== undefined
+          ? redactCdpEndpoint(result.stderr, hostAgentBrowserCdpOrigin)
+          : result.stderr,
+        exitCode: result.exitCode,
+        // The model reads that the run was sealed, and not the host path of
+        // the image, which only the record keeps.
+        ...(sealed !== undefined ? { sealed: { networkMode: "none" } } : {}),
+        ...(cfcResult !== undefined ? { cfcResult } : {}),
+      };
+      await context.recordSkillScriptExecution({
+        ...buildExecutionRecord({
           output,
           runId: context.runId,
           executedAt,
           resourcePath: resource.resourcePath,
         }),
-      );
-      return output;
-    }
-    const sandboxEnv = {
-      CF_HARNESS_RUN_ID: context.runId,
-      SKILL_NAME: skillName,
-      SKILL_DIR: resolution.resolved.sandboxSkillDir,
-      SKILL_SCRIPT: resource.sandboxResourcePath,
-      CF_HARNESS_SKILL_SCRIPT_EXECUTION_TARGET: executionTarget,
-    };
-    const result = executionTarget === "host"
-      ? await context.hostProcessRunner.run({
-        command: scriptExecution.argv[0]!,
-        args: scriptExecution.argv.slice(1),
-        cwd: hostCwd,
-        clearEnv: true,
-        env: createClearedHostProcessEnv({
-          CF_HARNESS_RUN_ID: context.runId,
-          SKILL_NAME: skillName,
-          SKILL_DIR: resolution.resolved.hostSkillDir,
-          SKILL_SCRIPT: resource.resourcePath,
-          CF_HARNESS_SKILL_SCRIPT_EXECUTION_TARGET: executionTarget,
-          ...(hostAgentBrowserCdpOrigin !== undefined
-            ? { AGENT_BROWSER_CDP: hostAgentBrowserCdpOrigin }
-            : {}),
-        }),
-        ...(scriptExecution.stdinText !== undefined
-          ? { stdinText: scriptExecution.stdinText }
-          : {}),
-        timeoutMs,
-      })
-      : await context.sandbox.run({
-        argv: scriptExecution.argv,
-        cwd,
-        env: sandboxEnv,
-        ...(scriptExecution.stdinText !== undefined
-          ? { stdinText: scriptExecution.stdinText }
-          : {}),
-        timeoutMs,
-        cfcInvocationContext: await context.createCfcInvocationContext({
-          toolId: "run_skill_script",
-          toolOutputId: outputId,
-          operation: "command",
-          cwd,
-          argv: scriptExecution.argv,
-          args,
-          env: sandboxEnv,
-          ...(scriptExecution.stdinText !== undefined
-            ? { stdinText: scriptExecution.stdinText }
-            : {}),
-          // Confidentiality only, and no integrity — including for an
-          // acquired script, whose acquisition minted an ExternalIngest atom
-          // that would otherwise belong on this invocation. A non-empty
-          // `integrity` array in `cfcInputLabels` makes the sandbox fail to
-          // start (CT-2302), so an acquired script labeled with its own
-          // provenance would not run at all. The provenance rides the output
-          // instead, in `acquisition`, and the execution record with it.
-          ...(input.cfcInputLabels !== undefined
-            ? { cfcInputLabels: input.cfcInputLabels }
-            : {}),
-          cfcInputLabelPaths: input.cwd !== undefined
-            ? [["argv"], ["args"], ["cwd"], ["env"]]
-            : [["argv"], ["args"], ["env"]],
-        }),
+        ...(sealed !== undefined ? { sealed: sealed.run } : {}),
       });
-
-    const cfcResult = (result as { cfcResult?: CfcSandboxResult }).cfcResult;
-    const output: RunSkillScriptToolOutput = {
-      ...baseOutput({
-        outputId,
-        skill: skillName,
-        path: normalizedPath,
-        status: "executed",
-        executionTarget,
-      }),
-      runtime: scriptExecution.runtime,
-      argv: scriptExecution.argv,
-      args,
-      cwd,
-      sandboxResourcePath: resource.sandboxResourcePath,
-      // Exactly one of the two, as on a refusal: the registry fields name the
-      // run-start snapshot an acquired script was never in, and `acquisition`
-      // names the pin whose bytes an acquired script was checked against.
-      ...(acquisition !== undefined ? { acquisition } : {
-        registryDigest: resource.digest,
-        digestMatchesRegistry: true,
-        registrySizeBytes: resource.sizeBytes,
-      }),
-      observedDigest,
-      observedSizeBytes,
-      // A host agent-browser script holds the lease endpoint in its
-      // environment and may echo it, so echoes are scrubbed from what the
-      // model reads. The scrub is a backstop: what keeps the endpoint out of
-      // model reach is that only the digest-pinned bundled script holds it.
-      stdout: hostAgentBrowserCdpOrigin !== undefined
-        ? redactCdpEndpoint(result.stdout, hostAgentBrowserCdpOrigin)
-        : result.stdout,
-      stderr: hostAgentBrowserCdpOrigin !== undefined
-        ? redactCdpEndpoint(result.stderr, hostAgentBrowserCdpOrigin)
-        : result.stderr,
-      exitCode: result.exitCode,
-      ...(cfcResult !== undefined ? { cfcResult } : {}),
-    };
-    await context.recordSkillScriptExecution(
-      buildExecutionRecord({
-        output,
-        runId: context.runId,
-        executedAt,
-        resourcePath: resource.resourcePath,
-      }),
-    );
-    return output;
+      return output;
+    } finally {
+      await sealedRuntime?.close?.();
+    }
   },
 };

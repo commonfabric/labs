@@ -354,12 +354,37 @@ about injection.
   class and needs none. The class is computed from the resolved sandbox profile,
   `read` when sealed and `side-effect` otherwise, and never declared. Scripts
   the operator runs on the host stay `side-effect`.
-- **Today no run is sealed.** Egress is on by default, DNS is exempt
-  (top/3594), a host target exists, and the default working directory is the
-  persistent workspace, so a script's writes outlive the call. That is why
-  `run_skill_script` is `side-effect`. One call site in `prompt-loop.ts` also
-  passes a literal `"side-effect"` when it authorizes the call, and it must pass
-  the tool's computed class instead.
+- **What runs sealed today.** Only a call the run would not admit as a side
+  effect is sealed; one it admits, under a direct command or in a run that does
+  not enforce, runs as before. Such a call is sealed when the run's engine built
+  its own runsc runtime, the target is the sandbox, and the call names no
+  working directory. It runs on a runtime built for that call from the run's
+  configuration, with network mode `none`, no fabric mount, the workspace and
+  every host bind read-only, and a scratch directory of its own; the tool checks
+  that the runtime describes itself that way before it runs anything. The
+  configuration also covers the artifact root, wherever a mount shows it, with
+  an empty tmpfs; the runtime describes no such mask, so the check does not
+  cover it. What the script writes lands in the container's own tmpfs mounts
+  (`/tmp`, `/dev`, `/dev/shm`) or the root filesystem's in-memory overlay, and
+  dies with the container. Every other call is a side effect: a host-target
+  call, a call that names a working directory, and any call in a run handed its
+  sandbox runtime.
+
+  Three parts of the definition are met less than fully. The working directory
+  is the read-only workspace rather than a fresh scratch directory, because
+  runsc keeps a call's working directory inside its mounts; the fresh `/tmp` is
+  the scratch. The environment is the explicit `CF_HARNESS_*` and `SKILL_*` set
+  plus runsc's `PATH`, `HOME` and `TERM`, rather than one built by
+  `createClearedHostProcessEnv`, which is for the host. And the record names the
+  root filesystem path, not a measured image digest: nothing measures the image
+  yet.
+- **The `"side-effect"` literal stays.** The policy gate in `prompt-loop.ts`
+  passes the call's computed class. The literal asks a different question:
+  whether a side effect would be admitted on this call. `read_value` asks it
+  before starting a piece, and `run_skill_script` asks it to decide whether to
+  seal. Asked as of `read`, it would say yes to a `quote`-bound call under
+  `enforce-explicit`, where a side effect would be refused. The loop now asks it
+  once, before computing the class, and hands the answer to both.
 - **A reviewed script descriptor comes later.** Each reviewed script becomes a
   §18.3.2 `ToolDescriptor` whose `contractPredicateDigest` names a §18.2.4.1
   measured contract over the script bytes, the interpreter and the sandbox
@@ -396,7 +421,7 @@ same for the parent run.
 | 1    | Reviewed-set entries as trust statements, and a delegation for each accepted set               | Yes, as an operator file: `--reviewed-skills`, read by `runtime/cf-harness/src/skills/reviewed-skills.ts`, evaluated through `trust.ts`'s closure. Per-person acceptance is question 3. |
 | 2    | A digest of the served bytes to match against                                                  | Yes: `acquire_skill`'s `valueDigest`, the external-ingest stamp, `run_skill_script`'s digest check, and a bundle digest over all of them. |
 | 3    | The lowering predicate consults the closure; the manifest records the evidence; uncovered files refused | Yes. The `childPromptSlotBinding` computation in `prompt-loop.ts`; the manifest's `reviewedSkill`.                          |
-| 4    | Sealed `run_skill_script`, classed `read`; the literal `"side-effect"` replaced                | No. Independent of review; built after steps 1 to 3 or alongside them. It lets a lowered child run scripts under `enforce-explicit` only: under the default `enforce-strict`, even a `read` needs `direct-command`. |
+| 4    | Sealed `run_skill_script`, classed `read`                                                      | Yes, where the run's engine built its own runsc runtime: `runtime/cf-harness/src/skills/sealed-script-sandbox.ts` and the tool's `effectClassOf`. It lets a lowered child run scripts under `enforce-explicit` only: under the default `enforce-strict`, even a `read` needs `direct-command`. No measured image digest. |
 | 5    | Source entry assigns prompt caveats to fetched text and script output, and mints the content-digest atom; then the concept-guarded rule clears the skill's material risk, and the boundary mints a `CaveatAssessment` at each decision | No (cleanup 4, top/1892). |
 | 6    | Per-call authority: `PromptSlotInfluence` on invocation records, argument labels, `IntentOnce` | No (H9 / CT-2175). This deletes the lowering.                                                                                                     |
 | 7    | Script descriptors, registry snapshots, `ToolDescriptorBound`, the sink check                  | No (cleanups 5 and 6).                                                                                                                            |

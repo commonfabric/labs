@@ -27,6 +27,10 @@ import {
   verifyPrivateScratchParent,
 } from "../src/sandbox/runsc.ts";
 import { SandboxPathEscapeError } from "../src/sandbox/errors.ts";
+import {
+  sandboxPathsUnderMounts,
+  sealedSkillScriptRunscConfig,
+} from "../src/skills/sealed-script-sandbox.ts";
 import { ProcessTimeoutError } from "../src/sandbox/process-runner.ts";
 import { writesDespiteMode } from "./support/runsc-privilege.ts";
 import { SandboxSessionUnavailableError } from "../src/sandbox/types.ts";
@@ -531,6 +535,95 @@ test("RunscSandboxRuntime writes a bundle whose spec names the rootfs and every 
   assertEquals(binds["/file-cabinet"].source, "/home/u/cabinet");
   assert(binds["/file-cabinet"].options.includes("ro"));
   assertEquals(binds["/fabric"].source, "/mnt/fabric");
+});
+
+test("RunscSandboxRuntime runs a sealed skill-script config with no network and nothing writable", async () => {
+  const runner = new FakeRunscRunner();
+  let captured: Record<string, unknown> | undefined;
+  runner.run = async function (this: FakeRunscRunner, request) {
+    if (request.command === "/bin/sh" && captured === undefined) {
+      const bundle = request.args[request.args.indexOf("--bundle") + 1];
+      captured = JSON.parse(
+        await Deno.readTextFile(join(bundle, "config.json")),
+      );
+    }
+    return FakeRunscRunner.prototype.run.call(this, request);
+  };
+  const run = config({
+    additionalMounts: [
+      {
+        kind: "host-bind",
+        name: "notes",
+        hostPath: "/home/u/notes",
+        sandboxPath: "/notes",
+        readOnly: false,
+      },
+      { kind: "fabric-fuse", hostPath: "/mnt/fabric" },
+    ],
+  });
+  const sealed = sealedSkillScriptRunscConfig(run, "call-1", [
+    "/workspace/.cf-harness-artifacts",
+  ]);
+  assertEquals(sealed.scratchDir, `${run.scratchDir}-sealed-call-1`);
+  const runtime = new RunscSandboxRuntime(sealed, runner);
+  assertEquals(runtime.describe().cfc?.networkMode, "none");
+  assertEquals(
+    runtime.describe().cfc?.mounts?.map((m) => [m.sandboxPath, m.readOnly]),
+    [["/workspace", true], ["/notes", true]],
+  );
+
+  await runtime.run({
+    argv: ["/bin/true"],
+    cwd: runtime.defaultWorkingDirectory(),
+  });
+  await runtime.close();
+  const argv = runner.requests[0].args.slice(6);
+  const globals = argv.slice(0, argv.indexOf("run"));
+  assert(globals.includes("--network=none"));
+  assert(captured !== undefined);
+  const spec = captured as {
+    process: { cwd: string };
+    mounts: Array<{ destination: string; source: string; options: string[] }>;
+  };
+  assertEquals(spec.process.cwd, "/workspace");
+  const binds = Object.fromEntries(
+    spec.mounts.filter((m) => m.source.startsWith("/")).map((
+      m,
+    ) => [m.destination, m]),
+  );
+  assert(binds["/workspace"].options.includes("ro"));
+  assert(binds["/notes"].options.includes("ro"));
+  assertEquals(binds["/fabric"], undefined);
+  const masks = spec.mounts.filter((m) =>
+    m.destination.startsWith("/workspace/")
+  );
+  assertEquals(masks.map((m) => [m.destination, m.source]), [[
+    "/workspace/.cf-harness-artifacts",
+    "tmpfs",
+  ]]);
+  assert(masks[0].options.includes("ro"));
+  // Listed after the workspace bind, so it covers what the bind shows there.
+  assert(
+    spec.mounts.indexOf(masks[0]) >
+      spec.mounts.findIndex((m) => m.destination === "/workspace"),
+  );
+});
+
+test("sandboxPathsUnderMounts maps a path under each mount that shows it, and none outside", () => {
+  assertEquals(
+    sandboxPathsUnderMounts(
+      [
+        { hostPath: "/host/ws", sandboxPath: "/workspace" },
+        { hostPath: "/host", sandboxPath: "/everything" },
+      ],
+      ["/host/ws/..artifacts", "/elsewhere/artifacts", "/host/ws-other"],
+    ),
+    [
+      "/workspace/..artifacts",
+      "/everything/ws/..artifacts",
+      "/everything/ws-other",
+    ],
+  );
 });
 
 test("RunscSandboxRuntime omits the CFC flags and reports no result without a policy", async () => {

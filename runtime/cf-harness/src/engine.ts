@@ -231,6 +231,7 @@ import {
 import type { HarnessTaskClassification } from "./task-classification.ts";
 import {
   assertRunscCfcPolicyForMode,
+  canonicalHostPath,
   resolveRunscSandboxConfig,
   type RunscNetworkMode,
   type RunscSandboxConfig,
@@ -258,6 +259,10 @@ import {
   ACQUIRED_SKILL_MOUNT_PATH,
   AcquiredSkillDirectoryReadableError,
 } from "./skills/acquired-skill-mount.ts";
+import {
+  sandboxPathsUnderMounts,
+  sealedSkillScriptRunscConfig,
+} from "./skills/sealed-script-sandbox.ts";
 import type { BashToolInput, BashToolOutput } from "./tools/bash.ts";
 import type {
   AcquireSkillToolInput,
@@ -499,6 +504,16 @@ export interface CreateHarnessEngineOptions
    * sessions too. A runtime the engine builds itself is always its own.
    */
   ownsSandboxRuntime?: boolean;
+
+  /**
+   * Builds the runtime of one sealed skill-script call (see
+   * `skills/sealed-script-sandbox.ts`). Defaults, where the engine built its
+   * own runsc runtime, to one built from that runtime's configuration with
+   * every channel out off; absent otherwise, and a run without one runs no
+   * script sealed.
+   */
+  sealedSandboxRuntime?: () => SandboxRuntime;
+
   artifactStore?: HarnessArtifactStore;
   processRunner?: ProcessRunner;
 
@@ -756,6 +771,8 @@ export class CfHarnessEngine {
   readonly #hostMounts: readonly HostSandboxMount[];
   /** The runsc configuration this engine built, when it built one. */
   readonly #ownedNativeConfig?: RunscSandboxConfig;
+  /** Builds a sealed skill-script call's runtime, where this run can. */
+  readonly #sealedSandboxRuntime?: () => SandboxRuntime;
   readonly #sandboxRuntimeChoice?: SandboxRuntimeChoice;
   #sandboxClosed = false;
   readonly #ownsSandbox: boolean;
@@ -1053,6 +1070,40 @@ export class CfHarnessEngine {
       this.sandbox = options.sandboxRuntime;
     }
     this.#ownedNativeConfig = runscConfig;
+    this.#sealedSandboxRuntime = options.sealedSandboxRuntime ??
+      (runscConfig === undefined ? undefined : () =>
+        new RunscSandboxRuntime(
+          sealedSkillScriptRunscConfig(
+            runscConfig,
+            crypto.randomUUID(),
+            // Resolved as the mounts are, so a link on either side cannot
+            // make the artifact root look outside them; a root that cannot be
+            // resolved fails the call rather than running it unmasked.
+            this.artifactStore?.artifactRoot === undefined
+              ? []
+              : sandboxPathsUnderMounts(
+                [
+                  {
+                    hostPath: runscConfig.workspaceHostPath,
+                    sandboxPath: runscConfig.workspaceMountPath,
+                  },
+                  ...runscConfig.additionalMounts.flatMap((mount) =>
+                    mount.kind === "host-bind" ? [mount] : []
+                  ),
+                ].map((mount) => ({
+                  hostPath: canonicalHostPath("sandbox mount", mount.hostPath),
+                  sandboxPath: mount.sandboxPath,
+                })),
+                [
+                  canonicalHostPath(
+                    "artifact root",
+                    this.artifactStore.artifactRoot,
+                  ),
+                ],
+              ),
+          ),
+          options.processRunner,
+        ));
     this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
     this.#ownsSandbox = options.sandboxRuntime === undefined ||
       options.ownsSandboxRuntime === true;
@@ -2627,10 +2678,14 @@ export class CfHarnessEngine {
     toolId: BuiltinToolId,
     input: Record<string, unknown>,
     signal?: AbortSignal,
+    sideEffectsAuthorized?: boolean,
   ) {
     const tool = getBuiltinTool(toolId);
     if (tool === undefined) throw new Error(`unknown builtin tool: ${toolId}`);
-    return await tool.effectClassOf?.(input, this.#createToolContext(signal)) ??
+    return await tool.effectClassOf?.(
+      input,
+      this.#createToolContext(signal, sideEffectsAuthorized),
+    ) ??
       tool.descriptor.effectClass;
   }
 
@@ -3075,6 +3130,9 @@ export class CfHarnessEngine {
       ) => this.mintSkillContextHandle(ref, acquisition),
       ...(this.#taskText !== undefined ? { taskText: this.#taskText } : {}),
       sandbox: this.sandbox,
+      ...(this.#sealedSandboxRuntime !== undefined
+        ? { sealedSandboxRuntime: this.#sealedSandboxRuntime }
+        : {}),
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,

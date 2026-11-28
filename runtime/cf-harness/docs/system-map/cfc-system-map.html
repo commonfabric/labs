@@ -670,8 +670,8 @@
     // The state of this repository the map describes. Bump both when the
     // map is re-verified; the stamp is drawn in the canvas's top-left corner.
     const SNAPSHOT = {
-      date: "2026-11-27",
-      sha: "fbe8cbc296",
+      date: "2026-11-28",
+      sha: "7bde1f7336",
     };
     const W = 2760, H = 1840;
     const bands = [
@@ -2189,7 +2189,7 @@
       },
       g_ingest: {
         body:
-          `<p><code>acquire_skill</code> pins the skill by digest, stamps <code>ExternalIngest</code> integrity, and hands back a capability-typed handle. Fetched skill text is quoted: the child it is delegated to runs as <code>quote</code>, whatever the parent holds, unless an accepted review (<code>--reviewed-skills</code>) covers the whole acquired bundle, in which case the child keeps the parent's binding and the text stays <code>quote</code>.</p><p>A pinned skill's <code>scripts/</code> comes with its instructions, held outside every mount the acquiring parent holds, and mounted read-only into the one child the handle is delegated to. Under an enforce mode that child is refused <code>run_skill_script</code> outright; a child whose skill a review covers holds its parent's binding instead, and is admitted or refused as its parent would be, still subject to the operator's script gate below. Elsewhere, running one is the operator's decision — the same <code>run_skill_script</code> gate a registry skill's script passes, satisfied by the run-wide <code>--allow-skill-scripts</code> switch or by an entry keyed on the pin — and it is re-checked against the digest taken at acquisition. Its invocation is labeled with confidentiality alone: a non-empty integrity array makes the sandbox fail to start (CT-2302), so the acquisition rides the tool output instead.</p>`,
+          `<p><code>acquire_skill</code> pins the skill by digest, stamps <code>ExternalIngest</code> integrity, and hands back a capability-typed handle. Fetched skill text is quoted: the child it is delegated to runs as <code>quote</code>, whatever the parent holds, unless an accepted review (<code>--reviewed-skills</code>) covers the whole acquired bundle, in which case the child keeps the parent's binding and the text stays <code>quote</code>.</p><p>A pinned skill's <code>scripts/</code> comes with its instructions, held outside every mount the acquiring parent holds, and mounted read-only into the one child the handle is delegated to. Under an enforce mode that child is refused <code>run_skill_script</code> unless the call runs sealed: on a runtime built for the one call with no network interface, no fabric mount and every mount read-only, which makes the call a <code>read</code> that <code>enforce-explicit</code> admits and <code>enforce-strict</code> still refuses. A child whose skill a review covers holds its parent's binding instead, and is admitted or refused as its parent would be, still subject to the operator's script gate below. Elsewhere, running one is the operator's decision — the same <code>run_skill_script</code> gate a registry skill's script passes, satisfied by the run-wide <code>--allow-skill-scripts</code> switch or by an entry keyed on the pin — and it is re-checked against the digest taken at acquisition. Its invocation is labeled with confidentiality alone: a non-empty integrity array makes the sandbox fail to start (CT-2302), so the acquisition rides the tool output instead.</p>`,
         why:
           "The stamp is written but never read at a release site, so integrity provenance does not yet change any decision.",
         close: [

@@ -241,9 +241,10 @@ observations, writes, or CFC downgrades.
 Status: implemented for scripts of already activated skills the operator allows
 — the run-wide switch, or an exact entry.
 
-`run_skill_script` is a built-in side-effect tool. It is not available in the
-default parent tool set; callers must explicitly include
-`--allow-tool run_skill_script`.
+`run_skill_script` is a built-in tool whose effect class each call computes: a
+sealed call (see "Sealed runs" below) is a `read`, and every other call is a
+side effect. It is not available in the default parent tool set; callers must
+explicitly include `--allow-tool run_skill_script`.
 
 Tool input:
 
@@ -326,10 +327,51 @@ observations: raw stdout/stderr are visible to the child model and retained in
 child artifacts, and the parent sees only the sanitized subagent return channel.
 
 Script execution records provenance in the normal tool output artifact and in
-`skill-script-executions.json`. In CFC enforce modes, `run_skill_script` is
-treated like other side-effect tools: direct-command authorization is required.
-Sandbox-target script stdout/stderr/exit-code observations must be mediated
-before model exposure.
+`skill-script-executions.json`. In CFC enforce modes, a call that is not sealed
+is treated like other side-effect tools: direct-command authorization is
+required. Sandbox-target script stdout/stderr/exit-code observations must be
+mediated before model exposure, sealed or not.
+
+### Sealed runs
+
+Sealing is for a call the run's authority would not admit as a side effect: a
+`quote`-bound call under an enforce mode. A call the run does admit, under a
+direct command or in a run that does not enforce, runs as it always has, on the
+run's network with a writable workspace.
+
+Such a call runs sealed when the run's engine built its own runsc runtime, the
+skill-script execution target is the sandbox, and the call names no `cwd`. It
+then runs on a runtime built for that one call from the run's runsc
+configuration and closed after it:
+
+- network mode `none`: a loopback and no other interface, and no pasta;
+- no fabric mount, and the workspace and every host bind read-only;
+- the run's artifact root, wherever the workspace or a host bind shows it,
+  covered by an empty read-only tmpfs, since no model-facing tool may read it;
+- a scratch directory of its own beside the run's, and a fresh container, so a
+  fresh `/tmp`; the script can write only to the container's own tmpfs mounts
+  (`/tmp`, `/dev`, `/dev/shm`) and the in-memory overlay over its root
+  filesystem, all gone when the call ends;
+- the read-only workspace as its working directory, since runsc keeps a call's
+  working directory inside its mounts.
+
+Its environment is the explicit `CF_HARNESS_*` and `SKILL_*` set, and argv,
+args, env and stdin are labeled as its inputs. Before running, the tool checks
+that the runtime is runsc and describes itself that way, and returns
+`permission_denied` otherwise. The artifact-root mask comes from the
+configuration alone: the runtime describes no mask, so the check does not see
+it. The output carries `sealed: { networkMode: "none" }`; the execution record
+adds `image`, the configured root filesystem path, which the model does not see.
+No measured digest of the image is recorded.
+
+A sealed call can write nothing that outlives it and reach nothing outside the
+call, so it is an untrusted transition and needs no authority: its class is
+`read`. Under `enforce-explicit` a `quote`-bound run, such as a child lowered
+for its skill, runs it; under `enforce-strict` even a `read` needs
+`direct-command`. A host-target call, a call that names a `cwd`, and any call in
+a run handed its sandbox runtime rather than building one stay side effects:
+under an enforce mode, such a call without `direct-command` authority is
+refused.
 
 ## CLI and Config Surface
 
@@ -581,11 +623,13 @@ Policy rules:
   script as for a registry one, and replaces neither of those two conditions. It
   runs in the sandbox; a run whose skill-script execution target is the host
   refuses it.
-- `run_skill_script` is a side-effect tool, and the child that holds an acquired
-  skill runs as `quote` unless an accepted review covers it, so under an enforce
-  mode an unreviewed skill's call is refused before either gate is reached. A
-  child whose skill a review covers keeps its parent's binding, so its calls
-  reach both gates as its parent's would.
+- `run_skill_script` is a side-effect tool unless the call runs sealed, and the
+  child that holds an acquired skill runs as `quote` unless an accepted review
+  covers it, so under an enforce mode an unreviewed skill's call that is not
+  sealed is refused before either gate is reached. Under `enforce-explicit` a
+  sealed call is a `read` and reaches both gates. A child whose skill a review
+  covers keeps its parent's binding, so its calls reach both gates as its
+  parent's would.
 - What backs `run_skill_script` for an acquired script is the mount that puts it
   at a path, so a run given no `--skills-root` still offers the tool to a child
   whose sandbox carries that mount, and `--allow-skill-script` takes an acquired
