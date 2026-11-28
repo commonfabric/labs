@@ -329,11 +329,13 @@ and 3. What it leaves behind:
   `slotStampPlacementUnknown` in `cfc/prepare.ts` withholds the witness of a
   writer's stamp at a reference slot of an envelope that does not say it
   (§18.7). A writer's stamp is one the flow stage minted, a `derived` or
-  `structure` entry; a `TransformedBy` a schema declares at a slot, or in a
-  template over a list's items, names no attempt and is no witness, at a
-  reference slot or at a value, however trusted the declaring code
-  (`asWitnessEvidence`, §15.4). The member sits beside the ones the
-  envelope's version defines
+  `structure` entry. A schema declaration never carries a `TransformedBy`:
+  `gateSchemaIntegrity` strips the atom from every label a schema declares
+  or stamps, whatever the author (§15.4), leaving what a document stores as
+  stored, and a stored declaration that still
+  carries one, written before that rule held, names no attempt and is no
+  witness, at a reference slot or at a value (`asWitnessEvidence`). The
+  member sits beside the ones the envelope's version defines
   and is no version of its own, which is the second deviation from the first
   draft's "bump to version 3": a version this build's predecessors do not
   know makes every labeled document unreadable to them, where a member they

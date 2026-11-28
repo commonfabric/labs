@@ -131,9 +131,14 @@ reference as an input, whatever the slot holding it is labeled. Such a slot is
 a location of its own: its integrity is resolved over the value stamps at the
 slot, as a shallow read of it is, and it counts even when nothing labels the
 slot. A value stamp is one the flow stage minted on the value an attempt
-wrote; a `TransformedBy` a schema declares at the slot, or in a template over
-the list's items, is no value stamp and witnesses nothing there, so a slot
-another writer filled under such a declaration witnesses only what that
+wrote. A schema declaration never carries a `TransformedBy`: the runtime
+mints the atom for one attempt and for nothing else, and
+`gateSchemaIntegrity` strips it from every label a schema declares or stamps,
+whatever the author, where `gateRuntimeMintedIntegrity` keeps the other
+runtime-minted atoms for a builtin (CFC §15.4). What a document stores, the
+flow stage's stamps among it, a link carries downstream as stored. A stored declaration that still carries one, written
+before that rule held, is no value stamp and witnesses nothing there, so a
+slot another writer filled under such a declaration witnesses only what that
 writer's own stamp says. So is a slot whose reference leads to another such
 slot. A reference
 counts when the transformation read the slot, or read recursively above it,
