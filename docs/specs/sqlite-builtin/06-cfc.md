@@ -517,8 +517,8 @@ runtime serves them — so its option cannot bound session-scoped queries where
 it sits. It declares the ceiling instead, once, in every session it opens: the signed
 `session.open` descriptor carries `readCeiling` (memory-v2 `04-protocol.md`
 §4.1.2), the memory server records it on the session, and the SpaceServer
-stamps it onto every run it serves AS that session (`WaveRunContext.readCeiling`,
-serving-loop.md §3c). A served session-scoped `db.query` reads under the serving
+stamps it onto every run whose scoped addresses resolve to that session
+(`WaveRunContext.sessionReadCeiling`, serving-loop.md §3c). A served session-scoped `db.query` reads under the serving
 runtime's own option met with the carried ceiling: the meet joins the request
 hash, decides the rows, and supplies the `onExceed` default (the mode meets
 toward `fail`). A served run acting as a session that declared none reads under
