@@ -330,6 +330,12 @@ describe("prompt-loop-sealed-skill-script", () => {
       expect(sandbox.runs).toEqual([]);
       expect(sealed.runs.map((run) => run.cwd)).toEqual(["/workspace"]);
       expect(sealed.closed).toBe(true);
+      // The quoted slot influenced every input, the script on stdin included.
+      const paths = sealed.runs[0].cfcInvocationContext
+        ?.promptSlotInfluenceLabels
+        ?.entries.map((entry) => entry.path);
+      expect(paths).toContainEqual(["argv"]);
+      expect(paths).toContainEqual(["stdin"]);
     });
 
     it("returns an error, running nothing, when the sealed runtime describes a network", async () => {

@@ -1626,9 +1626,17 @@ export const runSkillScriptTool: HarnessToolDefinition<
             ...(input.cfcInputLabels !== undefined
               ? { cfcInputLabels: input.cfcInputLabels }
               : {}),
-            cfcInputLabelPaths: input.cwd !== undefined
-              ? [["argv"], ["args"], ["cwd"], ["env"]]
-              : [["argv"], ["args"], ["env"]],
+            // Every input the script receives, stdin included: a shebang
+            // script reaches its interpreter on stdin.
+            cfcInputLabelPaths: [
+              ["argv"],
+              ["args"],
+              ...(input.cwd !== undefined ? [["cwd"] as const] : []),
+              ["env"],
+              ...(scriptExecution.stdinText !== undefined
+                ? [["stdin"] as const]
+                : []),
+            ],
           }),
         });
 
