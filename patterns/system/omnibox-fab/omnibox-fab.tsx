@@ -44,25 +44,39 @@ interface OmniboxFABInput {
   extraSystemPrompt: string;
 }
 
-const toggle = handler<any, { value: Writable<boolean> }>((_, { value }) => {
-  value.set(!value.get());
-});
+const toggle = handler<unknown, { value: Writable<boolean> }>(
+  (_, { value }) => {
+    value.set(!value.get());
+  },
+);
 
-const closeFab = handler<any, { fabExpanded: Writable<boolean> }>(
+const closeFab = handler<unknown, { fabExpanded: Writable<boolean> }>(
   (_, { fabExpanded }) => {
     fabExpanded.set(false);
   },
 );
 
 const dismissPeek = handler<
-  any,
+  unknown,
   { peekDismissedIndex: Writable<number>; assistantMessageCount: number }
 >((_, { peekDismissedIndex, assistantMessageCount }) => {
   peekDismissedIndex.set(assistantMessageCount);
 });
 
+/**
+ * The `cf-drop` event of `cf-drop-zone`, with the fields the drop handler
+ * reads. `sourceCellRef` names the dropped cell, and `sourceCell` is that cell,
+ * read for its name.
+ */
+type CellDropEvent = {
+  detail?: {
+    sourceCellRef?: { id: string; path?: string[] };
+    sourceCell?: { [NAME]?: string };
+  };
+};
+
 const handleDropToPin = handler<
-  any,
+  CellDropEvent,
   {
     pinToChat: Stream<{ path: string; name: string; accumulate: boolean }>;
     fabExpanded: Writable<boolean>;
@@ -119,7 +133,7 @@ export function latestAssistantText(
 /** Wish for a #tag or a custom query with optional linked context. Automatically navigates to the result. */
 type WishToolParameters = {
   query: string;
-  context?: Record<string, any>;
+  context?: Record<string, unknown>;
 };
 
 export const wishTool = pattern<WishToolParameters, boolean>(

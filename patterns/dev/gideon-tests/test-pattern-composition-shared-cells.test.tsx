@@ -32,7 +32,6 @@ import {
   propValue,
   readValue,
   textContent,
-  viewCell,
 } from "../../tools/test-support/vnode-helpers.ts";
 import SharedCells from "./test-pattern-composition-shared-cells.tsx";
 
@@ -108,7 +107,7 @@ const toggle = handler<
   void,
   { ui: Writable<VNode>; heading: string; title: string }
 >((_, { ui, heading, title }) => {
-  const view = findViewCell(viewCell(ui), isHeadedBy("h3", heading));
+  const view = findViewCell(ui, isHeadedBy("h3", heading));
   if (view === undefined) throw new Error(`no view headed ${heading}`);
   const checked = boundViewCell(
     view,

@@ -9,6 +9,8 @@
 import {
   computed,
   type Default,
+  type JSONObject,
+  type JSONValue,
   NAME,
   pattern,
   patternTool,
@@ -20,8 +22,8 @@ import {
 } from "commonfabric";
 
 export type SuggestionHistoryEntry = {
-  result: Writable<any>;
-  messages: any[];
+  result: Writable<unknown>;
+  messages: JSONValue[];
   timestamp: string;
 };
 
@@ -38,12 +40,25 @@ function isHistoryEntry(
   return entry?.result != null && Array.isArray(entry.messages);
 }
 
-function extractText(content: any): string {
+/** Whether `value` is a JSON object rather than an array or a primitive. */
+function isJSONObject(value: JSONValue | undefined): value is JSONObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * The text of a message's content: the content itself when it is a string,
+ * the text parts joined when it is a list of parts, and otherwise nothing.
+ */
+function extractText(content: unknown): string {
   if (typeof content === "string") return content;
   if (Array.isArray(content)) {
     return content
-      .filter((p: any) => p.type === "text" && p.text)
-      .map((p: any) => p.text)
+      .flatMap((part: unknown) =>
+        typeof part === "object" && part !== null && "type" in part &&
+          part.type === "text" && "text" in part && part.text
+          ? [part.text]
+          : []
+      )
       .join(" ");
   }
   return "";
@@ -51,8 +66,9 @@ function extractText(content: any): string {
 
 function messageText(entry: SuggestionHistoryEntry): string {
   return (entry.messages ?? [])
-    .filter((m: any) => m.role === "user")
-    .map((m: any) => extractText(m.content))
+    .flatMap((m) =>
+      isJSONObject(m) && m.role === "user" ? [extractText(m.content)] : []
+    )
     .join(" ");
 }
 

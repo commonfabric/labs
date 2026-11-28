@@ -22,7 +22,7 @@ export interface DoItem {
   done: boolean | Default<false>;
   indent: number | Default<0>; // 0 = root, 1 = child, 2 = grandchild...
   aiEnabled: boolean | Default<false>; // future: flag for AI auto-completion
-  attachments: Writable<any>[] | Default<[]>;
+  attachments: Writable<unknown>[] | Default<[]>;
 }
 
 interface DoListInput {
@@ -40,7 +40,9 @@ export interface DoListOutput {
   mentionable: { [NAME]: string; summary: string; [UI]: VNode }[];
   // UI handlers (use cell references via equals())
   addItem: Reactive<
-    Stream<{ title: string; indent?: number; attachments?: Writable<any>[] }>
+    Stream<
+      { title: string; indent?: number; attachments?: Writable<unknown>[] }
+    >
   >;
   removeItem: Reactive<Stream<{ item: DoItem }>>;
   updateItem: Reactive<
@@ -51,7 +53,7 @@ export interface DoListOutput {
       items: Array<{
         title: string;
         indent?: number;
-        attachments?: Writable<any>[];
+        attachments?: Writable<unknown>[];
       }>;
     }>
   >;
@@ -66,7 +68,7 @@ export interface DoListOutput {
       title: string;
       newTitle?: string;
       done?: boolean;
-      attachments?: Writable<any>[];
+      attachments?: Writable<unknown>[];
     }>
   >;
   archiveCompleted: Reactive<Stream<void>>;
@@ -75,7 +77,7 @@ export interface DoListOutput {
 // ===== Module-scope Handlers =====
 
 const addItemHandler = handler<
-  { title: string; indent?: number; attachments?: Writable<any>[] },
+  { title: string; indent?: number; attachments?: Writable<unknown>[] },
   { items: Writable<DoItem[]> }
 >(({ title, indent, attachments }, { items }) => {
   const trimmed = title.trim();
@@ -143,7 +145,7 @@ const addItemsHandler = handler<
     items: Array<{
       title: string;
       indent?: number;
-      attachments?: Writable<any>[];
+      attachments?: Writable<unknown>[];
     }>;
   },
   { items: Writable<DoItem[]> }
@@ -200,7 +202,7 @@ const updateItemByTitleHandler = handler<
     title: string;
     newTitle?: string;
     done?: boolean;
-    attachments?: Writable<any>[];
+    attachments?: Writable<unknown>[];
   },
   { items: Writable<DoItem[]> }
 >(({ title, newTitle, done, attachments }, { items }) => {
@@ -228,7 +230,7 @@ const updateItemByTitleHandler = handler<
 });
 
 const addAttachment = handler<
-  { detail: { sourceCell: Writable<any> } },
+  { detail: { sourceCell: Writable<unknown> } },
   { item: DoItem; items: Writable<DoItem[]> }
 >((e, { item, items }) => {
   const cell = e.detail.sourceCell;
@@ -241,16 +243,14 @@ const addAttachment = handler<
 
 const removeAttachment = handler<
   unknown,
-  { item: DoItem; attachment: Writable<any>; items: Writable<DoItem[]> }
+  { item: DoItem; attachment: Writable<unknown>; items: Writable<DoItem[]> }
 >((_, { item, attachment, items }) => {
   const currentItems = items.get();
   const idx = currentItems.findIndex((i) => equals(i, item));
   if (idx >= 0) {
     const attachments = items.key(idx).key("attachments");
     const currentAttachments = attachments.get();
-    const attIdx = currentAttachments.findIndex((a: any) =>
-      equals(a, attachment)
-    );
+    const attIdx = currentAttachments.findIndex((a) => equals(a, attachment));
     if (attIdx >= 0) {
       attachments.set(currentAttachments.toSpliced(attIdx, 1));
     }
@@ -307,7 +307,7 @@ const DoItemCard = pattern<
               gap="1"
               style="margin-top: 4px; margin-left: 24px; flex-wrap: wrap;"
             >
-              {attachments.map((att: any) => (
+              {attachments.map((att: Writable<unknown>) => (
                 <cf-hstack gap="0" align="center">
                   <cf-cell-link $cell={att} />
                   <cf-button

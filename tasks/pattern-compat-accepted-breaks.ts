@@ -84,6 +84,11 @@ export interface RequiredPatternOverride {
   reason: string;
 }
 
+const MENTIONABLE_OBJECT_ALTERNATIVE_REASON =
+  "MentionablePiece's mentionable property lost its object alternative; a piece stores a link to an exported array there, so no stored piece holds an object";
+const SYSTEM_PATTERNS_SUBSET_TYPES_RECORD =
+  "docs/history/system-patterns-subset-types-break.md";
+
 export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
   {
     // The verb list's items left its argument for the pattern's own `state`,
@@ -3066,6 +3071,75 @@ export const ACCEPTED_CONTRACT_BREAKS: readonly AcceptedContractBreak[] = [
     reason:
       "each request to get a pattern carries its own write policy and author label, so a host can check who asked and which handler wrote it; the list-wide policy cannot be changed in place",
     record: "docs/history/pattern-catalog-get-it-entries-break.md",
+  },
+  {
+    // `MentionablePiece.mentionable` lost its `{ get?: () => ... }`
+    // alternative, which the recorded contracts hold as any object. The
+    // stored value is a link to an exported array, so no stored piece holds an
+    // object there. The three entries below are the same break seen from the
+    // patterns whose arguments hold a `MentionablePiece`.
+    pattern: "system/backlinks-index/backlinks-index.tsx",
+    baselines: [
+      "20260729T022742Z-9pBfxgqW3_1huWGE",
+      "20261113T013152Z-J5mUA5NpA2x7xikw",
+    ],
+    paths: [
+      "argument.pieceRegistry[].backlinks[].mentionable",
+      "argument.pieceRegistry[].mentionable",
+      "argument.pieceRegistry[].mentioned[].mentionable",
+    ],
+    reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
+  },
+  {
+    pattern: "apps/annotation/annotation.tsx",
+    baselines: [
+      "20260729T020823Z-xvFtyqRXIizYJLpO",
+      "20261004T000822Z-6RckeyaAEcVBvSTz",
+      "20261025T215333Z-_AB2_FyoDbgf6cmz",
+      "20261113T002142Z-IrTOkElqP4DfCwXf",
+    ],
+    paths: [
+      "argument.blockedBy[].mentioned[].mentionable",
+      "argument.blockedBy[].targetPiece",
+      "argument.targetPiece",
+    ],
+    reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
+  },
+  {
+    pattern: "system/omnibox-fab/omnibox-fab.tsx",
+    baselines: [
+      "20260729T022742Z-Un69ZFLqnAUnTPSw",
+      "20260904T235034Z-TMzfGTBXki_p2cBX",
+      "20261004T000823Z-dufAXqhHK1DTVVXj",
+    ],
+    paths: ["argument.mentionable[].mentionable"],
+    reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
+  },
+  {
+    pattern: "system/quick-capture/quick-capture.tsx",
+    baselines: ["20260729T022742Z-X9QaF-JkGRiGHI0l"],
+    paths: ["argument.pieceRegistry[].mentionable"],
+    reason: MENTIONABLE_OBJECT_ALTERNATIVE_REASON,
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
+  },
+  {
+    // The suggestion's `context` argument moved from `any` to
+    // `Record<string, Writable<unknown>>`, the type `llmDialog` declares for
+    // the context it is passed, so each entry now carries `asCell`. A stored
+    // literal or link reads as a cell either way.
+    pattern: "system/suggestion/suggestion.tsx",
+    baselines: [
+      "20260729T022742Z-Rgx51FDumoAK2D04",
+      "20261004T000823Z-aBL2DgOoWmZwOMwI",
+      "20261112T153000Z-GA_jHVqd2oeitMwF",
+    ],
+    paths: ["argument.context.*"],
+    reason:
+      "the context argument moved from any to the cell record llmDialog declares, so each entry is read as a cell; a stored literal or link reads as one",
+    record: SYSTEM_PATTERNS_SUBSET_TYPES_RECORD,
   },
   {
     // The manager's `people` lists the people its rooms hold only for a

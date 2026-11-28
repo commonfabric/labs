@@ -1,5 +1,3 @@
-// deno-lint-ignore-file no-explicit-any
-
 /**
  * Annotation - A pattern for annotating existing cells/pieces.
  *
@@ -95,7 +93,7 @@ const setStatus = handler<
   if (value) status.set(value);
 });
 
-const markResolved = handler<unknown, { status: Writable<any> }>(
+const markResolved = handler<unknown, { status: Writable<AnnotationStatus> }>(
   (_event, { status }) => {
     status.set("resolved");
   },
@@ -105,15 +103,18 @@ const selectTarget = handler<
   unknown,
   {
     piece: MentionablePiece;
-    targetPiece: Writable<any>;
+    targetPiece: Writable<MentionablePiece | null>;
     targetSearch: Writable<string>;
   }
 >((_event, { piece, targetPiece, targetSearch }) => {
-  targetPiece.set(piece);
+  targetPiece.set(piece as MentionablePiece);
   targetSearch.set("");
 });
 
-const clearTarget = handler<unknown, { targetPiece: Writable<any> }>(
+const clearTarget = handler<
+  unknown,
+  { targetPiece: Writable<MentionablePiece | null> }
+>(
   (_event, { targetPiece }) => {
     targetPiece.set(null);
   },
@@ -123,20 +124,20 @@ const addBlocker = handler<
   unknown,
   {
     blocker: AnnotationPiece;
-    blockedBy: Writable<any>;
+    blockedBy: Writable<AnnotationPiece[]>;
     blockerSearch: Writable<string>;
   }
 >((_event, { blocker, blockedBy, blockerSearch }) => {
   const current = (blockedBy.get() ?? []) as AnnotationPiece[];
   if (!current.some((b) => equals(b, blocker))) {
-    blockedBy.set([...current, blocker]);
+    blockedBy.set([...current, blocker as AnnotationPiece]);
   }
   blockerSearch.set("");
 });
 
 const removeBlocker = handler<
   unknown,
-  { index: number; blockedBy: Writable<any> }
+  { index: number; blockedBy: Writable<AnnotationPiece[]> }
 >((_event, { index, blockedBy }) => {
   const current = (blockedBy.get() as AnnotationPiece[]) ?? [];
   blockedBy.set(current.toSpliced(index, 1));

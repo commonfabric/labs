@@ -574,7 +574,7 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
     // TODO(seefeld,mathpirate): We need some better way to find the "All Notes" notebook.
     const goToAllNotesAction = action(() => {
       const pieces = pieceRegistry.get() ?? [];
-      const existing = pieces.find((piece: any) => {
+      const existing = pieces.find((piece) => {
         const name = piece?.[NAME];
         return typeof name === "string" && name.startsWith("All Notes");
       });
@@ -831,7 +831,7 @@ const Notebook = pattern<NotebookInput, NotebookOutput>(
     // All Notes button display - search the registry by name.
     const allNotesButtonDisplay = computed(() => {
       const pieces = pieceRegistry.get() ?? [];
-      const exists = pieces.some((piece: any) => {
+      const exists = pieces.some((piece) => {
         const name = piece?.[NAME];
         return typeof name === "string" && name.startsWith("All Notes");
       });

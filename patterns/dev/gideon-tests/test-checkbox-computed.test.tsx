@@ -31,7 +31,6 @@ import {
   hasText,
   propValue,
   textContent,
-  viewCell,
 } from "../../tools/test-support/vnode-helpers.ts";
 import CheckboxComputed from "./test-checkbox-computed.tsx";
 
@@ -59,7 +58,7 @@ const toggle = handler<
   void,
   { ui: Writable<VNode>; heading: string; title: string }
 >((_, { ui, heading, title }) => {
-  const section = findViewCell(viewCell(ui), isSection(heading));
+  const section = findViewCell(ui, isSection(heading));
   if (section === undefined) throw new Error(`no section ${heading}`);
   const checked = boundViewCell(
     section,

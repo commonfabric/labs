@@ -42,11 +42,13 @@ collection does with it:
   and `pending`, the members it asked. A send's effect is invisible to the
   transaction that makes it, so `pending` is a list of requests rather than of
   outcomes: a later run reports whichever landed under `named` and asks for the
-  rest again. Which of the two a collection calls turns on whether its member
-  pattern declares `recordName({ name })`. A member whose pattern does not
-  stores the payload as ordinary data at that name in its result, because a send
-  to a path holding no stream is an ordinary write — `Cell.send` in
-  `runtime/runner/src/cell.ts` delegates to `set`.
+  rest again. Both take the member list as the collection's own `Writable` list
+  cell, because `resolveAsCell()`, which resolves a position to its member, is
+  declared on that cell type alone. Which of the two a collection calls turns on
+  whether its member pattern declares `recordName({ name })`. A member whose
+  pattern does not stores the payload as ordinary data at that name in its
+  result, because a send to a path holding no stream is an ordinary write —
+  `Cell.send` in `runtime/runner/src/cell.ts` delegates to `set`.
 
   The two differ on one shape, and which of them is right about it is settled by
   the names table. `backfillNames` counts a member present at ANY key of the
@@ -70,12 +72,13 @@ collection does with it:
 
 The library is two modules, and which one a declaration sits in turns on what it
 needs at runtime. `allocator.ts` holds the allocation rule — `nextNameAmong`,
-`createNamed`, `assignName`, and the `NamesMap` and `NamesMapCell` shapes — and
-takes no value from `commonfabric`, so a plain `deno test` can import it and run
-the allocator with no pattern runtime behind it. `naming.ts` holds what does
-take one — the names table, the reverse lookup, the two backfills — and
-re-exports the whole of `allocator.ts`, so a collection reaches the library
-through `naming.ts` alone.
+`createNamed`, `assignName`, `readNames`, the `NamesMap` type, and the
+`NamesMapCell` cell type — and takes no value from `commonfabric`: it names the
+cell types in type positions alone, through an `import type`, so a plain
+`deno test` can import it and run the allocator with no pattern runtime behind
+it. `naming.ts` holds what does take one — the names table, the reverse lookup,
+the two backfills — and re-exports the whole of `allocator.ts`, so a collection
+reaches the library through `naming.ts` alone.
 
 Nothing in `naming.ts` knows what kind of piece a member is beyond the one verb
 `recordNames` sends to and the one property it reads. A member is a cell,
@@ -99,10 +102,14 @@ the reads above stay bounded:
   property's own type node, so a default declared through a type alias is
   dropped from the schema.
 
-A verb reads its binding through a schema that carries no default, so inside a
-verb the map is `undefined` until the first name is written. `NamesMapCell`
-declares that structurally, and the library's readers take an absent map as
-empty.
+A verb passes that binding to `createNamed`, `assignName`, and the two backfills
+as the `NamesMapCell` they declare, `Writable<NamesMap>`: a default is an
+annotation on the value type, so the two are the same cell type. A verb reads
+its binding through a schema that carries no default, so inside a verb the map
+is `undefined` until the first name is written. The library reads the map
+through `readNames()`, whose parameter is a
+`ReadonlyCell<NamesMap | undefined>`, so every reader takes an absent map as
+empty where the type checker can see it.
 
 ## The mention universe: `mentionable.ts`
 
@@ -243,11 +250,12 @@ cf piece call --cell /of:<board> backfillNames --json '{"agentName":"Sol"}'
 - `allocator.test.ts` — a plain Deno unit test, run by `deno test` with no
   pattern runtime: the name grammar, the length-then-lexicographic comparison
   that keeps names distinct past `2^53`, the carry over a trailing run of nines,
-  and `createNamed` and `assignName` driven over a stand-in namespace cell.
-  Importing `allocator.ts` is half of what it checks. `commonfabric` declares
-  `lift`, `equals` and `Writable` with `export declare const`, which binds
-  nothing at runtime, so a module taking one of them as a value fails to link
-  here — this test is what holds the allocator to needing none of them.
+  and `createNamed` and `assignName` driven over a stand-in for the namespace
+  cell, an ordinary object asserted to `NamesMapCell`. Importing `allocator.ts`
+  is half of what it checks. `commonfabric` declares `lift`, `equals` and
+  `Writable` with `export declare const`, which binds nothing at runtime, so a
+  module taking one of them as a value fails to link here — this test is what
+  holds the allocator to needing none of them.
 - `naming.test.tsx` — the sequence rule, the allocator re-run against a stale
   read (a first allocation, a concurrent writer's key landing, and a re-run over
   the map as the winner left it, which takes the next distinct name), the

@@ -140,7 +140,9 @@ export const calculator = pattern<
     try {
       result = evaluateMathExpression(sanitized).toString(sanitizedBase);
     } catch (error) {
-      result = { error: (error as any)?.message || "<error>" };
+      result = {
+        error: (error instanceof Error && error.message) || "<error>",
+      };
     }
     return result;
   });
@@ -166,7 +168,9 @@ export const addListItem = handler<
       state.list.push({ title: args.item });
       args.result.set(`${state.list.get().length} items`);
     } catch (error) {
-      args.result.set(`Error: ${(error as any)?.message || "<error>"}`);
+      args.result.set(
+        `Error: ${(error instanceof Error && error.message) || "<error>"}`,
+      );
     }
   },
 );
@@ -338,7 +342,7 @@ export default pattern<ToolsInput>(({ list }) => {
  */
 type FetchAndRunPatternInput = {
   url: string;
-  args: Writable<any>;
+  args: Writable<Record<string, unknown>>;
 };
 
 export const fetchAndRunPattern = pattern<FetchAndRunPatternInput>(
@@ -377,7 +381,7 @@ export const fetchAndRunPattern = pattern<FetchAndRunPatternInput>(
  * Especially useful after instantiating a pattern with fetchAndRunPattern:
  * Pass the "@link" you get at `cell` to navigate to the pattern's view.
  */
-type NavigateToPatternInput = { cell: Writable<any> }; // Hack to steer LLM
+type NavigateToPatternInput = { cell: Writable<unknown> }; // Hack to steer LLM
 export const navigateToPattern = pattern<NavigateToPatternInput>(
   ({ cell }) => {
     const success = navigateTo(cell);

@@ -311,7 +311,7 @@ const Note = pattern<NoteInput, NoteOutput>(
           isHidden: !!notebook,
           parentNotebook: notebook,
         });
-        pieceRegistry.push(note as any);
+        pieceRegistry.push(note);
         return navigateTo(note);
       }
     });
@@ -350,10 +350,12 @@ const Note = pattern<NoteInput, NoteOutput>(
     const appendLink = action(
       ({ piece }: { piece: Writable<MentionablePiece> }) => {
         const name = piece.get()[NAME] ?? "";
-        const resolved = (piece as any).resolveAsCell();
         // Derive the embed id from the scheme-PRESERVING sourceURI (the bare
         // entityId would silently alias a computed: cell to its of: sibling)
-        // and let bareMentionId enforce the embed contract.
+        // and let bareMentionId enforce the embed contract. `sourceURI` is
+        // cell-runtime surface that the pattern `Writable` type does not
+        // declare, hence the cast to `any`.
+        const resolved = piece.resolveAsCell() as any;
         const uri: string | undefined = resolved?.sourceURI;
         const entityId = uri ? bareMentionId(uri) : undefined;
         if (!name || !entityId) return;
@@ -384,7 +386,7 @@ const Note = pattern<NoteInput, NoteOutput>(
 
     // Link pattern for wiki-links
     const patternJson = computed(() => {
-      const lpValue = (linkPattern as any)?.get?.() ?? linkPattern;
+      const lpValue = linkPattern?.get();
       const custom = typeof lpValue === "string" ? lpValue.trim() : "";
       return custom || JSON.stringify(Note);
     });

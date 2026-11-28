@@ -46,6 +46,7 @@ import {
   type NamesMap,
   type NamesMapCell,
   nextNameAmong,
+  readNames,
 } from "./allocator.ts";
 
 export {
@@ -57,6 +58,7 @@ export {
   type NamesMap,
   type NamesMapCell,
   nextNameAmong,
+  readNames,
 };
 
 /**
@@ -223,15 +225,18 @@ const isObject = (value: unknown): boolean => Object(value) === value;
  * Called from a verb body for the reason `assignName()` is: the keyset read
  * and the key writes are one transaction, so a create that lands while a
  * backfill runs serializes with it rather than colliding on a name.
+ *
+ * `members` is a `Writable` because `resolveAsCell()`, which pins each member,
+ * is declared on that cell type alone; nothing is written through it. It is
+ * generic over the member type `M` because a `Writable` parameter accepts a
+ * cell of exactly its own value type, and the collection's list is a cell of
+ * its own member type.
  */
-export function backfillNames(
-  members: {
-    get(): readonly unknown[];
-    key(index: number): { resolveAsCell(): object };
-  },
+export function backfillNames<M>(
+  members: Writable<M[]>,
   names: NamesMapCell,
 ): string[] {
-  const map = names.get() ?? {};
+  const map = readNames(names);
   // The members with a name: those the map already holds, and — as the walk
   // goes — those this run names, so a member met again is not named again.
   const named = Object.values(map) as (object | undefined)[];
@@ -340,22 +345,18 @@ export interface RecordNamesResult {
  * Called from a verb body for the reason `assignName()` is: the keyset read
  * and the key writes are one transaction, so a create that lands while this
  * runs serializes with it rather than colliding on a name.
+ *
+ * `members` is a `Writable` because the run resolves each position to its
+ * member with `resolveAsCell()` and sends to the member, and both are
+ * declared on that cell type alone. It is generic over the member type `M`
+ * for the reason `backfillNames()` gives, and `M` declares the `shortName`
+ * this reads off each member's stored value.
  */
-export function recordNames(
-  members: {
-    // The stored values, for each member's own report of its name, and the
-    // position's cell, for the verb this sends to. The verb is named
-    // structurally because no collection's member type is in scope here.
-    get(): readonly ({ shortName?: string } | undefined)[];
-    key(index: number): {
-      resolveAsCell(): {
-        key(verb: "recordName"): { send(event: { name: string }): void };
-      };
-    };
-  },
+export function recordNames<M extends { shortName?: string }>(
+  members: Writable<M[]>,
   names: NamesMapCell,
 ): RecordNamesResult {
-  const map = names.get() ?? {};
+  const map = readNames(names);
   // Every name the namespace holds, to the member it names. A key outside the
   // grammar is not a name, so an entry under one names nothing here — the same
   // view `namesTable()` publishes and `nameOf()` reads.
@@ -372,7 +373,9 @@ export function recordNames(
     // Only a position holding an object can hold a member, for the reason
     // `backfillNames()` gives.
     if (!isObject(value)) continue;
-    const member = members.key(index).resolveAsCell();
+    // A handle of `unknown`, because the verb this sends to is not in the
+    // collection's member type: `key()` on such a handle walks to any name.
+    const member: Writable<unknown> = members.key(index).resolveAsCell();
     // Each member once, however many positions hold it: membership is asked
     // of IDENTITY, never of position, so a collection listing one member
     // twice asks it for its name once.

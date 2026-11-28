@@ -1005,15 +1005,15 @@ export default pattern(() => {
   // one), the collection's name for a member is copied off the member's own
   // and reads blank where it has none, and a row records its SOURCE as
   // `piece` — identity, not a copy.
+  const named = new Writable({
+    [NAME]: "Named",
+    title: "Titled",
+    shortName: "42",
+  });
+  const cold = new Writable({ title: "Cold title" });
+  const blankName = new Writable({ [NAME]: "", title: "Blank name" });
+  const midSync = new Writable<{ title: string } | undefined>();
   const assert_mention_index_rows_pure = assert(() => {
-    const named = {
-      get: () => ({ [NAME]: "Named", title: "Titled", shortName: "42" }),
-    };
-    const cold = {
-      get: () => ({ title: "Cold title" }),
-    };
-    const blankName = { get: () => ({ [NAME]: "", title: "Blank name" }) };
-    const midSync = { get: () => undefined };
     const rows = mentionableRowsOf(
       [named, cold, midSync, blankName, undefined],
     );

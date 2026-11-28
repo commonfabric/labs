@@ -339,7 +339,8 @@ export interface TopicLink {
 }
 
 /**
- * Whether `candidate` is one of `array`'s own elements.
+ * Whether `candidate` is one of `array`'s own elements. Reads through `array`
+ * and writes nothing, so a cell of a list of any element type passes.
  *
  * "Is a reference" is not the check these verbs need. A cell that reads back
  * as an object satisfies that while belonging to another piece entirely, and a
@@ -356,10 +357,7 @@ export interface TopicLink {
  * report success, and move a count on a topic nobody was looking at.
  */
 const isElementOf = (
-  array: {
-    get(): readonly unknown[];
-    key(index: number): { equals(other: object): boolean };
-  },
+  array: ReadonlyCell<readonly unknown[]>,
   candidate: object,
 ): boolean => {
   const stored = array.get();

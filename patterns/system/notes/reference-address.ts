@@ -1,6 +1,11 @@
 /** Resolves note mentions to addresses rendered by the shared reference grammar. */
 
-import { type CellScope, renderCellReference, Writable } from "commonfabric";
+import {
+  type CellScope,
+  renderCellReference,
+  spaceOfLink,
+  Writable,
+} from "commonfabric";
 import { type MentionRefMap } from "./schemas.tsx";
 
 /** The shape `getAsNormalizedFullLink()` returns, as much of it as is used. */
@@ -38,9 +43,10 @@ export const linkAddress = (
  * reference's destination is a cell carrying whatever scheme it has, and
  * assuming `of:` for it would address a different entity than the one meant.
  *
- * `resolveAsCell` and `getAsNormalizedFullLink` are cell-runtime surface
- * rather than the pattern Writable type, hence the casts — the same one notes'
- * `appendLink` makes.
+ * `getAsNormalizedFullLink` is cell-runtime surface that the pattern
+ * `Writable` type does not declare, and no declared function returns a
+ * destination's id, path, and scope, hence the cast to `any` on the resolved
+ * destination.
  */
 export const referenceAddresses = (
   references: Writable<MentionRefMap> | undefined,
@@ -51,21 +57,22 @@ export const referenceAddresses = (
   // callback below it: a read from a nested callback resolves the address
   // correctly and registers no dependency, so the rendered content would be
   // right once and then never again.
-  const map = references?.get?.();
+  if (references === undefined) return addresses;
+  const map = references.get();
   if (!map) return addresses;
 
   // The space the note itself lives in. A destination in the same space is
   // addressed without one, which is what every mention made today looks like.
-  const contextSpace: string | undefined = (references as any)
-    ?.getAsNormalizedFullLink?.()?.space;
+  const contextSpace: string | undefined = spaceOfLink(references);
 
   for (const key of Object.keys(map)) {
     // `destination` is typed unknown and so reads back as a reference
     // carrying nothing, but the ENTRY still materializes — `modifiedTitle` is
     // a boolean — and the address comes from the path to the destination, not
     // from its value.
-    const destination = (references as any).key(key).key("destination");
-    const link: NormalizedLink | undefined = destination?.resolveAsCell?.()
+    const destination = references.key(key).key("destination");
+    const resolved = destination.resolveAsCell() as any;
+    const link: NormalizedLink | undefined = resolved
       ?.getAsNormalizedFullLink?.();
     const address = link ? linkAddress(link, contextSpace) : undefined;
     if (address) addresses[key] = address;

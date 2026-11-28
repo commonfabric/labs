@@ -3,6 +3,7 @@ import {
   type Cell,
   type Default,
   handler,
+  type ReadonlyCell,
   type Stream,
   type Writable,
   type WriteAuthorizedBy,
@@ -39,11 +40,15 @@ export type ParticipantRosterCell = Writable<
   ParticipantRoster | Default<Record<PropertyKey, never>>
 >;
 
-/** The roster's profiles, in the order they were added. */
+/**
+ * The roster's profiles, in the order they were added. The value type admits
+ * `undefined` for a roster cell nothing has written yet; a
+ * `ParticipantRosterCell` passes, because a `ReadonlyCell` accepts a cell
+ * whose value type is assignable to its own.
+ */
 export const rosterProfiles = (
-  roster: { get(): ParticipantRoster | Record<PropertyKey, never> | undefined },
-): ParticipantProfile[] =>
-  Array.from((roster.get() as ParticipantRoster | undefined)?.items ?? []);
+  roster: ReadonlyCell<ParticipantRoster | undefined>,
+): ParticipantProfile[] => Array.from(roster.get()?.items ?? []);
 
 /**
  * Adds a profile to the roster once. Any participant may add any profile: a

@@ -1,0 +1,88 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "AnonymousType_1": {
+        "items": {
+          "$ref": "#/$defs/MentionablePiece"
+        },
+        "type": "array"
+      },
+      "MentionablePiece": {
+        "properties": {
+          "$NAME": {
+            "type": "string"
+          },
+          "backlinks": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "isHidden": {
+            "type": "boolean"
+          },
+          "isMentionable": {
+            "type": "boolean"
+          },
+          "mentionable": {
+            "$ref": "#/$defs/AnonymousType_1"
+          },
+          "mentioned": {
+            "$ref": "#/$defs/AnonymousType_1"
+          }
+        },
+        "type": "object"
+      }
+    },
+    "properties": {
+      "pieceRegistry": {
+        "$ref": "#/$defs/AnonymousType_1",
+        "asCell": [
+          "cell"
+        ]
+      }
+    },
+    "required": [
+      "pieceRegistry"
+    ],
+    "type": "object"
+  },
+  "pattern": "system/quick-capture/quick-capture.tsx",
+  "resultSchema": {
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "capture": {
+        "asCell": [
+          "stream"
+        ],
+        "properties": {
+          "attachments": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "type": "object"
+      },
+      "summary": {
+        "type": "string"
+      }
+    },
+    "required": [
+      "summary",
+      "capture",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}

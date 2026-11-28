@@ -279,8 +279,8 @@ Writing through a binding:
 A value read resolves a `$`-prop such as `$checked` or `$value` to the plain
 value its binding holds, so a test that acts as the bound control walks the
 view as cells instead. A handler declares the view as a `Writable<VNode>` in
-its state and is bound with `subject[UI]`; `viewCell(ui)` makes that cell
-walkable by key.
+its state and is bound with `subject[UI]`, and the helpers below take that
+cell as it is: a cell walks to any key of the view.
 
 - `findViewCell(cell, predicate)` — the cell holding the first node the
   predicate accepts, searched in the order `findNode` searches.

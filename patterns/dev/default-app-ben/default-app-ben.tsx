@@ -24,9 +24,11 @@ import KnowledgeGraph, {
   searchGraphPattern,
 } from "../../system/knowledge-graph/main.tsx";
 
-import QuickCapture from "../../system/quick-capture/quick-capture.tsx";
+import QuickCapture, {
+  type QuickCaptureOutput,
+} from "../../system/quick-capture/quick-capture.tsx";
 import OmniboxFAB from "../../system/omnibox-fab/omnibox-fab.tsx";
-import DoList from "../../examples/do-list/main.tsx";
+import DoList, { type DoItem } from "../../examples/do-list/main.tsx";
 import Notebook from "../../system/notes/notebook.tsx";
 import DailyJournal from "../../system/notes/daily-journal.tsx";
 import PieceGrid from "../../system/piece-grid/piece-grid.tsx";
@@ -68,7 +70,7 @@ const removePiece = handler<
 >((_, state) => {
   const registeredPieces = state.pieceRegistry.get();
   const index = registeredPieces.findIndex(
-    (c: any) => c && state.piece.equals(c),
+    (c) => c && state.piece.equals(c),
   );
 
   if (index !== -1) {
@@ -83,14 +85,14 @@ const removePiece = handler<
 // Handler for dropping a note onto a notebook row
 const dropOntoNotebook = handler<
   { detail: { sourceCell: Writable<unknown> } },
-  { notebook: Writable<{ notes?: unknown[] }> }
+  { notebook: Writable<MentionablePiece & { notes?: Writable<unknown>[] }> }
 >((event, { notebook }) => {
   const sourceCell = event.detail.sourceCell;
   const notesCell = notebook.key("notes");
   const notesList = notesCell.get() ?? [];
 
   // Prevent duplicates using Writable.equals
-  const alreadyExists = notesList.some((n) => equals(sourceCell, n as any));
+  const alreadyExists = notesList.some((n) => equals(sourceCell, n));
   if (alreadyExists) return;
 
   // Hide from Patterns list
@@ -100,7 +102,7 @@ const dropOntoNotebook = handler<
   notesCell.push(sourceCell);
 });
 
-const toggleFab = handler<any, { fabExpanded: Writable<boolean> }>(
+const toggleFab = handler<unknown, { fabExpanded: Writable<boolean> }>(
   (_, { fabExpanded }) => {
     fabExpanded.set(!fabExpanded.get());
   },
@@ -140,7 +142,7 @@ const menuNewNotebook = handler<void, { menuOpen: Writable<boolean> }>(
 // Menu: Quick Capture
 const menuQuickCapture = handler<
   void,
-  { menuOpen: Writable<boolean>; quickCapture: any }
+  { menuOpen: Writable<boolean>; quickCapture: QuickCaptureOutput }
 >((_, { menuOpen, quickCapture }) => {
   menuOpen.set(false);
   return navigateTo(quickCapture);
@@ -222,14 +224,14 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
     })
   );
 
-  const doListItems = new Writable<any[]>([]);
+  const doListItems = new Writable<DoItem[]>([]);
   const doList = DoList({ items: doListItems });
 
   // Combine registered pieces with system pieces (like doList) so
   // BacklinksIndex picks up their mentionable items.
   const piecesWithSystem = computed(() => [
     ...pieceRegistry.get(),
-    doList as any,
+    doList,
   ]);
 
   const index = BacklinksIndex({ pieceRegistry: piecesWithSystem });
@@ -480,7 +482,7 @@ export default pattern<PiecesListInput, PiecesListOutput>((_) => {
                                 <cf-drop-zone
                                   accept="note"
                                   oncf-drop={dropOntoNotebook({
-                                    notebook: piece as any,
+                                    notebook: piece,
                                   })}
                                 >
                                   {link}

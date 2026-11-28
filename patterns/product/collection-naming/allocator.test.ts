@@ -25,12 +25,14 @@ import { describe, it } from "@commonfabric/test-support/test";
 /**
  * A stand-in for the namespace cell a verb holds: `get()` reads the map back
  * and `key(name).set(member)` writes one entry, both over an ordinary object.
- * `entries` is left out for a collection that has never named a member, whose
- * map reads `undefined` inside a verb.
+ * Those two are the methods the allocator calls, and the stand-in is asserted
+ * to `NamesMapCell` because a plain `deno test` has no runtime to make a
+ * cell. `entries` is left out for a collection that has never named a member,
+ * whose map reads `undefined` inside a verb.
  */
 function namesMapCell(entries?: NamesMap): NamesMapCell {
   let map = entries;
-  return {
+  const standIn = {
     get: () => map,
     key: (name: string) => ({
       set: (member: unknown) => {
@@ -38,6 +40,7 @@ function namesMapCell(entries?: NamesMap): NamesMapCell {
       },
     }),
   };
+  return standIn as unknown as NamesMapCell;
 }
 
 describe("allocator", () => {

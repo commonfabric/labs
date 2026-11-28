@@ -3,6 +3,7 @@ import {
   type AnyCell,
   type Default,
   equals,
+  type ReadonlyCell,
 } from "commonfabric";
 
 export type AdminSubject = AnyCell<any> | object;
@@ -28,9 +29,7 @@ export type AdminRegistryValue<Role> =
   | Default<EmptyAdminRegistryValue>;
 
 export const adminRegistryEntries = <Role>(
-  registry: {
-    get(): AdminRegistryValue<Role> | undefined;
-  },
+  registry: ReadonlyCell<AdminRegistryValue<Role> | undefined>,
 ): Role[] =>
   Array.from(
     (registry.get() as AdminRegistryStoredValue<Role> | undefined)
@@ -38,9 +37,7 @@ export const adminRegistryEntries = <Role>(
   );
 
 export const adminRegistryEveryoneIsAdmin = <Role>(
-  registry: {
-    get(): AdminRegistryValue<Role> | undefined;
-  },
+  registry: ReadonlyCell<AdminRegistryValue<Role> | undefined>,
 ): boolean => {
   const stored = registry.get() as AdminRegistryStoredValue<Role> | undefined;
   if (stored?.everyoneIsAdmin === false) {

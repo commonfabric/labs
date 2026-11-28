@@ -1,0 +1,310 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "DoItem": {
+        "properties": {
+          "aiEnabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attachments": {
+            "default": [],
+            "items": {
+              "asCell": [
+                "cell"
+              ],
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "done": {
+            "default": false,
+            "type": "boolean"
+          },
+          "indent": {
+            "default": 0,
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "done",
+          "indent",
+          "aiEnabled",
+          "attachments"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "items": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "items": {
+          "$ref": "#/$defs/DoItem"
+        },
+        "type": "array"
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "examples/do-list/do-list.tsx",
+  "resultSchema": {
+    "$defs": {
+      "DoItem": {
+        "properties": {
+          "aiEnabled": {
+            "default": false,
+            "type": "boolean"
+          },
+          "attachments": {
+            "default": [],
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "done": {
+            "default": false,
+            "type": "boolean"
+          },
+          "indent": {
+            "default": 0,
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "done",
+          "indent",
+          "aiEnabled",
+          "attachments"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addItem": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "attachments": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "indent": {
+            "type": "number"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "addItems": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "items": {
+            "items": {
+              "properties": {
+                "attachments": {
+                  "items": {
+                    "type": "unknown"
+                  },
+                  "type": "array"
+                },
+                "indent": {
+                  "type": "number"
+                },
+                "title": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "title"
+              ],
+              "type": "object"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "archiveCompleted": {
+        "asCell": [
+          "stream",
+          "stream",
+          "opaque"
+        ]
+      },
+      "compactUI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "isHidden": {
+        "enum": [
+          true
+        ],
+        "type": "boolean"
+      },
+      "itemCount": {
+        "type": "number"
+      },
+      "items": {
+        "items": {
+          "$ref": "#/$defs/DoItem"
+        },
+        "type": "array"
+      },
+      "mentionable": {
+        "items": {
+          "properties": {
+            "$NAME": {
+              "type": "string"
+            },
+            "$UI": {
+              "$ref": "https://commonfabric.org/schemas/vnode.json"
+            },
+            "summary": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "summary",
+            "$NAME",
+            "$UI"
+          ],
+          "type": "object"
+        },
+        "type": "array"
+      },
+      "removeItem": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "item": {
+            "$ref": "#/$defs/DoItem"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "type": "object"
+      },
+      "removeItemByTitle": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "description": "Remove a task and its subtasks by title",
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      },
+      "summary": {
+        "type": "string"
+      },
+      "updateItem": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "properties": {
+          "done": {
+            "type": "boolean"
+          },
+          "item": {
+            "$ref": "#/$defs/DoItem"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "type": "object"
+      },
+      "updateItemByTitle": {
+        "asCell": [
+          "stream",
+          "stream"
+        ],
+        "description": "Update a task by title. Set done to mark complete, newTitle to rename, attachments to add references.",
+        "properties": {
+          "attachments": {
+            "items": {
+              "type": "unknown"
+            },
+            "type": "array"
+          },
+          "done": {
+            "type": "boolean"
+          },
+          "newTitle": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "type": "object"
+      }
+    },
+    "required": [
+      "compactUI",
+      "isHidden",
+      "items",
+      "itemCount",
+      "summary",
+      "mentionable",
+      "addItem",
+      "removeItem",
+      "updateItem",
+      "addItems",
+      "removeItemByTitle",
+      "updateItemByTitle",
+      "archiveCompleted",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
