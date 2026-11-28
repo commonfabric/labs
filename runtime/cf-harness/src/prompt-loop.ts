@@ -644,6 +644,14 @@ const transcriptTimelineEntry = (
 const emptyTurnNotice = (tool: "submit_result" | "finish_task"): string =>
   `Host completion check: the last turn carried no words and no tool call. Call ${tool} with the answer, or with why it cannot be given.`;
 
+/**
+ * Asks a run that returns through `submit_result` for its result after a turn
+ * that answered in words alone. The text is fixed and repeats nothing the run
+ * read.
+ */
+const UNSUBMITTED_RESULT_NOTICE =
+  "Host completion check: this run returns its answer through submit_result, and no result has been submitted. Call submit_result now with the answer you just wrote as `result`; a run that ends without one fails.";
+
 const PROMPT_LOOP_MODEL_TURNS = Symbol("cf-harness.prompt-loop.model-turns");
 
 interface PromptLoopErrorWithModelTurns {
@@ -4246,6 +4254,7 @@ export class CfHarnessPromptLoop {
       };
 
       let emptyTurnNudged = false;
+      let resultNudged = false;
       while (modelTurns < maxModelTurns) {
         options.signal?.throwIfAborted();
         modelTurns += 1;
@@ -4371,6 +4380,9 @@ export class CfHarnessPromptLoop {
           );
         }
         if (toolCalls.length === 0) {
+          // A completion notice needs a following turn that offers tools.
+          const toolTurnFollows = modelTurns <
+            maxModelTurns - (this.#finalizeOnTurnLimit ? 1 : 0);
           if (assistantMessage.content.trim().length === 0) {
             if (response.emptyReply !== undefined) {
               const attempt = modelAttempts.at(-1);
@@ -4387,15 +4399,12 @@ export class CfHarnessPromptLoop {
                 // failure or prevent the completion notice.
               }
             }
-            // A completion notice needs a following turn that offers its
-            // tool. Each invocation gets one notice; a second blank fails.
+            // Each invocation gets one notice; a second blank fails.
             const completionTool = this.#allowedToolIds.has("submit_result")
               ? "submit_result"
               : this.#allowedToolIds.has("finish_task")
               ? "finish_task"
               : undefined;
-            const toolTurnFollows = modelTurns <
-              maxModelTurns - (this.#finalizeOnTurnLimit ? 1 : 0);
             if (
               !toolTurnFollows || emptyTurnNudged ||
               completionTool === undefined
@@ -4414,6 +4423,18 @@ export class CfHarnessPromptLoop {
               "Host completion check: this run has no successful assign_slug receipt. " +
                 PIECE_OUTPUT_GUIDANCE,
             );
+            continue;
+          }
+          // A run that returns through `submit_result` and answered in words
+          // alone would end with no result. Each invocation gets one notice,
+          // separate from the blank-turn one; a second such turn ends the run.
+          if (
+            !resultNudged && toolTurnFollows &&
+            this.#allowedToolIds.has("submit_result") &&
+            await this.engine.structuredResultOwed()
+          ) {
+            resultNudged = true;
+            await appendHostNotice(UNSUBMITTED_RESULT_NOTICE);
             continue;
           }
           finalAssistantText = assistantMessage.content;

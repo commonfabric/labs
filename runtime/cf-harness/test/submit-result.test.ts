@@ -11,7 +11,10 @@ import { expect } from "@std/expect";
 import { join } from "@std/path";
 import { normalize } from "@std/path/posix";
 
-import { createCfHarnessCliCapabilities } from "../src/cli.ts";
+import {
+  createCfHarnessCliCapabilities,
+  validateCfHarnessStructuredResult,
+} from "../src/cli.ts";
 import { parseCfHarnessCliArgs, runCfHarnessCli } from "./support/on-linux.ts";
 import { CfHarnessEngine } from "../src/engine.ts";
 import {
@@ -353,9 +356,11 @@ describe("submit_result", () => {
   });
 
   it("offers the tool when a schema is configured, under an explicit allowlist too", async () => {
-    const byDefault = await run("run-offered", [finalTurn("Done.")]);
+    const byDefault = await run("run-offered", [
+      submit("call-1", { answer: "Hyperion" }),
+    ]);
     const allowlisted = await run("run-offered-allowlist", [
-      finalTurn("Done."),
+      submit("call-1", { answer: "Hyperion" }),
     ], { allowedToolIds: ["describe_handle", "submit_result"] });
 
     expect(byDefault.offeredTools[0]).toContain("submit_result");
@@ -421,7 +426,7 @@ describe("submit_result", () => {
   it("still refuses the same run a sandbox tool", async () => {
     const { result } = await run("run-bash-refused", [
       toolCallTurn("call-1", "bash", JSON.stringify({ command: "true" })),
-      finalTurn("Done."),
+      submit("call-2", { answer: "Hyperion" }),
     ]);
 
     expect(toolOutputs(result.transcript)[0]).toMatchObject({
@@ -536,6 +541,189 @@ describe("submit_result", () => {
     ).rejects.toMatchObject({ code: "provider-unavailable" });
   });
 
+  const UNSUBMITTED_RESULT_NOTICE =
+    "Host completion check: this run returns its answer through submit_result, and no result has been submitted. Call submit_result now with the answer you just wrote as `result`; a run that ends without one fails.";
+
+  /**
+   * How many times the unsubmitted-result notice is in the transcript the
+   * model last read. A notice is turn-local, so the loop's returned
+   * transcript leaves it out.
+   */
+  const resultNotices = (
+    requests: readonly ReturnType<typeof chatViewOfRequest>[],
+  ): number =>
+    (requests.at(-1)?.messages ?? []).filter((message) =>
+      message.role === "user" &&
+      message.content === UNSUBMITTED_RESULT_NOTICE
+    ).length;
+
+  it("answers a turn of words without a submission with a notice and completes on the submission after it", async () => {
+    const { result, requests, engine } = await run("run-prose-then-submit", [
+      finalTurn("Hyperion, by Dan Simmons."),
+      submit("call-1", { answer: "Hyperion" }),
+    ]);
+    const direct = await run("run-submit-directly", [
+      submit("call-1", { answer: "Hyperion" }),
+    ]);
+
+    expect(requests).toHaveLength(2);
+    expect(requests[1].messages.at(-1)).toMatchObject({
+      role: "user",
+      content: UNSUBMITTED_RESULT_NOTICE,
+    });
+    expect(resultNotices(requests)).toBe(1);
+    expect(result.runState.status).toBe("completed");
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Hyperion",
+    });
+    // The notice is fixed host text: it records no observation, so the
+    // model context carries the label a run without it carries.
+    expect(engine.getRunState().cfcModelContext).toEqual(
+      direct.engine.getRunState().cfcModelContext,
+    );
+  });
+
+  it("ends a run that answers in words twice without a result, after one notice", async () => {
+    const { result, requests } = await run("run-prose-twice", [
+      finalTurn("Hyperion."),
+      finalTurn("Hyperion, again."),
+    ]);
+
+    expect(requests).toHaveLength(2);
+    expect(resultNotices(requests)).toBe(1);
+    expect(result.finalAssistantText).toBe("Hyperion, again.");
+    await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
+    expect(
+      await validateCfHarnessStructuredResult({
+        config: {
+          schema: RESULT_SCHEMA,
+          path: resultPath,
+          sandboxPath: "/workspace/result.json",
+        },
+        readTextFile: (path) => Deno.readTextFile(path),
+      }),
+    ).toMatchObject({
+      status: "invalid",
+      validation_error: "no structured result was submitted",
+    });
+  });
+
+  it("gives a run each notice once, the blank-turn one and the result one", async () => {
+    const { result, requests } = await run("run-blank-prose-submit", [
+      finalTurn(""),
+      finalTurn("Hyperion."),
+      submit("call-1", { answer: "Hyperion" }),
+    ]);
+
+    expect(requests).toHaveLength(3);
+    expect(requests[1].messages.at(-1)).toMatchObject({
+      role: "user",
+      content:
+        "Host completion check: the last turn carried no words and no tool call. Call submit_result with the answer, or with why it cannot be given.",
+    });
+    expect(requests[2].messages.at(-1)).toMatchObject({
+      role: "user",
+      content: UNSUBMITTED_RESULT_NOTICE,
+    });
+    expect(result.runState.status).toBe("completed");
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Hyperion",
+    });
+  });
+
+  it("sends no result notice to a run that takes no result", async () => {
+    const { result, requests } = await run("run-prose-no-schema", [
+      finalTurn("Hyperion."),
+    ], { schema: false });
+
+    expect(requests).toHaveLength(1);
+    expect(resultNotices(requests)).toBe(0);
+    expect(result.finalAssistantText).toBe("Hyperion.");
+  });
+
+  it("sends no result notice to a run whose result file is already there, as a resumed run's may be", async () => {
+    await Deno.mkdir(join(dir, "workspace"));
+    await Deno.writeTextFile(
+      resultPath,
+      JSON.stringify({ answer: "Hyperion" }),
+    );
+    const { result, requests } = await run("run-prose-result-held", [
+      finalTurn("Hyperion."),
+    ]);
+
+    expect(requests).toHaveLength(1);
+    expect(resultNotices(requests)).toBe(0);
+    expect(result.finalAssistantText).toBe("Hyperion.");
+  });
+
+  it("sends no result notice to a run whose result is the file, not submit_result", async () => {
+    const { result, requests } = await run("run-prose-file-result", [
+      finalTurn("Hyperion."),
+    ], { allowedToolIds: ["describe_handle"] });
+
+    expect(requests).toHaveLength(1);
+    expect(resultNotices(requests)).toBe(0);
+    expect(result.finalAssistantText).toBe("Hyperion.");
+  });
+
+  it("sends no result notice to a run that already submitted, when a steer continues it into words", async () => {
+    const requests: ReturnType<typeof chatViewOfRequest>[] = [];
+    const engine = new CfHarnessEngine({
+      sandboxRuntime: new FakeSandboxRuntime(),
+      runId: "run-submitted-then-prose",
+      model: "gpt-5.4",
+      structuredResult: { schema: RESULT_SCHEMA, path: resultPath },
+    });
+    const loop = new CfHarnessPromptLoop({
+      apiKey: "test-key",
+      engine,
+      fetchFn: scriptedFetch(
+        [
+          submit("call-1", { answer: "Hyperion" }),
+          finalTurn("It won the Hugo."),
+        ],
+        { value: 0 },
+        requests,
+      ),
+    });
+    const result = await loop.runPrompt({
+      prompt: "Recommend a book.",
+      promptSlotBinding: contextPromptSlotBinding,
+      takeMessages: (turn) => turn === 2 ? ["Also say why."] : [],
+    });
+
+    expect(requests).toHaveLength(2);
+    expect(resultNotices(requests)).toBe(0);
+    expect(result.finalAssistantText).toBe("It won the Hugo.");
+    expect(JSON.parse(await Deno.readTextFile(resultPath))).toEqual({
+      answer: "Hyperion",
+    });
+  });
+
+  const noToolTurnLeft: readonly [
+    string,
+    { maxModelTurns: number; finalizeOnTurnLimit?: boolean },
+  ][] = [
+    ["the last turn of the budget", { maxModelTurns: 1 }],
+    ["followed only by the reserved final turn", {
+      maxModelTurns: 2,
+      finalizeOnTurnLimit: true,
+    }],
+  ];
+  for (const [label, options] of noToolTurnLeft) {
+    it(`sends no result notice where the turn of words is ${label}`, async () => {
+      const { result, requests } = await run(
+        `run-prose-no-turn-left-${options.maxModelTurns}`,
+        [finalTurn("Hyperion.")],
+        options,
+      );
+
+      expect(requests).toHaveLength(1);
+      expect(resultNotices(requests)).toBe(0);
+      expect(result.finalAssistantText).toBe("Hyperion.");
+    });
+  }
+
   it("fails a blank turn at once where the run takes no result", async () => {
     await expect(
       run("run-blank-no-schema", [finalTurn(""), finalTurn("Done.")], {
@@ -549,9 +737,11 @@ describe("submit_result", () => {
     const { result, offeredTools } = await run("run-refused-continues", [
       submit("call-1", { answer: 7 }),
       finalTurn("I could not form the result."),
+      finalTurn("I could not form the result."),
     ]);
 
-    expect(offeredTools).toHaveLength(2);
+    // The second turn of words follows the unsubmitted-result notice.
+    expect(offeredTools).toHaveLength(3);
     expect(result.finalAssistantText).toBe("I could not form the result.");
     await expect(Deno.stat(resultPath)).rejects.toThrow(Deno.errors.NotFound);
   });
@@ -559,6 +749,7 @@ describe("submit_result", () => {
   it("leaves no file behind a submission that was only ever invalid", async () => {
     await run("run-only-invalid", [
       submit("call-1", { wrong: true }),
+      finalTurn("Done."),
       finalTurn("Done."),
     ]);
 
@@ -605,7 +796,7 @@ describe("submit_result", () => {
 
   it("refuses a conflicting result configuration on resume", async () => {
     const first = await run("run-conflicting-resumed-result", [
-      finalTurn("Done."),
+      submit("call-1", { answer: "Hyperion" }),
     ]);
 
     expect(() =>
