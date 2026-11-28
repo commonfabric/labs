@@ -41,7 +41,7 @@ import KnowledgeGraph, {
   type GraphEdge,
   searchGraphPattern,
   type SummaryEntry,
-} from "./knowledge-graph.tsx";
+} from "./main.tsx";
 
 // The model fails the agent's analysis each time it is asked for.
 export const llmMocks = [

@@ -24,7 +24,7 @@ import {
 import AnnotationManager from "../../apps/annotation-manager/main.tsx";
 import Aside from "../../examples/aside/main.tsx";
 import Bookmarks from "../../apps/bookmarks/main.tsx";
-import Chatbot from "../../system/chatbot/chatbot.tsx";
+import Chatbot from "../../system/chatbot/main.tsx";
 import Cheeseboard from "../../apps/cheeseboard/main.tsx";
 import FormDemo from "../../examples/form-demo/main.tsx";
 import GroupChatLobby from "../../examples/group-chat-lobby/main.tsx";

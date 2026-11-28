@@ -103,7 +103,7 @@ benefited (see the contract doc's "Lessons" section).
 
 Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
 `apps/annotation-manager/main.tsx`, `examples/aside/main.tsx`,
-`apps/bookmarks/main.tsx`, `system/chatbot/chatbot.tsx`,
+`apps/bookmarks/main.tsx`, `system/chatbot/main.tsx`,
 `apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
 `apps/deep-research/main.tsx`, `showcase/dice/main.tsx` (+
 `showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
@@ -1880,7 +1880,7 @@ type Output = {
 };
 ```
 
-## `system/chatbot/chatbot.tsx`
+## `system/chatbot/main.tsx`
 
 Full-featured AI chat assistant with tool support, model selection, and
 mentionables. Deploy this to have a conversational AI interface.

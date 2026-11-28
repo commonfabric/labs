@@ -14,7 +14,7 @@ import {
 import SpaceOverview, {
   OverviewView,
   type SpaceOverviewResult,
-} from "./space-overview.tsx";
+} from "./main.tsx";
 
 // The model fails the analysis the autostart asks for.
 export const llmMocks = [
