@@ -136,8 +136,6 @@ gates. Each is a separate change; none is fixed here.
 - **A wildcard `requiredIntegrity` floor goes unchecked on the write side**
   (`verifyWriteFloor` skips `*` entries), and the read gate hands an empty
   read prefix to it, so a literal written into a floored list passes.
-- **A link written at a payload field named `internal`** leaves the root
-  stamp's `TransformedBy` in place.
 - **A schema's `addIntegrity` at a container mints at every position a write
   landed inside**, the container's own included, so its stamp resolves as
   current-value evidence at a sibling another writer wrote.

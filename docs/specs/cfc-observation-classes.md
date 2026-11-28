@@ -190,14 +190,24 @@ the entry's path (for a `*` template, its container's) leaves on it only the
 identity, or under none, therefore leaves the entry naming no function — also
 when that transaction read nothing and carries no labels of its own, since a
 write below a stamp carrying `TransformedBy` admits its document to the persist
-step whatever the join. The meet covers `TransformedBy` only: a hereditary
-integrity atom on an ancestor's `derived` entry still survives another writer
-adding a child. The declared structure-container route (filter/flatMap result
-containers) re-mints its stamps from each reconcile's join without writing the
-container, so there the atom names the builtin that reconciled, not every writer
-of every slot. The hereditary atoms stay off these stamps: they would feed the
-next transaction's hereditary meet through container reads, which is a change to
-certification propagation rather than to attribution.
+step whatever the join. The meet holds whatever the writer's flow-label dial: a
+writer at `observe` or `off` replaces no stamp, so the entries under its writes
+keep their confidentiality, and keep only the `TransformedBy` its join carries,
+which is none at `off`, where no join is derived. The meet covers
+`TransformedBy` only: a hereditary integrity atom on an ancestor's `derived`
+entry still survives another writer adding a child. A reconcile re-mints, from
+its own join and whether or not it writes there, the stamps of a declared
+structure container (filter/flatMap result containers) and the membership stamp
+of a container a list read is declared onward to (map, filter and flatMap
+results). A reconcile that sets the container decides every slot, even where
+the diff writes only the slots that changed, so its stamps carry its join's
+`TransformedBy`. One that does not set it decides no slot, so its re-minted
+stamps keep only the `TransformedBy` atoms that the stamps they replace still
+carried; a slot another writer changed leaves the container naming no function
+until the coordinator sets it again. The hereditary atoms stay off these
+stamps: they would feed the next transaction's hereditary meet through
+container reads, which is a change to certification propagation rather than to
+attribution.
 
 **C3 note (2026-07-03, superseded 2026-07-06): grow shipped, then the
 discipline was settled with the spec as freeze-at-creation.** C3's interim
