@@ -93,13 +93,15 @@ export async function readHeapGraph(path: string): Promise<HeapGraph> {
   }
   firstEdge[header.node_count] = edgeIndex;
 
-  // A WeakMap's table names each pair with the table's own id.
-  const tableOfPair = new Map<number, number>();
+  // A WeakMap's table names each pair with the table's own id. The ids are
+  // kept per string index in a typed array, since a heap can hold more pairs
+  // than a `Map` holds entries (2^24).
+  const tableOfPair = new Float64Array(strings.length).fill(Number.NaN);
   const pairName = /pair in WeakMap \(table @(\d+)\)$/;
   strings.forEach((text, index) => {
     if (text.length < 40 || !text.includes("part of key")) return;
     const match = pairName.exec(text);
-    if (match) tableOfPair.set(index, Number(match[1]));
+    if (match) tableOfPair[index] = Number(match[1]);
   });
 
   const retains = new Uint8Array(header.edge_count);
@@ -110,7 +112,7 @@ export async function readHeapGraph(path: string): Promise<HeapGraph> {
       if (type === weak || (type === shortcut && node !== 0)) continue;
       if (
         type === internal &&
-        tableOfPair.get(edges[edge * edgeFieldCount + edgeNameField]) === id
+        tableOfPair[edges[edge * edgeFieldCount + edgeNameField]] === id
       ) continue;
       retains[edge] = 1;
     }
