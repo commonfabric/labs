@@ -32,13 +32,10 @@ import {
   membershipSpacesInConfidentiality,
 } from "../src/cfc/mod.ts";
 import { createRuntimeCfcModulePolicySource } from "../src/cfc/policy-resolver.ts";
-import { stampWaveRunContext } from "../src/executor/wave.ts";
+import { ExecutorHost } from "../src/executor/host.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import { Runtime } from "../src/runtime.ts";
-import {
-  setCfcImplementationIdentity,
-  setCfcTrustSnapshot,
-} from "../src/storage/extended-storage-transaction.ts";
+import { setCfcImplementationIdentity } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   EmulatedStorageManager,
@@ -142,6 +139,7 @@ describe("cfc-reclassify", () => {
   let managers: EmulatedStorageManager[];
   let runtimes: Runtime[];
   let names = 0;
+  let host: ExecutorHost | undefined;
 
   /** A runtime on the shared server, closed when the test ends. */
   const connect = (
@@ -201,18 +199,53 @@ describe("cfc-reclassify", () => {
     return result;
   };
 
-  /** Creates a piece as a served handler run acting for `actor` makes it. */
-  const createPieceFor = async (actor: Identity): Promise<Cell<unknown>> => {
-    const serving = connect(service, { servingPosture: true });
-    const tx = serving.edit();
-    stampWaveRunContext(tx, {
-      actionId: "handler/reclassify",
-      kind: "event-handler",
-      eventId: "event-1",
-      acting: { user: actor.did(), session: `${actor.did()}-session` },
+  /**
+   * Creates a piece as a served handler run acting for `actor` makes it: on
+   * the serving runtime of `space`, as a step of a wave, whose commit
+   * reaches the store as the wave's `derived` commit, as in production.
+   */
+  const createPieceFor = (actor: Identity): Promise<Cell<unknown>> => {
+    host ??= new ExecutorHost({
+      server,
+      serviceIdentity: service.did(),
+      createRuntime: () => {
+        const storageManager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://fabric.example/"),
+          storageManager,
+          servingPosture: true,
+          experimental: {
+            serverExecution: true,
+            pieceCreatorRecord: true,
+            cfcPatternReclassification: true,
+          },
+        });
+        runtime.registerCfcPolicyManifests(undefined, [artifact]);
+        return Promise.resolve({
+          runtime,
+          dispose: async () => {
+            await runtime.dispose();
+            await storageManager.close();
+          },
+        });
+      },
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
     });
-    setCfcTrustSnapshot(tx, serving.trustSnapshotForPrincipal(actor.did()));
-    return await createPiece(serving, { tx });
+    return host.runLifecycleVerb(space, {
+      name: "reclassify",
+      run: (runtime) => {
+        const tx = runtime.edit();
+        runtime.stampServerRun(tx, {
+          actionId: "handler/reclassify",
+          kind: "event-handler",
+          eventId: "event-1",
+          acting: { user: actor.did() },
+        });
+        return createPiece(runtime, { tx });
+      },
+    });
   };
 
   /**
@@ -349,15 +382,14 @@ describe("cfc-reclassify", () => {
   };
 
   beforeEach(() => {
-    server = newLoopbackServer({
-      subscriptionRefreshDelayMs: 0,
-      delegatingDids: [service.did()],
-    });
+    server = newLoopbackServer({ subscriptionRefreshDelayMs: 0 });
     managers = [];
     runtimes = [];
   });
 
   afterEach(async () => {
+    await host?.close();
+    host = undefined;
     for (const runtime of runtimes) {
       await runtime.idle();
       await runtime.dispose();

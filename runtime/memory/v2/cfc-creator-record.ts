@@ -15,12 +15,17 @@
  * A commit a session makes may leave a document's record as it found it, or
  * record one where none was stored when it names the session's principal. It
  * may not change or remove a stored record, except by deleting the document.
- * A commit from a session whose principal the server lists as a service or
- * delegating identity is not judged here: that is the deployment's serving
- * runtime, which ran the code, and whose commit preparation admitted a record
- * that may name a run's actor or the creator of the piece whose run placed a
- * child. Nor are the commits the server makes itself (`derived`, `system`, and
- * delegated ones).
+ * Every session's commit is judged alike, a session of the deployment's own
+ * service or delegating identity included. The commits the server makes
+ * itself are not judged (`derived`, `system`, and delegated ones): a serving
+ * runtime's writes reach the store as its wave's `derived` commit, and its
+ * commit preparation admitted a record that may name a run's actor or the
+ * creator of the piece whose run placed a child.
+ *
+ * This is a stopgap: it keeps a client from forging another principal's
+ * record, and does not make the record trustworthy on its own. Ways around it
+ * remain (`patterns/dev/test/share-space-declassify/PROPOSAL.md`, Risks), and
+ * a record bound into the piece's identity would close them as a class.
  */
 
 // SPEC-PENDING https://github.com/commonfabric/specs/pull/87 The ruling has

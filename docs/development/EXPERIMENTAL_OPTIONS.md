@@ -1081,12 +1081,15 @@ holds the measurements and the conditions for revisiting.
   or the root issuer of the proof chain it presented), and may not
   change or remove a stored one except by deleting the document
   ([`runtime/memory/v2/cfc-creator-record.ts`](../../runtime/memory/v2/cfc-creator-record.ts)).
-  A commit the server produces, or one a session of its own serving or
-  delegating identity submits, is not judged, since its serving runtime ran
-  the code. So a runtime on a client records only its own identity: a child it
+  Every session is judged alike, one of the deployment's own service or
+  delegating identity included; only the commits the server makes itself are
+  not, and a serving runtime's writes reach the store as its wave's `derived`
+  commit. So a runtime on a client records only its own identity, and logs
+  `piece-creator-record-skipped` where it records none: a child it
   instantiates under another principal's piece, and a first source transition
-  it makes of a legacy piece whose evidence names another principal, record
-  none. With the flag off, no record is written and a stored one is left as it
+  it makes of a legacy piece whose evidence names another principal. The
+  store's check is a stopgap against a forged record, not what makes the
+  record trustworthy (`cfcPatternReclassification` below lists what remains). With the flag off, no record is written and a stored one is left as it
   is. The record exists so that a
   field a later release adds with `ownerPrincipal: CurrentPrincipal` is bound
   to the piece's creator rather than to whoever first writes it; that binding

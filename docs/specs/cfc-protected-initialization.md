@@ -310,8 +310,9 @@ its owner-protected fields represent, none where those fields name two
 principals or none. Ahead of a ruling stacked on
 [specs#87](https://github.com/commonfabric/specs/pull/87), the memory store
 admits a record a session writes only when it names a principal the session
-authenticated as, and refuses a change or removal of a stored one; a commit
-the serving host makes is not judged. So a
+authenticated as, and refuses a change or removal of a stored one. Every
+session is judged alike; only a commit the server makes itself, which carries
+a serving runtime's writes, is not. So a
 runtime on a client records only its own identity, and a child or a legacy
 piece whose record would name another principal records none there. The
 record is written only while the `pieceCreatorRecord` experimental option is on

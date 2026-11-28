@@ -239,12 +239,9 @@ describe("cfc-creator-record", () => {
       expect(read(engine, { id: piece })).toBeNull();
     });
 
-    it("commits a record the server vouches for: a create for an acting user, and a child with its producer's creator", () => {
-      const vouched = { creatorRecordsVouched: true };
-      commitAs(SERVICE, [create(piece, BOB)], vouched);
-      commitAs(SERVICE, [create(child, ALICE)], vouched);
+    it("commits a record a `system` commit carries", () => {
+      commitAs(SERVICE, [create(piece, BOB)], { commitClass: "system" });
       expect(storedCreator(piece)).toBe(BOB);
-      expect(storedCreator(child)).toBe(ALICE);
     });
 
     it("commits a record a delegated commit carries", () => {
@@ -256,9 +253,9 @@ describe("cfc-creator-record", () => {
   });
 
   describe("a session's transact the server admits", () => {
-    // The server vouches for the records of a session whose principal it
-    // lists as a delegating identity, as a toolshed running server execution
-    // lists its own, and judges every other session's.
+    // A serving runtime's writes reach the store as `derived` commits, so
+    // the server judges every session's records alike, a session of its own
+    // delegating identity included.
 
     const SPACE = "did:key:z6Mk-creator-record-space";
     const AUDIENCE = "did:key:z6Mk-creator-record-audience";
@@ -343,11 +340,22 @@ describe("cfc-creator-record", () => {
       }
     });
 
-    it("commits a delegating session's record naming the principal its runtime acted for", async () => {
+    it("returns an error for a delegating session's record naming another principal", async () => {
       const server = newServer();
       try {
         const service = await openSession(server, SERVICE);
         const result = await transact(server, service, "of:served", ALICE);
+        expect(result.error?.message).toMatch(/only its own principal/);
+      } finally {
+        await server.close();
+      }
+    });
+
+    it("commits a client session's record naming its own principal", async () => {
+      const server = newServer();
+      try {
+        const alice = await openSession(server, ALICE);
+        const result = await transact(server, alice, "of:own", ALICE);
         expect(result.error).toBeUndefined();
       } finally {
         await server.close();

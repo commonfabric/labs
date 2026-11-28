@@ -461,8 +461,8 @@ dials.
 - The memory store admits a session's piece creator record only when it names
   the principal the session authenticated, and refuses a session's change or
   removal of a stored one (`creatorRecordRefusal` in
-  `runtime/memory/v2/cfc-creator-record.ts`); a commit the serving host makes
-  is not judged. It runs at every posture and refuses more than
+  `runtime/memory/v2/cfc-creator-record.ts`); only a commit the server makes
+  itself, which carries a serving runtime's writes, is not judged. It runs at every posture and refuses more than
   [specs#87](https://github.com/commonfabric/specs/pull/87) does, so the store
   side is fail-closed.
 - With the default-off `pieceCreatorRecord` on, a runtime on a client records

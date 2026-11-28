@@ -5781,11 +5781,13 @@ export class Runner {
     // session's record only when it names the principal the session
     // authenticated (`cfc-creator-record.ts` in the memory package), so a
     // child of another principal's piece, or a legacy piece whose evidence
-    // names another principal, records none there. That also leaves without
-    // one a piece that a client the store would vouch for, such as a
-    // toolshed's own non-serving runtime, creates for a user, and one a key
-    // acting under another principal's proof chain creates for that
-    // principal; both fail closed.
+    // names another principal, records none there. So does a piece a
+    // client of a service identity, such as a toolshed's own non-serving
+    // runtime, creates for a user, and one a key acting under another
+    // principal's proof chain creates for that principal. Each fails closed
+    // for reclassification, and is logged, since nothing else shows it: only
+    // a serving runtime, whose writes reach the store as the wave's `derived`
+    // commit, records a creator other than its own identity.
     if (
       !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
       this.#runtime.experimental.pieceCreatorRecord === true &&
@@ -5799,9 +5801,15 @@ export class Runner {
         : this.#legacyPieceCreator(tx, resultCell);
       const clientIdentity = tx.getCfcState().clientIdentity;
       if (
-        creator !== undefined &&
-        (clientIdentity === undefined || creator === clientIdentity)
+        creator !== undefined && clientIdentity !== undefined &&
+        creator !== clientIdentity
       ) {
+        logger.warn("piece-creator-record-skipped", () => [
+          `piece ${resultCell.getAsNormalizedFullLink().id} records no ` +
+          `creator: it would name ${creator}, and this client's commit ` +
+          `may record only its own identity, ${clientIdentity}`,
+        ]);
+      } else if (creator !== undefined) {
         resultCell.withTx(tx).setMetaRaw(
           "creator",
           creator,

@@ -192,7 +192,8 @@ decided by how the piece came to be:
   store admits a session's record only when it names the session's own
   principal (`runtime/memory/v2/cfc-creator-record.ts`), so a runtime on a
   client records the parent's creator only when that is its own identity, and
-  none otherwise; a serving runtime's record is not judged there.
+  none otherwise. A serving runtime's record is not judged there, since its
+  writes reach the store as the server's own `derived` commit.
 - A piece a builtin instantiates from a continuation of its action
   (`attributeInitialization: false`) names the instantiating piece's creator
   by the same rule.

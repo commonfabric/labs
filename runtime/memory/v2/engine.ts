@@ -1799,16 +1799,6 @@ export type ApplyCommitOptions = {
   };
 
   /**
-   * Whether the server vouches for the creator records this `authored`
-   * commit carries, which it does for a session whose principal it lists as
-   * a service or delegating identity: an operator principal, or a toolshed
-   * of the deployment, whose runtime ran the code and whose commit
-   * preparation admitted each record. Otherwise a session's commit records
-   * only its own principal as a piece's creator (`cfc-creator-record.ts`).
-   */
-  creatorRecordsVouched?: boolean;
-
-  /**
    * The root issuer of the proof chain the committing session presented,
    * whose capability the session acts under: a creator record may name it as
    * well as the session's own principal.
@@ -7406,7 +7396,6 @@ const applyCommitTransaction = (
     consequenceOf,
     derivedThrough,
     delegated,
-    creatorRecordsVouched = false,
     capabilityPrincipal,
     systemEventActor,
     scopeKeys,
@@ -8779,15 +8768,11 @@ const applyCommitTransaction = (
 
   // A session's commit may record a piece's creator only as the principal
   // the session authenticated, and may not change or remove a stored record
-  // (`cfc-creator-record.ts`). A `derived` or `system` commit, a delegated
-  // one, and one the server vouches for are not judged: the server makes the
-  // first three itself, and the last comes from a principal it lists as a
-  // service or delegating identity. A content-addressed document is never a
+  // (`cfc-creator-record.ts`). A `derived`, `system` or delegated commit is
+  // not judged: the server makes each itself, and a serving runtime's writes
+  // reach the store as `derived` commits. A content-addressed document is never a
   // piece, so a session's commit writes no record on one.
-  if (
-    commitClass === "authored" && delegated === undefined &&
-    !creatorRecordsVouched
-  ) {
+  if (commitClass === "authored" && delegated === undefined) {
     const recorders = [principal, capabilityPrincipal].filter(
       (each): each is string => each !== undefined,
     );

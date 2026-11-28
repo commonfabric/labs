@@ -382,7 +382,8 @@ ruling drafted to stack on
 [specs#87](https://github.com/commonfabric/specs/pull/87). The memory store
 admits a session's `creator` record only when it names a principal the session
 authenticated as, and refuses a session's change or removal of a stored one;
-the deployment's own serving commits are not judged. That refuses more than #87
+every session is judged alike, and only the server's own commits, which carry
+a serving runtime's writes, are not. That refuses more than #87
 and stores nothing new, so it runs at the strict default, and its site in
 `runtime/memory/v2/cfc-creator-record.ts` carries a `SPEC-PENDING` marker
 naming #87. Behind the default-off `pieceCreatorRecord` dial, a runtime on a

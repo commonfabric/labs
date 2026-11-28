@@ -221,11 +221,15 @@ leave room:
   So a lift in loom B reads A's home with nobody online, and labels are the only
   thing holding the data. A modified client with WRITE on B that wrote a piece
   with `creator: A` would release A's data to B's readers. The store now refuses
-  that record: a session records only its own principal, and only the serving
-  host's commits record anyone else, such as a child's parent's creator. So a
-  child that a member's client places under A's piece records no creator, and
-  its outputs release nothing. The record is still only as strong as the act
-  that writes it; the next four risks are the ways around it that remain.
+  that record: a session records only its own principal, every session of the
+  deployment's own identity included, and only the server's own commits, which
+  carry a serving runtime's writes, record anyone else, such as a child's
+  parent's creator. So a child that a member's client places under A's piece
+  records no creator, and its outputs release nothing. The record is still only
+  as strong as the act that writes it; the next four risks are the ways around
+  it that remain. The store's check is a stopgap against this one forgery rather
+  than a fix for the class: a creator bound into the piece's identity, which the
+  store can check against the id itself, would close all five.
 - **An honest owner's runtime can record itself as the creator of a piece it did
   not choose.** A piece from before the record gains one at its next source
   transition, from the principal its owner-protected fields' stored labels name,
