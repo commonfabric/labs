@@ -473,6 +473,17 @@ dials.
   update-added owner fields bind their first writer, as a piece recording none
   does under #87. For reclassification it is fail-closed. Both are a semantic
   gap whose ruling is [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on #87.
+- With both dials on, a reclassification is honored only where the access list
+  of the piece's space, and of the written document's space, lets its creator
+  and no one else write, and only in a run acting for no one or for the
+  creator (`reclassifiedFlowConfidentiality` in
+  `runtime/runner/src/cfc/prepare.ts`, `writableOnlyBy` in
+  `runtime/runner/src/cfc/space-membership.ts`). This approximates §3.8.4's
+  requirement that low-integrity values not choose what is released, which no
+  stored integrity can carry against a co-writer, since the store admits
+  integrity as a client states it. It refuses more than
+  [specs#111](https://github.com/commonfabric/specs/pull/111) and persists
+  nothing, so it is fail-closed; its ruling belongs with #111.
 - Under strict, an authorized runtime-owned store with a live enrollment or
   an authenticated piece-setup claim admits eligible writer-fit misfits and
   records them only in the derived component.
