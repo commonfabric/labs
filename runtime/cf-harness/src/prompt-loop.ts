@@ -35,7 +35,10 @@ import {
   BROWSER_HOST_HANDOFF_REASONS,
   type HarnessBrowserHost,
 } from "./contracts/browser-host.ts";
-import type { HarnessCfcModelContextObservationInput } from "./contracts/cfc-model-context.ts";
+import {
+  confidentialityOnlyIfcLabel,
+  type HarnessCfcModelContextObservationInput,
+} from "./contracts/cfc-model-context.ts";
 import {
   createHarnessCfcPolicySnapshot,
   type HarnessParentToolAllowance,
@@ -2154,8 +2157,12 @@ const createStructuredSubagentReturn = async (
         parsedValue,
         {
           source: `delegate_task:${options.childRunId}`,
+          // A child whose observations were all public seals what it
+          // returns, as one that observed nothing does.
           referentLabel: options.returnReferents
-            ? options.childEngine.getRunState().cfcModelContext?.label
+            ? confidentialityOnlyIfcLabel(
+              options.childEngine.getRunState().cfcModelContext?.label ?? {},
+            )
             : undefined,
         },
       );

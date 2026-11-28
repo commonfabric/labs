@@ -554,6 +554,7 @@ describe("runHarnessJob()", () => {
         usageCoverage: "direct",
         modelTurns: 2,
         toolCalls: 1,
+        reads: [],
         runRef: join(runRoot, "artifacts"),
       });
       expect(seen.prompt).toBe("Name a moon of Saturn.");
@@ -617,7 +618,71 @@ describe("runHarnessJob()", () => {
         usageCoverage: "including-descendants",
         modelTurns: 2,
         toolCalls: 1,
+        reads: [],
       });
+    });
+
+    it("reports the reads the run's observations declared, in sequence order", async () => {
+      const outputId = (n: number) => `job-run:run_command:${n}`;
+      const owner = { type: "https://cfc.test/atom/owner" };
+      const read = (ref: string) => ({
+        ref,
+        revision: `rev-${ref}`,
+        coverage: { kind: "body" },
+        ifc: { confidentiality: [owner] },
+      });
+      const observation = (sequence: number, reads?: unknown[]) => ({
+        type: "cf-harness.cfc-model-context-observation",
+        sequence,
+        at: "2026-10-05T12:00:00.500Z",
+        toolCallId: `call-${sequence}`,
+        toolId: "run_command",
+        outputId: outputId(sequence),
+        channels: ["output"],
+        policy: "observed",
+        label: { confidentiality: [owner] },
+        ...(reads !== undefined ? { reads } : {}),
+      });
+      const { result } = await runScripted(plainSpec(), async (context) => {
+        await answering("Titan")(context);
+        const done = loopResult(runRoot);
+        return {
+          ...done,
+          runState: {
+            ...done.runState,
+            toolOutputs: [1, 2, 3, 4].map((n) => ({ outputId: outputId(n) })),
+            cfcModelContext: {
+              type: "cf-harness.cfc-model-context",
+              version: 1,
+              updatedAt: "2026-10-05T12:00:00.500Z",
+              label: { confidentiality: [owner] },
+              observations: [
+                observation(1, [read("a"), read("b")]),
+                observation(2),
+                observation(3, [read("c")]),
+                observation(4, []),
+              ],
+            },
+          } as unknown as HarnessPromptLoopResult["runState"],
+        };
+      });
+
+      expect(result.report?.reads).toEqual([
+        {
+          sequence: 1,
+          toolCallId: "call-1",
+          outputId: outputId(1),
+          label: { confidentiality: [owner] },
+          reads: [read("a"), read("b")],
+        },
+        {
+          sequence: 3,
+          toolCallId: "call-3",
+          outputId: outputId(3),
+          label: { confidentiality: [owner] },
+          reads: [read("c")],
+        },
+      ]);
     });
 
     it("gives the harness the spec's instructions and turn cap, and neither when the spec names none", async () => {
@@ -998,6 +1063,7 @@ describe("runHarnessJob()", () => {
         report: {
           modelTurns: 2,
           toolCalls: 1,
+          reads: [],
           usage: { inputTokens: 10, outputTokens: 4, totalTokens: 14 },
           usageCoverage: "direct",
           runRef: join(runRoot, "artifacts"),

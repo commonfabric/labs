@@ -21,6 +21,7 @@ import {
   CFC_PROMPT_SLOT_BOUND_ATOM_TYPE,
   type PromptSlotBinding,
 } from "../../src/contracts/prompt-slot.ts";
+import { HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES } from "../../src/contracts/cfc-model-context.ts";
 import { createToolOutputId } from "../../src/contracts/tool-result.ts";
 import { CfHarnessEngine } from "../../src/engine.ts";
 import {
@@ -64,6 +65,23 @@ import { responsesBodyFromChatFixture } from "../support/responses-fixture.ts";
 
 const OWNER = "https://cfc.test/atom/owner";
 const HEALTH = "https://cfc.test/atom/facet/health";
+const VOUCHED = "https://cfc.test/atom/vouched";
+
+/** A read the host declares, of `ref` at `revision` under `confidentiality`. */
+const readOf = (
+  ref: string,
+  revision: string | null,
+  confidentiality: readonly unknown[],
+  details: Record<string, unknown> = {},
+) => ({
+  ref,
+  revision,
+  coverage: revision === null
+    ? { kind: "body", revisionScope: "none" }
+    : { kind: "body", pages: [1] },
+  ifc: { confidentiality: [...confidentiality] },
+  ...details,
+});
 
 /** A host configuration whose endpoint is `url`. */
 const configFor = (url: string): HarnessLoomCommandsConfig => ({
@@ -1586,6 +1604,7 @@ describe("loom-commands tools", () => {
           args: { title: "Trip" },
           context: { loom_id: "loom-0123456789abcdef", expected_version: 1 },
           actor: "agent:agent-runner",
+          reads: true,
         },
       });
     });
@@ -1744,6 +1763,338 @@ describe("loom-commands tools", () => {
     });
   });
 
+  describe("runCommandTool's declared reads", () => {
+    const run = (
+      answer: unknown,
+      options: Parameters<typeof contextWith>[0] = {},
+    ) => {
+      const { context, calls } = contextWith({
+        answer: JSON.stringify(answer),
+        ...options,
+      });
+      return {
+        calls,
+        output: runCommandTool.invoke(context, {
+          command: "people-discovery.dossier",
+          args: { entity_id: "e-1" },
+        }),
+      };
+    };
+
+    it("labels an answer by the join of its reads' labels, recording the reads beside it and showing them nowhere", async () => {
+      const mail = readOf("gmail:thread-a", "rev-a", [OWNER], {
+        provisional: ["gmail"],
+        title: "Lunch",
+        at: "2026-11-20T12:00:00Z",
+        author: { email: "a@example.com" },
+      });
+      const chart = {
+        ...readOf("health:visit-b", "rev-b", [HEALTH]),
+        ifc: { confidentiality: [HEALTH], integrity: [VOUCHED] },
+      };
+      const answer = { ok: true, id: "people-discovery.dossier", records: 2 };
+      const referents: Record<string, unknown>[] = [];
+      const output = executed(
+        await run({ ...answer, reads: [mail, chart] }, { referents }).output,
+      );
+
+      expect(output.entry).toMatchObject({
+        status: "admitted",
+        value: answer,
+        labelSource: "row",
+      });
+      expect(output.outcome.bodyBytes).toBe(JSON.stringify(answer).length);
+      expect(output.cfc).toEqual({
+        version: 1,
+        observedLabel: { confidentiality: [OWNER, HEALTH] },
+        reads: [mail, chart],
+      });
+      // The answer combines rows of two stores with the model's arguments,
+      // so it keeps the integrity of neither.
+      expect(referents[0]).toMatchObject({
+        label: { confidentiality: [OWNER, HEALTH], integrity: [] },
+      });
+      expect(JSON.stringify(runCommandModelView(output).output)).not.toContain(
+        "gmail:thread-a",
+      );
+    });
+
+    it("joins the arguments' label with the reads', so a public read does not make an answer public", async () => {
+      const output = executed(
+        await run({
+          ok: true,
+          echo: "/people-discovery.dossier e-1",
+          reads: [readOf("web:https://example.com/", null, [])],
+        }, { queryLabel: [OWNER] }).output,
+      );
+
+      expect(output.cfc.observedLabel).toEqual({ confidentiality: [OWNER] });
+      expect(output.cfc.reads).toHaveLength(1);
+    });
+
+    it("joins an answer's own `ifc` with its reads', and withholds one whose own `ifc` cannot be read", async () => {
+      const joined = executed(
+        await run({
+          ok: true,
+          ifc: { confidentiality: [HEALTH], integrity: [VOUCHED] },
+          reads: [readOf("gmail:thread-a", "rev-a", [OWNER])],
+        }).output,
+      );
+      expect(joined.entry).toMatchObject({
+        status: "admitted",
+        value: { ok: true },
+        labelSource: "row",
+      });
+      expect(joined.cfc.observedLabel).toEqual({
+        confidentiality: [OWNER, HEALTH],
+      });
+
+      const unreadable = executed(
+        await run({
+          ok: true,
+          ifc: { confidentiality: "secret" },
+          reads: [readOf("gmail:thread-a", "rev-a", [OWNER])],
+        }).output,
+      );
+      expect(unreadable.entry).toEqual({
+        status: "withheld",
+        reasonCode: "cfc_label_read_failed",
+      });
+      expect(unreadable.cfc).toEqual({ version: 1 });
+    });
+
+    it("labels an answer that declares no reads as the call's arguments", async () => {
+      const labeled = executed(
+        await run({ ok: true, reads: [] }, { queryLabel: [OWNER] }).output,
+      );
+      expect(labeled.entry).toMatchObject({
+        status: "admitted",
+        value: { ok: true },
+        labelSource: "query",
+      });
+      expect(labeled.cfc).toEqual({
+        version: 1,
+        observedLabel: { confidentiality: [OWNER] },
+        reads: [],
+      });
+
+      const unlabeled = executed(await run({ ok: true, reads: [] }).output);
+      expect(unlabeled.cfc).toEqual({ version: 1, reads: [] });
+    });
+
+    it("labels an answer with no `reads` key by its own `ifc`, or else by the query, and records no reads", async () => {
+      const byQuery = executed(
+        await run({ ok: true, echo: "answered" }, { queryLabel: [OWNER] })
+          .output,
+      );
+      expect(byQuery.entry).toMatchObject({
+        status: "admitted",
+        value: { ok: true, echo: "answered" },
+        labelSource: "query",
+      });
+      expect(byQuery.cfc).toEqual({
+        version: 1,
+        observedLabel: { confidentiality: [OWNER] },
+      });
+
+      const byRow = executed(
+        await run({ ok: true, ifc: { confidentiality: [HEALTH] } }, {
+          queryLabel: [OWNER],
+        }).output,
+      );
+      expect(byRow.entry).toMatchObject({
+        status: "admitted",
+        value: { ok: true },
+        labelSource: "row",
+      });
+      expect(byRow.cfc).toEqual({
+        version: 1,
+        observedLabel: { confidentiality: [HEALTH] },
+      });
+    });
+
+    it("withholds an answer whose reads cannot be read, recording none", async () => {
+      for (
+        const reads of [
+          "two",
+          null,
+          [{
+            ref: "gmail:thread-a",
+            revision: "r",
+            coverage: { kind: "body" },
+          }],
+          [{ ...readOf("gmail:thread-a", "r", [OWNER]), revision: 3 }],
+          [{ ...readOf("gmail:thread-a", "r", [OWNER]), coverage: {} }],
+          [{ ...readOf("", "r", [OWNER]) }],
+          ["gmail:thread-a"],
+          [readOf("gmail:thread-a", "r", [OWNER], { provisional: [] })],
+          [readOf("gmail:thread-a", "r", [OWNER], { provisional: [3] })],
+          [readOf("gmail:thread-a", "r", [OWNER], { provisional: "gmail" })],
+        ]
+      ) {
+        const output = executed(await run({ ok: true, reads }).output);
+        expect(output.entry).toEqual({
+          status: "withheld",
+          reasonCode: "cfc_label_read_failed",
+        });
+        expect(output.cfc).toEqual({ version: 1 });
+      }
+    });
+
+    it("records no reads for an answer withheld by the ceiling", async () => {
+      const output = executed(
+        await run({
+          ok: true,
+          reads: [readOf("health:visit-b", "rev-b", [HEALTH])],
+        }, { ceiling: [OWNER] }).output,
+      );
+      expect(output.entry?.status).toBe("withheld");
+      expect(output.cfc).toEqual({ version: 1 });
+    });
+
+    it("leaves out an answer that declares more reads than an observation records, and shows one at the bound", async () => {
+      const reads = (count: number) =>
+        Array.from(
+          { length: count },
+          (_, n) => readOf(`gmail:thread-${n}`, "r", [OWNER]),
+        );
+      const past = executed(
+        await run({ ok: true, reads: reads(513) }).output,
+      );
+      expect(past.entry).toBeUndefined();
+      expect(past.truncated).toBe(true);
+      expect(past.hint).toContain("at most 512 reads");
+      expect(past.hint).not.toContain("tool output limit");
+      expect(past.cfc).toEqual({ version: 1 });
+
+      const at = executed(await run({ ok: true, reads: reads(512) }).output);
+      expect(at.entry?.status).toBe("admitted");
+      expect(at.cfc.reads).toHaveLength(512);
+    });
+
+    it("admits a read at every limit Loom states, and leaves out an answer whose read is larger than one observation records", async () => {
+      // Loom bounds a read's reference at 1,000 characters, its title at
+      // 3,000 and its pages at 1,000; multibyte text and long page numbers
+      // take the serialized read past 16 KiB.
+      const atLimits = {
+        ...readOf("gmail:" + "é".repeat(994), "r".repeat(200), [OWNER], {
+          title: "\u{1F600}".repeat(1500),
+          at: "2".repeat(100),
+          provisional: ["gmail"],
+        }),
+        coverage: {
+          kind: "body",
+          pages: Array.from({ length: 1000 }, (_, n) => 1_000_000_000 + n),
+        },
+      };
+      expect(new TextEncoder().encode(JSON.stringify(atLimits)).length)
+        .toBeGreaterThan(16_384);
+      const admitted = executed(
+        await run({ ok: true, reads: [atLimits] }).output,
+      );
+      expect(admitted.entry?.status).toBe("admitted");
+      expect(admitted.cfc.reads).toEqual([atLimits]);
+
+      const oversized = executed(
+        await run({
+          ok: true,
+          reads: [readOf("gmail:thread-a", "r", [OWNER], {
+            title: "x".repeat(HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES),
+          })],
+        }).output,
+      );
+      expect(oversized.entry).toBeUndefined();
+      expect(oversized.truncated).toBe(true);
+      expect(oversized.hint).toContain(
+        `each at most ${HARNESS_CFC_MODEL_CONTEXT_READ_MAX_BYTES} bytes`,
+      );
+      expect(oversized.cfc).toEqual({ version: 1 });
+    });
+
+    it("bounds a batch's reads together, leaving out the answer that would pass the bound", async () => {
+      const reads = Array.from(
+        { length: 300 },
+        (_, n) => readOf(`gmail:thread-${n}`, "r", [OWNER]),
+      );
+      const { context } = contextWith({
+        answer: () => Response.json({ ok: true, reads }),
+      });
+      const output = batched(
+        await runCommandTool.invoke(context, {
+          calls: [
+            { command: "people-discovery.dossier", args: { entity_id: "a" } },
+            { command: "people-discovery.dossier", args: { entity_id: "b" } },
+          ],
+        }),
+      );
+      const [first, second] = output.results.map(executed);
+      expect(first.entry?.status).toBe("admitted");
+      expect(second.entry).toBeUndefined();
+      expect(output.cfc.reads).toEqual(reads);
+    });
+
+    it("joins a batch's reads in the calls' order", async () => {
+      const a = readOf("gmail:thread-a", "rev-a", [OWNER]);
+      const b = readOf("health:visit-b", "rev-b", [HEALTH]);
+      const { context } = contextWith({
+        answer: (call) =>
+          Response.json(
+            (call as { args?: { entity_id?: string } }).args?.entity_id ===
+                "a"
+              ? { ok: true, reads: [a], padding: "x".repeat(200) }
+              : (call as { args?: { entity_id?: string } }).args?.entity_id ===
+                  "b"
+              ? { ok: true, reads: [b] }
+              : { ok: true },
+          ),
+      });
+      const output = batched(
+        await runCommandTool.invoke(context, {
+          calls: [
+            { command: "people-discovery.dossier", args: { entity_id: "a" } },
+            { command: "people-discovery.dossier", args: { entity_id: "c" } },
+            { command: "people-discovery.dossier", args: { entity_id: "b" } },
+          ],
+        }),
+      );
+      expect(output.cfc).toEqual({
+        version: 1,
+        observedLabel: { confidentiality: [OWNER, HEALTH] },
+        reads: [a, b],
+      });
+    });
+
+    it("shows the model an `unlabelled-read` refusal as a refusal naming the stores, with guidance", async () => {
+      const refusal = {
+        ok: false,
+        id: "preparation.calendar",
+        code: "unlabelled-read",
+        stores: ["item"],
+        error:
+          "preparation.calendar read rows from a store that carries no label (item); the answer is not sent without one",
+        reads: [],
+      };
+      const output = executed(
+        await run(refusal, { queryLabel: [OWNER] }).output,
+      );
+      expect(output.outcome).toMatchObject({
+        ok: false,
+        code: "unlabelled-read",
+      });
+      expect(output.outcome).not.toHaveProperty("hostCode");
+      expect(output.hint).toContain("stores that carry no label");
+      expect(output.entry).toMatchObject({
+        status: "admitted",
+        value: { stores: ["item"], code: "unlabelled-read" },
+      });
+
+      const other = executed(
+        await run({ ok: false, code: "not-found", reads: [] }).output,
+      );
+      expect(other.hint).toBeUndefined();
+    });
+  });
+
   describe("runCommandTool.effectClassOf()", () => {
     const effectOf = (
       input: Record<string, unknown>,
@@ -1864,6 +2215,35 @@ describe("loom-commands tools", () => {
           "call-1",
         ),
       ).not.toHaveProperty("truncated");
+    });
+
+    it("carries the reads an answer recorded, and refuses a result whose recorded reads are not reads", () => {
+      const read = readOf("gmail:thread-a", "rev-a", [OWNER]);
+      expect(
+        loomCommandModelContextObservation(
+          {
+            status: "executed",
+            truncated: false,
+            cfc: { version: 1, reads: [read] },
+          },
+          resultRef,
+          "call-1",
+        ),
+      ).toEqual({
+        toolCallId: "call-1",
+        toolId: "run_command",
+        outputId: resultRef.outputId,
+        channels: ["output"],
+        label: { confidentiality: [] },
+        reads: [read],
+      });
+      expect(() =>
+        loomCommandModelContextObservation(
+          { status: "executed", cfc: { version: 1, reads: [{ ref: "x" }] } },
+          resultRef,
+          "call-1",
+        )
+      ).toThrow(TypeError);
     });
 
     it("returns `undefined` for a withheld answer, an undelivered command, or a non-object", () => {
@@ -2082,6 +2462,203 @@ describe("loom-commands tools", () => {
       }
     });
 
+    /**
+     * Has the model call `run_command` once per input, each in its own turn,
+     * with the host answering each posted call through `answer`, then
+     * finish. Returns the run's result and each request sent to the model.
+     */
+    const runCalls = async (
+      inputs: RunCommandInput[],
+      answer: (call: { args?: Record<string, unknown> }) => unknown,
+    ) => {
+      const { engine } = engineWith("{}");
+      answers = {
+        ...answers,
+        run: (body) =>
+          Response.json(answer(body as { args?: Record<string, unknown> })),
+      };
+      const payloads = [
+        ...inputs.map((input, index) => ({
+          choices: [{
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "",
+              tool_calls: [{
+                id: `run-${index + 1}`,
+                type: "function",
+                function: {
+                  name: "run_command",
+                  arguments: JSON.stringify(input),
+                },
+              }],
+            },
+          }],
+        })),
+        {
+          choices: [{
+            index: 0,
+            message: { role: "assistant", content: "Done" },
+          }],
+        },
+      ];
+      let turn = 0;
+      const requests: string[] = [];
+      const result = await new CfHarnessPromptLoop({
+        engine,
+        apiKey: "synthetic-test-key",
+        model: "gpt-5.4",
+        allowedToolIds: ["run_command"],
+        fetchFn: (_url, init) => {
+          requests.push(String(init?.body ?? ""));
+          return Promise.resolve(
+            new Response(
+              JSON.stringify(
+                responsesBodyFromChatFixture(payloads[turn++], init?.body),
+              ),
+              { status: 200 },
+            ),
+          );
+        },
+      }).runPrompt({
+        prompt: "Gather what is known about Ada",
+        promptSlotBinding: directPromptSlotBindingFor("loom-commands"),
+      });
+      return { engine, result, requests };
+    };
+
+    /** The JSON the model was shown for each tool result, in order. */
+    const shownResults = (
+      result: Awaited<ReturnType<typeof runCalls>>["result"],
+    ) =>
+      result.transcript.flatMap((message) =>
+        message.role === "tool"
+          ? [JSON.parse((message as { content: string }).content)]
+          : []
+      );
+
+    it("records one observation per answer carrying the reads it declared, numbered in order, and shows the model none of them", async () => {
+      // The public read comes first: the second call's arguments carry what
+      // the run observed by then, and its answer takes their label.
+      const page = readOf("web:https://example.com/only-in-reads", null, []);
+      const mail = readOf("gmail:thread-only-in-reads", "rev-a", [OWNER], {
+        title: "Title only in reads",
+      });
+      const chart = readOf("health:visit-only-in-reads", "rev-b", [HEALTH]);
+      const { engine, result, requests } = await runCalls(
+        [
+          { command: "people-discovery.dossier", args: { entity_id: "a" } },
+          { command: "people-discovery.dossier", args: { entity_id: "b" } },
+        ],
+        (call) =>
+          call.args?.entity_id === "a"
+            ? { ok: true, records: 1, reads: [page] }
+            : { ok: true, records: 2, reads: [mail, chart] },
+      );
+
+      const observations = engine.getRunState().cfcModelContext?.observations;
+      expect(
+        observations?.map((observation) => ({
+          sequence: observation.sequence,
+          toolCallId: observation.toolCallId,
+          label: observation.label,
+          reads: observation.reads?.map((read) => [read.ref, read.revision]),
+        })),
+      ).toEqual([{
+        sequence: 1,
+        toolCallId: "run-1",
+        label: { confidentiality: [] },
+        reads: [["web:https://example.com/only-in-reads", null]],
+      }, {
+        sequence: 2,
+        toolCallId: "run-2",
+        label: { confidentiality: [OWNER, HEALTH] },
+        reads: [
+          ["gmail:thread-only-in-reads", "rev-a"],
+          ["health:visit-only-in-reads", "rev-b"],
+        ],
+      }]);
+      expect(observations?.[1].reads).toEqual([mail, chart]);
+      expect(shownResults(result).map((shown) => shown.entry.value)).toEqual([
+        { ok: true, records: 1 },
+        { ok: true, records: 2 },
+      ]);
+      for (const request of requests) {
+        expect(request).not.toContain("only-in-reads");
+        expect(request).not.toContain("Title only in reads");
+      }
+    });
+
+    it("leaves no observation for an answer that declares no reads and has no confidentiality", async () => {
+      const { engine, result } = await runCalls(
+        [{ command: "people-discovery.dossier", args: { entity_id: "a" } }],
+        () => ({ ok: true, records: 0, reads: [] }),
+      );
+
+      expect(shownResults(result)[0]).toMatchObject({
+        status: "executed",
+        entry: { status: "admitted", value: { ok: true, records: 0 } },
+      });
+      expect(engine.getRunState().cfcModelContext).toBeUndefined();
+    });
+
+    it("shows the model an answer with no `reads` key as before, and records no reads for it", async () => {
+      const { engine, result } = await runCalls(
+        [{ command: "people-discovery.dossier", args: { entity_id: "a" } }],
+        () => ({ ok: true, records: 3, ifc: { confidentiality: [OWNER] } }),
+      );
+
+      const [shown] = shownResults(result);
+      expect(Object.keys(shown).sort()).toEqual(
+        ["entry", "notice", "outcome", "outputId", "status", "truncated"],
+      );
+      expect(shown).toMatchObject({
+        status: "executed",
+        notice: LOOM_COMMAND_UNTRUSTED_NOTICE,
+        outcome: {
+          ok: true,
+          bodyBytes: JSON.stringify({
+            ok: true,
+            records: 3,
+            ifc: { confidentiality: [OWNER] },
+          }).length,
+        },
+        entry: {
+          status: "admitted",
+          labelSource: "row",
+          value: { ok: true, records: 3 },
+        },
+        truncated: false,
+      });
+      expect(Object.keys(shown.entry).sort()).toEqual(
+        ["handle", "label", "labelSource", "status", "value"],
+      );
+      const observations = engine.getRunState().cfcModelContext?.observations;
+      expect(observations).toHaveLength(1);
+      expect(observations?.[0]).not.toHaveProperty("reads");
+    });
+
+    it("shows the model an `unlabelled-read` refusal as a tool result it can act on", async () => {
+      const { result } = await runCalls(
+        [{ command: "people-discovery.dossier", args: { entity_id: "a" } }],
+        () => ({
+          ok: false,
+          id: "people-discovery.dossier",
+          code: "unlabelled-read",
+          stores: ["item"],
+          error: "read rows from a store that carries no label (item)",
+          reads: [],
+        }),
+      );
+
+      expect(shownResults(result)[0]).toMatchObject({
+        status: "executed",
+        outcome: { ok: false, code: "unlabelled-read" },
+        hint: expect.stringContaining("stores that carry no label"),
+        entry: { status: "admitted", value: { stores: ["item"] } },
+      });
+    });
+
     it("shows the model a batch's answers without their labels, and records one observation joining them", async () => {
       const { engine } = engineWith(JSON.stringify({
         ok: true,
@@ -2211,7 +2788,12 @@ describe("loom-commands tools", () => {
           method: "POST",
           path: "/command",
           runId: "job-1",
-          body: { id: "loom.compose", args: {}, actor: "agent:agent-runner" },
+          body: {
+            id: "loom.compose",
+            args: {},
+            actor: "agent:agent-runner",
+            reads: true,
+          },
         },
       ]);
       const toolMessage = result.transcript.find((message) =>
@@ -2237,6 +2819,7 @@ describe("loom-commands tools", () => {
         id: "loom.compose",
         args: forged,
         actor: "agent:agent-runner",
+        reads: true,
       });
     });
 
@@ -2262,6 +2845,7 @@ describe("loom-commands tools", () => {
         args: { section: "a" },
         context: { loom_id: "loom-0123456789abcdef", expected_version: 2 },
         actor: "agent:agent-runner",
+        reads: true,
       };
       for (const input of [call, { calls: [call] } as RunCommandInput]) {
         const { context, calls } = contextWith();
