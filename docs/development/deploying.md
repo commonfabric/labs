@@ -67,11 +67,14 @@ Successful verification uploads `receipt.json` in the GitHub artifact
 `estuary-deployment-<run_id>-<run_attempt>`. It records `repository`,
 `workflow_sha`, `run_id`, `run_attempt`, `verify_only`, `labs_sha`,
 `verified_at`, `capacity`, `expected_workers`, `workers`, and `https`.
-`capacity` is the layout the host recorded, with `api` and `storage`. Each
-worker has `host`, `port`, and `git_sha`; `https` has `url` and `git_sha`.
-The receipt is uploaded only after its layout has been checked against the
-supported ones and the complete worker set for that layout and the HTTPS
-result have been validated.
+`capacity` is the layout the workers were checked against, with `api` and
+`storage`: the one in the host's `toolshed-capacity.json`, or 5 API and 16
+storage instances when the host has no such file. The receipt does not say
+which, so a `capacity` of 5 and 16 does not show that the host recorded a
+layout. Each worker has `host`, `port`, and `git_sha`; `https` has `url` and
+`git_sha`. The receipt is uploaded only after its layout has been checked
+against the supported ones and the complete worker set for that layout and the
+HTTPS result have been validated.
 
 ## Coordinated Rapids releases
 
