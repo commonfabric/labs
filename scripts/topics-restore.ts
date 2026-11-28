@@ -31,8 +31,9 @@
  *
  * Those wiring links are `STRUCTURAL_LINK_SOURCES`, which maps each one to
  * the board path it points at: `mentionable` to the board's `mentionable`
- * index, `boardCrossrefs` to its `crossrefs`, `boardCrossrefIndex` to its
- * `crossrefIndex`, and `boardNames` to its `namesTable`. A link-valued field
+ * index, `board` to its `board` collection, `boardCrossrefs` to its
+ * `crossrefs`, `boardCrossrefIndex` to its `crossrefIndex`, and `boardNames`
+ * to its `namesTable`. A link-valued field
  * absent from that map stops the restore rather than being guessed at, so a
  * wiring input added to the topic pattern announces itself here. The board is
  * asked which of those paths it publishes before anything is applied, because
@@ -72,6 +73,7 @@ import {
   declaredRetirableLinks,
   deepEqual,
   isAbsentPathError,
+  linkedInputFields,
   normalizeFid,
   PRESERVED_FIELDS,
   publishedBoardSources,
@@ -331,17 +333,13 @@ for (const field of Object.keys(restoreDoc)) {
     console.log(`${field}: restored`);
   }
 }
+// One read of the whole input, which shows each link as stored; see
+// `linkedInputFields()` for why a read of the field cannot.
+const linkedAfter = structural.length === 0
+  ? new Set<string>()
+  : await linkedInputFields(addr);
 for (const field of structural) {
-  const after = await cfJson<unknown>([
-    "cell",
-    "get",
-    "-q",
-    ...addr,
-    "--input",
-    "--select",
-    `${field}@`,
-  ]).catch(() => undefined);
-  if (after === undefined) {
+  if (!linkedAfter.has(field)) {
     console.error(`${field}: board link NOT re-established`);
     failed++;
   } else {
