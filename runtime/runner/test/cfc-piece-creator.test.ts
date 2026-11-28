@@ -19,12 +19,11 @@ import {
 
 import type { Cell } from "../src/cell.ts";
 import { runtimeWritePolicyAuthorization } from "../src/cfc/types.ts";
-import { stampWaveRunContext } from "../src/executor/wave.ts";
+import { ExecutorHost } from "../src/executor/host.ts";
 import { getMetaLink, parseLink } from "../src/link-utils.ts";
 import { rawMetaWriteAuthorization } from "../src/meta-seam.ts";
 import type { RunnerRunOptions } from "../src/runner.ts";
 import { Runtime } from "../src/runtime.ts";
-import { setCfcTrustSnapshot } from "../src/storage/extended-storage-transaction.ts";
 import type { IExtendedStorageTransaction } from "../src/storage/interface.ts";
 import {
   EmulatedStorageManager,
@@ -52,6 +51,7 @@ describe("cfc-piece-creator", () => {
   let openTxs: IExtendedStorageTransaction[];
   let client: Runtime;
   let serving: Runtime;
+  let host: ExecutorHost | undefined;
   let pieces = 0;
 
   /** A runtime on the shared server, closed when the test ends. */
@@ -135,21 +135,55 @@ describe("cfc-piece-creator", () => {
     return fresh.getMetaRaw("creator");
   };
 
-  /** A serving transaction stamped as a handler run `actor` invoked. */
-  const servedHandlerTx = (actor?: Identity): IExtendedStorageTransaction => {
-    const tx = edit(serving);
-    stampWaveRunContext(tx, {
-      actionId: "handler/piece-creator",
-      kind: "event-handler",
-      eventId: "event-1",
-      ...(actor !== undefined
-        ? { acting: { user: actor.did(), session: `${actor.did()}-session` } }
-        : {}),
+  /**
+   * Runs `body` on the serving runtime of `space` as a step of a wave, in a
+   * transaction stamped as a handler run `actor` invoked, and resolves with
+   * what `body` returns once the wave has committed. A serving runtime's
+   * writes reach the store as the wave's `derived` commit, as in production.
+   */
+  const servedHandlerRun = <T>(
+    space: MemorySpace,
+    actor: Identity | undefined,
+    body: (runtime: Runtime, tx: IExtendedStorageTransaction) => Promise<T>,
+  ): Promise<T> => {
+    host ??= new ExecutorHost({
+      server,
+      serviceIdentity: service.did(),
+      createRuntime: () => {
+        const storageManager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://fabric.example/"),
+          storageManager,
+          servingPosture: true,
+          experimental: { serverExecution: true, pieceCreatorRecord: true },
+        });
+        return Promise.resolve({
+          runtime,
+          dispose: async () => {
+            await runtime.dispose();
+            await storageManager.close();
+          },
+        });
+      },
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
     });
-    if (actor !== undefined) {
-      setCfcTrustSnapshot(tx, serving.trustSnapshotForPrincipal(actor.did()));
-    }
-    return tx;
+    return host.runLifecycleVerb(space, {
+      name: "piece-creator",
+      run: async (runtime) => {
+        const tx = runtime.edit();
+        runtime.stampServerRun(tx, {
+          actionId: "handler/piece-creator",
+          kind: "event-handler",
+          eventId: "event-1",
+          ...(actor !== undefined ? { acting: { user: actor.did() } } : {}),
+        });
+        const outcome = await body(runtime, tx);
+        expect((await tx.commit().settled).error).toBeUndefined();
+        return outcome;
+      },
+    });
   };
 
   beforeEach(() => {
@@ -162,6 +196,8 @@ describe("cfc-piece-creator", () => {
   });
 
   afterEach(async () => {
+    await host?.close();
+    host = undefined;
     for (const tx of openTxs) {
       if (tx.status().status === "ready") tx.abort(new Error("test-only"));
     }
@@ -202,9 +238,11 @@ describe("cfc-piece-creator", () => {
   });
 
   it("records the run's actor on a piece a served handler run creates", async () => {
-    const tx = servedHandlerTx(bob);
-    const result = await createPiece(serving, service.did(), { tx });
-    expect((await tx.commit().settled).error).toBeUndefined();
+    const result = await servedHandlerRun(
+      service.did(),
+      bob,
+      (runtime, tx) => createPiece(runtime, service.did(), { tx }),
+    );
 
     expect(await storedCreator(result)).toBe(bob.did());
   });
@@ -215,13 +253,41 @@ describe("cfc-piece-creator", () => {
     // parent's code made, so it is Alice's.
 
     const parent = await createPiece(client, alice.did());
-    await serving.getCellFromLink(parent.getAsNormalizedFullLink()).sync();
-    const tx = servedHandlerTx(bob);
-    const child = await createPiece(serving, alice.did(), {
-      tx,
+    const child = await servedHandlerRun(
+      alice.did(),
+      bob,
+      async (runtime, tx) => {
+        await runtime.getCellFromLink(parent.getAsNormalizedFullLink()).sync();
+        return createPiece(runtime, alice.did(), {
+          tx,
+          run: { parentPieceRootId: parent.getAsNormalizedFullLink().id },
+        });
+      },
+    );
+
+    expect(await storedCreator(child)).toBe(alice.did());
+  });
+
+  it("records no creator on a child another principal's client instantiates of a piece it did not create", async () => {
+    // The store admits a session's record only when it names the session's
+    // own principal, so bob's client leaves the child of alice's piece
+    // without one rather than have its commit refused.
+
+    const parent = await createPiece(client, alice.did());
+    const member = connect(bob);
+    await member.getCellFromLink(parent.getAsNormalizedFullLink()).sync();
+    const child = await createPiece(member, alice.did(), {
       run: { parentPieceRootId: parent.getAsNormalizedFullLink().id },
     });
-    expect((await tx.commit().settled).error).toBeUndefined();
+
+    expect(await storedCreator(child)).toBeUndefined();
+  });
+
+  it("records the parent's creator on a child its creator's own client instantiates", async () => {
+    const parent = await createPiece(client, alice.did());
+    const child = await createPiece(client, alice.did(), {
+      run: { parentPieceRootId: parent.getAsNormalizedFullLink().id },
+    });
 
     expect(await storedCreator(child)).toBe(alice.did());
   });
@@ -288,9 +354,11 @@ export default pattern<
   });
 
   it("records nothing for a served run that acts for no one", async () => {
-    const tx = servedHandlerTx();
-    const result = await createPiece(serving, service.did(), { tx });
-    expect((await tx.commit().settled).error).toBeUndefined();
+    const result = await servedHandlerRun(
+      service.did(),
+      undefined,
+      (runtime, tx) => createPiece(runtime, service.did(), { tx }),
+    );
 
     expect(await storedCreator(result)).toBeUndefined();
   });

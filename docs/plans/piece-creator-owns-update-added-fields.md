@@ -197,15 +197,32 @@ decided by how the piece came to be:
   demanded. The record is not written, and the admission below refuses a
   record that names the service.
 
+These are the principals a serving runtime records, since its writes reach
+the store as the serving loop's own `derived` commit, which the store does not
+judge. A runtime on a client records the principal a rule above names only
+when that is its own identity, and none otherwise (logging
+`piece-creator-record-skipped`): the store admits a session's record only when
+it names a principal the session authenticated as, its key or the root issuer
+of the proof chain it presented (`runtime/memory/v2/cfc-creator-record.ts`).
+So a client records its own creations, and a child of its own piece, but not
+a child of another principal's piece.
+
 ### Admission at commit preparation
 
 A write to `creator` is admitted only when the transaction creates the result
 document, meaning the document holds no stored value and no stored envelope,
 and the write carries the runtime's write-policy authorization. The value
 must be a well-formed DID and must not be the serving runtime's identity.
-Every other write to the field is refused. This is what makes the record
-worth more than a space grant: a client that can write the space can still
-not rename a creator. The gate for runtime-minted integrity atoms
+Every other write to the field is refused. That binds only a writer going
+through the runtime: a modified client with a space grant can skip commit
+preparation and hand the store any record. What keeps such a client from
+naming or renaming a creator is the store's own admission
+(`runtime/memory/v2/cfc-creator-record.ts`): a session's commit may write a
+record only where none is stored and only naming a principal the session
+authenticated as, and may not change or remove a stored one except by
+deleting the document. Commit preparation decides which principal an honest
+runtime records; the store decides which records any session may store. The
+gate for runtime-minted integrity atoms
 (`gateRuntimeMintedIntegrity`, the `cf-compiled-by` attestation) is the
 precedent for a fact only the runtime asserts.
 
@@ -251,7 +268,10 @@ one later, under a second admission that applies only where the field is
 absent: the principal the piece's existing owner-protected fields unanimously
 name; for a space root, the owner `resolveSpaceOwner` returns; otherwise
 nothing. The write happens on the piece's next source transition, in the same
-transaction, so the field it installs can bind. A piece that offers no
+transaction, so the field it installs can bind. As above, a serving runtime
+records the evidenced principal, and a runtime on a client records it only
+when it is the client's own identity; otherwise that transition records none,
+and the next one that finds the field absent may still write it. A piece that offers no
 evidence stays as it is and its update-added fields stay first-writer-bound,
 which is the current behavior and not a regression.
 

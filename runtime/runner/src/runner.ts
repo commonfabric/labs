@@ -5831,7 +5831,17 @@ export class Runner {
     // creators records the one its owner-protected fields give evidence of,
     // so the field the transition installs can bind them. A piece that
     // records a creator keeps it, a pointer installed again over the record
-    // included.
+    // included. A client records only its own identity: the store admits a
+    // session's record only when it names the principal the session
+    // authenticated (`cfc-creator-record.ts` in the memory package), so a
+    // child of another principal's piece, or a legacy piece whose evidence
+    // names another principal, records none there. So does a piece a
+    // client of a service identity, such as a toolshed's own non-serving
+    // runtime, creates for a user, and one a key acting under another
+    // principal's proof chain creates for that principal. Each fails closed
+    // for reclassification, and is logged, since nothing else shows it: only
+    // a serving runtime, whose writes reach the store as the wave's `derived`
+    // commit, records a creator other than its own identity.
     if (
       !PatternManager.isKeylessPatternIdentity(entryRef.identity) &&
       this.#runtime.experimental.pieceCreatorRecord === true &&
@@ -5843,7 +5853,17 @@ export class Runner {
       const creator = previousIdentityRef === undefined
         ? this.#pieceCreatorFor(tx, resultCell, validationOptions)
         : this.#legacyPieceCreator(tx, resultCell);
-      if (creator !== undefined) {
+      const clientIdentity = tx.getCfcState().clientIdentity;
+      if (
+        creator !== undefined && clientIdentity !== undefined &&
+        creator !== clientIdentity
+      ) {
+        logger.warn("piece-creator-record-skipped", () => [
+          `piece ${resultCell.getAsNormalizedFullLink().id} records no ` +
+          `creator: it would name ${creator}, and this client's commit ` +
+          `may record only its own identity, ${clientIdentity}`,
+        ]);
+      } else if (creator !== undefined) {
         resultCell.withTx(tx).setMetaRaw(
           "creator",
           creator,

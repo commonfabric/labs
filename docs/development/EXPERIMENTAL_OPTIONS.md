@@ -43,7 +43,7 @@ was last checked against the code.
 | [`localFold`](#localfold) | `EXPERIMENTAL_LOCAL_FOLD` env / shell build define, or `RuntimeOptions.experimental` | off | Robin McCollum (2026-10-14) | decide between the fold and reverting a refused derived write, then delete the flag and the losing arm | implemented, off by default |
 | [`pieceCreatorRecord`](#piececreatorrecord) | `EXPERIMENTAL_PIECE_CREATOR_RECORD` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | off | Bernhard Seefeld (2026-11-01) | graduate once the ruling that binds an update-added owner field to the piece's creator merges, then delete the flag | implemented, off by default |
 | [`cfcCommittedSubjectCandidates`](#cfccommittedsubjectcandidates) | `EXPERIMENTAL_CFC_COMMITTED_SUBJECT_CANDIDATES` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment | on | alex-claude (2026-11-26) | graduate once [specs pull request 110](https://github.com/commonfabric/specs/pull/110) merges and the kernel is re-derived at the reconciled pin, then delete the flag | implemented, on by default |
-| [`cfcPatternReclassification`](#cfcpatternreclassification) | `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment; has effect only beside `pieceCreatorRecord` | off | alex-claude (2026-11-25) | graduate once the specs rulings on a creator's reclassification and on the creator record merge, the store admits the creator record itself, only the creator may change a piece's source, and documents created before the flag can be rebuilt, then delete the flag | implemented, off by default, experiment only |
+| [`cfcPatternReclassification`](#cfcpatternreclassification) | `EXPERIMENTAL_CFC_PATTERN_RECLASSIFICATION` env, or `RuntimeOptions.experimental`; the shell adopts it from its deployment; has effect only beside `pieceCreatorRecord` | off | alex-claude (2026-11-25) | graduate once the specs rulings on a creator's reclassification and on the creator record merge, only the creator may change a piece's source, a legacy piece's creator record needs its principal's act, and documents created before the flag can be rebuilt, then delete the flag | implemented, off by default, experiment only |
 | [`instanceNames`](#instancenames) | `RuntimeOptions.experimental` only (mapped `null` in the canonical env registry); the shell adopts it from its deployment | off | Dan Bornstein (2026-10-23) | make it reachable on servers, turn deployments' posture on, turn it on, then delete the flag and the positional compile of `const`-bound instances | implemented, off by default, with a runtime whose naming mode differs from its space's refused that space; must not turn on before deployments' posture names instances |
 | [`connectionAuth`](#connectionauth) | Memory hello capability | advertised by a host that verifies `connection.auth`; toolshed does under `sharedMemoryConnection` | Bernhard Seefeld (2026-09-29) | retain as protocol negotiation until signed `session.open` retires | optional capability |
 | [`sessionOpenProofs`](#sessionopenproofs) | Memory hello capability; toolshed withholds it under `MEMORY_ACL_DELEGATIONS=false` or `0` | on | Robin McCollum (2026-10-26) | retain as protocol negotiation while deployments may contain servers that admit no chain | implemented end to end and on by default; a profile space owns itself and its owner's runtime presents the chain Home records |
@@ -1075,8 +1075,22 @@ holds the measurements and the conditions for revisiting.
   only in the transaction that installs the piece's first pattern pointer, or
   in a source transition that finds the field absent, with the runtime's own
   mark vouching for the value either way, and refuses every other write to
-  it, whatever grant the writer holds. With the flag off, no record is
-  written and a stored one is left as it is. The record exists so that a
+  it, whatever grant the writer holds. The memory store judges the record
+  too, whatever the flag: a session's commit may write one only where none is
+  stored and only naming a principal the session authenticated as (its key,
+  or the root issuer of the proof chain it presented), and may not
+  change or remove a stored one except by deleting the document
+  ([`runtime/memory/v2/cfc-creator-record.ts`](../../runtime/memory/v2/cfc-creator-record.ts)).
+  Every session is judged alike, one of the deployment's own service or
+  delegating identity included; only the commits the server makes itself are
+  not, and a serving runtime's writes reach the store as its wave's `derived`
+  commit. So a runtime on a client records only its own identity, and logs
+  `piece-creator-record-skipped` where it records none: a child it
+  instantiates under another principal's piece, and a first source transition
+  it makes of a legacy piece whose evidence names another principal. The
+  store's check is a stopgap against a forged record, not what makes the
+  record trustworthy (`cfcPatternReclassification` below lists what remains). With the flag off, no record is written and a stored one is left as it
+  is. The record exists so that a
   field a later release adds with `ownerPrincipal: CurrentPrincipal` is bound
   to the piece's creator rather than to whoever first writes it; that binding
   follows the record wherever one is stored and is gated by nothing else, so
@@ -1086,16 +1100,21 @@ holds the measurements and the conditions for revisiting.
   `RuntimeOptions.experimental.pieceCreatorRecord: true` to record creators.
   The record and its admission rule are spec text under the CFC
   correspondence procedure, so they land behind `SPEC-PENDING` markers in
-  `runtime/runner/src/cfc/prepare.ts` and
+  `runtime/runner/src/cfc/prepare.ts`,
   `runtime/runner/src/cfc/piece-creator-evidence.ts` naming the ruling,
-  [specs pull request 87](https://github.com/commonfabric/specs/pull/87). Once
-  that ruling merges, the record becomes unconditional and the flag is
-  deleted.
+  [specs pull request 87](https://github.com/commonfabric/specs/pull/87), and
+  in `runtime/memory/v2/cfc-creator-record.ts` naming the store's ruling
+  stacked on it. The
+  store's admission refuses more than that ruling does and stores nothing new,
+  so it runs unconditionally; the ruling that states it is
+  [specs pull request 112](https://github.com/commonfabric/specs/pull/112), stacked on pull request 87. Once those rulings merge, the record becomes unconditional
+  and the flag is deleted.
 - **Status on 2026-11-01.** Implemented and off. The record and the writes
   refused are covered by `runtime/runner/test/cfc-piece-creator.test.ts`, the
   binding and the legacy record by
   `runtime/runner/test/cfc-creator-owner-binding.test.ts`, and the plumbing by
-  `runtime/runner/test/experimental-options.test.ts`.
+  `runtime/runner/test/experimental-options.test.ts`. The store's admission
+  (2026-11-27) is covered by `runtime/memory/test/v2-cfc-creator-record.test.ts`.
 - **Path to removal.** Remove the env mapping, the runtime option and its
   authority and shell-source entries, the default, and the gate at the write
   site in `#setupInternal`; the meta field, the transaction mark and the
@@ -1181,18 +1200,20 @@ holds the measurements and the conditions for revisiting.
   semantic gap under the CFC correspondence procedure, and its deciding site
   in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker naming
   [specs pull request 111](https://github.com/commonfabric/specs/pull/111)
-  (SC-58). The flag must stay off in every
-  deployment until the store itself admits a `creator` record only when it
-  names the commit's authenticated actor: commit preparation alone checks the
-  record today, so a modified client could write a piece naming another
-  principal as its creator and release that principal's data. It must also
-  stay off until only the creator may change the source of a piece that
-  records one (otherwise a member with WRITE can repoint the piece and
-  release the creator's data), the creator-record ruling
+  (SC-58). The store admits a session's `creator` record only when it names
+  the principal the session authenticated (`pieceCreatorRecord` above), so a
+  modified client can no longer write a piece naming another principal as its
+  creator. The flag must stay off in every deployment until only the creator
+  may change the source of a piece that records one (otherwise a member with
+  WRITE can repoint the piece and release the creator's data), a legacy
+  piece's record needs an act of the principal it names rather than following
+  from evidence a member can arrange, the creator-record ruling
   ([specs pull request 87](https://github.com/commonfabric/specs/pull/87))
   lands, and documents created before the flag can be rebuilt, since their
   stored shape stays the creator's alone. The fixture's `PROPOSAL.md`, Risks,
-  lists these and the rest.
+  lists these and the rest, among them a `result` link that commit
+  preparation follows as written and a served child whose pattern another
+  member's data chose.
 - **Status on 2026-11-27.** Implemented and off. The substitution is covered
   by `runtime/runner/test/cfc-reclassify.test.ts`, the plumbing by
   `runtime/runner/test/experimental-options.test.ts`. With this flag and
@@ -1201,8 +1222,9 @@ holds the measurements and the conditions for revisiting.
   space sees it (README, finding 7, and
   `patterns/integration/share-space-reclassify-two-browsers.test.ts`). The
   conditions for turning it on are in that fixture's `PROPOSAL.md`, Risks.
-- **Path to removal.** Once both rulings merge, the store admits the record,
-  only the creator may change a piece's source, and documents created before
+- **Path to removal.** Once both rulings merge, only the creator may change a
+  piece's source, a legacy piece's record needs its principal's act, and
+  documents created before
   the flag can be rebuilt, remove the env mapping, the runtime option and its authority and
   shell-source entries, the default, and the transaction dial; the
   substitution in `prepare.ts` stays.

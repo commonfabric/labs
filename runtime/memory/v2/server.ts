@@ -8615,6 +8615,9 @@ export class Server {
                       // admission path — never read from the client payload
                       // (protocol.md §1).
                       commitClass: "authored",
+                      ...(session.capabilityPrincipal === undefined ? {} : {
+                        capabilityPrincipal: session.capabilityPrincipal,
+                      }),
                     });
                     // No commit other than an admitted deletion leaves a
                     // deletion tombstone, a patch in `off` mode included.

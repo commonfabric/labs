@@ -458,6 +458,21 @@ dials.
   scoped principal is unavailable. No foreign-space clause or unbound
   `User` clause is added. Full derived labels still persist and taint readers;
   no declaration or frozen existence label is released.
+- The memory store admits a session's piece creator record only when it names
+  the principal the session authenticated, and refuses a session's change or
+  removal of a stored one (`creatorRecordRefusal` in
+  `runtime/memory/v2/cfc-creator-record.ts`); only a commit the server makes
+  itself, which carries a serving runtime's writes, is not judged. It runs at every posture and refuses more than
+  [specs#87](https://github.com/commonfabric/specs/pull/87) does, so the store
+  side is fail-closed.
+- With the default-off `pieceCreatorRecord` on, a runtime on a client records
+  only its own identity, so a child it instantiates under another principal's
+  piece and a legacy piece whose evidence names another principal record
+  none, where #87 records the parent's creator or the evidence's principal.
+  This client side under-protects #87's owner binding: such a piece's
+  update-added owner fields bind their first writer, as a piece recording none
+  does under #87. For reclassification it is fail-closed. Both are a semantic
+  gap whose ruling is [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on #87.
 - Under strict, an authorized runtime-owned store with a live enrollment or
   an authenticated piece-setup claim admits eligible writer-fit misfits and
   records them only in the derived component.
