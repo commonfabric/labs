@@ -1,13 +1,12 @@
 import { isAbsolute, join, resolve } from "@std/path";
 
+/**
+ * Whether `path` is a regular file. Throws when it cannot be inspected,
+ * including when it does not exist.
+ */
 async function isRegularFile(path: string): Promise<boolean> {
-  try {
-    const info = await Deno.lstat(path);
-    return info.isFile && !info.isSymlink;
-  } catch (error) {
-    if (error instanceof Deno.errors.NotFound) return false;
-    throw error;
-  }
+  const info = await Deno.lstat(path);
+  return info.isFile && !info.isSymlink;
 }
 
 async function hasGitMarker(path: string): Promise<boolean> {

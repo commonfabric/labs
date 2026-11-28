@@ -397,6 +397,13 @@ describe("NodeRegistry", () => {
               walk(nodes, asked),
             ]);
           }
+          for (const root of roots) {
+            expect([step, root, nodes.hasNodesUnderDemandRoot(root)]).toEqual([
+              step,
+              root,
+              walk(nodes, [root]).length > 0,
+            ]);
+          }
         }
         // The sequence did each kind of step and the lookups found nodes, so
         // the comparison above was not of empty lists.

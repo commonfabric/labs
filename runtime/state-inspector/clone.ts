@@ -39,6 +39,7 @@ import type { MemorySpace } from "@commonfabric/memory/interface";
 import { createHasher } from "@commonfabric/content-hash";
 import { isDID } from "@commonfabric/identity/did";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
+import { canonicalPath } from "./canonical-path.ts";
 import { openSpace } from "./db.ts";
 import {
   contentFingerprint,
@@ -220,7 +221,7 @@ export async function createClone(
   const forbidden = await Promise.all(
     (options.forbiddenDirs ?? [])
       .filter((entry) => entry.trim() !== "")
-      .map(canonicalPath),
+      .map((entry) => canonicalPath(entry)),
   );
 
   assertSafeTarget(dir, source, forbidden);
@@ -817,42 +818,6 @@ async function hashFile(path: string): Promise<string> {
   using file = await Deno.open(path, { read: true });
   for await (const chunk of file.readable) hasher.update(chunk);
   return hasher.digest("base64url");
-}
-
-/**
- * An absolute, symlink-resolved form of `path` — even when it does not exist
- * yet.
- *
- * Both properties are load-bearing for the safety rails. A relative path can
- * never overlap an absolute live-store directory, so returning one verbatim
- * silently disarms `assertSafeTarget` — the clone lands inside the store the
- * rail was meant to protect, under a banner claiming it did not. And on macOS
- * `/tmp` is a symlink to `/private/tmp`, so two spellings of one directory must
- * canonicalize together or the comparison misses.
- *
- * `realPath` needs the path to exist, so for a target we are about to create we
- * resolve the nearest existing ancestor and re-append the rest.
- */
-async function canonicalPath(path: string): Promise<string> {
-  const absolute = Path.resolve(path);
-  const tail: string[] = [];
-  let current = absolute;
-  while (true) {
-    try {
-      const real = await Deno.realPath(current);
-      return tail.length === 0
-        ? real
-        : Path.join(real, ...tail.slice().reverse());
-    } catch (error) {
-      // Anything other than "not there yet" — a component that is a regular
-      // file, a permission problem — is a real error the caller must see.
-      if (!(error instanceof Deno.errors.NotFound)) throw error;
-      const parent = Path.dirname(current);
-      if (parent === current) return absolute; // reached the filesystem root
-      tail.push(Path.basename(current));
-      current = parent;
-    }
-  }
 }
 
 function isWithin(child: string, parent: string): boolean {

@@ -45,21 +45,6 @@ import {
 import { ANY_INSTANCE, sliceChain, SPACE_SLICE } from "./currency-keys.ts";
 import { type Engine, read, serverSeq } from "./engine.ts";
 
-/**
- * Whether two documents read from the store hold the same value. A stored
- * value can hold a link, a byte sequence or another special object, which
- * keeps its state out of its properties, so the comparison is the one that
- * decides those by content. Two documents it cannot decide are not the
- * same: a pair of maps or of sets, which it does not hash yet.
- */
-const sameDocument = (a: unknown, b: unknown): boolean => {
-  try {
-    return fabricAwareEqual(a, b);
-  } catch {
-    return false;
-  }
-};
-
 /** What the id of a document some computation derives begins with. */
 const COMPUTED_ID_PREFIX = "computed:";
 
@@ -1432,7 +1417,7 @@ const advance = (context: Context): CurrencyMarked[] => {
       const ref = { piece, slice };
       statements.deleteExpiry.run({ branch, slice, piece });
       const mark = markOf(context, ref);
-      if (mark === undefined || mark === 2) continue;
+      if (mark === 2) continue;
       setMark(context, ref, 2);
       seqs.set(refKey(ref), { ref, seq: head + 1 });
       if (mark === 0) becameMarked.push(ref);
@@ -1481,7 +1466,7 @@ const advance = (context: Context): CurrencyMarked[] => {
       const known = seqs.get(key);
       if (known === undefined || seq < known.seq) seqs.set(key, { ref, seq });
       const mark = markOf(context, ref);
-      if (mark === undefined || mark === 2) continue;
+      if (mark === 2) continue;
       setMark(context, ref, 2);
       if (mark === 0) becameMarked.push(ref);
     }
@@ -1831,13 +1816,16 @@ export const storeCurrencyRecords = (
      * Whether the instance holds another document than it did at `seq`. A
      * start derives every output of a piece afresh, those of a slice that
      * was current among them, so an instance written again as it stood is
-     * no sign that the stored value was stale.
+     * no sign that the stored value was stale. A stored value can hold a
+     * link, a byte sequence or another special object, which keeps its
+     * state out of its properties, so the comparison is the one that
+     * decides those by content.
      */
     const differs = (
       { id, scopeKey, seq }: CurrencyInstance & { seq: number },
     ): boolean =>
       headOf(id, scopeKey) > seq &&
-      !sameDocument(
+      !fabricAwareEqual(
         read(engine, { id, scopeKey: scopeKey as ScopeKey, seq }),
         read(engine, { id, scopeKey: scopeKey as ScopeKey }),
       );
@@ -2512,7 +2500,6 @@ export const applyCurrencyImports = (
       for (const { slice, piece, seq } of readers) {
         const ref = { piece, slice };
         const mark = markOf(context, ref);
-        if (mark === undefined) continue;
         if (seq < head) {
           if (mark === 2) continue;
           setMark(context, ref, 2);
@@ -2699,7 +2686,7 @@ export const forgetCurrencySource = (
       for (const { slice, piece } of readers) {
         const ref = { piece, slice };
         const mark = markOf(context, ref);
-        if (mark === undefined || mark === 2) continue;
+        if (mark === 2) continue;
         setMark(context, ref, 2);
         marked.set(refKey(ref), ref);
       }
@@ -2759,7 +2746,7 @@ export const forgetCurrencyImports = (
       for (const { slice, piece } of readers) {
         const ref = { piece, slice };
         const mark = markOf(context, ref);
-        if (mark === undefined || mark === 2) continue;
+        if (mark === 2) continue;
         setMark(context, ref, 2);
         marked.set(refKey(ref), ref);
       }

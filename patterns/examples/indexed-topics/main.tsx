@@ -44,14 +44,16 @@ interface TopicInput {
 }
 
 /**
- * What the board reads and calls of the topic a listing row selected. Only
- * the title is required of it: a topic's "mentioned by" is absent until
+ * What the board shows, reads and calls of the topic a listing row selected.
+ * Only the title is required of it: a topic's "mentioned by" is absent until
  * something asks for it, and a row whose reference did not satisfy its type
  * would drop out of the result that holds it.
  */
 export interface SelectedTopic {
+  [UI]?: VNode;
   title: string;
   mentionedBy?: Rows<MentioningTopic>;
+  rename?: Stream<{ title: string }>;
   mention?: Stream<{ topic: TopicRef }>;
 }
 
@@ -210,6 +212,7 @@ export default pattern<Record<string, never>, BoardOutput>(() => {
               </cf-button>
             ))}
           </cf-vstack>
+          <cf-vstack id="selected-topic">{selected}</cf-vstack>
         </cf-vstack>
       </cf-screen>
     ),

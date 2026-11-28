@@ -1613,6 +1613,31 @@ describe("piece schema compatibility", () => {
     ).not.toThrow();
   });
 
+  it("refuses a link whose reference chain never reaches a schema", () => {
+    const linked = (definitions: Record<string, JSONSchema>): JSONSchema => ({
+      type: "object",
+      properties: { x: { $ref: "#/$defs/A" } },
+      $defs: definitions,
+    });
+    const reader: JSONSchema = {
+      type: "object",
+      properties: { x: { type: "string" } },
+    };
+    const looping = linked({
+      A: { $ref: "#/$defs/B" },
+      B: { $ref: "#/$defs/A" },
+    });
+    expect(() => assertSchemaSubset(looping, reader, "link")).toThrow(
+      "link schema is not compatible: link.x: cannot resolve a local schema reference",
+    );
+
+    const ending = linked({
+      A: { $ref: "#/$defs/B" },
+      B: { type: "string" },
+    });
+    expect(() => assertSchemaSubset(ending, reader, "link")).not.toThrow();
+  });
+
   it("uses target defaults as link proofs only under default-stable ancestors", () => {
     const properties = {
       x: { type: "number" as const },
@@ -3317,6 +3342,48 @@ describe("piece schema compatibility", () => {
           path: "result.tick",
           reason: "existing result field was removed",
         }]);
+      });
+
+      it("refuses dropping an optional field whose reference resolves to no schema", () => {
+        // `ui`'s verb sits beside a reference whose chain loops back on
+        // itself, so there is no contract to follow the binding through.
+        // Without the reference, the same binding lets `ui` go.
+
+        const withUi = (ui: JSONSchema | undefined) =>
+          pattern(oldPattern.argumentSchema, {
+            type: "object",
+            properties: {
+              doubled: { type: "number" },
+              ...(ui === undefined ? {} : { ui }),
+            },
+            required: ["doubled"],
+            $defs: {
+              Loop: { $ref: "#/$defs/Back" },
+              Back: { $ref: "#/$defs/Loop" },
+            },
+          });
+        const candidate = withUi(undefined);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withUi({ $ref: "#/$defs/Loop", properties: { tick } }),
+              { ui: { tick: handlerStream } },
+            ),
+            candidate,
+          ),
+        ).toEqual([{
+          path: "result.ui",
+          reason: "existing result field was removed",
+        }]);
+        expect(
+          patternSchemaIncompatibilities(
+            bound(
+              withUi({ type: "object", properties: { tick } }),
+              { ui: { tick: handlerStream } },
+            ),
+            candidate,
+          ),
+        ).toEqual([]);
       });
     });
 
@@ -7197,6 +7264,188 @@ describe("piece schema compatibility", () => {
       }
       expect(message).toMatch(/value\.a: /);
       expect(message).not.toMatch(/value\.b/);
+    });
+  });
+
+  describe("result rules inside a union branch", () => {
+    // A union's branches are each proved against the previous union's
+    // branches, and the object rules a result field obeys at the top level
+    // decide whether a branch is still accepted.
+
+    const result = (branch: JSONSchema): Pattern =>
+      pattern(oldPattern.argumentSchema, {
+        anyOf: [branch, { type: "null" }],
+      });
+    const refused = [{
+      path: "result",
+      reason:
+        "a schema alternative accepted previously is not accepted by the candidate",
+    }];
+
+    it("refuses a branch whose required field stops being required", () => {
+      const previous = result({
+        type: "object",
+        properties: { a: { type: "number" } },
+        required: ["a"],
+      });
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({ type: "object", properties: { a: { type: "number" } } }),
+        ),
+      ).toEqual(refused);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({
+            type: "object",
+            properties: { a: { type: "number" } },
+            required: ["a"],
+          }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses a branch that drops a field and publishes another type under its name", () => {
+      const previous = result({
+        type: "object",
+        properties: { a: { type: "number" } },
+      });
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({ type: "object", additionalProperties: { type: "string" } }),
+        ),
+      ).toEqual(refused);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          result({ type: "object", additionalProperties: { type: "number" } }),
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses a branch naming a field its previous pattern property types otherwise", () => {
+      const previous = result({
+        type: "object",
+        patternProperties: { "^a$": { type: "number" } },
+      });
+      const naming = (type: "number" | "string") =>
+        result({
+          type: "object",
+          properties: { a: { type } },
+          additionalProperties: false,
+        });
+      expect(patternSchemaIncompatibilities(previous, naming("string")))
+        .toEqual(refused);
+      expect(patternSchemaIncompatibilities(previous, naming("number")))
+        .toEqual([]);
+    });
+
+    it("refuses a branch naming a field its previous additional properties reject", () => {
+      const candidate = result({
+        type: "object",
+        properties: { a: { type: "string" } },
+        additionalProperties: false,
+      });
+      expect(
+        patternSchemaIncompatibilities(
+          result({ type: "object", additionalProperties: false }),
+          candidate,
+        ),
+      ).toEqual(refused);
+      expect(
+        patternSchemaIncompatibilities(
+          result({ type: "object", additionalProperties: { type: "string" } }),
+          candidate,
+        ),
+      ).toEqual([]);
+    });
+
+    it("refuses an event branch that newly requires a field with no default", () => {
+      const verb = (field: JSONSchema, required: string[]) =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties: {
+            go: {
+              asCell: ["stream"],
+              anyOf: [
+                { type: "object", properties: { a: field }, required },
+                { type: "null" },
+              ],
+            },
+          },
+          required: ["go"],
+        });
+      const previous = verb({ type: "number" }, []);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          verb({ type: "number" }, ["a"]),
+        ),
+      ).toEqual([{
+        path: "result.go",
+        reason:
+          "a schema alternative accepted previously is not accepted by the candidate",
+      }]);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          verb({ type: "number", default: 0 }, ["a"]),
+        ),
+      ).toEqual([]);
+    });
+  });
+
+  describe("one issue per field", () => {
+    it("reports an event field the candidate requires but no longer names only as removed", () => {
+      const verb = (
+        properties: Record<string, JSONSchema>,
+        required: string[],
+      ) =>
+        pattern(oldPattern.argumentSchema, {
+          type: "object",
+          properties: {
+            go: { asCell: ["stream"], type: "object", properties, required },
+          },
+          required: ["go"],
+        });
+      const previous = verb({ a: { type: "number" } }, []);
+      expect(patternSchemaIncompatibilities(previous, verb({}, ["a"])))
+        .toEqual([{
+          path: "result.go.a",
+          reason: "existing result field was removed",
+        }]);
+      expect(
+        patternSchemaIncompatibilities(
+          previous,
+          verb({ a: { type: "number" } }, ["a"]),
+        ),
+      ).toEqual([{
+        path: "result.go.a",
+        reason: "newly required verb event field has no default",
+      }]);
+    });
+
+    it("reports an argument field once however many candidate patterns refuse it", () => {
+      const previous = pattern({
+        type: "object",
+        properties: { x: { type: "string" } },
+        additionalProperties: false,
+      }, oldPattern.resultSchema);
+      const candidate = (type: "boolean" | "number" | "string") =>
+        pattern({
+          type: "object",
+          patternProperties: { "^x$": { type }, "x": { type } },
+          additionalProperties: false,
+        }, oldPattern.resultSchema);
+      expect(patternSchemaIncompatibilities(previous, candidate("number")))
+        .toEqual([{
+          path: "argument.x",
+          reason: "type string is not accepted by the candidate schema",
+        }]);
+      expect(patternSchemaIncompatibilities(previous, candidate("string")))
+        .toEqual([]);
     });
   });
 });

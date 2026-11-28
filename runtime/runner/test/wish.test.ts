@@ -992,6 +992,80 @@ describe("wish built-in", () => {
       expect(data.type).toBe("mentionable");
     });
 
+    it("matches mentionables by the hashtags in their result schema", async () => {
+      const piecePattern = (description: string) =>
+        pattern(
+          () => ({ [NAME]: "Untitled", body: description }),
+          { type: "object", properties: {} },
+          {
+            type: "object",
+            description,
+            properties: {
+              [NAME]: { type: "string" },
+              body: { type: "string" },
+            },
+          },
+        );
+      const notebook = runtime.run(
+        tx,
+        piecePattern("A #notebook of notes"),
+        {},
+        runtime.getCell(
+          patternSpace.did(),
+          "schema-tag-notebook",
+          undefined,
+          tx,
+        ),
+      );
+      const recipe = runtime.run(
+        tx,
+        piecePattern("A #recipe for dinner"),
+        {},
+        runtime.getCell(patternSpace.did(), "schema-tag-recipe", undefined, tx),
+      );
+      const backlinksIndexCell = runtime.getCell(
+        patternSpace.did(),
+        "schema-tag-backlinks-index",
+        undefined,
+        tx,
+      );
+      backlinksIndexCell.set({ mentionable: [notebook, recipe] });
+      const defaultPatternCell = runtime.getCell(
+        patternSpace.did(),
+        "schema-tag-default-pattern",
+        undefined,
+        tx,
+      );
+      defaultPatternCell.set({ backlinksIndex: backlinksIndexCell });
+      runtime.getCell(patternSpace.did(), patternSpace.did(), undefined, tx)
+        .key("defaultPattern").set(defaultPatternCell);
+
+      const wishPattern = pattern(() => ({
+        notebook: wish({ query: "#notebook", scope: ["."] }),
+        recipe: wish({ query: "#recipe", scope: ["."] }),
+        missing: wish({ query: "#untitled-thing", scope: ["."] }),
+      }));
+      const result = runtime.run(
+        tx,
+        wishPattern,
+        {},
+        runtime.getCell(patternSpace.did(), "schema-tag-result", undefined, tx),
+      );
+      await tx.commit().settled;
+      tx = runtime.edit();
+      await result.pull();
+
+      const bodies = (key: string) =>
+        result.key(key).key("candidates").asSchema({
+          type: "array",
+          items: { type: "object", properties: { body: { type: "string" } } },
+        }).get().map((candidate) => candidate.body);
+      expect(bodies("notebook")).toEqual(["A #notebook of notes"]);
+      expect(bodies("recipe")).toEqual(["A #recipe for dinner"]);
+      expect(bodies("missing")).toEqual([]);
+      expect(result.key("missing").key("errorCode").get()).toBe("no-match");
+    });
+
     it('searches only favorites with scope: ["~"]', async () => {
       // Setup: Add favorites to home space (should be found)
       const homeSpaceCell = runtime.getHomeSpaceCell(tx);

@@ -558,9 +558,6 @@ function openEditor(annotation?: TapeAnnotation): void {
 }
 
 async function saveAnnotation(): Promise<void> {
-  if (!durationControlsReady()) {
-    throw new Error("The recording duration is still updating.");
-  }
   clearError();
   const duration = playbackDuration();
   const startSeconds = Number(startInput.value);
@@ -713,12 +710,12 @@ async function seekPlayback(seconds: number): Promise<void> {
 }
 
 async function rebuildAudioBuffer(
+  context: AudioContext,
   durationSeconds: number,
   transitionPositionSeconds: number,
   resumeIntent: boolean,
 ): Promise<void> {
-  if (!audioContext) throw new Error("The audio engine is not available.");
-  const buffer = await audioContext.decodeAudioData(
+  const buffer = await context.decodeAudioData(
     buildSyntheticWav(durationSeconds),
   );
   if (disposed) return;
@@ -736,7 +733,9 @@ async function rebuildAudioBuffer(
   updateTimecode();
 }
 
-async function synchronizeRequestedDurations(): Promise<void> {
+async function synchronizeRequestedDurations(
+  context: AudioContext,
+): Promise<void> {
   durationReady = false;
   const transitionPositionSeconds = playbackPosition();
   const resumeIntent = activeSource !== undefined && !audio.paused;
@@ -758,6 +757,7 @@ async function synchronizeRequestedDurations(): Promise<void> {
     }
     try {
       await rebuildAudioBuffer(
+        context,
         duration,
         transitionPositionSeconds,
         resumeIntent,
@@ -803,7 +803,7 @@ function requestDurationSync(): void {
     loadedDurationSeconds,
     hydrated && durationReady,
   );
-  if (!hydrated) {
+  if (!hydrated || !audioContext) {
     requestedDurationSeconds = target;
     return;
   }
@@ -820,7 +820,7 @@ function requestDurationSync(): void {
   requestedDurationSeconds = target;
   if (durationSync) return;
 
-  durationSync = synchronizeRequestedDurations().catch((cause) => {
+  durationSync = synchronizeRequestedDurations(audioContext).catch((cause) => {
     durationReady = false;
     applyDurationControlState();
     renderSafely();

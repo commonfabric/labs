@@ -286,3 +286,44 @@ test("AgentsHostProcessLock reports a lock path it cannot inspect", async () => 
     await Deno.remove(directory, { recursive: true });
   }
 });
+
+test("AgentsHostProcessLock rejects a lock file replaced while it is opened", async () => {
+  if (Deno.build.os === "windows") return;
+  const directory = await Deno.makeTempDir();
+  const target = join(directory, "target");
+  const path = join(directory, "agents.lock");
+  try {
+    await Deno.writeTextFile(target, "do not replace\n", { mode: 0o600 });
+    await Deno.writeTextFile(path, "", { mode: 0o600 });
+    const owner = (await Deno.lstat(path)).uid;
+    // The owner is read once for the directory and then once for the lock
+    // file the lock inspected; the second read swaps in a symbolic link, as
+    // another process could between that inspection and the open.
+    let ownerReads = 0;
+    await assertRejects(
+      () =>
+        AgentsHostProcessLock.accessForTestingOnly.acquire(path, {
+          os: "linux",
+          uid: () => {
+            ownerReads += 1;
+            if (ownerReads === 2) {
+              Deno.removeSync(path);
+              Deno.symlinkSync(target, path);
+            }
+            return owner;
+          },
+        }),
+      Error,
+      "process lock file changed while opening",
+    );
+    assertEquals(await Deno.readTextFile(target), "do not replace\n");
+
+    await Deno.remove(path);
+    const lock = await AgentsHostProcessLock.acquire(path);
+    await lock.release();
+    assertEquals(await Deno.readTextFile(path), `${Deno.pid}\n`);
+    assertEquals(await Deno.readTextFile(target), "do not replace\n");
+  } finally {
+    await Deno.remove(directory, { recursive: true });
+  }
+});

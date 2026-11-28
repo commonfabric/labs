@@ -7,9 +7,15 @@
  */
 import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
+  findElement,
+  findElementByExactText,
+  findElements,
   findNode,
   fireEvent,
+  hasText,
   propsOf,
+  propValue,
+  textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
 import Redactor from "./redactor.tsx";
 import { restore } from "./redaction.ts";
@@ -34,6 +40,26 @@ export const llmMocks = [
 // A draft with nothing to replace, sent, then edited to mention a vault name.
 const PLAIN_DRAFT = "Explain politely that the rent is late.";
 const LATER_DRAFT = "Jordan Rivera says the rent is late.";
+
+// A vault phone number the draft holds only in part: redaction matches whole
+// values, so the part stays visible, and the leak check reports it.
+const LEAKY_DRAFT = "Call 867-5309 tonight.";
+
+// What the view shows, read the way the owner sees it.
+const sendDisabled = (view: unknown): boolean =>
+  propValue(
+    findElementByExactText(view, "cf-button", "Send to model"),
+    "disabled",
+  ) === true;
+const chipLabels = (view: unknown): unknown[] =>
+  findElements(view, "cf-chip").map((chip) => propValue(chip, "label"));
+const showsSent = (view: unknown): boolean => hasText(view, "✓ Sent");
+const shownReply = (view: unknown): unknown =>
+  propValue(findElement(view, "cf-markdown"), "content");
+const alertText = (view: unknown): string | undefined => {
+  const alert = findElement(view, "cf-alert");
+  return alert === undefined ? undefined : textContent(alert);
+};
 
 export default pattern(() => {
   const pastedReply = new Writable("");
@@ -125,6 +151,47 @@ export default pattern(() => {
       "Dear Jordan Rivera, I'll pay on Friday. Thanks, Mr. Rivera!"
   );
 
+  // The view: nothing to send or show until there is a draft.
+  const assert_view_empty = assert(() =>
+    sendDisabled(redactor[UI]) &&
+    chipLabels(redactor[UI]).length === 0 &&
+    !showsSent(redactor[UI]) &&
+    shownReply(redactor[UI]) === undefined &&
+    hasText(redactor[UI], "The model's reply appears here")
+  );
+  // Each replaced value is listed with its category; nothing is sent yet.
+  const assert_view_found = assert(() =>
+    !sendDisabled(redactor[UI]) &&
+    chipLabels(redactor[UI]).includes("Name: Jordan Rivera") &&
+    chipLabels(redactor[UI]).includes("SSN: 123-45-6789") &&
+    !showsSent(redactor[UI]) &&
+    alertText(redactor[UI]) === undefined
+  );
+  const assert_view_sent = assert(() => showsSent(redactor[UI]));
+  // The restored reply replaces the placeholder.
+  const assert_view_reply = assert(() =>
+    shownReply(redactor[UI]) ===
+      "Dear Jordan Rivera, I'll pay on Friday. Thanks, Mr. Rivera!" &&
+    !hasText(redactor[UI], "The model's reply appears here")
+  );
+  const assert_plain_view_sent = assert(() => showsSent(plain[UI]));
+  // The prompt sent no longer matches the edited draft.
+  const assert_plain_view_stale = assert(() => !showsSent(plain[UI]));
+
+  // A third redactor, whose draft holds part of a vault number.
+  const leaky = Redactor(
+    { pastedReply: new Writable("") } as Parameters<typeof Redactor>[0],
+  );
+  const action_type_leaky = action(() =>
+    leaky.typeDraft.send({ text: LEAKY_DRAFT })
+  );
+  const assert_leak_shown = assert(() =>
+    leaky.redacted === LEAKY_DRAFT &&
+    leaky.leaks.length === 1 &&
+    leaky.leaks[0] === "415-867-5309" &&
+    alertText(leaky[UI]) === "Still visible: 415-867-5309"
+  );
+
   const assert_restore_whole_words = assert(() =>
     restore("Bobby met Bob.", [
       { category: "name", original: "Jordan", standIn: "Bob" },
@@ -136,6 +203,7 @@ export default pattern(() => {
       { assertion: assert_empty_start },
       { action: action_focus_draft },
       { assertion: assert_draft_started },
+      { assertion: assert_view_empty },
       {
         action: redactor.vault.addEntry,
         event: { category: "name", value: "Jordan Rivera" },
@@ -146,21 +214,25 @@ export default pattern(() => {
       { assertion: assert_real_mention_kept },
       { assertion: assert_no_leaks },
       { assertion: assert_found_list },
+      { assertion: assert_view_found },
       { assertion: assert_raw_refused },
       // The raw draft is refused at the public prompt.
       { action: redactor.sendRawDraft },
       { assertion: assert_raw_refused },
       { action: redactor.send },
       { assertion: assert_redacted_sent },
+      { assertion: assert_view_sent },
       // The raw draft cannot overwrite what was sent.
       { action: redactor.sendRawDraft },
       { assertion: assert_redacted_sent },
       { action: action_paste_reply },
       { assertion: assert_reply_restored },
+      { assertion: assert_view_reply },
       { assertion: assert_restore_whole_words },
       { action: action_type_plain },
       { action: plain.send },
       { assertion: assert_plain_sent },
+      { assertion: assert_plain_view_sent },
       {
         action: plain.vault.addEntry,
         event: { category: "name", value: "Jordan Rivera" },
@@ -168,6 +240,13 @@ export default pattern(() => {
       { action: action_edit_plain },
       { assertion: assert_plain_edited },
       { assertion: assert_plain_reply_kept },
+      { assertion: assert_plain_view_stale },
+      {
+        action: leaky.vault.addEntry,
+        event: { category: "phone", value: "415-867-5309" },
+      },
+      { action: action_type_leaky },
+      { assertion: assert_leak_shown },
     ],
     // The refused raw send logs the CFC refusal; the refusal is the point.
     allowConsoleWarnings: true,

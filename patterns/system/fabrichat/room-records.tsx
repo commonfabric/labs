@@ -1564,7 +1564,8 @@ const isRemoved = (outcome: FileRequestOutcome): boolean =>
  * nothing, and one whose removal is done, or found no entry, is removed, and
  * neither is kept. One whose `add` or `remove` has yet to answer is kept, and
  * so is one whose `remove` was refused otherwise, which the composer shows
- * and never sends again. Each request's outcome is read by its id alone.
+ * and never sends again, and with no store, which answers nothing, every file
+ * is kept. Each request's outcome is read by its id alone.
  */
 const settleTakenOut = (
   composer: ComposerCell,
@@ -1572,15 +1573,10 @@ const settleTakenOut = (
   takenOut: readonly TakenOutAttachment[],
 ): void => {
   const target = store?.resolveAsCell();
-  if (target === undefined) {
-    composer.key("takenOut").set(
-      takenOut.length === 0 ? undefined : [...takenOut],
-    );
-    return;
-  }
-  const requests = target.key("requests");
   const outcomeOf = (requestId: string) =>
-    requests.key(requestId).get() as FileRequestOutcome | undefined;
+    target?.key("requests").key(requestId).get() as
+      | FileRequestOutcome
+      | undefined;
   const kept = takenOut.flatMap((file): TakenOutAttachment[] => {
     const removalId = removalRequestId(file.requestId);
     if (file.removing === true) {
@@ -1588,7 +1584,7 @@ const settleTakenOut = (
       return removal !== undefined && isRemoved(removal) ? [] : [file];
     }
     const added = outcomeOf(file.requestId);
-    if (added === undefined) return [file];
+    if (target === undefined || added === undefined) return [file];
     if (added.status !== "done") return [];
     target.key("remove").send({ requestId: removalId, entry: added.entry });
     return [{ ...file, removing: true }];

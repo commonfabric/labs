@@ -66,6 +66,12 @@ interface CollectionState {
   readonly pending: Set<string>;
 
   /**
+   * Ids of documents owed for maintenance withdrawn too many times in a row,
+   * held for the drain the next write to the space starts.
+   */
+  readonly held: Set<string>;
+
+  /**
    * Rows of members a handler added since the last drain started, as `add()`
    * stored them. The next drain re-reads each without asking the database
    * for it, which may not answer yet for a row written a moment ago.
@@ -212,12 +218,15 @@ export class IndexedCollectionMaintainer {
   /**
    * The per-space turns each maintenance event waits for before it is
    * queued, which a test fills to hold a drain between reading its members
-   * and the transaction that projects them.
+   * and the transaction that projects them; and the state of each space,
+   * whose latest registry read (`loaded`) a test waits for, since the
+   * runtime does not track it as async work.
    */
   get accessForTestingOnly(): {
     readonly turns: Map<MemorySpace, Promise<void>>;
+    readonly spaces: Map<MemorySpace, SpaceState>;
   } {
-    return { turns: this.#turns };
+    return { turns: this.#turns, spaces: this.#spaces };
   }
 
   /**
@@ -327,6 +336,8 @@ export class IndexedCollectionMaintainer {
     const written = [...state.early];
     state.early.clear();
     for (const collection of state.collections.values()) {
+      for (const id of collection.held) collection.pending.add(id);
+      collection.held.clear();
       for (const id of written) {
         if (id === collection.handle.id) {
           this.#redeclare(collection);
@@ -439,6 +450,7 @@ export class IndexedCollectionMaintainer {
       handle,
       stream,
       pending: new Set(),
+      held: new Set(),
       added: new Map(),
       draining: undefined,
       withdrawn: 0,
@@ -493,7 +505,9 @@ export class IndexedCollectionMaintainer {
    * ended together, a commit may write one database only, and a wave that is
    * refused takes every transaction in it along. So the events of a space go
    * one at a time, each after the wave of the one before has settled, and an
-   * event whose transaction a wave withdrew is owed again.
+   * event whose transaction a wave withdrew is owed again. Once the
+   * maintainer is disposed, its handlers are cancelled, so an event whose
+   * turn comes afterward is not queued.
    */
   async #dispatch(
     collection: CollectionState,
@@ -504,6 +518,7 @@ export class IndexedCollectionMaintainer {
     const { promise: settled, resolve: settle } = Promise.withResolvers<void>();
     this.#turns.set(space, settled);
     await before;
+    if (this.#disposed) return settle();
     const { promise: ended, resolve: end } = Promise.withResolvers<void>();
     this.#runtime.scheduler.queueEvent(
       collection.stream,
@@ -545,8 +560,9 @@ export class IndexedCollectionMaintainer {
       if (again) void this.#dispatch(collection, event);
       return;
     }
+    const owed = again ? collection.pending : collection.held;
     for (const rows of event.members) {
-      for (const doc of rows.deps) collection.pending.add(doc);
+      for (const doc of rows.deps) owed.add(doc);
     }
     if (again) this.#schedule(collection);
   }
@@ -561,7 +577,6 @@ export class IndexedCollectionMaintainer {
     try {
       await Promise.all(cells.map((cell) => cell.sync()));
       for (let start = 0; start < members.length; start += MEMBERS_PER_EVENT) {
-        if (this.#disposed) return;
         await this.#dispatch(collection, {
           members: members.slice(start, start + MEMBERS_PER_EVENT),
         });
@@ -601,7 +616,6 @@ export class IndexedCollectionMaintainer {
         memberRowsSql(opened.descriptor, allMembersSql(opened.descriptor)),
       );
       await this.#reread(collection, groupMemberRows(opened.descriptor, rows));
-      if (this.#disposed) return;
       await this.#dispatch(collection, { record: "declaration", declaration });
       collection.declaration = declaration;
     } finally {
@@ -614,11 +628,11 @@ export class IndexedCollectionMaintainer {
     rows: MemberRows,
     tx?: IExtendedStorageTransaction,
   ): Cell<unknown> {
-    const sigil = parseCfLinkToSigil(rows.member);
-    if (sigil === null) {
-      throw new TypeError("an indexed collection row names no member");
-    }
-    return this.#runtime.getCellFromLink(sigil, undefined, tx);
+    return this.#runtime.getCellFromLink(
+      parseCfLinkToSigil(rows.member),
+      undefined,
+      tx,
+    );
   }
 
   #schedule(collection: CollectionState): void {

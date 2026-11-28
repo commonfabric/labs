@@ -31,6 +31,7 @@ import {
   commandDraftError,
   type CommandDraftFields,
   commandPayload,
+  formatJson,
   materializeRootCell,
   providerSessionRetrieval,
   sessionSortLabel,
@@ -42,6 +43,7 @@ import {
   inspectMaterializedValueCommand,
   inspectValueCommand,
   RAW_RETRIEVAL_SETUP,
+  readableCellLink,
 } from "./provenance.ts";
 
 type DebugTab = "overview" | "sessions" | "commands" | "activity" | "raw";
@@ -455,36 +457,11 @@ function sessionConversationState(
 
 interface ReadableCellValue<T> {
   get(): T | undefined;
-  getAsNormalizedFullLink?(): {
-    id: string;
-    space: string;
-    path: Array<string | number>;
-    scope?: string;
-  };
 }
 
 function isReadableCell<T>(value: unknown): value is ReadableCellValue<T> {
   return typeof value === "object" && value !== null && "get" in value &&
     typeof value.get === "function";
-}
-
-function readableCellLink(value: unknown): CellLink {
-  if (!isReadableCell(value)) {
-    throw new Error("Raw data source does not expose a Fabric cell");
-  }
-  const link = value.getAsNormalizedFullLink?.();
-  if (
-    typeof link?.id !== "string" || typeof link.space !== "string" ||
-    !Array.isArray(link.path)
-  ) {
-    throw new Error("Raw data source has an incomplete Fabric cell link");
-  }
-  return {
-    id: link.id,
-    space: link.space,
-    path: [...link.path],
-    ...(link.scope === undefined ? {} : { scope: link.scope }),
-  };
 }
 
 function rawDataProvenanceAtLink(
@@ -584,15 +561,6 @@ function currentSessionEntries(
   return index?.sessions ?? [];
 }
 
-// deno-lint-ignore no-explicit-any
-function json(value: any): string {
-  try {
-    return JSON.stringify(value, null, 2) ?? "undefined";
-  } catch (error) {
-    return `Could not serialize value: ${String(error)}`;
-  }
-}
-
 function cellRows(health: HostHealth | undefined): Array<[string, string]> {
   return Object.entries(health?.target.cells ?? {});
 }
@@ -684,7 +652,7 @@ const loadSessionRawData = handler<
   }
   driver.set(manifestValue.driver);
   rawJson.set(
-    json(materializedRawConversationData(manifestValue)),
+    formatJson(materializedRawConversationData(manifestValue)),
   );
 });
 
@@ -695,7 +663,7 @@ const loadSessionIndexRawData = handler<
     rawJson: Writable<string>;
   }
 >((_, { value, rawJson }) => {
-  rawJson.set(json(rawOpaqueCell(value)));
+  rawJson.set(formatJson(rawOpaqueCell(value)));
 });
 
 const loadHealthRawData = handler<
@@ -705,14 +673,14 @@ const loadHealthRawData = handler<
     rawJson: Writable<string>;
   }
 >((_, { value, rawJson }) => {
-  rawJson.set(json(rawOpaqueCell(value)));
+  rawJson.set(formatJson(rawOpaqueCell(value)));
 });
 
 const loadCommandsRawData = handler<
   JsonObject,
   { value: AgentCommandValue[] | undefined; rawJson: Writable<string> }
 >((_, { value, rawJson }) => {
-  rawJson.set(json(materializeRootCell(value)));
+  rawJson.set(formatJson(materializeRootCell(value)));
 });
 
 const loadReceiptsRawData = handler<
@@ -722,7 +690,7 @@ const loadReceiptsRawData = handler<
     rawJson: Writable<string>;
   }
 >((_, { value, rawJson }) => {
-  rawJson.set(json(rawOpaqueCell(value)));
+  rawJson.set(formatJson(rawOpaqueCell(value)));
 });
 
 export function rawConversationData(
@@ -904,7 +872,7 @@ function rawDataProvenanceUi(
               <cf-vstack gap="1">
                 <cf-text tone="muted">Value path</cf-text>
                 <code style="overflow-wrap: anywhere;">
-                  {json(provenance.fabric.path)}
+                  {formatJson(provenance.fabric.path)}
                 </code>
               </cf-vstack>
               <cf-vstack gap="1">
@@ -1082,7 +1050,7 @@ const receiptDetailsJson = lift(
       updatedAt,
     }: Pick<ReceiptRow, "error" | "receipt" | "updatedAt">,
   ) =>
-    json(materializeShardedJson({
+    formatJson(materializeShardedJson({
       updatedAt,
       error,
       receipt,
@@ -1091,7 +1059,7 @@ const receiptDetailsJson = lift(
 
 const activityDetailsJson = lift(
   ({ details }: Pick<HostActivity, "details">) =>
-    json(materializeShardedJson(details)),
+    formatJson(materializeShardedJson(details)),
 );
 
 const RawReceiptDetailsView = pattern<
@@ -1187,7 +1155,9 @@ const renderCommandTableRow = pattern<
     const source: OpaqueCell<DeferredDocument> = input.key("element");
     const command = commandForDisplay(value);
     const rawValue = command === undefined ? value : command.payload;
-    const rawJson = computed(() => json(materializeShardedJson(rawValue)));
+    const rawJson = computed(() =>
+      formatJson(materializeShardedJson(rawValue))
+    );
     const rawView = RawJsonView({
       title: command === undefined
         ? "Invalid command action value"
@@ -1533,7 +1503,9 @@ const DebugView = pattern<DebugInput, DebugOutput>(
     ]);
     const pendingCommandJson = computed(() => {
       const command = pendingCommand.get();
-      return command === null || command === undefined ? "" : json(command);
+      return command === null || command === undefined
+        ? ""
+        : formatJson(command);
     });
     const commandArgumentLabel = computed(() =>
       commandType.get() === "rename" ? "New title" : "Mode ID"
@@ -1955,7 +1927,7 @@ const DebugView = pattern<DebugInput, DebugOutput>(
                                     {source.errors.length} errors
                                   </summary>
                                   <pre style="white-space: pre-wrap; overflow-wrap: anywhere;">
-                                    {json(materializedCells(source.errors))}
+                                    {formatJson(materializedCells(source.errors))}
                                   </pre>
                                 </details>
                               </td>

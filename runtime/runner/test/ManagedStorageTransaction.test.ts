@@ -1,8 +1,12 @@
 import { expect } from "@std/expect";
 import type { MemorySpace } from "@commonfabric/memory/interface";
+import { toDocumentPath } from "@commonfabric/memory/v2";
 import { describe, it } from "@commonfabric/test-support/test";
 
-import type { IMemorySpaceAddress } from "../src/storage/interface.ts";
+import type {
+  Activity,
+  IMemorySpaceAddress,
+} from "../src/storage/interface.ts";
 import { ManagedStorageTransaction } from "../src/traverse.ts";
 
 const SPACE = "did:key:zManagedTx" as MemorySpace;
@@ -40,6 +44,60 @@ describe("ManagedStorageTransaction", () => {
         expect([...journal.activity()]).toEqual([]);
         expect([...journal.novelty(SPACE)]).toEqual([]);
         expect([...journal.history(SPACE)]).toEqual([]);
+      });
+    });
+
+    describe("getReactivityLog()", () => {
+      it("returns an empty log after a read, which the default journal does not record", () => {
+        const tx = new ManagedStorageTransaction({
+          load: (address) => ({
+            address: { ...address, path: [] },
+            value: { value: 1 },
+          }),
+        });
+
+        expect(tx.read(ADDRESS).ok?.value).toBe(1);
+        expect(tx.getReactivityLog()).toEqual({
+          reads: [],
+          shallowReads: [],
+          writes: [],
+        });
+      });
+
+      it("returns the reads and writes of the journal it was given", () => {
+        const document = (path: string[]) => ({
+          space: SPACE,
+          id: ADDRESS.id,
+          path: toDocumentPath(path),
+        });
+        const journal = {
+          activity: (): Activity[] => [
+            { read: { ...document(["value"]), meta: {} } },
+            {
+              read: {
+                ...document(["value", "a"]),
+                meta: {},
+                nonRecursive: true,
+              },
+            },
+            { write: document(["value", "b"]) },
+          ],
+          novelty: () => [],
+          history: () => [],
+        };
+        const tx = new ManagedStorageTransaction({ load: () => null }, journal);
+
+        const at = (path: string[]) => ({
+          space: SPACE,
+          scope: "space",
+          id: ADDRESS.id,
+          path,
+        });
+        expect(tx.getReactivityLog()).toEqual({
+          reads: [at(["value"])],
+          shallowReads: [at(["value", "a"])],
+          writes: [at(["value", "b"])],
+        });
       });
     });
 

@@ -986,15 +986,19 @@ cell's contents. The cache is designed around this:
     setup is refused as before. A clean closure costs a read of its labels,
     and a sync of each member's compiled record, in the transaction that
     already loaded it.
-  - A refused closure is not tried again in the session. One whose commit lost a
-    race, was refused for want of write access, or failed for another reason is
-    tried again at the next load: a session that may only read the space
-    verifies the closure again at each load of it, about 40 to 50 ms for a
-    28-module closure. A module that is a non-entry member of one closure and
-    the entry of another is repaired with its own cache-root edges only through
-    the closure it enters: a test program's closure verified before its page's
-    is refused when the page's dropped edges were the only way to reach a
-    member, and is clean once the page's closure is repaired.
+  - Loads of a closure that overlap share one repair: a load that finds a
+    repair of the closure under way in the session starts none, and waits for
+    that one to end before it goes on, whatever its outcome. A refused closure
+    is not tried again in the session. One whose commit lost a race, was
+    refused for want of write access, or failed for another reason is tried
+    again by the next load that finds no repair of it under way: a session
+    that may only read the space verifies the closure again at each load of
+    it, about 40 to 50 ms for a 28-module closure. A module that is a
+    non-entry member of one closure and the entry of another is repaired with
+    its own cache-root edges only through the closure it enters: a test
+    program's closure verified before its page's is refused when the page's
+    dropped edges were the only way to reach a member, and is clean once the
+    page's closure is repaired.
   - Not repaired: a stamped compiled record of a module the source closure
     does not reach, such as a `fabric:` dependency the compiled closure
     links, is neither checked nor erased. A setup of its importer still

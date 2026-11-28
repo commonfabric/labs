@@ -199,6 +199,21 @@ ${moduleBody}`,
     );
   });
 
+  it("marks a stream returned from an expression-bodied callback", async () => {
+    const { before, after } = await markTiers(
+      `export default pattern((input: any) => ({ go: bump({ draft: input.draft }) }), {
+  type: "object",
+  properties: { draft: { type: "string" } },
+}, ${streamResult});`,
+    );
+    expect(after).toBe(
+      before.replace(
+        'go: { asCell: ["stream"] }',
+        'go: { asCell: ["stream"], tier: "wrapper" }',
+      ),
+    );
+  });
+
   it("keeps the wrappers around a result schema it marks", async () => {
     const { before, after } = await markTiers(
       patternReturning("bump({ draft })", `(${streamResult} as const)`),
@@ -242,6 +257,31 @@ ${
         ),
       "for a pattern call without schemas":
         `export default pattern((input: any) => ({ go: bump({ draft: input.draft }) }));`,
+      "for a callback that is not a function literal":
+        `const body = (input: any) => ({ go: bump({ draft: input.draft }) });
+export default pattern(body, { type: "object" }, ${streamResult});`,
+      "for a callback that returns no object literal":
+        `export default pattern((input: any) => {
+  const result = { go: bump({ draft: input.draft }) };
+  return result;
+}, { type: "object" }, ${streamResult});`,
+      "for a returned verb under a computed name":
+        `export default pattern((input: any) => {
+  const draft = input.draft;
+  return { ...input, ["go"]: bump({ draft }) };
+}, { type: "object" }, ${streamResult});`,
+      "for a verb applied through a callee that is not a call":
+        patternReturning(
+          "input.make({ draft })",
+          streamResult,
+        ),
+      "for a verb applied through a factory that is not a handler":
+        `declare function makeFactory(...args: unknown[]): any;
+const made = makeFactory(false, {
+  type: "object",
+  properties: { draft: { type: "string", scope: "session" } },
+});
+${patternReturning("made({ draft })", streamResult)}`,
       "for a result schema that is not a literal":
         `const result = ${streamResult};
 ${patternReturning("bump({ draft })", "result")}`,

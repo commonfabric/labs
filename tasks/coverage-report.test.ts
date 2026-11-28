@@ -5,6 +5,7 @@ import {
   coverageFiguresOf,
   readSpool,
 } from "@commonfabric/test-support/records";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
 import {
   collectReports,
@@ -588,6 +589,75 @@ describe("coverage-report", () => {
 
     it("returns two for a command line it cannot read", async () => {
       expect(await main(["--nonsense", "1"], REPOSITORY)).toBe(2);
+    });
+  });
+
+  describe("the command", () => {
+    /**
+     * Runs the script as its own process in the repository with `args`,
+     * `spool` as the run's spool and `summary` as the step summary, and
+     * returns its exit status and what it wrote to standard error.
+     */
+    async function runScript(
+      args: string[],
+      spool: string,
+      summary: string,
+    ): Promise<{ code: number; stderr: string }> {
+      const output = await runDenoCommandWithTemporaryLock({
+        root: REPOSITORY,
+        args: (lockPath) => [
+          "run",
+          "--config",
+          path.join(REPOSITORY, "deno.jsonc"),
+          "--lock",
+          lockPath,
+          "-A",
+          path.join(REPOSITORY, "tasks/coverage-report.ts"),
+          ...args,
+        ],
+        env: { CF_TEST_RECORDS_DIR: spool, GITHUB_STEP_SUMMARY: summary },
+      });
+      return {
+        code: output.code,
+        stderr: new TextDecoder().decode(output.stderr),
+      };
+    }
+
+    it("records the figures into the spool its environment names", async () => {
+      const reports = await directoryOf({
+        [await reportPathIn("lane-1")]: await everyFileReport(),
+      });
+      const spool = await Deno.makeTempDir({ prefix: "coverage-spool-" });
+      const summary = await Deno.makeTempFile({ prefix: "step-summary-" });
+      try {
+        const run = await runScript(["--reports", reports], spool, summary);
+        expect(run.code).toBe(0);
+        const figures = coverageFiguresOf((await readSpool(spool)).records);
+        expect([...figures.sets.keys()]).toEqual([`${SUITE}/${MEMBER}`]);
+        expect(figures.groups.get("workspace")).toBe(
+          (await collectSourceFiles(REPOSITORY)).length,
+        );
+        expect(await Deno.readTextFile(summary)).toContain("uncovered lines");
+      } finally {
+        await Deno.remove(reports, { recursive: true });
+        await Deno.remove(spool, { recursive: true });
+        await Deno.remove(summary);
+      }
+    });
+
+    it("exits two, recording nothing, for a command line it cannot read", async () => {
+      const spool = await Deno.makeTempDir({ prefix: "coverage-spool-" });
+      const summary = await Deno.makeTempFile({ prefix: "step-summary-" });
+      try {
+        const run = await runScript(["--nonsense", "1"], spool, summary);
+        expect(run.code).toBe(2);
+        expect(run.stderr).toContain("usage: coverage-report.ts");
+        expect((await readSpool(spool)).records).toEqual([]);
+        expect(await Deno.readTextFile(summary)).toBe("");
+      } finally {
+        await Deno.remove(spool, { recursive: true });
+        await Deno.remove(summary);
+      }
     });
   });
 });

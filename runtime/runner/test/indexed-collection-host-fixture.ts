@@ -139,14 +139,20 @@ export async function indexedCollectionHostFixture() {
   });
   runtime.scheduler.onError((error) => errors.push(error));
   // The host reads each registry through this, so a case can make one of
-  // those reads fail.
+  // those reads fail, or hold one until the case releases it.
   let failRegistryRead = false;
+  let holdRegistryRead: Promise<void> | undefined;
   const hostServer = {
     watchAdmittedCommits: server.watchAdmittedCommits.bind(server),
-    readDocument: (...args: Parameters<typeof server.readDocument>) => {
-      if (!failRegistryRead) return server.readDocument(...args);
-      failRegistryRead = false;
-      return Promise.reject(new Error("the store is unavailable"));
+    readDocument: async (...args: Parameters<typeof server.readDocument>) => {
+      if (failRegistryRead) {
+        failRegistryRead = false;
+        throw new Error("the store is unavailable");
+      }
+      const hold = holdRegistryRead;
+      holdRegistryRead = undefined;
+      await hold;
+      return await server.readDocument(...args);
     },
   };
   const newHost = () =>
@@ -335,8 +341,15 @@ export async function indexedCollectionHostFixture() {
     select,
     hostWatchRoots,
     restartHost,
+    commit,
     failNextRegistryRead: () => {
       failRegistryRead = true;
+    },
+    /** Holds the next registry read until the returned function is called. */
+    holdNextRegistryRead: () => {
+      const { promise, resolve } = Promise.withResolvers<void>();
+      holdRegistryRead = promise;
+      return resolve;
     },
     close,
   };

@@ -45,7 +45,6 @@ import {
 import { internSchema } from "@commonfabric/data-model-schema";
 import { debugStr, toDebugKindString } from "@commonfabric/data-model";
 import { Identity } from "@commonfabric/identity";
-import { setLLMResponder } from "@commonfabric/llm";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
 import { resolveLocalProgram } from "@commonfabric/runner/local-program.deno";
 import {
@@ -113,7 +112,11 @@ import {
   makeMockFetch,
   readFetchMocks,
 } from "./fetch-mock.ts";
-import { LLMMockResponder, readLLMMocks } from "./llm-mock.ts";
+import {
+  installLLMResponder,
+  LLMMockResponder,
+  readLLMMocks,
+} from "./llm-mock.ts";
 import { materializeTestVDOM, mountTestVDOM } from "./materialize-test-vdom.ts";
 import {
   multiUserDescriptorMeta,
@@ -140,6 +143,8 @@ import {
   settleServed,
 } from "./served-settle.ts";
 import { pullActionEvent } from "./test-action-event.ts";
+import { deleteSpaceOf } from "./test-delete-space.ts";
+import type { EmulatedStorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { pressRenderedControl, pressTargetOf } from "./test-press.ts";
 
 /**
@@ -257,6 +262,9 @@ type HarnessTestStepMeta = {
   // `{ settle: true }` step: wait for full settlement (scheduler + storage +
   // in-flight async builtin I/O) via `runtime.settled()` before the next step.
   settle?: boolean;
+  // `{ deleteSpace }` step: delete the space a cell's value lives in, as the
+  // test's identity (`test-delete-space.ts`).
+  deleteSpace?: unknown;
   // `{ label }` / `{ await }` synchronize participants in a multi-user test.
   // A single-user run has no participant to synchronize with, so they carry
   // no work here — but they still have to be recognized, or a step holding
@@ -288,6 +296,7 @@ const testStepPeekSchema = internSchema(
       skip: { type: "boolean" },
       readBudget: true,
       settle: { type: "boolean" },
+      deleteSpace: { type: "unknown" },
       label: { type: "string" },
       await: { type: "string" },
     },
@@ -1438,14 +1447,9 @@ export async function runTestPattern(
   let fetchMockEntries: FetchMockEntry[] | undefined;
   const mockFetch = makeMockFetch(() => fetchMockEntries, realFetch);
   let llmResponder: LLMMockResponder | undefined;
-  let llmReported = 0;
   /** The requests no entry answered that nothing has reported yet. */
-  const unreportedLLMFailures = (): string[] => {
-    const unanswered = llmResponder?.unanswered ?? [];
-    const unreported = unanswered.slice(llmReported);
-    llmReported = unanswered.length;
-    return unreported;
-  };
+  const unreportedLLMFailures = (): string[] =>
+    llmResponder?.takeUnreported() ?? [];
   // The test's responder stays installed until the serving loop below has
   // closed, which this stack, declared before the loop's, outlasts.
   using llmScope = new DisposableStack();
@@ -1463,11 +1467,14 @@ export async function runTestPattern(
   // Set on that arm too: the wait for the serving loop to finish what it was
   // set off on, which a settle ends with.
   let servedQuiescence: ServedQuiescence | undefined;
+  // Set when the runner creates the store, which is what deletes a space for
+  // a `{ deleteSpace }` step.
+  let emulatedStorage: EmulatedStorageManager | undefined;
   // A caller-supplied store is FILE-BACKED, which the default emulation is not:
   // `StorageManager.emulate` runs against `:memory:` and leaves nothing to
   // snapshot. See `TestRunnerOptions.storageHost`.
   const storageManager = options.storageHost?.storageManager ??
-    await withPhase(
+    (emulatedStorage = await withPhase(
       ["runTestPattern", "storageManager"],
       async () => {
         // The Deno storage cache opens SQLite as it loads, which a
@@ -1510,7 +1517,7 @@ export async function runTestPattern(
           as: identity,
         });
       },
-    );
+    ));
 
   const runtime = await withPhase(
     ["runTestPattern", "runtime"],
@@ -1713,17 +1720,7 @@ export async function runTestPattern(
     // Every request for a language model's answer is answered from the
     // test's `llmMocks`, or fails, whether or not the test exports any.
     llmResponder = new LLMMockResponder(readLLMMocks(main));
-    setLLMResponder(llmResponder);
-    llmScope.defer(() => {
-      setLLMResponder(undefined);
-      const late = unreportedLLMFailures();
-      if (late.length > 0) {
-        throw new Error(
-          `${testPath}: requests no llmMocks entry answered, made after the ` +
-            `test's results were collected:\n${late.join("\n")}`,
-        );
-      }
-    });
+    llmScope.use(installLLMResponder(llmResponder, testPath));
     readBudgets = parseReadBudgets(main.readBudgets);
 
     // A compile-only run ends here: the program's modules are in the byte
@@ -2105,6 +2102,7 @@ export async function runTestPattern(
       const isAssertion = Object.hasOwn(stepValue, "assertion");
       const isRender = Object.hasOwn(stepValue, "render");
       const isSettle = Object.hasOwn(stepValue, "settle");
+      const isDeleteSpace = Object.hasOwn(stepValue, "deleteSpace");
       const isMarker = Object.hasOwn(stepValue, "label") ||
         Object.hasOwn(stepValue, "await");
 
@@ -2131,6 +2129,21 @@ export async function runTestPattern(
           } finally {
             printReadCost(`settle_${i}`, itemStart);
             printStepTimings(`settle_${i}`, itemStart);
+          }
+          continue;
+        }
+
+        // `{ deleteSpace: cell }` step: delete the space the cell's value
+        // lives in, and settle what the deletion sets off. Like a settle, it
+        // produces no result, and a failure fails the whole run.
+        if (isDeleteSpace) {
+          if (!stepValue.skip) {
+            await deleteSpaceOf(
+              emulatedStorage,
+              stepCell.key("deleteSpace") as Cell<unknown>,
+              identity.did(),
+            );
+            await settleRuntime(`deleteSpace_${i}`);
           }
           continue;
         }
@@ -2166,7 +2179,7 @@ export async function runTestPattern(
         if (!isAction && !isAssertion) {
           throw new Error(
             `Test step at index ${i} must have an 'action', 'press', ` +
-              debugStr`'assertion', 'render', 'settle', 'label', or 'await' key. Got: $quote,long${
+              debugStr`'assertion', 'render', 'settle', 'deleteSpace', 'label', or 'await' key. Got: $quote,long${
                 Object.keys(stepCell.get() as object)
               }`,
           );

@@ -1,6 +1,6 @@
 /**
- * Prepared Food tests: declared dietary tags, quick-add, and the
- * `dietaryCompatibility` a meal planner reads.
+ * Prepared Food tests: declared dietary tags, quick-add, the number fields,
+ * and the `dietaryCompatibility` a meal planner reads.
  *
  * Run: deno task cf test patterns/apps/food-recipe/prepared-food.test.tsx --verbose
  */
@@ -8,9 +8,25 @@ import { action, assert, FS, NAME, pattern, TESTS, UI } from "commonfabric";
 import {
   clickButton,
   findElement,
+  findNode,
   fireEvent,
+  isElement,
+  propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import PreparedFood, { normalizedTags } from "./prepared-food.tsx";
+
+/** Types `value` into the number input whose minimum is `min`: "1" for
+ * servings, "0" for prep time. */
+const typeNumber = (ui: unknown, min: string, value: string) =>
+  fireEvent(
+    findNode(
+      ui,
+      (node) => isElement(node, "cf-input") && propValue(node, "min") === min,
+    ),
+    "oncf-change",
+    { detail: { value } },
+    `the number input with min ${min}`,
+  );
 
 export default pattern(() => {
   const food = PreparedFood({
@@ -54,6 +70,32 @@ export default pattern(() => {
     food.dietaryTags.join() === "gluten-free,dairy-free"
   );
 
+  const action_servings_rounded = action(() =>
+    typeNumber(food[UI], "1", " 8.4 ")
+  );
+  const assert_servings_rounded = assert(() => food.servings === 8);
+
+  // Text that is not a number, or nothing at all, leaves the value alone.
+  const action_servings_not_a_number = action(() =>
+    typeNumber(food[UI], "1", "lots")
+  );
+  const action_servings_blank = action(() => typeNumber(food[UI], "1", "  "));
+  const assert_servings_kept = assert(() => food.servings === 8);
+
+  const action_servings_too_low = action(() => typeNumber(food[UI], "1", "0"));
+  const assert_servings_clamped = assert(() => food.servings === 1);
+
+  const action_prep_set = action(() => typeNumber(food[UI], "0", "15"));
+  const assert_prep_set = assert(() =>
+    food.prepTime === 15 && food.servings === 1 &&
+    food[FS].content.includes("Prep: 15 min")
+  );
+
+  const action_prep_negative = action(() => typeNumber(food[UI], "0", "-5"));
+  const assert_prep_clamped = assert(() =>
+    food.prepTime === 0 && !food[FS].content.includes("Prep:")
+  );
+
   const assert_fs = assert(() =>
     food[FS].content.includes("From: Costco") &&
     food[FS].content.includes("Dietary: gluten-free, dairy-free")
@@ -69,6 +111,18 @@ export default pattern(() => {
       { action: action_add_twice },
       { assertion: assert_tags_normalized },
       { assertion: assert_fs },
+      { action: action_servings_rounded },
+      { assertion: assert_servings_rounded },
+      { action: action_servings_not_a_number },
+      { assertion: assert_servings_kept },
+      { action: action_servings_blank },
+      { assertion: assert_servings_kept },
+      { action: action_servings_too_low },
+      { assertion: assert_servings_clamped },
+      { action: action_prep_set },
+      { assertion: assert_prep_set },
+      { action: action_prep_negative },
+      { assertion: assert_prep_clamped },
     ],
     food,
   };

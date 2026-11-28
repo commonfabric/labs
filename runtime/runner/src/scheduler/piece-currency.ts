@@ -260,9 +260,10 @@ type NodeRun = {
 
   /**
    * Whether the instance of the document `id` at `scopeKey`, a key other
-   * than the run's, holds what the run left there.
+   * than the run's, holds what the run left there. Absent for a run that
+   * writes at no key other than its own.
    */
-  holds: (scopeKey: ScopeKey, id: string) => boolean;
+  holds?: (scopeKey: ScopeKey, id: string) => boolean;
 };
 
 /**
@@ -277,7 +278,6 @@ const runsOf = (state: PieceCurrencyState, node: SchedulerNode): NodeRun[] => {
       identity: undefined,
       log: state.dependencies.get(node.action),
       clean: node.status === "clean",
-      holds: () => true,
     }];
   }
   // The node's one status is invalid while any instance is owed a run. Which
@@ -387,11 +387,7 @@ export function snapshotPieceCurrency(
       for (const write of surface) {
         if (write.space !== space) continue;
         const declared = normalizeCellScope(write.scope);
-        const keys: ScopeKey[] = node.fanOut !== undefined
-          ? writtenKeys(declared, run.key, run.identity)
-          : declared === "space"
-          ? ["space"]
-          : [];
+        const keys = writtenKeys(declared, run.key, run.identity);
         // What a run wrote is answered for in the run's own slice: the
         // instance at its key as one it vouches for, and each instance at
         // another key, a redirect at a broader one among them, as a slot it
@@ -401,7 +397,7 @@ export function snapshotPieceCurrency(
             slice.vouches.add(write.id);
             continue;
           }
-          const slots = run.holds(key, write.id)
+          const slots = run.holds?.(key, write.id) !== false
             ? slice.decides
             : slice.superseded;
           slots.set(`${key}\0${write.id}`, { id: write.id, scopeKey: key });
@@ -513,9 +509,7 @@ export function snapshotPieceCurrency(
         for (const inherited of takenOver) {
           for (const address of inherited ?? []) {
             const scopeKey = instanceRead(address, undefined);
-            const entry = `${address.space}\0${scopeKey}\0${address.id}`;
-            if (slice.reads.has(entry)) continue;
-            slice.reads.set(entry, {
+            slice.reads.set(`${address.space}\0${scopeKey}\0${address.id}`, {
               space: address.space,
               id: address.id,
               scopeKey,

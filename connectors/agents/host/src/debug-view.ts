@@ -6,8 +6,8 @@ import {
   stableCellId,
 } from "@commonfabric/agents-connector/fabric-graph";
 import type { FabricPlainObject, FabricValue } from "@commonfabric/data-model";
+import { entityRefToString } from "@commonfabric/data-model/cell-rep";
 import { internSchema } from "@commonfabric/data-model-schema";
-import { pieceId } from "@commonfabric/piece";
 import type { PiecesController } from "@commonfabric/piece/ops";
 import {
   areLinksSame,
@@ -357,7 +357,7 @@ function debugRegistrationsMatch(
 function debugRegistrationTargets(
   registration: DebugRegistration | undefined,
   cause: string,
-  candidatePieceId: string | undefined,
+  candidatePieceId: string,
   patternRef: { identity: string; symbol: string },
 ): boolean {
   return registration?.cause === cause &&
@@ -465,6 +465,7 @@ async function registerDebugPiece(
   manager: PiecesController,
   defaultPattern: Cell<unknown>,
   piece: Cell<unknown>,
+  id: string,
   cause: string,
   patternRef: { identity: string; symbol: string },
   deploymentId: string,
@@ -501,7 +502,7 @@ async function registerDebugPiece(
     isPieceRunningLocally(manager, precedingPiece);
   const nextRegistration: DebugRegistration = {
     cause,
-    pieceId: pieceId(piece) ?? "",
+    pieceId: id,
     patternIdentity: patternRef.identity,
     patternSymbol: patternRef.symbol,
     deploymentId,
@@ -514,9 +515,6 @@ async function registerDebugPiece(
       ]),
     ],
   };
-  if (!nextRegistration.pieceId) {
-    throw new Error("debug view piece has no entity ID");
-  }
   const candidateLink = piece.getAsNormalizedFullLink();
   const piecesToRemove = [...piecesToUnregister, piece];
   const removePublicDebugLinks = async () => {
@@ -794,15 +792,9 @@ async function deployAgentSessionsDebugViewNow(
   signal?: AbortSignal,
 ): Promise<string> {
   signal?.throwIfAborted();
-  let defaultPattern: Cell<unknown> | undefined = await manager
-    .getDefaultPattern(false);
-  if (!defaultPattern) {
-    await manager.ensureDefaultPattern();
-    defaultPattern = await manager.getDefaultPattern(false);
-    if (!defaultPattern) {
-      throw new Error("default pattern was not created");
-    }
-  }
+  const defaultPattern: Cell<unknown> =
+    await manager.getDefaultPattern(false) ??
+      (await manager.ensureDefaultPattern()).getCell();
   signal?.throwIfAborted();
   const program = await resolveLocalProgram(
     (resolver) => manager.runtime.harness.resolve(resolver),
@@ -869,6 +861,7 @@ async function deployAgentSessionsDebugViewNow(
       throw new Error("new debug view disappeared after owner protection");
     }
   }
+  const id = entityRefToString(piece.entityId);
   const existingRegistration = (await debugRegistration(
     manager,
     target.conn.ownerDid,
@@ -876,7 +869,7 @@ async function deployAgentSessionsDebugViewNow(
   const pieceWasRegistered = debugRegistrationTargets(
     existingRegistration,
     cause,
-    pieceId(piece),
+    id,
     patternRef,
   );
   signal?.throwIfAborted();
@@ -910,6 +903,7 @@ async function deployAgentSessionsDebugViewNow(
       manager,
       defaultPattern,
       piece,
+      id,
       cause,
       patternRef,
       deploymentId,
@@ -926,7 +920,7 @@ async function deployAgentSessionsDebugViewNow(
       registrationIsOwned = debugRegistrationTargets(
         activeRegistration,
         cause,
-        pieceId(piece),
+        id,
         patternRef,
       ) && (activeRegistration?.deploymentId === deploymentId ||
         (pieceWasRegistered &&
@@ -947,8 +941,6 @@ async function deployAgentSessionsDebugViewNow(
     }
     throw error;
   }
-  const id = pieceId(piece);
-  if (!id) throw new Error("debug view piece has no entity ID");
   return id;
 }
 

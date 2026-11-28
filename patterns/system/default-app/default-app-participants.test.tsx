@@ -14,7 +14,7 @@ import {
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
-import DefaultApp from "./default-app.tsx";
+import DefaultApp, { joinAsViewer } from "./default-app.tsx";
 
 type TestProfile = Confidential<
   { name?: string; avatar?: string },
@@ -32,6 +32,19 @@ export default pattern(() => {
   const joinOther = action(() =>
     subject.addParticipant.send({ profile: other })
   );
+
+  // What "Join this space" is bound to, with the viewer's profile absent and
+  // then present.
+  const absent = Writable.of<TestProfile>();
+  const viewer = Writable.of<TestProfile>({ name: "Viewer" });
+  const joinWithoutProfile = joinAsViewer({
+    join: subject.addParticipant,
+    profile: absent,
+  });
+  const joinAsTheViewer = joinAsViewer({
+    join: subject.addParticipant,
+    profile: viewer,
+  });
 
   return {
     [TESTS]: [
@@ -67,11 +80,24 @@ export default pattern(() => {
         ),
       },
 
+      // An unresolved profile joins no one; a resolved one joins once.
+      { action: joinWithoutProfile },
+      { assertion: assert(() => subject.participants.length === 2) },
+      { action: joinAsTheViewer },
+      {
+        assertion: assert(() =>
+          subject.participants.length === 3 &&
+          subject.participants[2].equals(viewer)
+        ),
+      },
+      { action: joinAsTheViewer },
+      { assertion: assert(() => subject.participants.length === 3) },
+
       { render: subject[UI] },
       {
         assertion: assert(() =>
           hasText(subject[UI], "Participants") &&
-          countElements(subject[UI], "cf-profile-badge") === 2
+          countElements(subject[UI], "cf-profile-badge") === 3
         ),
       },
     ],

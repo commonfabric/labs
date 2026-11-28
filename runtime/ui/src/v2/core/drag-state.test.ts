@@ -13,6 +13,7 @@ import {
 } from "@commonfabric/test-support/test";
 import { createMockCellHandle } from "../test-utils/mock-cell-handle.ts";
 import {
+  createMockElement,
   installMockDocument,
   type MockElement,
 } from "../test-utils/mock-document.ts";
@@ -91,18 +92,17 @@ describe("drag-state — core", () => {
     expect(cleaned).toBe(true);
   });
 
-  it("endDrag removes preview from parent if attached", () => {
-    let childRemoved = false;
-    const mockParent = {
-      removeChild: () => {
-        childRemoved = true;
-      },
-    };
+  it("endDrag detaches the preview from its parent and leaves the parent's other children", () => {
+    const parent = createMockElement("body");
+    const sibling = parent.appendChild(createMockElement("div"));
+    const preview = parent.appendChild(createMockElement("div"));
     startDrag(createMockDragState({
-      preview: { parentNode: mockParent } as unknown as HTMLElement,
+      preview: preview as unknown as HTMLElement,
     }));
     endDrag();
-    expect(childRemoved).toBe(true);
+    expect(parent.children).toEqual([sibling]);
+    expect(preview.parentNode).toBeNull();
+    expect(sibling.parentNode).toBe(parent);
   });
 });
 

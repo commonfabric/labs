@@ -1512,6 +1512,24 @@ describe("guest", () => {
         });
       });
 
+      it("decodes the bytes into a bitmap of the image's dimensions", async () => {
+        /** A PNG two pixels wide and one high. */
+        const STRIP = "data:image/png;base64," +
+          "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAIAAAB7QOjdAAAADUlEQVR4nGP4zwAE/wEHAAH/4iOeWQAAAABJRU5ErkJggg==";
+        await withClient({ strip: STRIP }, async (fabric) => {
+          const bitmap = await fabric.asset("strip").bitmap();
+          expect([bitmap.width, bitmap.height]).toEqual([2, 1]);
+        });
+      });
+
+      it("rejects a bitmap of bytes that are not a whole image", async () => {
+        await withClient({ glaze: GLAZE }, async (fabric) => {
+          await expect(fabric.asset("glaze").bitmap()).rejects.toThrow(
+            "Cannot decode image",
+          );
+        });
+      });
+
       it("throws for a name the document carries no asset for, listing the names it carries", async () => {
         await withClient({ glaze: GLAZE, label: LABEL }, (fabric) => {
           expect(() => fabric.asset("logo")).toThrow(

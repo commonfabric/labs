@@ -1569,7 +1569,7 @@ function missingDefaultFields(
 function ownedCellOwesSeed(
   link: NormalizedFullLink,
   ownerScope: CellScope,
-): boolean {
+): link is NormalizedFullLink & { schema: JSONSchemaObj } {
   return isObjectOrArray(link.schema) &&
     link.schema.default !== undefined &&
     scopeRank(link.scope) > scopeRank(ownerScope);
@@ -1585,8 +1585,9 @@ function ownedCellOwesSeed(
  * that part alone, where a seed would have written the rest of the default
  * beside it.
  */
-function absentReadsAsSeed(link: NormalizedFullLink): boolean {
-  if (!isObjectOrArray(link.schema)) return false;
+function absentReadsAsSeed(
+  link: NormalizedFullLink & { schema: JSONSchemaObj },
+): boolean {
   const schemaDefault = link.schema.default;
   return schemaDefault === null || typeof schemaDefault === "string" ||
     typeof schemaDefault === "number" || typeof schemaDefault === "boolean";
@@ -3550,7 +3551,9 @@ export class Runner {
    * syncer and deferred-start committer a test may supply, the setup,
    * storage-subscription, commit-gated run, ownership, key, sync, walk, and
    * retry steps, the implementation invoker, the node planner, which a
-   * test drives directly, the wave kick, the count of node bindings held
+   * test drives directly, the wave kick, the repeat of a scoped-default
+   * seed a wave dropped, the named-family gate's absence and argument-link
+   * probes, the count of node bindings held
    * and the step that drops them, and the pre-sync plan recorder, node
    * binding recorder and resume yield a test installs.
    */
@@ -3638,6 +3641,25 @@ export class Runner {
       cells: readonly Cell<any>[],
       kick: (cell: Cell<any>) => Promise<unknown>,
     ): Promise<void>;
+    seedAgainIfDropped(
+      settlement: NonNullable<ReturnType<typeof waveSettlementOf>>,
+      instance: ResumePatternInstance,
+      owed: readonly NormalizedFullLink[],
+      identity: ScopeKeyIdentity | undefined,
+      isCurrent: () => boolean,
+      options: { retry: boolean; onLost?: () => void },
+    ): Promise<void>;
+    absenceUnexamined(
+      readTx: IExtendedStorageTransaction,
+      links: readonly NormalizedFullLink[],
+    ): boolean;
+    argumentLinksAbsent(
+      argument: unknown,
+      argumentLink: NormalizedFullLink,
+      resultCell: Cell<any>,
+      readTx: IExtendedStorageTransaction,
+      present: (link: NormalizedFullLink) => boolean,
+    ): boolean;
   } {
     // deno-lint-ignore no-this-alias
     const outerThis = this;
@@ -3775,6 +3797,38 @@ export class Runner {
         outerThis.#resumeYield = value;
       },
       kickResumeWave: (cells, kick) => this.#kickResumeWave(cells, kick),
+      seedAgainIfDropped: (
+        settlement,
+        instance,
+        owed,
+        identity,
+        isCurrent,
+        options,
+      ) =>
+        this.#seedAgainIfDropped(
+          settlement,
+          instance,
+          owed,
+          identity,
+          isCurrent,
+          options,
+        ),
+      absenceUnexamined: (readTx, links) =>
+        this.#absenceUnexamined(readTx, links),
+      argumentLinksAbsent: (
+        argument,
+        argumentLink,
+        resultCell,
+        readTx,
+        present,
+      ) =>
+        this.#argumentLinksAbsent(
+          argument,
+          argumentLink,
+          resultCell,
+          readTx,
+          present,
+        ),
     };
   }
 
@@ -6518,13 +6572,11 @@ export class Runner {
     // keep its `tx`, the start's transaction, for that long.
     const { tx: startTx, givenPattern, parentPieceRootId } = options;
     const pieceKey = this.#getDocKey(resultCell);
+    // A run asking for a program of a registered piece reaches the
+    // registration's `ensure()` through `#startWithTx()`, so a start that
+    // finds the piece registered has nothing to add to it.
     const existing = this.#scopedPieces.get(pieceKey);
-    if (existing !== undefined) {
-      if (startTx && givenPattern) {
-        existing.ensure(startTx, givenPattern);
-      }
-      return existing;
-    }
+    if (existing !== undefined) return existing;
     const variants = new Map<string, PieceRegistration>();
     const programs = new Map<string, Pattern>();
     const originInstances = new Set<ScopeKey>();
@@ -13475,7 +13527,8 @@ export class Runner {
    * which is the right guard while the cascade is still resolving; claiming
    * the target's lifetime at settle time asks about the target alone, because
    * a stop of an intermediate link doc does not touch the target's
-   * registration.
+   * registration. A target in a space under view replication is reported
+   * without the whole-attempt check, so a tombstone is checked here too.
    */
   #isStartAttemptCurrentFor(
     attempt: StartAttempt,

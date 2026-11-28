@@ -832,8 +832,8 @@ function* resolvedLocations(
   ]);
   if (nonRecursive !== true) {
     for (const entry of entries) {
+      // A consumed entry longer than `path` lies beneath it.
       if (entry.path.length <= path.length) continue;
-      if (!isPrefix(path, entry.path)) continue;
       locations.set(pathKey(entry.path), entry.path);
     }
   }
@@ -894,13 +894,6 @@ const observationInputWitnesses = (
   nonRecursive: boolean | undefined,
   evidence?: readonly LabelMapEntry[],
 ): CfcAtom[] | undefined => {
-  // A location's confidentiality comes only from these entries, so a read
-  // none of them makes confidential has no confidential location.
-  if (
-    !entries.some((entry) => (entry.label.confidentiality?.length ?? 0) > 0)
-  ) {
-    return undefined;
-  }
   let witnesses: CfcAtom[] | undefined;
   for (
     const { integrity } of resolvedLocations(
@@ -6621,18 +6614,9 @@ const deriveFlowJoinImpl = (
         location.path,
       );
     }
-    const metadataOf = (location: ObservedLocation) => {
-      const key = docKey(location);
-      if (metadataByDoc.has(key)) return metadataByDoc.get(key)!.metadata;
-      noteLabelSource(location, "application/json");
-      return storedMetadataFor(
-        tx,
-        location.space,
-        location.id,
-        location.scope,
-        "application/json",
-      );
-    };
+    // The observation that observed a location registered its document.
+    const metadataOf = (location: ObservedLocation) =>
+      metadataByDoc.get(docKey(location))!.metadata;
     // A slot whose stamp the envelope does not place witnesses nothing,
     // whether its reference is followed or only observed: the stamp does
     // not say which reference it describes.
@@ -8731,13 +8715,12 @@ const UNMARKED_METADATA: NonNullable<IReadActivity["meta"]> = Object.freeze(
 );
 
 /**
- * Whether what `meta` says of its reads can no longer change: it is absent,
- * or frozen with a prototype that is `Object.prototype` or none. What
+ * Whether what `meta` says of its reads can no longer change: it is frozen
+ * with a prototype that is `Object.prototype` or none. What
  * `Object.prototype` says is compared apart
  * (`InputReadSnapshot.inheritedInternal`).
  */
 const classificationIsFixed = (meta: IReadActivity["meta"]): boolean => {
-  if (meta === undefined) return true;
   if (!Object.isFrozen(meta)) return false;
   const prototype = Object.getPrototypeOf(meta);
   return prototype === Object.prototype || prototype === null;
@@ -12188,9 +12171,11 @@ export const decomposeEnvelopeRoot = (
   for (const [hash, document] of decomposed.documents) {
     registerSchemaDocument(hash, document);
   }
-  const rootDocument = decomposed.documents.get(parsed.taggedHash);
-  if (rootDocument === undefined) return undefined;
-  return { rootHash: parsed.taggedHash, rootDocument };
+  // The closure holds every document it references, the root's included.
+  return {
+    rootHash: parsed.taggedHash,
+    rootDocument: decomposed.documents.get(parsed.taggedHash)!,
+  };
 };
 
 // Exported for unit testing of the S5 mismatch refusal; the persist loop is
@@ -12771,10 +12756,10 @@ export const describeSinkReleaseRefusal = (
   );
 };
 
-/** Looks up the manifest of a module policy, in `space` where one is named. */
+/** Looks up the manifest of a module policy in `space`. */
 type ManifestLookup = (
   reference: CfcModulePolicyRefAtom,
-  space: MemorySpace | undefined,
+  space: MemorySpace,
 ) => unknown;
 
 /**
@@ -12784,8 +12769,6 @@ type ManifestLookup = (
  * that evaluates at every location of a long list
  * otherwise pays that per location. Absences are kept too. Sound only while the
  * pass installs no manifest: a pass that does must take a new lookup after it.
- * A lookup with no space named resolves over the spaces the journal has
- * touched so far, which the pass can widen, so it is not kept.
  */
 const passManifestLookup = (
   tx: IExtendedStorageTransaction,
@@ -12799,14 +12782,13 @@ const passManifestLookup = (
   // hereditary meet.
   const resolve = (
     reference: CfcModulePolicyRefAtom,
-    space: MemorySpace | undefined,
+    space: MemorySpace,
   ): unknown =>
     tx.runWithAmbientReadMeta(
       internalVerifierRead,
       () => tx.resolveCfcPolicyManifest(reference, space),
     );
   return (reference, space) => {
-    if (space === undefined) return resolve(reference, undefined);
     const key = stringTupleKey([
       space,
       reference.policyDigest,
@@ -12851,7 +12833,7 @@ const evaluateGatedConfidentiality = (
   integrity: readonly CfcAtom[],
   boundary: readonly CfcAtom[],
   consumption: CfcGrantConsumptionContext,
-  destinationSpace?:
+  destinationSpace:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
   admitsRule?: (rule: ExchangeRule) => boolean,
@@ -12895,10 +12877,9 @@ const evaluateGatedConfidentiality = (
           const space = typeof destinationSpace === "function"
             ? destinationSpace(reference)
             : destinationSpace;
-          if (typeof destinationSpace === "function" && space === undefined) {
-            return undefined;
-          }
-          return manifestFor(reference, space);
+          return space === undefined
+            ? undefined
+            : manifestFor(reference, space);
         },
       ),
     },
@@ -12935,7 +12916,7 @@ const evaluateAccessExchange = (
   locations: () => readonly ConsumedLocation[],
   boundary: readonly CfcAtom[],
   consumption: CfcGrantConsumptionContext,
-  destinationSpace?:
+  destinationSpace:
     | MemorySpace
     | ((reference: unknown) => MemorySpace | undefined),
 ): ReturnType<typeof evaluateGatedConfidentiality> => {

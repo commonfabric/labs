@@ -192,6 +192,9 @@ let following: string | undefined;
 let shownPeople = "";
 // The jam pads, by ring index and lane.
 const padButtons = new Map<string, HTMLButtonElement>();
+// The row of each ring in the list of rings, in the layout's order.
+let ringRows: { ring: Ring; row: HTMLLIElement; mute: HTMLButtonElement }[] =
+  [];
 
 //
 // Document
@@ -389,10 +392,10 @@ function showError(cause: unknown): void {
 }
 
 /**
- * Empties the alert, unless it holds the standing report of an invalid input.
+ * Empties the alert. The controls that call this are disabled or absent while
+ * an invalid input stands, so the standing report of one is never emptied here.
  */
 function clearError(): void {
-  if (error.textContent === layoutErrorMessage) return;
   error.textContent = "";
 }
 
@@ -712,10 +715,9 @@ function applySettings(): void {
  * @throws {Error} When the browser leaves the audio context suspended.
  */
 async function startPlayback(): Promise<void> {
-  if (!ready() || transport) return;
   audio ??= createAudioEngine();
   await audio.context.resume();
-  if (disposed || transport) return;
+  if (!ready() || transport) return;
   if (audio.context.state !== "running") {
     throw new Error("The browser has not started audio. Press Play again.");
   }
@@ -1037,6 +1039,7 @@ function drawPointers(radius: number): void {
 /** Rebuilds the list of rings, one row with a mute control for each. */
 function rebuildRingRows(): void {
   ringList.replaceChildren();
+  ringRows = [];
   if (!layout) return;
   for (const [index, ring] of layout.rings.entries()) {
     const row = document.createElement("li");
@@ -1082,6 +1085,7 @@ function rebuildRingRows(): void {
     }, { signal });
     row.append(text, mute);
     ringList.append(row);
+    ringRows.push({ ring, row, mute });
   }
 }
 
@@ -1117,14 +1121,14 @@ function rebuildPads(): void {
       // by however long the button is held.
       pad.addEventListener("pointerdown", (event) => {
         event.preventDefault();
-        pressPad(ringIndex, lane);
+        pressPad(ring, lane);
       }, { signal });
       pad.addEventListener("keydown", (event) => {
         if (event.repeat || (event.key !== "Enter" && event.key !== " ")) {
           return;
         }
         event.preventDefault();
-        pressPad(ringIndex, lane);
+        pressPad(ring, lane);
       }, { signal });
       padButtons.set(`${ringIndex}:${lane}`, pad);
       padGrid.append(pad);
@@ -1262,10 +1266,7 @@ function renderControls(): void {
   }
 
   const muted = mutedRingIds();
-  for (const [index, row] of [...ringList.children].entries()) {
-    const ring = layout?.rings[index];
-    const mute = row.querySelector("button");
-    if (!ring || !(row instanceof HTMLElement) || !mute) continue;
+  for (const [index, { ring, row, mute }] of ringRows.entries()) {
     const isMuted = muted.has(ring.id);
     row.dataset.muted = String(isMuted);
     row.dataset.hover = String(hoverCell?.ringIndex === index);
@@ -1367,10 +1368,8 @@ function setHover(cell: Cell | undefined): void {
   }
   hoverCell = cell;
   renderReadout();
-  for (const [index, row] of [...ringList.children].entries()) {
-    if (row instanceof HTMLElement) {
-      row.dataset.hover = String(hoverCell?.ringIndex === index);
-    }
+  for (const [index, { row }] of ringRows.entries()) {
+    row.dataset.hover = String(hoverCell?.ringIndex === index);
   }
   requestFrame();
 }
@@ -1576,9 +1575,9 @@ function sameHand(a: PeerHand | undefined, b: PeerHand | undefined): boolean {
  * @throws {Error} When the browser leaves the audio context suspended.
  */
 async function follow(peerId: string): Promise<void> {
-  if (!ready()) return;
   audio ??= createAudioEngine();
   await audio.context.resume();
+  if (!ready()) return;
   if (audio.context.state !== "running") {
     throw new Error("The browser has not started audio. Try again.");
   }
@@ -1631,10 +1630,9 @@ function syncToFollowed(): void {
 }
 
 /** Plays a jam pad here, and tells the room so that everyone else hears it. */
-function pressPad(ringIndex: number, lane: number): void {
-  if (!ready() || !layout) return;
+function pressPad(ring: Ring, lane: number): void {
   rejoinIfLost();
-  const press = { id: nextPressId++, ring: layout.rings[ringIndex].id, lane };
+  const press = { id: nextPressId++, ring: ring.id, lane };
   const played = playPress(press, effectiveColor(), true);
   if (played) lastJammed.set(SELF, played);
   renderPeople();
@@ -1701,9 +1699,8 @@ function playPress(
  * Places or removes the note of `cell`. The cell shows its new content at
  * once, and takes no second toggle until the write has settled.
  */
-function toggleCell(cell: Cell): void {
-  if (!ready() || !layout) return;
-  const edit = toggleEdit(layout, currentNotes(), cell, {
+function toggleCell(rings: RingLayout, cell: Cell): void {
+  const edit = toggleEdit(rings, currentNotes(), cell, {
     id: authorId,
     name: noteAuthorName(undefined, viewerName()),
     color: effectiveColor(),
@@ -1775,12 +1772,13 @@ canvas.addEventListener("pointerleave", () => {
 }, { signal });
 canvas.addEventListener("pointerdown", rejoinIfLost, { signal });
 canvas.addEventListener("click", (event) => {
+  if (!layout) return;
   // A tap brings no pointer movement ahead of it, so the cell it toggles is
   // selected here, for the readout and for the arrow keys to move on from.
   const cell = cellUnder(event);
   if (!cell) return;
   setHover(cell);
-  toggleCell(cell);
+  toggleCell(layout, cell);
 }, { signal });
 canvas.addEventListener("focus", () => {
   // Only keyboard focus selects a cell; focus from a click or a tap leaves the
@@ -1803,7 +1801,7 @@ canvas.addEventListener("keydown", (event) => {
   if (event.repeat) return;
   const cell = hoverCell ?? FIRST_CELL;
   setHover(cell);
-  toggleCell(cell);
+  toggleCell(layout, cell);
 }, { signal });
 
 playButton.addEventListener("click", () => {
@@ -1868,7 +1866,7 @@ globalThis.addEventListener("keydown", (event) => {
   const pad = padForKey(layout, event.key);
   if (!pad) return;
   event.preventDefault();
-  pressPad(pad.ringIndex, pad.lane);
+  pressPad(layout.rings[pad.ringIndex], pad.lane);
 }, { signal });
 globalThis.addEventListener("pagehide", teardown, { once: true, signal });
 

@@ -10,6 +10,12 @@ export interface DenoCommandWithTemporaryLockOptions {
   env?: Record<string, string>;
 
   /**
+   * Whether the child's environment holds only `env` and the run-record
+   * variables set for it, rather than this process's environment as well.
+   */
+  clearEnv?: boolean;
+
+  /**
    * Where the child's stderr goes. `"piped"`, the default, collects it into
    * the returned output. `"inherit"` writes it to this process's stderr as the
    * child writes it, for a child whose progress belongs in the caller's log
@@ -62,7 +68,15 @@ export async function readDenoConfig(
   return parseJsonc(await Deno.readTextFile(path)) as Record<string, any>;
 }
 
-async function removeIfPresent(path: string, options?: Deno.RemoveOptions) {
+/**
+ * Removes `path`, as `Deno.remove()` does given `options`, and returns
+ * quietly when it is already absent. Throws when it is present and cannot be
+ * removed.
+ */
+export async function removeIfPresent(
+  path: string,
+  options?: Deno.RemoveOptions,
+): Promise<void> {
   try {
     await Deno.remove(path, options);
   } catch (error) {
@@ -95,6 +109,7 @@ export async function runDenoCommandWithTemporaryLock(
       args: options.args(tempLock),
       stdout: "piped",
       stderr: options.stderr ?? "piped",
+      clearEnv: options.clearEnv ?? false,
       // The child's tests are the caller's fixtures, so they record nothing
       // into the caller's run and skip nothing its skip list names, unless
       // the caller names those variables itself.

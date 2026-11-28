@@ -11,6 +11,8 @@ import {
   seedHasRun,
 } from "./test-order-tomorrow.ts";
 import { describe, it } from "@commonfabric/test-support/test";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
+import { fromFileUrl } from "@std/path";
 
 const SEED = 20261029;
 const COMMIT = "60cd866374f5b59bdf16c8469ad3f71cd35ac040";
@@ -301,6 +303,43 @@ describe("test-order-tomorrow", () => {
         expect(printed).toEqual([]);
         expect(asked).toEqual([]);
         expect(announced[0]).toContain("test-order-tomorrow takes a seed");
+      }
+    });
+  });
+
+  describe("the command line", () => {
+    const root = fromFileUrl(new URL("..", import.meta.url));
+
+    /**
+     * Runs the script with the permissions the workflow grants it, `args`,
+     * and `env` on top of this process's environment.
+     */
+    function script(args: string[], env: Record<string, string>) {
+      return runDenoCommandWithTemporaryLock({
+        root,
+        args: (lock) => [
+          "run",
+          `--lock=${lock}`,
+          "--allow-env",
+          "--allow-net=api.github.com",
+          "tasks/test-order-tomorrow.ts",
+          ...args,
+        ],
+        env,
+      });
+    }
+
+    it("exits with the status main() returns", async () => {
+      const cases: [string[], Record<string, string>][] = [
+        [[], { GITHUB_SHA: COMMIT, GITHUB_RUN_ID: `${SELF}` }],
+        [[`${SEED}`], { GITHUB_SHA: "", GITHUB_RUN_ID: `${SELF}` }],
+      ];
+      for (const [args, env] of cases) {
+        const { code, stdout, stderr } = await script(args, env);
+        const said = new TextDecoder().decode(stderr);
+        expect(code, said).toBe(2);
+        expect(new TextDecoder().decode(stdout)).toBe("");
+        expect(said).toContain("test-order-tomorrow takes a seed");
       }
     });
   });

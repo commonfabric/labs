@@ -7,6 +7,7 @@ import {
   computeModuleIdentities,
   FABRIC_MOUNT_ROOT,
   type FabricMount,
+  requiredModuleIdentity,
 } from "../src/sandbox/module-record-compiler.ts";
 import { ensureCompilerStack } from "../src/harness/deferred-compiler-stack.ts";
 
@@ -133,6 +134,26 @@ describe("computeFabricModuleIdentities", () => {
     );
     expect(identities.get(mountPath(secondEntry, "/main.tsx"))).toBe(
       secondEntry,
+    );
+  });
+
+  it("returns the identity of a computed path and throws for any other", () => {
+    const subtree = [source("/main.tsx", `export const value = 1;`)];
+    const host = [source("/host.tsx", `export const host = 1;`)];
+    const entryIdentity = computeModuleIdentities(subtree).get("/main.tsx")!;
+    const identities = computeFabricModuleIdentities([
+      ...host,
+      source(mountPath(entryIdentity, "/main.tsx"), subtree[0].contents),
+    ], [mount(entryIdentity)]);
+
+    expect(
+      requiredModuleIdentity(identities, mountPath(entryIdentity, "/main.tsx")),
+    ).toBe(entryIdentity);
+    expect(requiredModuleIdentity(identities, "/host.tsx")).toBe(
+      computeModuleIdentities(host).get("/host.tsx"),
+    );
+    expect(() => requiredModuleIdentity(identities, "/util.ts")).toThrow(
+      "No module identity computed for '/util.ts'",
     );
   });
 });

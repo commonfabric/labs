@@ -111,10 +111,14 @@ export class ReverseInvalidationQueue {
 
   /**
    * Queue an entry invalidation for `names` under `parentIno`. Returns whether
-   * the work was accepted, so the caller can schedule a flush only when it was.
+   * the work was accepted, so the caller can schedule a flush only when it was;
+   * an empty `names` is no work, and is not accepted.
    */
   addEntry(parentIno: bigint, names: string[]): boolean {
-    if (this.#closed || !this.#entrySupported || this.#deps.isUnmounting()) {
+    if (
+      names.length === 0 || this.#closed || !this.#entrySupported ||
+      this.#deps.isUnmounting()
+    ) {
       return false;
     }
     const key = parentIno.toString();
@@ -192,12 +196,13 @@ export class ReverseInvalidationQueue {
       this.#pendingEntry.clear();
       return undefined;
     }
+    // A pending parent always has at least one name: `addEntry` refuses an
+    // empty list, and a parent is removed when its last name is taken.
     for (const [key, { parentIno, names }] of this.#pendingEntry) {
-      for (const name of names) {
-        names.delete(name);
-        if (names.size === 0) this.#pendingEntry.delete(key);
-        return () => this.#notifyEntry(parentIno, name);
-      }
+      const [name] = names;
+      names.delete(name);
+      if (names.size === 0) this.#pendingEntry.delete(key);
+      return () => this.#notifyEntry(parentIno, name);
     }
     return undefined;
   }

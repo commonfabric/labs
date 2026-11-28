@@ -1,8 +1,7 @@
 import { expect } from "@std/expect";
 
-import { transformCfDirective } from "../../src/mod.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
-import { validateFiles } from "../utils.ts";
+import { validateFiles, withSourceText } from "../utils.ts";
 import { describe, it } from "@commonfabric/test-support/test";
 
 const MAIN = `/// <cts-enable />
@@ -24,12 +23,11 @@ describe("schema-generator", () => {
         "/types.ts": `export interface Imported { key: symbol }\n`,
         "/main.tsx": MAIN,
       }, { types: COMMONFABRIC_TYPES });
-      const compiled = transformCfDirective(MAIN);
       expect(
-        diagnostics.map(({ type, fileName, start, length }) => ({
+        withSourceText(MAIN, diagnostics).map(({ type, fileName, text }) => ({
           type,
           fileName,
-          text: compiled.slice(start, start + length),
+          text,
         })),
       ).toEqual([
         { type: "schema-type:symbol", fileName: "/main.tsx", text: "symbol" },

@@ -20,13 +20,10 @@ const hasherPool: IHasher[] = [];
 
 /**
  * Returns a hasher to the pool once its owner is collected, for owners that
- * never released it.
+ * never released it. A registration lasts until the hasher is released, so a
+ * hasher this returns is never already in the pool.
  */
-const hasherRepooler = new FinalizationRegistry((hasher: IHasher) => {
-  if (!hasherPool.includes(hasher)) {
-    hasherPool.push(hasher);
-  }
-});
+const hasherRepooler = new FinalizationRegistry(releaseHasher);
 
 /**
  * Takes an initialized hasher out of the pool, or returns `undefined` if the
@@ -46,7 +43,10 @@ function holdHasher(owner: WeakKey, hasher: IHasher) {
   hasherRepooler.register(owner, hasher, hasher);
 }
 
-/** Returns a hasher taken by `takeHasher()` to the pool. */
+/**
+ * Returns a hasher taken by `takeHasher()` to the pool, ending the
+ * registration `holdHasher()` made for it.
+ */
 function releaseHasher(hasher: IHasher) {
   hasherRepooler.unregister(hasher);
   hasherPool.push(hasher);
@@ -151,10 +151,12 @@ class WasmUpdatingHasher extends BaseSmallChunkUpdatingHasher {
  * module is usable, `false` if not.
  */
 export function initWasmOneShot(): Promise<boolean> {
-  oneShotInitResult ??= addHashers(theOneShotHasher, 1).then((usable) => {
-    moduleIsUsable = usable;
-    return usable;
-  });
+  oneShotInitResult ??= addHashers(theOneShotHasher, 1, createSHA256).then(
+    (usable) => {
+      moduleIsUsable = usable;
+      return usable;
+    },
+  );
 
   return oneShotInitResult;
 }
@@ -166,23 +168,28 @@ export function initWasmOneShot(): Promise<boolean> {
  */
 export function initWasm(): Promise<boolean> {
   initResult ??= initWasmOneShot().then((usable) =>
-    usable && addHashers(hasherPool, HASHER_POOL_SIZE)
+    usable && addHashers(hasherPool, HASHER_POOL_SIZE, createSHA256)
   );
 
   return initResult;
 }
 
 /**
- * Helper for `initWasmOneShot()` and `initWasm()`, which adds `count` new
- * hashers to `hashers`. Returns (a promise to) `true` if it could, `false` if
- * `hash-wasm` is not available.
+ * Helper for `initWasmOneShot()` and `initWasm()`, which adds `count` hashers
+ * made by `create` to `hashers`. Returns (a promise to) `true` if it could,
+ * `false` once `create` rejects, as `createSHA256` does where `hash-wasm` is
+ * not available; the hashers made before that stay added.
  */
-async function addHashers(hashers: IHasher[], count: number): Promise<boolean> {
+export async function addHashers<T>(
+  hashers: T[],
+  count: number,
+  create: () => Promise<T>,
+): Promise<boolean> {
   const goal = hashers.length + count;
   try {
-    while (hashers.length < goal) hashers.push(await createSHA256());
+    while (hashers.length < goal) hashers.push(await create());
   } catch {
-    // `hash-wasm` is not available.
+    // `create` failed; the shortfall is the result.
   }
   return hashers.length === goal;
 }

@@ -240,6 +240,31 @@ test("time travel: diff + timelines", async (t) => {
           beforeValueKind: "bigint",
           afterValueKind: "object",
         }]);
+        // `null` annotates to itself alone, so it never collides.
+        const others: FabricValue[] = ["null", {}, [], 0, false];
+        for (const other of others) {
+          const pairs: [FabricValue, FabricValue][] = [
+            [null, other],
+            [other, null],
+          ];
+          for (const [before, after] of pairs) {
+            assertEquals(diffValues(before, after), [{
+              path: "",
+              pathSegments: [],
+              kind: "changed",
+              before,
+              after,
+            }]);
+          }
+        }
+        assertEquals(diffValues({ stored: null }, { stored: undefined }), [{
+          path: "stored",
+          pathSegments: ["stored"],
+          kind: "changed",
+          before: null,
+          after: { $undefined: true },
+          afterIsUndefined: true,
+        }]);
         assertEquals(diffValues({ $stream: true }, "$stream"), [{
           path: "",
           pathSegments: [],

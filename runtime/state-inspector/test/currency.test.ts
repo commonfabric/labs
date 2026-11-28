@@ -185,6 +185,59 @@ describe("currency", () => {
       expect(result.cycles[0].pieces).toBe(3);
     });
 
+    it("returns the shortest cycle where a longer way back passes through another space", async () => {
+      await seed(A, [
+        record("of:p1", ["of:p1"], [{ space: B, id: "of:q2" }]),
+        record("of:p3", ["of:p3"], [{ space: B, id: "of:q3" }]),
+      ]);
+      await seed(B, [
+        record("of:q1", ["of:q1"], [
+          { space: A, id: "of:p3" },
+          { space: B, id: "of:q3" },
+        ]),
+        record("of:q2", ["of:q2"], [{ space: B, id: "of:q1" }]),
+        record("of:q3", ["of:q3"], [{ space: A, id: "of:p1" }]),
+      ]);
+
+      const result = currencyCycles(examine([A, B]));
+
+      expect(result.cycleCount).toBe(1);
+      expect(result.cycles[0].edges.map(shown)).toEqual([
+        `${A}/of:p1 -[of:p1]-> ${B}/of:q3`,
+        `${B}/of:q3 -[of:q3]-> ${B}/of:q1`,
+        `${B}/of:q1 -[of:q1]-> ${B}/of:q2`,
+        `${B}/of:q2 -[of:q2]-> ${A}/of:p1`,
+      ]);
+      expect(result.cycles[0].pieces).toBe(5);
+    });
+
+    it("returns no cycle for a piece that reads its own output", async () => {
+      await seed(A, [record("of:first", ["of:a"], [{ space: A, id: "of:a" }])]);
+
+      expect(currencyCycles(examine([A])).cycles).toEqual([]);
+    });
+
+    it("returns a cycle without the edge of a piece on it that reads its own output", async () => {
+      await seed(A, [
+        record("of:first", ["of:a"], [
+          { space: A, id: "of:a" },
+          { space: B, id: "of:b" },
+        ]),
+      ]);
+      await seed(B, [
+        record("of:second", ["of:b"], [{ space: A, id: "of:a" }]),
+      ]);
+
+      const result = currencyCycles(examine([A, B]));
+
+      expect(result.cycleCount).toBe(1);
+      expect(result.cycles[0].edges.map(shown)).toEqual([
+        `${A}/of:first -[of:a]-> ${B}/of:second`,
+        `${B}/of:second -[of:b]-> ${A}/of:first`,
+      ]);
+      expect(result.cycles[0].pieces).toBe(2);
+    });
+
     it("returns no cycle for pieces of one space that read what each other write", async () => {
       await seed(A, [
         record("of:first", ["of:a"], [{ space: A, id: "of:c" }]),

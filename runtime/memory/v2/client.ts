@@ -1265,11 +1265,8 @@ export class Client {
           signal,
         })),
       ));
-      if (signal?.aborted) {
-        throw signal.reason instanceof Error
-          ? signal.reason
-          : new Error("memory session mount cancelled");
-      }
+      // The caller may have cancelled just as the open was answered.
+      if (signal?.aborted) throw mountCancelled(signal);
     } catch (error) {
       // A cancelled mount hands out no session, so one the server opened for
       // it has no holder to close it.
@@ -1539,21 +1536,18 @@ export class Client {
    * part that does not follow the parts it holds, and with it the rest, so
    * the set is applied whole or not at all; the first refusal is the set's.
    *
+   * The split reads the bounds of the connection the call is made on, so a
+   * session calls this only while the client is connected. The parts go out
+   * without an await, in the order the caller's other requests would be
+   * issued, and a part that finds the connection replaced fails as lost with
+   * it.
+   *
    * @internal For `SpaceSession`.
    */
   async requestWatchSet(
     message: WatchSetRequest,
-    options: { whileConnected?: boolean; onResponse?: () => void } = {},
+    options: { onResponse?: () => void } = {},
   ): Promise<WatchSetResult> {
-    // The split reads the connection's bounds, so it waits for the
-    // connection. A connected client issues the parts without an await, in
-    // the order the caller's other requests would be issued.
-    if (!this.#connected && options.whileConnected !== true) {
-      await this.#ensureConnected();
-    }
-    if (!this.#connected) {
-      return await this.request<WatchSetResult>(message, options);
-    }
     const epoch = this.#connectionEpoch;
     const encoded = this.#encodeRequest(message);
     const limits = this.#requestLimits;
@@ -1572,7 +1566,6 @@ export class Client {
     // The last part's response is the set's.
     const answers = parts.map((part, index) =>
       this.request<WatchSetResult>(part, {
-        whileConnected: options.whileConnected,
         epoch,
         ...(index === parts.length - 1
           ? { onResponse: options.onResponse }
@@ -2361,11 +2354,11 @@ export class Client {
   ): void {
     if (!this.#routedSigners.has(principal.did)) return;
     this.#cancelRenewal(principal.did);
+    // A close, a failure for good and the next hello cancel the timer. A
+    // drop does not: a renewal that falls due while the connection is down
+    // finds it down in `#authenticate()`, which sends nothing then.
     const timer = setTimeout(() => {
       this.#renewals.delete(principal.did);
-      if (this.#closed || !this.#connected || epoch !== this.#connectionEpoch) {
-        return;
-      }
       // A first attempt replaces the authentication whose lease is running
       // out. A retry has nothing to replace. The refused attempt's entry is
       // gone, and an authentication admitted since then armed its own
@@ -3459,6 +3452,9 @@ export class Client {
       // notification covering it, and that rule is what lets the write
       // sites be checked rather than reasoned about one by one.
       this.#noteStateChange();
+      // A failed client authenticates nothing again, so no renewal timer
+      // outlives it, as none outlives a close.
+      this.#cancelRenewals();
       this.#endHeldMounts(err);
       this.#rejectPending(err);
       for (const session of [...this.#spaces]) {
@@ -6459,11 +6455,11 @@ export const queuedFrameTransport = (
       deliveryWaiters.shift()!.resolve();
     }
   };
-  // `end()` cancels the turn, so a turn that runs finds the transport open.
+  // A turn is armed only while a frame is queued, and `end()` cancels it, so
+  // a turn that runs finds the transport open and a frame to hand over.
   const drainOne = () => {
     turn = null;
-    const frame = queue.shift();
-    if (frame === undefined) return;
+    const frame = queue.shift()!;
     handedOver++;
     receiver(frame);
     if (queue.length > 0) schedule();

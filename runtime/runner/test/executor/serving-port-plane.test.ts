@@ -494,6 +494,23 @@ describe("serving-port-plane", () => {
       await handled();
       expect(changes).toHaveLength(1);
     });
+
+    it("reports a currency change to the installed observer, and to none once it is removed", async () => {
+      const other = "did:key:z6MkServingPortPlaneOther";
+      const changes: string[] = [];
+      plane.server.setServerExecutionObserver({
+        currencyChanged: (space) => changes.push(space),
+      });
+      bridge.notify("observer.currencyChanged", { space });
+      bridge.notify("observer.currencyChanged", { space: other });
+      await handled();
+      expect(changes).toEqual([space, other]);
+
+      plane.server.setServerExecutionObserver(undefined);
+      bridge.notify("observer.currencyChanged", { space });
+      await handled();
+      expect(changes).toEqual([space, other]);
+    });
   });
 
   describe("createWaveCommitSink()", () => {

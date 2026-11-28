@@ -24,12 +24,15 @@
 // each is recorded in the "Where the polling `waitFor` stays" section of
 // docs/development/waiting-in-tests.md.
 //
-// Usage: deno run --allow-read ./tasks/check-no-waitfor.ts
+// Usage: deno run --allow-read ./tasks/check-no-waitfor.ts [root]
+//
+// `root` is the repository to scan, and defaults to the one holding this file.
 
 import { exists } from "@std/fs/exists";
 import { walk } from "@std/fs/walk";
 import { dirname, fromFileUrl, relative, resolve } from "@std/path";
 import { PACKAGE_ROOTS, packageDirOf } from "./package-layout.ts";
+import { runOnRoot } from "./root-argument.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -235,4 +238,7 @@ export async function main(root: string = REPO_ROOT): Promise<number> {
   return 0;
 }
 
-if (import.meta.main) Deno.exit(await main());
+/** What the command line may hold. */
+const USAGE = "check-no-waitfor.ts [root]";
+
+if (import.meta.main) Deno.exit(await runOnRoot(Deno.args, USAGE, main));

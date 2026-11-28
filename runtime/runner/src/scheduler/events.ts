@@ -42,7 +42,6 @@ import {
 import type {
   CommitError,
   IExtendedStorageTransaction,
-  IMemorySpaceAddress,
   IPreconditionFailedError,
   IReadActivity,
   IStorageManager,
@@ -195,17 +194,8 @@ function servedNotRunWait(
   runtime: Runtime,
   tx: IExtendedStorageTransaction,
 ): { space: MemorySpace; id: string; scopeKey: ScopeKey } | undefined {
-  const unproduced = tx.tx.unproducedScopedInstance;
-  if (unproduced === undefined) return undefined;
-  // Recorded as `<space>/<scope>/<id>`; neither a space DID nor a scope holds
-  // a slash.
-  const [space, scope, ...rest] = unproduced.split("/");
-  if (scope !== "user" && scope !== "session") return undefined;
-  const address = {
-    space: space as MemorySpace,
-    id: rest.join("/") as IMemorySpaceAddress["id"],
-    scope: scope as "user" | "session",
-  };
+  const address = tx.tx.unproducedScopedInstance;
+  if (address === undefined) return undefined;
   const scopeKey = runtime.scheduler.comingOwedScopedInstance(address, tx);
   return scopeKey === undefined
     ? undefined

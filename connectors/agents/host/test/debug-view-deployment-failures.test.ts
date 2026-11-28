@@ -9,7 +9,7 @@ import {
 } from "@commonfabric/agents-connector/fabric-graph";
 import { createSession, Identity, type Session } from "@commonfabric/identity";
 import { pieceId } from "@commonfabric/piece";
-import { PiecesController } from "@commonfabric/piece/ops";
+import { PieceController, PiecesController } from "@commonfabric/piece/ops";
 import { type Cell, Runtime } from "@commonfabric/runner";
 import { setCfcImplementationIdentity } from "@commonfabric/runner/cfc/trust-authority";
 import { createTransactionCommitReceipt } from "../../../../runtime/runner/src/storage/commit-receipt.ts";
@@ -163,6 +163,37 @@ describe("deployAgentSessionsDebugView()", () => {
 
       await expect(deployAgentSessionsDebugView(manager, target)).rejects
         .toThrow(`No space answers to ${session.space}`);
+      expect(ensure.calls.length).toBe(1);
+    }, { defaultPattern: false });
+  });
+
+  it("deploys into a space whose default pattern it had to create", async () => {
+    await withDeployment(async ({ session, runtime, manager, target }) => {
+      using ensure = stub(manager, "ensureDefaultPattern", async () => {
+        await installDefaultPattern(manager);
+        const root = await manager.getDefaultPattern(false);
+        if (root === undefined) throw new Error("no default pattern linked");
+        return new PieceController(manager, root);
+      });
+
+      const id = await deployAgentSessionsDebugView(
+        manager,
+        target,
+        ALTERNATE_LOCATION,
+      );
+
+      expect(ensure.calls.length).toBe(1);
+      expect(
+        runtime.getCell(
+          session.space,
+          `agent-sessions-debug-registration:${session.as.did()}`,
+        ).getRaw(),
+      ).toMatchObject({ pieceId: id });
+
+      // A space that has its default pattern is not asked to create one.
+      expect(
+        await deployAgentSessionsDebugView(manager, target, ALTERNATE_LOCATION),
+      ).toBe(id);
       expect(ensure.calls.length).toBe(1);
     }, { defaultPattern: false });
   });
@@ -366,6 +397,66 @@ describe("deployAgentSessionsDebugView()", () => {
     });
   });
 
+  it("stops a view whose piece changed before it was registered", async () => {
+    await withDeployment(async ({ session, runtime, manager, target }) => {
+      // Once the view starts, transactions see its piece without arguments.
+      let startedId: string | undefined;
+      const startPiece = manager.startPiece.bind(manager);
+      const startStub = stub(manager, "startPiece", async (piece) => {
+        await startPiece(piece);
+        if (typeof piece !== "string") {
+          startedId = piece.getAsNormalizedFullLink().id;
+        }
+      });
+      const edit = runtime.edit.bind(runtime);
+      const editStub = stub(runtime, "edit", (...args) => {
+        const tx = edit(...args);
+        if (startedId === undefined) return tx;
+        const read = tx.readOrThrow.bind(tx);
+        stub(
+          tx,
+          "readOrThrow",
+          (address, options) =>
+            address.id === startedId && address.path.length === 1 &&
+              address.path[0] === "argument"
+              ? undefined
+              : read(address, options),
+        );
+        return tx;
+      });
+      const stopped: unknown[] = [];
+      const stopRunner = runtime.runner.stop.bind(runtime.runner);
+      const stopStub = stub(runtime.runner, "stop", (piece) => {
+        stopRunner(piece);
+        stopped.push(piece.getAsNormalizedFullLink().id);
+      });
+
+      try {
+        await expect(
+          deployAgentSessionsDebugView(manager, target, ALTERNATE_LOCATION),
+        ).rejects.toThrow("debug view piece changed during deployment");
+      } finally {
+        startStub.restore();
+        editStub.restore();
+        stopStub.restore();
+      }
+      expect(stopped).toEqual([startedId]);
+      const registration = runtime.getCell(
+        session.space,
+        `agent-sessions-debug-registration:${session.as.did()}`,
+      );
+      expect(registration.getRaw()).toMatchObject({ cause: "", pieceId: "" });
+
+      // The unchanged piece is adopted and registered by the next deployment.
+      const id = await deployAgentSessionsDebugView(
+        manager,
+        target,
+        ALTERNATE_LOCATION,
+      );
+      expect(registration.getRaw()).toMatchObject({ pieceId: id });
+    });
+  });
+
   it("refuses a view whose arguments lack the owner's protection", async () => {
     await withDeployment(async ({ session, manager, target }) => {
       // The first deployment names the cause and arguments, then stops.
@@ -388,6 +479,44 @@ describe("deployAgentSessionsDebugView()", () => {
       ).rejects.toThrow(
         `refusing to adopt unprotected debug view arguments for ${session.as.did()}`,
       );
+    });
+  });
+
+  it("refuses a protected cause that holds something other than its view", async () => {
+    await withDeployment(async ({ session, runtime, manager, target }) => {
+      const ownerDid = session.as.did();
+      // The first deployment names the cause, then stops.
+      let cause: string | undefined;
+      const capture = stub(manager, "setupPersistent", (...args) => {
+        if (typeof args[2] === "string") cause = args[2];
+        return Promise.reject(new Error("setup captured"));
+      });
+      await expect(
+        deployAgentSessionsDebugView(manager, target, ALTERNATE_LOCATION),
+      ).rejects.toThrow("setup captured");
+      capture.restore();
+      if (cause === undefined) throw new Error("setup was not reached");
+      const squatted = runtime.getCell(session.space, cause);
+      const seeded = await runtime.editWithRetry((tx) => {
+        setCfcImplementationIdentity(tx, {
+          kind: "builtin",
+          builtinId: AGENT_CONNECTOR_WRITER_ID,
+        });
+        squatted.withTx(tx).asSchema(agentOwnerSchema(ownerDid))
+          .setRawUntyped({ note: "not a debug view" });
+      });
+      if (seeded.error) throw seeded.error;
+      using setup = spy(manager, "setupPersistent");
+      using start = spy(manager, "startPiece");
+
+      await expect(
+        deployAgentSessionsDebugView(manager, target, ALTERNATE_LOCATION),
+      ).rejects.toThrow(
+        `debug view cause ${cause} contains a different prepared piece`,
+      );
+      expect(squatted.getRaw()).toEqual({ note: "not a debug view" });
+      expect(setup.calls.length).toBe(0);
+      expect(start.calls.length).toBe(0);
     });
   });
 

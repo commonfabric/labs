@@ -4,20 +4,29 @@
  * handed, by reference, and no other, even after the list has moved (for
  * an item added through `addItem`; see below for one seeded inline);
  * `removeRule` takes out one rule and its adopted mark; `resetRules` empties
- * the set and keeps the history; the setters write their setting; and each
- * verb refuses malformed input by throwing rather than doing nothing.
+ * the set and keeps the history; the setters write their setting; each verb
+ * refuses malformed input by throwing rather than doing nothing; and the
+ * header's goal box sets a new goal when filled and nothing when blank.
  *
  * Pattern under test: ./lofi-inductor.tsx
  */
 import { action, assert, pattern, TESTS, UI, Writable } from "commonfabric";
 import {
   findNodeByProp,
+  propValue,
   setBound,
+  typeInto,
 } from "../../../tools/test-support/vnode-helpers.ts";
 import { HIFI_MOCKS, rule } from "./lofi-inductor-test-fixture.ts";
 import LofiInductor, { type Item } from "./lofi-inductor.tsx";
 
 const GOAL = "Is this email a bill?";
+const LUNCH_GOAL = "Is this email about lunch?";
+const GOAL_BOX = "A new yes-or-no question, such as “Is this email a bill?”";
+
+/** What the goal box in the header of `view` holds. */
+const goalBox = (view: unknown): unknown =>
+  propValue(findNodeByProp(view, "placeholder", GOAL_BOX), "$value");
 
 export const llmMocks = HIFI_MOCKS;
 
@@ -27,6 +36,10 @@ const REFUSALS = [
   // The event's schema drops a field that is not a string before the action
   // sees it, so an item whose only field is a number has none.
   "An item needs at least one field.",
+  // The schema turns an event that is not an item, here a bare string and
+  // an object without `fields`, into nothing.
+  "An item is an object with `fields`.",
+  "An item is an object with `fields`.",
   "`items` is a list of items.",
   "`item` is an item read from `items`.",
   "`rule` is a rule read from `rules`.",
@@ -219,6 +232,48 @@ export default pattern(() => {
     subject.hifiModel === ""
   );
 
+  // The schema drops an id that is not a string, so the item is added under
+  // a minted id rather than refused.
+  const assert_numbered_added = assert(() =>
+    seeded.items.length === 3 &&
+    seeded.items[2]?.fields.subject === "Weekend plans" &&
+    /^item-[0-9a-z]+$/.test(seeded.items[2]?.id ?? "")
+  );
+
+  // A blank goal box sets nothing; a filled one sets the new goal, which
+  // clears what belonged to the old one, and empties the box.
+  const asking = LofiInductor({
+    goal: GOAL,
+    items: [],
+    rules: [INVOICE],
+    history: [{
+      round: 1,
+      accepted: true,
+      reason: "it scored better",
+      proposed: [INVOICE],
+      refusals: [],
+      currentF1: 0,
+      proposedF1: 1,
+      heldOut: 5,
+      answered: [],
+      decidedAt: 0,
+    }],
+  });
+  const action_type_blank_goal = action(() => {
+    typeInto(asking[UI], GOAL_BOX, "   ");
+  });
+  const assert_goal_unchanged = assert(() =>
+    asking.goal === GOAL && asking.rules.length === 1 &&
+    asking.history.length === 1
+  );
+  const action_type_goal = action(() => {
+    typeInto(asking[UI], GOAL_BOX, `  ${LUNCH_GOAL} `);
+  });
+  const assert_goal_set = assert(() =>
+    asking.goal === LUNCH_GOAL && asking.rules.length === 0 &&
+    asking.history.length === 0 && goalBox(asking[UI]) === ""
+  );
+
   return {
     [TESTS]: [
       { action: action_add_batch },
@@ -257,6 +312,8 @@ export default pattern(() => {
         action: subject.addItem,
         event: { fields: { subject: 42 } },
       },
+      { action: subject.addItem, event: "mail-9" },
+      { action: subject.addItem, event: { id: "mail-9" } },
       { action: subject.addItems, event: { items: "mail-9" } },
       { action: subject.removeItem, event: {} },
       { action: subject.removeRule, event: {} },
@@ -265,9 +322,22 @@ export default pattern(() => {
       { action: subject.setHeldOutPercent, event: { percent: 100 } },
       { action: subject.setHifiModel, event: { model: 7 } },
       { assertion: assert_unchanged_by_refusals },
+      {
+        action: seeded.addItem,
+        event: { id: 9, fields: { subject: "Weekend plans" } },
+      },
+      { assertion: assert_numbered_added },
+      { render: asking[UI] },
+      { action: action_type_blank_goal },
+      { press: asking[UI], control: "Set goal" },
+      { assertion: assert_goal_unchanged },
+      { action: action_type_goal },
+      { press: asking[UI], control: "Set goal" },
+      { assertion: assert_goal_set },
     ],
     expectRuntimeErrors: REFUSALS,
     subject,
     seeded,
+    asking,
   };
 });

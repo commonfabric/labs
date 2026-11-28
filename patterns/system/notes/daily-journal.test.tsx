@@ -6,8 +6,10 @@
  * filing another. The summary, the calendar's marked days, the settings view,
  * and the rollup card for a week with notes in it are read off the journal.
  *
- * The journal's rollup comes from a language model, which a pattern test
- * cannot reach, so the rollup view is given rollups directly.
+ * "Refresh" asks the model for a rollup of the week's notes; `llmMocks`
+ * answers with one, which the journal shows with a suggestion beside it. The
+ * rollup view is also given rollups directly, to show the shapes the model's
+ * answer may take.
  *
  * Run: deno task cf test patterns/system/notes/daily-journal.test.tsx --root patterns --verbose
  */
@@ -72,6 +74,21 @@ const ROLLUP = {
   openThreads: ["Order seeds"],
   mood: "calm",
 };
+
+// The rollup request: the week holds one note (today's; the March notes are
+// older), and the model presents ROLLUP. The dialog then asks for one more
+// turn, which still offers `presentResult`; a turn that answers with text
+// and an empty list of tool calls ends the dialog there.
+export const llmMocks = [
+  {
+    when: {
+      systemContains: '<daily-notes count="1">',
+      lastMessageContains: "Analyze my daily notes from this past week",
+    },
+    toolCalls: [{ name: "presentResult", input: ROLLUP }],
+  },
+  { when: { messageCount: 3 }, text: "Here is your week.", toolCalls: [] },
+];
 
 export default pattern(() => {
   const registrations = wish<{ testPieceRegistrationCount: number }>({
@@ -156,6 +173,23 @@ export default pattern(() => {
   const assert_rollup_card_shown = assert(() =>
     findNodeByText(journal[UI], "Weekly Rollup") !== undefined
   );
+  const assert_no_rollup_before_refresh = assert(() =>
+    journal.weeklyRollup === undefined &&
+    !hasText(journal[UI], "A steady week") &&
+    findNodeByText(journal[UI], "Suggested") === undefined
+  );
+
+  // ===== The weekly rollup =====
+
+  const action_refresh_rollup = action(() =>
+    clickButton(journal[UI], "Refresh")
+  );
+  const assert_rollup_from_model = assert(() =>
+    journal.weeklyRollup?.headline === "A steady week" &&
+    journal.weeklyRollup?.openThreads[0] === "Order seeds" &&
+    hasText(journal[UI], "Garden — planted beans") &&
+    findNodeByText(journal[UI], "Suggested") !== undefined
+  );
 
   // ===== Settings =====
 
@@ -225,6 +259,10 @@ export default pattern(() => {
       { assertion: assert_summary_names_latest },
       { assertion: assert_calendar_marks_dated_entries },
       { assertion: assert_rollup_card_shown },
+      { assertion: assert_no_rollup_before_refresh },
+
+      { action: action_refresh_rollup },
+      { assertion: assert_rollup_from_model },
 
       { action: action_open_settings },
       { assertion: assert_settings_shown },

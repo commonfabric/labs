@@ -9,11 +9,13 @@ import {
   type CurrencyRecord,
   type CurrencySliceRecord,
   dropUnreadCurrencyImports,
+  forgetCurrencyImports,
   forgetCurrencySource,
   judgeCurrencyRoots,
   pullCurrencyExports,
   registerCurrencyReads,
   selectCurrencyDeriver,
+  selectCurrencyImports,
   selectCurrencyNextExpiry,
   selectCurrencyPiece,
   selectCurrencyReadersMoved,
@@ -1255,6 +1257,34 @@ describe("currency-index", () => {
         store(asOf, [{ ...unrun, vouched: false }]);
 
         expect(markOf("of:piece")).toBe(2);
+      });
+    });
+
+    describe("with a clean piece that read what another computes", () => {
+      /** Records `of:producer` computing `computed:x`, which `of:reader` reads. */
+      const storeBoth = (): number => {
+        const asOf = write("of:producer", "of:reader", "computed:x");
+        store(asOf, [
+          record("of:producer", { produces: ["computed:x"] }),
+          record("of:reader", { reads: [derived("computed:x")] }),
+        ]);
+        return asOf;
+      };
+
+      it("marks `1` the reader once a record of the producer writes what it read and no longer vouches for it", () => {
+        const asOf = storeBoth();
+
+        store(asOf, [record("of:producer", { writes: ["computed:x"] })]);
+
+        expect([markOf("of:producer"), markOf("of:reader")]).toEqual([0, 1]);
+      });
+
+      it("leaves the reader clean once a record of the producer no longer writes what it read, which holds a value", () => {
+        const asOf = storeBoth();
+
+        store(asOf, [record("of:producer")]);
+
+        expect([markOf("of:producer"), markOf("of:reader")]).toEqual([0, 0]);
       });
     });
 
@@ -2988,6 +3018,18 @@ describe("currency-index", () => {
 
         expect(advance()).toEqual([]);
       });
+
+      it("reports nothing at the time a slice expires at once a commit marked it `2` before then", () => {
+        storeClock();
+        write("computed:tick");
+        expect(advance()).toEqual(["of:clock", "of:reader"]);
+        now = EXPIRES;
+
+        expect(advance()).toEqual([]);
+        expect(markOf("of:clock")).toBe(2);
+        expect(selectCurrencyNextExpiry(engine, { space: SPACE }))
+          .toBeUndefined();
+      });
     });
 
     describe("selectCurrencyNextExpiry()", () => {
@@ -3471,6 +3513,64 @@ describe("currency-index", () => {
         pull();
 
         expect(markOf("of:piece")).toBe(0);
+      });
+
+      it("leaves marked `1` a slice whose source reports its instance current again while a local input of it is stale", () => {
+        const head = storeProducer();
+        register("computed:far");
+        store(write("of:piece", "of:maker", "of:i", "computed:mine"), [
+          record("of:maker", {
+            reads: [input("of:i")],
+            produces: ["computed:mine"],
+          }),
+          record("of:piece", {
+            reads: [far("computed:far", head), derived("computed:mine")],
+          }),
+        ]);
+        const changed = writeSource("of:raw");
+        pull();
+        write("of:i");
+        advance();
+        expect([markOf("of:maker"), markOf("of:piece")]).toEqual([2, 1]);
+
+        storeSource(changed, [
+          record("of:producer", {
+            reads: [{ ...input("of:raw"), space: SOURCE }],
+            produces: ["computed:far"],
+          }),
+        ]);
+        pull();
+
+        expect(markOf("of:piece")).toBe(1);
+      });
+    });
+
+    describe("forgetCurrencyImports()", () => {
+      /** Forgets the reading space's import of the source's `of:farA`. */
+      const forgetA = () =>
+        forgetCurrencyImports(engine, {
+          space: SPACE,
+          source: SOURCE,
+          instances: [{ id: "of:farA", scopeKey: "space" }],
+        });
+
+      it("marks `2` each slice that read a forgotten instance, and no slice that read another", () => {
+        storeReading("of:pieceA", "of:farA");
+        storeReading("of:pieceB", "of:farB");
+
+        expect(forgetA()).toEqual(["of:pieceA"]);
+
+        expect([markOf("of:pieceA"), markOf("of:pieceB")]).toEqual([2, 0]);
+        expect(selectCurrencyImports(engine, { space: SPACE, source: SOURCE }))
+          .toEqual([{ id: "of:farB", scopeKey: "space" }]);
+      });
+
+      it("names no piece whose slice it had marked already", () => {
+        storeReading("of:pieceA", "of:farA");
+        forgetA();
+
+        expect(forgetA()).toEqual([]);
+        expect(markOf("of:pieceA")).toBe(2);
       });
     });
 

@@ -194,7 +194,7 @@ function deriveCapabilityShrinkPlan(
     ...paramSummary.writePaths,
     ...(paramSummary.opaquePaths ?? []),
   ]);
-  const fullShapePaths = uniquePaths(paramSummary.fullShapePaths ?? []);
+  const fullShapePaths = uniquePaths(paramSummary.fullShapePaths);
   const identityPaths = uniquePaths(paramSummary.identityPaths ?? []);
   const identityCellPaths = uniquePaths(paramSummary.identityCellPaths ?? []);
   const comparableCellPaths = uniquePaths([
@@ -3676,14 +3676,10 @@ function createIdentityOnlyReplacementTypeNode(
       factory,
       preservedWrapperFor(node, resolvedType, checker),
     );
-    const wrappedType = resolveIdentitySemanticType(
+    typeRegistry?.set(
       wrappedNode,
-      checker,
-      typeRegistry,
+      getTypeFromTypeNodeWithFallback(wrappedNode, checker, typeRegistry),
     );
-    if (wrappedType && typeRegistry) {
-      typeRegistry.set(wrappedNode, wrappedType);
-    }
     return wrappedNode;
   }
   return unknownNode;
@@ -3711,28 +3707,13 @@ function createIdentityOnlyNullishTypeNode(
 
 function createIdentityOnlyRootTypeNode(
   node: ts.TypeNode,
-  semanticType: ts.Type | undefined,
+  resolvedType: ts.Type,
   forceOpaque: boolean,
   forceComparable: boolean,
   checker: ts.TypeChecker,
   factory: ts.NodeFactory,
   typeRegistry?: WeakMap<ts.Node, ts.Type>,
 ): ts.TypeNode {
-  const resolvedType = semanticType ??
-    resolveIdentitySemanticType(node, checker, typeRegistry);
-
-  if (!resolvedType) {
-    return createIdentityOnlyReplacementTypeNode(
-      node,
-      resolvedType,
-      forceOpaque,
-      forceComparable,
-      checker,
-      factory,
-      typeRegistry,
-    );
-  }
-
   if (isNullishType(resolvedType)) {
     return createIdentityOnlyNullishTypeNode(
       resolvedType,
@@ -3785,15 +3766,11 @@ function createIdentityOnlyRootTypeNode(
 }
 
 function getIdentityChildSemanticType(
-  type: ts.Type | undefined,
+  type: ts.Type,
   head: string,
   location: ts.Node,
   checker: ts.TypeChecker,
 ): ts.Type | undefined {
-  if (!type) {
-    return undefined;
-  }
-
   const nonNullable = checker.getNonNullableType(type);
   const prop = findPropertySymbol(nonNullable, head, checker);
   if (prop) {
@@ -3807,18 +3784,6 @@ function getIdentityChildSemanticType(
     nonNullable,
     numericIndex ? ts.IndexKind.Number : ts.IndexKind.String,
   ) ?? checker.getIndexTypeOfType(nonNullable, ts.IndexKind.String);
-}
-
-function resolveIdentitySemanticType(
-  node: ts.TypeNode,
-  checker: ts.TypeChecker,
-  typeRegistry?: WeakMap<ts.Node, ts.Type>,
-): ts.Type | undefined {
-  try {
-    return getTypeFromTypeNodeWithFallback(node, checker, typeRegistry);
-  } catch (_error: unknown) {
-    return undefined;
-  }
 }
 
 function applyIdentityOnlyPathsToTypeNode(
@@ -3839,7 +3804,7 @@ function applyIdentityOnlyPathsToTypeNode(
     comparableCellLikePaths,
   );
   const resolvedSemanticType = semanticType ??
-    resolveIdentitySemanticType(node, checker, typeRegistry);
+    getTypeFromTypeNodeWithFallback(node, checker, typeRegistry);
   if (
     normalized.some((path) => path.length === 0) &&
     !normalized.some((path) => path.length > 0)
@@ -3933,12 +3898,10 @@ function applyIdentityOnlyPathsToTypeNode(
     normalizedComparableCellLikePaths,
   );
   if (itemPaths.length > 0) {
-    const itemSemanticType = resolvedSemanticType
-      ? getArrayElementType(
-        checker.getNonNullableType(resolvedSemanticType),
-        checker,
-      )
-      : undefined;
+    const itemSemanticType = getArrayElementType(
+      checker.getNonNullableType(resolvedSemanticType),
+      checker,
+    );
     if (ts.isArrayTypeNode(node)) {
       const updated = applyIdentityOnlyPathsToTypeNode(
         node.elementType,

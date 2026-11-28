@@ -201,15 +201,14 @@ export async function selectPieces(
   // from a link.
   const holderDoc = collection.getAsNormalizedFullLink().id;
   const selected = members.map((member, index) => {
-    const id = pieceId(member);
-    if (id === undefined || member.getAsNormalizedFullLink().id === holderDoc) {
+    if (member.getAsNormalizedFullLink().id === holderDoc) {
       throw new Error(
         `Collection member ${index} at ${
           selector.path.join("/")
         } does not hold a piece link.`,
       );
     }
-    return { piece: id, phase };
+    return { piece: pieceId(member), phase };
   });
   if (phase === HOLDER_PHASE) {
     throw new Error(

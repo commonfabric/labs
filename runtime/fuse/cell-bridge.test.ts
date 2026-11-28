@@ -3997,6 +3997,47 @@ describe("cell-bridge", () => {
       });
 
       describe("invalidateWritePath()", () => {
+        it("skips a name tracked for the piece whose directory is gone", async () => {
+          const tree = new FsTree();
+          const bridge = new CellBridge(tree, "/tmp/cf-exec");
+          const state = buildTestSpace(bridge, "home", []);
+          const piece = staticPiece("of:notes", "Notes", {}, { title: "a" });
+          await bridge.accessForTestingOnly.addPieceToSpace(
+            state,
+            fakePiece(piece),
+            "home",
+          );
+          const pieceIno = tree.lookup(state.piecesIno, "Notes")!;
+          await bridge.accessForTestingOnly.hydratePieceProp(
+            pieceIno,
+            "result",
+          );
+          const goneIno = tree.addDir(state.piecesIno, "Gone");
+          tree.removeChild(state.piecesIno, "Gone");
+          state.pieceMap.set("Gone", piece.id);
+          state.pieceInos.set("Gone", goneIno);
+          const invalidated: Array<[bigint, string[]]> = [];
+          bridge.onInvalidate = (parentIno, names) =>
+            invalidated.push([parentIno, names]);
+
+          bridge.invalidateWritePath({
+            spaceName: "home",
+            pieceName: "Notes",
+            cell: "result",
+            jsonPath: ["title"],
+            isJsonFile: false,
+            piece: fakePiece(piece),
+          });
+
+          expect(invalidated).toEqual([[
+            pieceIno,
+            ["result", "result.json", ".handlers"],
+          ]]);
+          expect(tree.getChildren(tree.lookup(pieceIno, "result")!))
+            .toEqual([]);
+          expect(tree.getNode(goneIno)).toBeUndefined();
+        });
+
         it("clears the hydrated piece result cache", async () => {
           const tree = new FsTree();
           const bridge = new CellBridge(tree, "/tmp/cf-exec");
@@ -4233,7 +4274,7 @@ describe("cell-bridge", () => {
             tree.lookup(entityIno, "result")!,
             "onAddContact.handler",
           )!;
-          return { bridge, state, piece, handlerIno };
+          return { tree, bridge, state, piece, handlerIno };
         }
 
         it("returns the handler of an entity projection, from its controller or else the pieces list", async () => {
@@ -4252,6 +4293,30 @@ describe("cell-bridge", () => {
 
           state.pieceControllers.clear();
           expect(bridge.resolveHandlerTarget(handlerIno)).toBeNull();
+        });
+
+        it("returns null for a directory, a handler outside a piece, and a handler in a space not connected", async () => {
+          const { tree, bridge, handlerIno } = await projectContactBook();
+          const addHandler = (parentIno: bigint) =>
+            tree.addCallable(
+              parentIno,
+              "onAddContact.handler",
+              "handler",
+              "onAddContact",
+              "result",
+              new Uint8Array(),
+            );
+          let awayIno = tree.addDir(tree.rootIno, "away");
+          for (const name of ["pieces", "Contact-Book", "result"]) {
+            awayIno = tree.addDir(awayIno, name);
+          }
+
+          expect(bridge.resolveHandlerTarget(handlerIno)).not.toBeNull();
+          expect(bridge.resolveHandlerTarget(tree.parents.get(handlerIno)!))
+            .toBeNull();
+          expect(bridge.resolveHandlerTarget(addHandler(tree.rootIno)))
+            .toBeNull();
+          expect(bridge.resolveHandlerTarget(addHandler(awayIno))).toBeNull();
         });
       });
 
@@ -6498,6 +6563,28 @@ describe("cell-bridge", () => {
             await rebuild({ title: "Hidden" });
             expect(tree.lookup(resultIno, "$UI.json")).toBeUndefined();
             expect(getFileContent(tree, resultIno, "title")).toBe("Hidden");
+          });
+
+          it("leaves a VNode out of a list's items, as it does under an object", async () => {
+            const { tree, pieceIno, rebuild } = await hydrate();
+            const ui = { type: "vnode", name: "div", props: {}, children: [] };
+            const item = { title: "First", ui, meta: { pinned: true } };
+            const expectItem = (itemIno: bigint) => {
+              expect(getFileContent(tree, itemIno, "title")).toBe("First");
+              expect(tree.lookup(itemIno, "ui")).toBeUndefined();
+              expect(
+                getFileContent(tree, tree.lookup(itemIno, "meta")!, "pinned"),
+              ).toBe("true");
+            };
+
+            await rebuild([item]);
+            const resultIno = tree.lookup(pieceIno, "result")!;
+            expectItem(tree.lookup(resultIno, "0")!);
+
+            await rebuild({ items: [item] });
+            expectItem(
+              tree.lookup(tree.lookup(resultIno, "items")!, "0")!,
+            );
           });
 
           it("keeps the `.json` sibling of a `$`-prefixed object that is not a VNode", async () => {

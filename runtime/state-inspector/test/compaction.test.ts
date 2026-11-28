@@ -1,7 +1,7 @@
 // Verification of a compacted store against its backup: passes on what the
 // run produces, and names the property a tampered result lost.
 
-import { assert, assertEquals, assertFalse } from "@std/assert";
+import { assert, assertEquals, assertFalse, assertThrows } from "@std/assert";
 import { toFileUrl } from "@std/path";
 import { Database } from "@db/sqlite";
 
@@ -793,6 +793,44 @@ test("verifyCompaction names what a tampered result lost", async () => {
     const none = verifyCompaction({ result: backup, against: backup });
     assertFalse(none.ok);
     assertEquals(failing(none), ["compaction commit recorded"]);
+  });
+});
+
+test("verifyCompaction throws when a head cannot be read in either file", async () => {
+  await withCompacted(async ({ backup, result, dir }) => {
+    // Every read of a head resolves its branch through `parent_branch`;
+    // without that column, no document in the file can be read.
+    const unreadable = async (source: string, name: string) => {
+      const copy = `${dir}/${name}`;
+      await Deno.copyFile(source, copy);
+      const db = new Database(copy);
+      db.exec(`ALTER TABLE branch RENAME COLUMN parent_branch TO parent`);
+      db.close();
+      return copy;
+    };
+    const brokenResult = await unreadable(result, "broken-result.sqlite");
+    const brokenBackup = await unreadable(backup, "broken-backup.sqlite");
+    for (
+      const options of [
+        // The backup's fingerprint reaches every head, and the result's read
+        // of each throws.
+        { result: brokenResult, against: backup },
+        // The backup's fingerprint fails before any head; each is then read
+        // on its own.
+        { result, against: brokenBackup },
+        // Sampled, without a fingerprint, on either side.
+        { result: brokenResult, against: backup, sample: 1 },
+        { result, against: brokenBackup, sample: 2 },
+      ]
+    ) {
+      assertThrows(
+        () => verifyCompaction(options),
+        Error,
+        "no such column: parent_branch",
+      );
+    }
+    // The intact pair reads back and verifies.
+    assert(verifyCompaction({ result, against: backup }).ok);
   });
 });
 

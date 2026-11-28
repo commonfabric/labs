@@ -6,13 +6,13 @@
  */
 
 import { chooseImplementation } from "@/implementation.ts";
-import { canUseDeno } from "@/sha256-deno.ts";
+import { denoImplementation } from "@/sha256-deno.ts";
 import { initWasm } from "@/sha256-wasm.ts";
 
 export type { DigestFn, IncrementalHasher } from "@/interface.ts";
 
 const { sha256, createHasher } = await chooseImplementation(
-  canUseDeno,
+  denoImplementation,
   initWasm,
 );
 

@@ -41,6 +41,12 @@ export default pattern(() => {
   const bindInvalid = action(() =>
     invalidRoot.bindMeeting.send({ key: KEY, reply })
   );
+  // A meeting association stored as a list rather than a record.
+  const listed = new Writable<{ length: number }>([KEY]);
+  const listedRoot = Loom({ meeting: listed });
+  const bindListed = action(() =>
+    listedRoot.bindMeeting.send({ key: KEY, reply })
+  );
   const unknown = new Writable<{ key?: string; future: string }>({
     future: "keep",
   });
@@ -172,6 +178,9 @@ export default pattern(() => {
       { action: bindInvalid },
       { assertion: assert(() => reply.get().status === "invalid-state") },
       { assertion: assert(() => invalid.get().key === "malformed") },
+      { action: bindListed },
+      { assertion: assert(() => reply.get().status === "invalid-state") },
+      { assertion: assert(() => listedRoot.meeting.key === undefined) },
       { action: bindUnknown },
       { assertion: assert(() => reply.get().status === "invalid-state") },
       { assertion: assert(() => unknown.get().future === "keep") },

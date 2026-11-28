@@ -2997,6 +2997,7 @@ type TestStepKey =
   | "press"
   | "render"
   | "settle"
+  | "deleteSpace"
   | "label"
   | "await";
 
@@ -3036,6 +3037,10 @@ type OnlyTestStep<Own extends TestStepKey, Fields> =
  * - `{ render }` materializes a VDOM subtree.
  * - `{ settle: true }` waits for full settlement (scheduler, storage, and
  *   in-flight async builtin I/O) before the next step.
+ * - `{ deleteSpace }` deletes the space the value of `deleteSpace` lives in,
+ *   as the test's identity, whoever else its access list names, so that
+ *   `spaceDeleted()` returns `true` for it in the steps after. A single-user
+ *   test runs it; a multi-user test refuses it.
  * - `{ label }` and `{ await }` synchronize a multi-user test: a participant
  *   announces reaching `label`, and another participant blocks on `await`
  *   until that marker is announced. They are inert in a single-user test.
@@ -3060,6 +3065,7 @@ export type TestStep =
   }>
   | OnlyTestStep<"render", { render: unknown }>
   | OnlyTestStep<"settle", { settle: true }>
+  | OnlyTestStep<"deleteSpace", { deleteSpace: unknown }>
   | OnlyTestStep<"label", { label: string }>
   | OnlyTestStep<"await", { await: string }>;
 

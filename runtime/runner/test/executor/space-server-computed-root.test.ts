@@ -9,6 +9,7 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 import { clock } from "@commonfabric/test-support/fake-clock";
+import { stub } from "@std/testing/mock";
 
 import { ExecutorHost } from "../../src/executor/host.ts";
 import type { RuntimeProgram } from "../../src/harness/types.ts";
@@ -75,6 +76,9 @@ describe("SpaceServer", () => {
 
   /** The runtimes the host made, one for each tenure it has served. */
   let servingRuntimes: Runtime[];
+
+  /** Runs on each serving runtime the host makes from here on. */
+  let prepare: ((runtime: Runtime) => void) | undefined;
   const opened: { runtime: Runtime; manager: EmulatedStorageManager }[] = [];
 
   /** A client runtime over the shared server, acting for `as`. */
@@ -92,6 +96,7 @@ describe("SpaceServer", () => {
   beforeEach(() => {
     server = newSharedServer({ subscriptionRefreshDelayMs: 0 });
     servingRuntimes = [];
+    prepare = undefined;
     host = new ExecutorHost({
       server,
       serviceIdentity: serviceSigner.did(),
@@ -106,6 +111,7 @@ describe("SpaceServer", () => {
           experimental: { serverExecution: true },
         });
         servingRuntimes.push(runtime);
+        prepare?.(runtime);
         return Promise.resolve({
           runtime,
           dispose: async () => {
@@ -290,6 +296,69 @@ describe("SpaceServer", () => {
           { stuckLabel: "alice to read her output derived from the new input" },
         );
         expect(serves(root)).toBe(true);
+      });
+
+      it("loads the document as the space holds it, and starts the piece, where the viewer's own instance of it cannot be read", async () => {
+        // The piece derives one total for the space, which the viewer names
+        // at their own instance. The serving runtime's first read of that
+        // instance fails, so the load falls back to the document itself,
+        // whose space instance links back to the piece.
+
+        const { root, derived } = await standUpParkAndChange(PROGRAM, "total");
+        let refused = 0;
+        prepare = (runtime) => {
+          const cellFor = runtime.getCellFromLink.bind(runtime);
+          stub(
+            runtime,
+            "getCellFromLink",
+            ((...args: Parameters<typeof runtime.getCellFromLink>) => {
+              const cell = cellFor(...args);
+              const link = cell.getAsNormalizedFullLink();
+              if (
+                refused > 0 || args[2] === undefined ||
+                link.id !== derived.id || link.scope !== "user"
+              ) {
+                return cell;
+              }
+              refused++;
+              return new Proxy(cell, {
+                get: (target, property, receiver) =>
+                  property === "sync"
+                    ? () => Promise.reject(new Error("instance unreadable"))
+                    : Reflect.get(target, property, receiver),
+              });
+            }) as typeof runtime.getCellFromLink,
+          );
+        };
+
+        const failures = host!.stats().structureLoadFailures;
+
+        const alice = openRuntime(aliceSigner);
+        const cell = alice.getCellFromLink<number>({
+          space,
+          id: derived.id,
+          scope: "user",
+          path: [],
+        });
+        await cell.sync();
+        cell.sink(() => {});
+        await host!.whenQuiescent();
+
+        expect(refused).toBe(1);
+        expect(host!.stats().structureLoadFailures).toBe(failures);
+        expect(serves(root)).toBe(true);
+        const total = alice.getCellFromLink<number>({
+          space,
+          id: derived.id,
+          path: [],
+        });
+        await total.sync();
+        await waitForCellValue(
+          alice,
+          total,
+          (value: number | undefined) => value === 42,
+          { stuckLabel: "alice to read the total derived from the new input" },
+        );
       });
 
       it("derives the instance of a viewer who names it while the piece runs for another viewer", async () => {

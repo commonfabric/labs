@@ -257,10 +257,11 @@ function bodyClosers(tokens: readonly Token[]): Map<number, number> {
 }
 
 /**
- * The start and end of each outermost body in `tokens`, delimiters included,
- * whose statement names a language other than `sql` or `plpgsql` in a
- * `LANGUAGE` clause outside brackets, before or after the body; `closers` is
- * {@link bodyClosers} of `tokens`.
+ * The start and end of each body in `tokens`, delimiters included, whose
+ * statement names a language other than `sql` or `plpgsql` in a `LANGUAGE`
+ * clause outside brackets, before or after the body; `closers` is
+ * {@link bodyClosers} of `tokens`. A body inside another body ends within it,
+ * so the range of a body inside such a body lies within that body's range.
  */
 function foreignBodies(
   text: string,
@@ -308,19 +309,16 @@ function foreignBodies(
   finish(0);
   // A body runs to its closing delimiter, or, unclosed, to the end of the text
   // it is in.
-  const ranges: [number, number][] = [];
-  for (const index of [...foreign].sort((a, b) => a - b)) {
+  return [...foreign].map((index) => {
     const token = tokens[index];
-    if (token.start < (ranges.at(-1)?.[1] ?? 0)) continue;
     const closer = tokens[closers.get(index) ?? tokens.length];
     const end = closer === undefined
       ? text.length
       : closer.body === token.body
       ? closer.end
       : closer.start;
-    ranges.push([token.start, end]);
-  }
-  return ranges;
+    return [token.start, end];
+  });
 }
 
 /**

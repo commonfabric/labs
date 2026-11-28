@@ -4,10 +4,12 @@ import type { DID } from "@commonfabric/identity";
 import { favoriteKey } from "@commonfabric/home-schemas";
 import { describe, it } from "@commonfabric/test-support/test";
 
+import { CellReadRefusedError } from "@/cell-handle.ts";
 import {
   type FavoritePieceAddress,
   FavoritesManager,
 } from "@/favorites-manager.ts";
+import type { CellReadRefusal } from "@/protocol/types.ts";
 import type { RuntimeClient } from "@/runtime-client.ts";
 
 const space = "did:key:test-space" as DID;
@@ -35,16 +37,27 @@ interface StubOptions {
 function makeStub(opts: StubOptions = {}) {
   const sent: Array<Record<string, unknown>> = [];
   let subscribeCb: ((v: unknown) => void) | undefined;
+  let onRefused: ((refusal: CellReadRefusal) => void) | undefined;
+  const subscribed = Promise.withResolvers<void>();
+  const favoritesResolved = Promise.withResolvers<void>();
   let unsubscribed = false;
   const getPieceArgs: unknown[][] = [];
 
   const handler = { send: (p: Record<string, unknown>) => sent.push(p) };
   const favoritesCell: Record<string, unknown> = {
-    asSchema: () => favoritesCell,
+    asSchema: () => {
+      favoritesResolved.resolve();
+      return favoritesCell;
+    },
     sync: () => Promise.resolve(),
     get: () => opts.favorites,
-    subscribe: (cb: (v: unknown) => void) => {
+    subscribe: (
+      cb: (v: unknown) => void,
+      options: { onRefused: (refusal: CellReadRefusal) => void },
+    ) => {
       subscribeCb = cb;
+      onRefused = options.onRefused;
+      subscribed.resolve();
       return () => {
         unsubscribed = true;
       };
@@ -77,6 +90,9 @@ function makeStub(opts: StubOptions = {}) {
     rt,
     sent,
     invokeSubscribe: (v: unknown) => subscribeCb?.(v),
+    refuse: (refusal: CellReadRefusal) => onRefused?.(refusal),
+    subscribed: subscribed.promise,
+    favoritesResolved: favoritesResolved.promise,
     hasSubscriber: () => subscribeCb !== undefined,
     wasUnsubscribed: () => unsubscribed,
     getPieceCalls: () => getPieceArgs.length,
@@ -221,6 +237,65 @@ describe("FavoritesManager", () => {
         // After cleanup, further deliveries are dropped.
         stub.invokeSubscribe([{ cell: {}, tags: ["y"], userTags: [] }]);
         expect(seen.length).toBe(2);
+      });
+
+      it("reports a refused read to `onError` and empties the list", async () => {
+        const stub = makeStub();
+        const seen: unknown[] = [];
+        const reported: Error[] = [];
+        new FavoritesManager(stub.rt).subscribeFavorites(
+          (f) => seen.push(f),
+          (err) => reported.push(err),
+        );
+        await stub.subscribed;
+
+        stub.invokeSubscribe([{ cell: {}, tags: ["x"], userTags: [] }]);
+        const refusal = {
+          refusedBy: "display-ceiling",
+          labelSource: "stored",
+        } as const;
+        stub.refuse(refusal);
+
+        expect(reported).toEqual([new CellReadRefusedError(refusal)]);
+        expect(reported[0]).toBeInstanceOf(CellReadRefusedError);
+        // The list shown is replaced by an empty one, not left holding the
+        // entries the refusal now withholds.
+        expect(seen).toEqual([[{ cell: {}, tags: ["x"], userTags: [] }], []]);
+      });
+
+      it("ignores a refused read after unsubscribing", async () => {
+        const stub = makeStub();
+        const seen: unknown[] = [];
+        const reported: Error[] = [];
+        const cancel = new FavoritesManager(stub.rt).subscribeFavorites(
+          (f) => seen.push(f),
+          (err) => reported.push(err),
+        );
+        await stub.subscribed;
+        cancel();
+
+        stub.refuse({ refusedBy: "display-ceiling" });
+        expect(reported).toEqual([]);
+        expect(seen).toEqual([]);
+      });
+
+      it("subscribes to nothing when unsubscribed while the home pattern loads", async () => {
+        const stub = makeStub();
+        const seen: unknown[] = [];
+        const cancel = new FavoritesManager(stub.rt).subscribeFavorites((f) =>
+          seen.push(f)
+        );
+        cancel();
+        // The favorites cell is resolved in the same step that decides
+        // whether to subscribe to it.
+        await stub.favoritesResolved;
+        expect(stub.hasSubscriber()).toBe(false);
+        expect(seen).toEqual([]);
+
+        const kept = makeStub();
+        new FavoritesManager(kept.rt).subscribeFavorites(() => {});
+        await kept.favoritesResolved;
+        expect(kept.hasSubscriber()).toBe(true);
       });
 
       it("reports setup errors to `onError`", async () => {

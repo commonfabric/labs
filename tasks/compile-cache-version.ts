@@ -29,6 +29,7 @@ import {
   OUTPUT_VERSION_MEMO_PATH,
 } from "../runtime/runner/src/compilation-cache/compile-cache-output-memo.deno.ts";
 import {
+  type CompilerOutputVersionOptions,
   computeCompilerOutputVersion,
   type CorpusEntryCompiled,
 } from "../runtime/runner/src/compilation-cache/compile-cache-output-version.deno.ts";
@@ -53,15 +54,30 @@ export interface CompileCacheVersionCommands {
   ): Promise<MemoizedOutputVersion>;
 }
 
-const COMMANDS: CompileCacheVersionCommands = {
-  print: (onCompiled) =>
-    computeCompilerOutputVersion(REPO_ROOT, { onCompiled }),
-  memoize: (onCompiled) =>
-    memoizeOutputVersion(
-      REPO_ROOT,
-      (repoRoot) => computeCompilerOutputVersion(repoRoot, { onCompiled }),
-    ),
-};
+/**
+ * The commands for the tree at `repoRoot`, each computing the version with
+ * `options` handed to the corpus compile; the task gives none. `--memo`
+ * records the memo in that tree.
+ */
+export function compileCacheVersionCommands(
+  repoRoot: string,
+  options: Omit<CompilerOutputVersionOptions, "onCompiled"> = {},
+): CompileCacheVersionCommands {
+  const computeVersion = (
+    root: string,
+    onCompiled: (compiled: CorpusEntryCompiled) => void,
+  ) => computeCompilerOutputVersion(root, { ...options, onCompiled });
+  return {
+    print: (onCompiled) => computeVersion(repoRoot, onCompiled),
+    memoize: (onCompiled) =>
+      memoizeOutputVersion(
+        repoRoot,
+        (root) => computeVersion(root, onCompiled),
+      ),
+  };
+}
+
+const COMMANDS = compileCacheVersionCommands(REPO_ROOT);
 
 /** The line the task prints as one corpus entry finishes compiling. */
 function compiledLine(compiled: CorpusEntryCompiled): string {

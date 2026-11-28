@@ -1898,6 +1898,16 @@ export interface TransactionCommitReceipt {
 }
 
 /**
+ * A user- or session-scoped instance of a document
+ * (`IStorageTransaction.unproducedScopedInstance`).
+ */
+export type UnproducedScopedInstance = {
+  space: MemorySpace;
+  id: URI;
+  scope: "user" | "session";
+};
+
+/**
  * Representation of a storage transaction, which can be used to query state and
  * assert / retract while maintaining consistency guarantees. Storage ensures
  * that transactions retain consistent view of the whole storage through it's
@@ -1949,15 +1959,14 @@ export interface IStorageTransaction {
   derivedWrites?: boolean;
 
   /**
-   * The first user- or session-scoped instance, as `<space>/<scope>/<id>`,
-   * that this transaction read through a link while the instance was missing
-   * and another derivation registered in the same runtime writes the document
-   * and has not yet run for that instance. Set by link resolution on a serving
-   * runtime only, where such an instance is one the serving loop has not
-   * produced yet, and read by the reactive action's commit, which a run that
-   * read one does not make.
+   * The first user- or session-scoped instance that this transaction read
+   * through a link while the instance was missing and another derivation
+   * registered in the same runtime writes the document and has not yet run for
+   * that instance. Set by link resolution on a serving runtime only, where
+   * such an instance is one the serving loop has not produced yet, and read by
+   * the reactive action's commit, which a run that read one does not make.
    */
-  unproducedScopedInstance?: string;
+  unproducedScopedInstance?: UnproducedScopedInstance;
 
   /**
    * The scope INSTANCE identity this transaction's scoped reads and writes

@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
-import { join } from "@std/path";
+import { dirname, fromFileUrl, join } from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 
 import {
   accountIdFor,
@@ -22,6 +23,13 @@ import {
   describe,
   it,
 } from "@commonfabric/test-support/test";
+
+const REPOSITORY = dirname(dirname(fromFileUrl(import.meta.url)));
+
+/** A wait for a test in which every account is already visible. */
+function noWait(): Promise<void> {
+  return Promise.reject(new Error("no wait expected"));
+}
 
 function sequenceFetch(
   responses: { status: number; json?: unknown }[],
@@ -101,6 +109,7 @@ describe("test-records-mint", () => {
       const log: { method: string; url: string; body?: string }[] = [];
       const email = await ensureServiceAccount({
         token: "t",
+        awaitVisibility: noWait,
         fetchImpl: sequenceFetch(
           [{ status: 404 }, { status: 200, json: {} }],
           log,
@@ -119,6 +128,7 @@ describe("test-records-mint", () => {
       const log: { method: string; url: string; body?: string }[] = [];
       await ensureServiceAccount({
         token: "t",
+        awaitVisibility: noWait,
         fetchImpl: sequenceFetch(
           [{ status: 200, json: { disabled: true } }, {
             status: 200,
@@ -134,6 +144,7 @@ describe("test-records-mint", () => {
       const log: { method: string; url: string; body?: string }[] = [];
       await ensureServiceAccount({
         token: "t",
+        awaitVisibility: noWait,
         fetchImpl: sequenceFetch([{ status: 200, json: {} }], log),
       }, "octocat");
       expect(log.length).toBe(1);
@@ -146,6 +157,7 @@ describe("test-records-mint", () => {
       await ensurePersonFolder(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 200, json: {} },
             { status: 200, json: { bindings: [], etag: "e1" } },
@@ -172,6 +184,7 @@ describe("test-records-mint", () => {
       await ensurePersonFolder(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 409 },
             {
@@ -209,6 +222,7 @@ describe("test-records-mint", () => {
       await ensurePersonFolder(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 409 },
             {
@@ -327,6 +341,7 @@ describe("test-records-mint", () => {
       const keyFile = await mintKey(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 200, json: { keys: [] } },
             { status: 200, json: { privateKeyData: keyData } },
@@ -344,6 +359,7 @@ describe("test-records-mint", () => {
       await mintKey(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             {
               status: 200,
@@ -381,6 +397,7 @@ describe("test-records-mint", () => {
       await expect(mintKey(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             {
               status: 200,
@@ -402,6 +419,7 @@ describe("test-records-mint", () => {
       await expect(mintKey(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             {
               status: 200,
@@ -529,7 +547,11 @@ describe("test-records-mint", () => {
         recipient: identity.recipient,
         username: "OctoCat",
         out: join(out, "delivery"),
-        client: { token: "t", fetchImpl: mintFetch(log) },
+        client: {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: mintFetch(log),
+        },
         githubOutput,
       });
 
@@ -552,7 +574,11 @@ describe("test-records-mint", () => {
         recipient: "age1notours",
         username: "octocat",
         out,
-        client: { token: "t", fetchImpl: mintFetch(log) },
+        client: {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: mintFetch(log),
+        },
       })).rejects.toThrow("not a cfr1 delivery recipient");
       expect(log).toEqual([]);
     });
@@ -564,7 +590,11 @@ describe("test-records-mint", () => {
         recipient: identity.recipient,
         username: "octocat",
         out,
-        client: { token: "t", fetchImpl: mintFetch(log) },
+        client: {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: mintFetch(log),
+        },
         env: (name) =>
           name === "TEST_RECORDS_PREFIX" ? "elsewhere/records" : undefined,
       })).rejects.toThrow(
@@ -581,7 +611,11 @@ describe("test-records-mint", () => {
         recipient: identity.recipient,
         username: "-bad-",
         out,
-        client: { token: "t", fetchImpl: mintFetch(log) },
+        client: {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: mintFetch(log),
+        },
       })).rejects.toThrow("not a GitHub username");
       expect(log).toEqual([]);
     });
@@ -640,6 +674,7 @@ describe("test-records-mint", () => {
         GITHUB_OUTPUT: githubOutput,
       };
       const requests: string[] = [];
+      const waits: number[] = [];
       const code = await runMintCommand(
         [
           "--recipient",
@@ -651,8 +686,13 @@ describe("test-records-mint", () => {
         ],
         (name) => env[name],
         freshStore(requests),
+        (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
       );
       expect(code).toBe(0);
+      expect(waits).toEqual([]);
       expect(requests.some((line) => line.includes("/b/probe-bucket/")))
         .toBe(true);
       const fingerprint = (await Deno.readTextFile(githubOutput))
@@ -667,6 +707,47 @@ describe("test-records-mint", () => {
         new TextDecoder().decode(await open(identity, box)),
       );
       expect(key?.cf_username).toBe("octocat");
+    });
+
+    it("waits five seconds before asking again for a key IAM refused for an account it has not seen", async () => {
+      const identity = await generateIdentity();
+      const requests: string[] = [];
+      const store = freshStore(requests);
+      let refusals = 0;
+      const waits: number[] = [];
+      const code = await runMintCommand(
+        [
+          "--recipient",
+          identity.recipient,
+          "--username",
+          "octocat",
+          "--out",
+          join(out, "delivery"),
+        ],
+        (name) => name === "TEST_RECORDS_GCP_TOKEN" ? "t" : undefined,
+        (input, init) => {
+          if (String(input).endsWith("/keys") && refusals === 0) {
+            refusals++;
+            return Promise.resolve(
+              new Response(
+                JSON.stringify(
+                  "test-records-gh-octocat@commontools-core." +
+                    "iam.gserviceaccount.com does not exist",
+                ),
+                { status: 404 },
+              ),
+            );
+          }
+          return store(input, init);
+        },
+        (ms) => {
+          waits.push(ms);
+          return Promise.resolve();
+        },
+      );
+      expect(code).toBe(0);
+      expect(refusals).toBe(1);
+      expect(waits).toEqual([5_000]);
     });
 
     it("returns 2 and prints the usage for a command line that names no recipient", async () => {
@@ -703,6 +784,28 @@ describe("test-records-mint", () => {
     });
   });
 
+  describe("the script", () => {
+    it("exits 2 with the usage when run with no command line", async () => {
+      const result = await runDenoCommandWithTemporaryLock({
+        root: REPOSITORY,
+        args: (lock) => [
+          "run",
+          `--lock=${lock}`,
+          "--allow-read",
+          "--allow-write",
+          "--allow-env",
+          "--allow-net",
+          fromFileUrl(new URL("./test-records-mint.ts", import.meta.url)),
+        ],
+      });
+      expect(result.code).toBe(2);
+      expect(new TextDecoder().decode(result.stderr)).toBe(
+        "usage: test-records-mint.ts --recipient <string> " +
+          "--username <github-login> --out <dir>\n",
+      );
+    });
+  });
+
   describe("parseMintArgs()", () => {
     it("returns the trimmed inputs of a full command line", () => {
       expect(parseMintArgs([
@@ -731,7 +834,11 @@ describe("test-records-mint", () => {
   describe("error paths", () => {
     it("throws when reading the account fails outright", async () => {
       await expect(ensureServiceAccount(
-        { token: "t", fetchImpl: sequenceFetch([{ status: 500 }], []) },
+        {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: sequenceFetch([{ status: 500 }], []),
+        },
         "octocat",
       )).rejects.toThrow("reading");
     });
@@ -740,6 +847,7 @@ describe("test-records-mint", () => {
       await expect(ensureServiceAccount(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([{ status: 404 }, { status: 403 }], []),
         },
         "octocat",
@@ -750,6 +858,7 @@ describe("test-records-mint", () => {
       await expect(ensureServiceAccount(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: (input: URL | RequestInfo) =>
             Promise.resolve(
               String(input).endsWith("/serviceAccounts")
@@ -765,6 +874,7 @@ describe("test-records-mint", () => {
       await expect(ensureServiceAccount(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 200, json: { disabled: true } },
             { status: 500 },
@@ -776,7 +886,11 @@ describe("test-records-mint", () => {
 
     it("throws when the folder cannot be created", async () => {
       await expect(ensurePersonFolder(
-        { token: "t", fetchImpl: sequenceFetch([{ status: 403 }], []) },
+        {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: sequenceFetch([{ status: 403 }], []),
+        },
         "b",
         "p",
         "octocat",
@@ -788,6 +902,7 @@ describe("test-records-mint", () => {
       await expect(ensurePersonFolder(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([{ status: 200 }, { status: 500 }], []),
         },
         "b",
@@ -798,6 +913,7 @@ describe("test-records-mint", () => {
       await expect(ensurePersonFolder(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 200 },
             { status: 200, json: { bindings: [], etag: "e" } },
@@ -813,13 +929,18 @@ describe("test-records-mint", () => {
 
     it("throws when the key listing or the mint itself fails", async () => {
       await expect(mintKey(
-        { token: "t", fetchImpl: sequenceFetch([{ status: 500 }], []) },
+        {
+          token: "t",
+          awaitVisibility: noWait,
+          fetchImpl: sequenceFetch([{ status: 500 }], []),
+        },
         "sa@x",
         "octocat",
       )).rejects.toThrow("listing the keys");
       await expect(mintKey(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 200, json: { keys: [] } },
             { status: 429 },
@@ -831,6 +952,7 @@ describe("test-records-mint", () => {
       await expect(mintKey(
         {
           token: "t",
+          awaitVisibility: noWait,
           fetchImpl: sequenceFetch([
             { status: 200, json: { keys: [] } },
             { status: 200, json: {} },

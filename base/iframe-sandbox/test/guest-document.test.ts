@@ -115,6 +115,21 @@ describe("guest-document", () => {
         );
       });
 
+      it("reads a doctype inside a comment that never closes as no doctype", () => {
+        // The unclosed comment runs to the end of the document, so the record
+        // goes ahead of everything after the byte order mark, where a closed
+        // comment lets it follow the doctype.
+        const unclosed = "\ufeff <!-- --><!-- <!doctype html><p></p>";
+        const closed = "\ufeff <!-- --><!-- --><!doctype html><p></p>";
+
+        expect(guestDocument(unclosed, undefined, ASSETS)).toBe(
+          `\ufeff${RECORD} <!-- --><!-- <!doctype html><p></p>`,
+        );
+        expect(guestDocument(closed, undefined, ASSETS)).toBe(
+          `\ufeff <!-- --><!-- --><!doctype html>${RECORD}<p></p>`,
+        );
+      });
+
       it("writes the record after a byte order mark ahead of the doctype", () => {
         expect(guestDocument("\ufeff<!doctype html><p></p>", undefined, ASSETS))
           .toBe(`\ufeff<!doctype html>${RECORD}<p></p>`);

@@ -281,6 +281,24 @@ describe("collectAllPatternFiles", () => {
 });
 
 describe("collectBaselineKeys", () => {
+  it("returns the sorted pattern directories at any depth, and no files", async () => {
+    const dir = await Deno.makeTempDir({ prefix: "pattern-files-" });
+    try {
+      await Deno.mkdir(`${dir}/system/home/home.tsx`, { recursive: true });
+      await Deno.writeTextFile(`${dir}/system/home/home.tsx/a.json`, "");
+      await Deno.mkdir(`${dir}/counter.ts`);
+      await Deno.writeTextFile(`${dir}/README.md`, "");
+      await Deno.writeTextFile(`${dir}/system/stray.tsx`, "");
+
+      expect(await collectBaselineKeys(dir)).toEqual([
+        "counter.ts",
+        "system/home/home.tsx",
+      ]);
+    } finally {
+      await Deno.remove(dir, { recursive: true });
+    }
+  });
+
   it("returns no keys for an absent tree, and throws for one it cannot read", async () => {
     const dir = await Deno.makeTempDir({ prefix: "pattern-files-" });
     try {

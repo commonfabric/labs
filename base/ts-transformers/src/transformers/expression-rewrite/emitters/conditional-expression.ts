@@ -65,24 +65,17 @@ function processBranch(
     ? findPendingComputeWrapCandidate(expr, analyze, context)
     : undefined;
 
-  if (pendingRewrite) {
-    if (
-      hasSyntheticComputeCallbackAncestor(pendingRewrite, context) ||
-      isAlreadySyntheticComputeOwned(pendingRewrite, context)
-    ) {
-      return rewriteChildren(expr) || expr;
-    }
-
-    const decision = resolveComputeWrapCandidate(
-      pendingRewrite,
-      expr,
-      "ternary branch",
-      context,
-    );
-    if (decision.kind === "skip-reported") {
-      return rewriteChildren(expr) || expr;
-    }
-
+  if (
+    pendingRewrite &&
+    !hasSyntheticComputeCallbackAncestor(pendingRewrite, context) &&
+    !isAlreadySyntheticComputeOwned(pendingRewrite, context) &&
+    resolveComputeWrapCandidate(
+        pendingRewrite,
+        expr,
+        "ternary branch",
+        context,
+      ).kind === "wrap"
+  ) {
     const derived = createReactiveWrapperForExpression(
       expr,
       branchDataFlows,

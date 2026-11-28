@@ -30,6 +30,13 @@ const derivedEntry = (path: string[], secret: string) => ({
   observes: "value",
 });
 
+/** A derived entry of no observation class holding `secret` at `path`. */
+const legacyEntry = (path: string[], secret: string) => ({
+  path,
+  label: { confidentiality: [secret] },
+  origin: "derived",
+});
+
 describe("CFC per-element label entries of a rewritten array", () => {
   let storageManager: ReturnType<typeof StorageManager.emulate> | undefined;
   let runtime: Runtime | undefined;
@@ -66,7 +73,10 @@ describe("CFC per-element label entries of a rewritten array", () => {
   const seed = async (
     name: string,
     value: FabricValue,
-    entries: ReturnType<typeof derivedEntry>[],
+    entries: (
+      | ReturnType<typeof derivedEntry>
+      | ReturnType<typeof legacyEntry>
+    )[],
   ): Promise<string> => {
     storageManager = StorageManager.emulate({ as: signer });
     runtime = new Runtime({
@@ -182,6 +192,20 @@ describe("CFC per-element label entries of a rewritten array", () => {
       expect(valueConfidentialityAt(id, ["2"])).toEqual(["alice-secret"]);
     });
 
+    it("moves the entries of equal elements the script removes and adds again elsewhere, in order", async () => {
+      const id = await seed("reorder-equal-pair", ["y", "y", "a", "b", "c"], [
+        derivedEntry(["0"], "alice-secret"),
+        derivedEntry(["1"], "bob-secret"),
+      ]);
+      await write("reorder-equal-pair", ["a", "b", "c", "y", "y"], {
+        reads: false,
+      });
+      expect(valueConfidentialityAt(id, ["0"])).toEqual([]);
+      expect(valueConfidentialityAt(id, ["1"])).toEqual([]);
+      expect(valueConfidentialityAt(id, ["3"])).toEqual(["alice-secret"]);
+      expect(valueConfidentialityAt(id, ["4"])).toEqual(["bob-secret"]);
+    });
+
     it("leaves an equal element's entries at an index the diff did not write", async () => {
       const id = await seed("reorder-equal-tail", ["x", "y", "x"], [
         derivedEntry(["0"], "alice-secret"),
@@ -207,6 +231,48 @@ describe("CFC per-element label entries of a rewritten array", () => {
       await write("nested", [["y"], ["y"]], { reads: false });
       expect(valueConfidentialityAt(id, ["0", "0"])).toEqual(["alice-secret"]);
       expect(valueConfidentialityAt(id, ["1", "0"])).toEqual(["bob-secret"]);
+    });
+  });
+
+  describe("an element edited and then replaced by a scalar", () => {
+    it("leaves every entry at its index", async () => {
+      // The value the replaced element held before cannot be rebuilt beneath
+      // the scalar, so the array is not aligned.
+
+      const id = await seed("edit-then-replace", [{ x: "a" }, "y", "y"], [
+        derivedEntry(["1"], "alice-secret"),
+        derivedEntry(["2"], "bob-secret"),
+      ]);
+      const tx = runtime!.edit();
+      const cell = runtime!.getCell<FabricValue[]>(
+        space,
+        "edit-then-replace",
+        undefined,
+        tx,
+      );
+      cell.key(0).key("x").set("b");
+      cell.key(0).set("y");
+      expect((await tx.commit().settled).ok).toBeDefined();
+      expect(valueConfidentialityAt(id, ["1"])).toEqual(["alice-secret"]);
+      expect(valueConfidentialityAt(id, ["2"])).toEqual(["bob-secret"]);
+    });
+  });
+
+  describe("entries of no observation class", () => {
+    // Such an entry predates observation classes, and covers an element's
+    // existence as well as its value.
+
+    it("moves a kept element's entry with it, and keeps a removed element's as the existence of the index it left", async () => {
+      const id = await seed("legacy-remove-first", ["x", "y"], [
+        legacyEntry(["0"], "alice-secret"),
+        legacyEntry(["1"], "bob-secret"),
+      ]);
+      await write("legacy-remove-first", ["y"], { reads: false });
+      expect(entriesOf(id)).toHaveLength(2);
+      expect(entriesOf(id)).toEqual(expect.arrayContaining([
+        legacyEntry(["0"], "bob-secret"),
+        { ...legacyEntry(["0"], "alice-secret"), observes: "shape" },
+      ]));
     });
   });
 

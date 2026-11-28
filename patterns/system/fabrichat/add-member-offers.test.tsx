@@ -16,10 +16,12 @@
  * refuses to offer anything but a group room, and an add whose id is too long
  * to key an offer by, which then reads `access-only` with the manager's
  * reason; an access list it doesn't hold yet doesn't read as one refusing its
- * user. A group named by both of Alice's profiles,
- * which point at two inboxes, is offered once to each, and lists her once;
- * one named by two of her profiles pointing at one inbox is offered there
- * once; and one naming profiles of Alice and Carol that point at the same
+ * user, and one giving its user WRITE refuses them. A group named by both of
+ * Alice's profiles, which point at two inboxes, is offered once to each, and
+ * lists her once; offered again to her by her chat address alone, it goes
+ * once to the inbox of the one profile its roster and her direct room's both
+ * list. One named by two of her profiles pointing at one inbox is offered
+ * there once; and one naming profiles of Alice and Carol that point at the same
  * inbox is offered there once, and lists each of them, whether or not it also
  * names Bob's own. Each person writes their own profiles here, so their labels
  * name them, as a Fabric profile's do.
@@ -803,6 +805,31 @@ export const bob = pattern<{ setup: Setup }>(({ setup }) => {
             );
         }),
       },
+      // Alice, named by her chat address alone, is offered the same room
+      // through the one profile of hers that both its roster and that of
+      // Bob's direct room with her list: once, at the inbox it points at, and
+      // not at the inbox of the other profile the room was created naming.
+      // The roster still lists her once.
+      {
+        action: manager.offerRoom,
+        event: {
+          requestId: "o-alice-rosters",
+          room: held.key("room"),
+          member: setup.aliceDid,
+        },
+      },
+      {
+        assertion: assert(() => {
+          const outcome = requests.get()["o-alice-rosters"];
+          const roster = held.key("room").get()?.get()?.roster ?? [];
+          return outcome?.status === "done" &&
+            outcome.delivery === "offered" &&
+            setup.shared.received.filter((id) => id === "o-alice-rosters")
+                .length === 1 &&
+            !setup.second.received.includes("o-alice-rosters") &&
+            roster.length === 2;
+        }),
+      },
       // An access list not known yet doesn't read as one refusing this user:
       // the offer goes on to the checks after it.
       { action: action_list_unseen },
@@ -872,7 +899,7 @@ export const alice = pattern<{ setup: Setup }>(({ setup }) => {
 });
 
 // Writes her two profiles, the second pointing at the inbox Alice's first
-// points at.
+// points at, and has her manager offer Alice a room in the test's space.
 export const carol = pattern<{ setup: Setup }>(({ setup }) => {
   const writePlain = writeOwnProfile({
     profile: setup.carolPlain,
@@ -886,12 +913,52 @@ export const carol = pattern<{ setup: Setup }>(({ setup }) => {
   const action_note_principal = action(() =>
     setup.carolDid.set(currentPrincipal() ?? "")
   );
+  const requests = Writable.of<Record<string, ChatRequestOutcome>>({});
+  const catalog = Writable.of<SharedSpaceCatalogStorage>({
+    entries: {},
+    offers: {},
+  });
+  const manager = FabriChatManagerCore({
+    myProfile: setup.carolPlain,
+    sessionProfile: setup.carolPlain,
+    sharedSpaceCatalog: catalog,
+    direct: Writable.of<Record<string, ChatIndexEntry>>({}),
+    requests,
+    outgoingNotices: Writable.of<ChatManagerNotice[]>([]),
+  } as ManagerArg);
+  const action_list_room = action(() => {
+    registerSharedSpaceIn(catalog, {
+      space: spaceOf(setup.room.messages) ?? "",
+      host: "http://localhost:8000",
+      kind: CHAT_ROOM_OFFER_KIND,
+    });
+  });
 
   return {
     [TESTS]: [
       { action: writePlain, event: {}, trustedUi: profileGesture },
       { action: writeShared, event: {}, trustedUi: profileGesture },
       { action: action_note_principal },
+      // Carol holds WRITE on the test's space, which her manager lists, so it
+      // refuses to offer Alice anything there, where Bob, its OWNER, gets
+      // past that check.
+      { await: "alice-ready" },
+      { action: action_list_room },
+      {
+        action: manager.offerRoom,
+        event: {
+          requestId: "o-writer",
+          room: setup.room.messages,
+          member: setup.aliceDid,
+        },
+      },
+      {
+        assertion: assert(() => {
+          const refused = requests.get()["o-writer"];
+          return refused?.status === "refused" &&
+            refused.reason === "This user can't add people to the room.";
+        }),
+      },
       { label: "carol-ready" },
       { await: "bob-done" },
     ],

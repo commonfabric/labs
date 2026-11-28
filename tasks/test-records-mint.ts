@@ -14,6 +14,7 @@
  *     --username <github-login> --out <dir>
  */
 
+import { delay } from "@std/async/delay";
 import { join } from "@std/path";
 import { toLongQuotedDebugString } from "@commonfabric/data-model";
 import { type Environment, readEnv } from "@commonfabric/test-support/records";
@@ -80,18 +81,13 @@ export interface GcpClient {
   /**
    * Waits out the window in which a just-created service account is not
    * yet visible to the services that name it, IAM's own key creation among
-   * them. Tests pass a no-op.
+   * them.
    */
-  awaitVisibility?: () => Promise<void>;
+  awaitVisibility: () => Promise<void>;
 }
 
 /** How long a create is given to reach the services that consume it. */
 const VISIBILITY_INTERVAL_MS = 5_000;
-
-function awaitVisibility(client: GcpClient): Promise<void> {
-  if (client.awaitVisibility !== undefined) return client.awaitVisibility();
-  return new Promise((resolve) => setTimeout(resolve, VISIBILITY_INTERVAL_MS));
-}
 
 async function gcp(
   client: GcpClient,
@@ -238,7 +234,7 @@ export async function ensurePersonFolder(
       );
     }
     console.log(`${email} has not reached Cloud Storage yet; waiting`);
-    await awaitVisibility(client);
+    await client.awaitVisibility();
   }
 }
 
@@ -326,7 +322,7 @@ export async function mintKey(
       );
     }
     console.log(`${email} has not reached IAM key creation yet; waiting`);
-    await awaitVisibility(client);
+    await client.awaitVisibility();
   }
   const keyData = (minted.json as { privateKeyData?: string }).privateKeyData;
   if (keyData === undefined) {
@@ -446,11 +442,14 @@ export function parseMintArgs(
  * Runs the minting a command line asks for, with the broker's token and
  * the workflow's output file read from `env`, and returns the exit status:
  * 2 for a malformed command line, and 0 once the delivery is written.
+ * Between attempts on an account not yet visible, it waits
+ * `VISIBILITY_INTERVAL_MS` through `wait`.
  */
 export async function runMintCommand(
   args: readonly string[],
   env: Environment = Deno.env.get,
   fetchImpl: typeof fetch = fetch,
+  wait: (ms: number) => Promise<void> = delay,
 ): Promise<number> {
   const parsed = parseMintArgs(args);
   if (parsed === undefined) {
@@ -463,7 +462,11 @@ export async function runMintCommand(
   }
   const runOptions: MintRunOptions = {
     ...parsed,
-    client: { token, fetchImpl },
+    client: {
+      token,
+      fetchImpl,
+      awaitVisibility: () => wait(VISIBILITY_INTERVAL_MS),
+    },
     env,
   };
   const githubOutput = readEnv("GITHUB_OUTPUT", env);

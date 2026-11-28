@@ -1350,3 +1350,34 @@ describe("a process with no LLM endpoint", () => {
     expect(sent).toEqual(["http://127.0.0.1:9/api/ai/llm/generateObject"]);
   });
 });
+
+describe("a process that may not read its environment", () => {
+  // A fresh copy of the module, loaded with `API_URL` set, while reading the
+  // environment either succeeds or fails the way a missing `--allow-env` does.
+  async function freshClientModule(
+    readable: boolean,
+  ): Promise<typeof clientModule> {
+    const apiUrl = Deno.env.get("API_URL");
+    Deno.env.set("API_URL", "http://api.example");
+    const denied = readable ? undefined : stub(Deno.env, "get", () => {
+      throw new Deno.errors.NotCapable("Requires env access");
+    });
+    try {
+      return await import(`./client.ts?env=${crypto.randomUUID()}`);
+    } finally {
+      denied?.restore();
+      if (apiUrl === undefined) Deno.env.delete("API_URL");
+      else Deno.env.set("API_URL", apiUrl);
+    }
+  }
+
+  it("loads, treating every variable as unset", async () => {
+    const llm = await freshClientModule(false);
+    expect(llm.getLLMUrl()).toBeUndefined();
+  });
+
+  it("takes its endpoint from `API_URL` when the read is allowed", async () => {
+    const llm = await freshClientModule(true);
+    expect(llm.getLLMUrl()).toBe("http://api.example/api/ai/llm");
+  });
+});

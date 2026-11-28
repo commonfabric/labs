@@ -35,8 +35,13 @@ function arrayString(arr: readonly number[]): string {
   return result.join("");
 }
 
-for (const toBase64 of [toUnpaddedBase64url, toBase64Polyfill]) {
-  describe(`${toBase64.name}()`, () => {
+for (
+  const [name, toBase64] of [
+    ["toUnpaddedBase64url", toUnpaddedBase64url],
+    ["toBase64Polyfill", toBase64Polyfill],
+  ] as const
+) {
+  describe(`${name}()`, () => {
     for (const { arr, b64 } of TEST_PAIRS) {
       const arrStr = arrayString(arr);
       it(`encodes ${arrStr} to \`${b64}\``, () => {
@@ -46,8 +51,13 @@ for (const toBase64 of [toUnpaddedBase64url, toBase64Polyfill]) {
   });
 }
 
-for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
-  describe(`${fromBase64.name}()`, () => {
+for (
+  const [name, fromBase64] of [
+    ["fromBase64url", fromBase64url],
+    ["fromBase64Polyfill", fromBase64Polyfill],
+  ] as const
+) {
+  describe(`${name}()`, () => {
     for (const { arr, b64 } of TEST_PAIRS) {
       const arrStr = arrayString(arr);
       const paddingCount = 2 - ((arr.length + 2) % 3);
@@ -164,6 +174,19 @@ for (const fromBase64 of [fromBase64url, fromBase64Polyfill]) {
     });
   });
 }
+
+describe("implementation choice", () => {
+  // Deno has native base64 support, so the polyfills stand unused here, and
+  // the cases above test both implementations.
+
+  it("encodes with the native implementation", () => {
+    expect(toUnpaddedBase64url).not.toBe(toBase64Polyfill);
+  });
+
+  it("decodes with the native implementation", () => {
+    expect(fromBase64url).not.toBe(fromBase64Polyfill);
+  });
+});
 
 describe("toUnpaddedBase64urlFromText()", () => {
   const textEncoder = new TextEncoder();

@@ -18,7 +18,9 @@
  * directory is replaced, so a module the revision no longer has goes too.
  *
  * It reads the revision through git, not the working tree, so it never copies
- * an uncommitted change, and it needs that revision to be fetched.
+ * an uncommitted change, and it needs that revision to be fetched. Both the
+ * revision and the copy belong to the checkout holding the script, wherever
+ * it is run from.
  */
 
 import { emptyDir } from "@std/fs";

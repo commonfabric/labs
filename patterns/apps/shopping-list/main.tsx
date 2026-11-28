@@ -238,19 +238,20 @@ export const searchItemsPattern = pattern<
   );
 });
 
+// The store mapper the Store button opens: a new, empty map.
+// Exported for tests.
+export const newStoreMapper = () =>
+  StoreMapper({
+    storeName: "My Store",
+    aisles: [],
+    departments: [],
+    entrances: [],
+    itemLocations: [],
+  });
+
 // Handler to navigate to store mapper
 const openStoreMapper = handler<unknown, Record<string, never>>(
-  (_event, _state) => {
-    return navigateTo(
-      StoreMapper({
-        storeName: "My Store",
-        aisles: [],
-        departments: [],
-        entrances: [],
-        itemLocations: [],
-      }),
-    );
-  },
+  () => navigateTo(newStoreMapper()),
 );
 
 // Handler for removing an item

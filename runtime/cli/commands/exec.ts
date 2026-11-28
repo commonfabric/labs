@@ -1,6 +1,11 @@
 import { Command } from "@cliffy/command";
 import { describeFailure } from "@commonfabric/js-values/describe-failure";
-import { executeMountedCallableFile } from "../lib/exec.ts";
+import {
+  type ExecDependencies,
+  type ExecutedMountedCallableFile,
+  executeMountedCallableFile,
+  type ExecuteMountedCallableOptions,
+} from "../lib/exec.ts";
 import { cliText } from "../lib/cli-name.ts";
 import { canonicalAddress, type InvocationPhase } from "../lib/callable.ts";
 import {
@@ -15,7 +20,6 @@ import {
   CellSelectionError,
   parseCellSelectionOptions,
 } from "../lib/cell-selection.ts";
-import type { ExecutedMountedCallableFile } from "../lib/exec.ts";
 import {
   parseReadSection,
   readSectionAsksVerbHelp,
@@ -98,6 +102,33 @@ export function renderExecOutcome(
   if (result.invocation) {
     write(JSON.stringify(invocationJson(result.invocation), null, 2));
   }
+}
+
+/**
+ * Run the callable a mounted file names and write what it produced, through
+ * {@link renderExecOutcome}. This is the whole of a `cf exec` call once its
+ * arguments are read; the action wraps it in the failure exit.
+ *
+ * The `deps` are {@link executeMountedCallableFile}'s seams plus the two
+ * sinks, so a test that resolves a mount against a stand-in runtime reads the
+ * same stdout and stderr a caller would.
+ */
+export async function runMountedCallableFile(
+  mountedFile: string,
+  sectionArgs: string[],
+  options: ExecuteMountedCallableOptions,
+  deps: ExecDependencies & Parameters<typeof renderExecOutcome>[1] = {},
+): Promise<void> {
+  const { write, writeError, ...execDeps } = deps;
+  renderExecOutcome(
+    await executeMountedCallableFile(
+      mountedFile,
+      sectionArgs,
+      execDeps,
+      options,
+    ),
+    { write, writeError },
+  );
 }
 
 /**
@@ -264,16 +295,10 @@ export const exec = new Command()
     );
 
     try {
-      const result = await executeMountedCallableFile(
-        mountedFile,
-        sectionArgs,
-        { onPhase },
-        {
-          invocation,
-          ...(selection === undefined ? {} : { selection }),
-        },
-      );
-      renderExecOutcome(result);
+      await runMountedCallableFile(mountedFile, sectionArgs, {
+        invocation,
+        ...(selection === undefined ? {} : { selection }),
+      }, { onPhase });
     } catch (error) {
       exitExecFailure(error, invocation.id, phase);
     }

@@ -61,6 +61,8 @@ function extractActionCallback(
  * Supported:     action(() => count.set(count.get() + 1))
  * NOT supported: action(function() { count.set(count.get() + 1) })
  *
+ * An unsupported callback is reported as `action:unsupported-callback`.
+ *
  * To support function expressions in the future:
  * 1. Update PatternBuilder.buildHandlerCallback to accept FunctionExpression
  *    (currently typed as ArrowFunction only)
@@ -80,9 +82,17 @@ export function transformActionCall(
   const actionCall = node;
   const { checker } = context;
 
-  // Extract callback
+  // Only a single arrow callback can be lowered. Any other argument list would
+  // reach the runtime unlowered, where `action()` throws, so it is reported.
   const callback = extractActionCallback(actionCall);
   if (!callback) {
+    context.reportDiagnostic({
+      type: "action:unsupported-callback",
+      message: "action() takes exactly one argument, an arrow function " +
+        "written at the call (`action(() => …)` or `action((event) => …)`). " +
+        "Write the callback inline here.",
+      node: actionCall.arguments[0] ?? actionCall,
+    });
     return undefined;
   }
 
@@ -127,11 +137,7 @@ export function transformActionCall(
     : createActionEventSchema(context);
 
   // State schema is based on captures
-  const stateTypeNode = createHandlerStateSchema(
-    captureTree,
-    undefined, // no explicit state parameter in action
-    context,
-  );
+  const stateTypeNode = createHandlerStateSchema(captureTree, context);
 
   // `action<Event, Result>`'s second type argument is the verb's declared
   // result. Lowering to `handler` is where it would otherwise be lost — the

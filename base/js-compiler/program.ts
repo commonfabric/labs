@@ -6,19 +6,8 @@ import { normalize } from "@std/path/normalize";
 import { relative } from "@std/path/relative";
 
 import { decodeDataFile } from "@commonfabric/text/data-file";
-import { isDeno } from "@commonfabric/platform/env";
 
 import type { ProgramResolver, Source } from "./interface.ts";
-
-/**
- * Guard the Deno-only file system entry points. Each caller names itself, so a
- * caller reaching this in a browser or worker is told which one it was.
- */
-function requireDeno(what: string): void {
-  if (!isDeno()) {
-    throw new Error(`${what} is not supported in this environment.`);
-  }
-}
 
 function isOutsideRoot(relativePath: string): boolean {
   return relativePath === ".." || relativePath.startsWith(`..${SEPARATOR}`) ||
@@ -86,7 +75,6 @@ export function readDataFileSource(
   dataPath: string,
   rootPath: string,
 ): Source {
-  requireDeno("readDataFileSource");
   const fsRoot = normalize(rootPath);
   const normalizedDataPath = normalize(dataPath);
   const relativeDataPath = relative(fsRoot, normalizedDataPath);
@@ -122,8 +110,8 @@ export class FileSystemProgramResolver implements ProgramResolver {
         `Main file "${mainPath}" must be within root directory "${this.#fsRoot}".`,
       );
     }
-    this.#realFsRoot = this.#realPath(this.#fsRoot);
-    const realMainPath = this.#realPath(normalizedMainPath);
+    this.#realFsRoot = Deno.realPathSync(this.#fsRoot);
+    const realMainPath = Deno.realPathSync(normalizedMainPath);
     if (isOutsideRoot(relative(this.#realFsRoot, realMainPath))) {
       throw new Error(
         `Main file "${mainPath}" must be within root directory "${this.#fsRoot}".`,
@@ -131,7 +119,7 @@ export class FileSystemProgramResolver implements ProgramResolver {
     }
     this.#main = {
       name: groundedSourceName(relativeMainPath),
-      contents: this.#readFile(realMainPath),
+      contents: Deno.readTextFileSync(realMainPath),
     };
   }
 
@@ -144,7 +132,7 @@ export class FileSystemProgramResolver implements ProgramResolver {
     if (realPath === undefined) return Promise.resolve(undefined);
     return Promise.resolve({
       name: specifier,
-      contents: this.#readFile(realPath),
+      contents: Deno.readTextFileSync(realPath),
     });
   }
 
@@ -156,7 +144,6 @@ export class FileSystemProgramResolver implements ProgramResolver {
    * where it is called cannot be handled one way.
    */
   async resolveDataFile(name: string): Promise<Source | undefined> {
-    requireDeno("FileSystemProgramResolver");
     let realPath: string | undefined;
     try {
       realPath = this.#groundedRealPath(name, "Data file");
@@ -181,7 +168,6 @@ export class FileSystemProgramResolver implements ProgramResolver {
   async listDataFiles(
     directory: string,
   ): Promise<readonly string[] | undefined> {
-    requireDeno("FileSystemProgramResolver");
     let realPath: string | undefined;
     try {
       realPath = this.#groundedRealPath(directory, "Data directory");
@@ -227,23 +213,13 @@ export class FileSystemProgramResolver implements ProgramResolver {
         `${kind} "${specifier}" resolves outside of root directory "${this.#fsRoot}".`,
       );
     }
-    const realPath = this.#realPath(absPath);
+    const realPath = Deno.realPathSync(absPath);
     if (isOutsideRoot(relative(this.#realFsRoot, realPath))) {
       throw new Error(
         `${kind} "${specifier}" resolves outside of root directory "${this.#fsRoot}".`,
       );
     }
     return realPath;
-  }
-
-  #realPath(path: string): string {
-    requireDeno("FileSystemProgramResolver");
-    return Deno.realPathSync(path);
-  }
-
-  #readFile(path: string): string {
-    requireDeno("FileSystemProgramResolver");
-    return Deno.readTextFileSync(path);
   }
 }
 

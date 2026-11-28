@@ -145,6 +145,33 @@ what a pattern decides from the level it is given, such as a control only an
 OWNER is offered. What the memory server refuses a principal is a question for
 a test against a server that enforces access lists.
 
+A single-user test can delete a space, to check what a pattern does once
+`spaceDeleted()` says a space it holds is gone. A `{ deleteSpace: cell }` step
+deletes the space `cell`'s value lives in, whoever its access list names, and
+the steps after it see the space as deleted. Ending the sessions open on the
+space logs errors, so such a test sets `allowConsoleErrors: true`. A link whose
+type carries a write policy goes in through a typed local, as
+[Putting a cell link in an event](#putting-a-cell-link-in-an-event) says.
+
+```tsx
+// Shown for illustration only.
+const home = Home({});
+const ada: Cell<unknown> = home.profiles.key(0);
+
+return {
+  [TESTS]: [
+    { action: home.createProfile, event: { name: "Ada" }, trustedUi: CREATE },
+    { deleteSpace: ada },
+    { action: action_retire_ada },
+    { assertion: assert(() => spacesOf(home.retiredProfiles) !== "") },
+  ],
+  allowConsoleErrors: true,
+};
+```
+
+`patterns/system/profile-create/profile-create.deleted-profile.test.tsx` is
+this example whole.
+
 ## Test Step Format
 
 Tests use a **discriminated union** format:

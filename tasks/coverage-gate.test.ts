@@ -1,5 +1,6 @@
 import { expect } from "@std/expect";
 import * as path from "@std/path";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { readSpool } from "@commonfabric/test-support/records";
 import { afterEach, describe, it } from "@commonfabric/test-support/test";
 import {
@@ -28,6 +29,8 @@ import type { MeasuredSet, Suite } from "./test-topology/suite.ts";
 import type { CoverageBaseline } from "./test-selection/manifest.ts";
 import type { ManifestFetch } from "./test-selection/store.ts";
 import { sampleEntry, sampleManifest } from "./test-selection/testing.ts";
+
+const ROOT = path.join(import.meta.dirname!, "..");
 
 /** A suite carrying only what the gate reads. */
 function suite(id: string, measured: MeasuredSet[]): Suite {
@@ -1838,6 +1841,73 @@ describe("coverage-gate", () => {
         expect(status).toBe(1);
         expect(written).toBeUndefined();
       });
+    });
+  });
+
+  describe("the script run as its own process", () => {
+    /**
+     * Runs the script from this checkout with `args`, allowed no network,
+     * and returns its status, what it wrote to standard error, and the job
+     * summary it left, or undefined where it left none.
+     */
+    async function script(args: readonly string[]): Promise<{
+      code: number;
+      stderr: string;
+      summary: string | undefined;
+    }> {
+      const dir = await Deno.makeTempDir({ prefix: "coverage-gate-cli-" });
+      const summaryPath = path.join(dir, "summary.md");
+      try {
+        const output = await runDenoCommandWithTemporaryLock({
+          root: ROOT,
+          args: (lockPath) => [
+            "run",
+            "--config",
+            path.join(ROOT, "deno.jsonc"),
+            "--lock",
+            lockPath,
+            "--no-prompt",
+            "--allow-read",
+            "--allow-env",
+            "--allow-run=git",
+            `--allow-write=${summaryPath}`,
+            path.join(ROOT, "tasks/coverage-gate.ts"),
+            ...args,
+          ],
+          env: { GITHUB_STEP_SUMMARY: summaryPath },
+        });
+        let summary: string | undefined;
+        try {
+          summary = await Deno.readTextFile(summaryPath);
+        } catch (error) {
+          if (!(error instanceof Deno.errors.NotFound)) throw error;
+        }
+        return {
+          code: output.code,
+          stderr: new TextDecoder().decode(output.stderr),
+          summary,
+        };
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    }
+
+    it("exits 2 with its usage for a command line it cannot read", async () => {
+      const { code, stderr, summary } = await script([]);
+      expect(code).toBe(2);
+      expect(stderr).toContain("usage: coverage-gate.ts --base <ref>");
+      expect(summary).toBeUndefined();
+    });
+
+    it("fails a pull request whose manifest store it cannot reach", async () => {
+      // Without network access the default store's listing is refused, so
+      // the plan the lanes packed cannot be reconstructed.
+      const { code, stderr, summary } = await script(["--base", "HEAD"]);
+      expect(code).toBe(1);
+      expect(stderr).not.toContain("usage:");
+      expect(summary).toContain("## Coverage gate");
+      expect(summary).toContain("The manifest store could not be read");
+      expect(summary).toContain("net access");
     });
   });
 
