@@ -3141,14 +3141,25 @@ pending user message continues the run instead. A later valid submission
 replaces the earlier result. A turn with neither words nor a tool call gets one
 host notice asking for the submission when a turn that still offers tools
 follows it; a second such turn, or one with no such turn after it, fails the
-run. This is the way that works under every enforcement mode and prompt-slot
-role — under `enforce-strict`, a run whose prompt is bound as `context` or
-`quote` is refused `bash`, `edit_file`, and `write_file`, and so cannot write
-the file itself. A run that does hold such a tool may still write the file
-directly; both ways end at the same path. With `--allow-tool`, name
-`submit_result` alongside the run's other tools. The schema and host path are
-retained in run state, so a resumed root run keeps the same result contract
-without repeating the command-line flags; a conflicting restatement is refused.
+run. A turn with words and no tool call, in a run that offers `submit_result`
+and holds no result (no accepted submission and no file at the path), gets one
+host notice of its own asking it to submit the answer it just wrote, when a turn
+that still offers tools follows it. Otherwise that turn ends the run, as does a
+second such turn after the notice, and the post-run validation then reads no
+structured result. Each notice is given at most once per prompt-loop invocation,
+independently of the other, so the two add at most two turns, and both count
+against the run's model-turn budget. A notice is fixed host text that repeats
+nothing the run read and records no observation, so it leaves the run's CFC
+labels as they were; it is turn-local, so a continuation's history leaves it
+out. A child run is never offered `submit_result` and never gets this notice.
+This is the way that works under every enforcement mode and prompt-slot role —
+under `enforce-strict`, a run whose prompt is bound as `context` or `quote` is
+refused `bash`, `edit_file`, and `write_file`, and so cannot write the file
+itself. A run that does hold such a tool may still write the file directly; both
+ways end at the same path. With `--allow-tool`, name `submit_result` alongside
+the run's other tools. The schema and host path are retained in run state, so a
+resumed root run keeps the same result contract without repeating the
+command-line flags; a conflicting restatement is refused.
 
 The system prompt includes the complete result schema for both batch and
 operator runs, whether the result is submitted through the tool or written to

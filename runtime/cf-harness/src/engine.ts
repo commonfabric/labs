@@ -1926,6 +1926,23 @@ export class CfHarnessEngine {
   }
 
   /**
+   * Whether this run takes a structured result and is known to hold none: no
+   * submission was accepted and no file is at the configured path, which is
+   * where the post-run validation looks. A path that cannot be checked is not
+   * known to be empty, so it reads as not owed.
+   */
+  async structuredResultOwed(): Promise<boolean> {
+    if (this.#structuredResult === undefined) return false;
+    if (this.#structuredResultRecorded) return false;
+    try {
+      await Deno.stat(this.#structuredResult.path);
+      return false;
+    } catch (error) {
+      return error instanceof Deno.errors.NotFound;
+    }
+  }
+
+  /**
    * Helper for `submit_result`, which writes a validated result to the
    * configured file, replacing whatever an earlier submission left.
    */

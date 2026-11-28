@@ -236,7 +236,11 @@ enforcement mode and under every prompt-slot role, with the policy reason
 schema (AH-TOOL-4's explicit grant), it is absent from a run configured with
 none, and it reaches nothing but that run's own result file. A subagent run is
 not offered it. The model writing the file itself remains available to a run
-that holds a tool able to.
+that holds a tool able to. A run that offers the tool, holds no result, and ends
+a turn with words and no tool call gets one fixed host notice asking for the
+submission, when a turn that still offers tools follows; a second such turn ends
+the run without a result. The notice is host text that carries nothing the run
+observed, so it adds no observation to the model context and changes no label.
 
 `report_progress` is the opt-in interim return channel. The host supplies its
 publication callback, and the tool is absent without that callback and in child
