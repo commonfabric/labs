@@ -22,8 +22,10 @@ a pattern later both implement the same shape.
 - `entries` is a bounded window of the catalog's top entries: the default
   listing. `page` asks for more. Blank text with no `after` answers with that
   same listing; other text searches; `next` in an answer, passed back as
-  `after`, asks for what follows. The answer is written into the `result` cell
-  the caller sends, never into anything shared.
+  `after`, asks for what follows. `standalone: true` narrows any of these to
+  entries that are standalone, as a person choosing what to place wants (with
+  "Show parts too" to drop it); without it every entry answers. The answer is
+  written into the `result` cell the caller sends, never into anything shared.
 - `GetItButton` is the only way to get a pattern. A person's tap appends
   `{requestId, patternId, destination, requestedAt, host}` to the catalog's
   `getItRequests` as a document of its own. Each request's type (`GetItEntry`)

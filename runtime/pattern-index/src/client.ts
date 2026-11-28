@@ -246,6 +246,13 @@ export interface PatternIndexSearchRequest {
    * index returns unvetted hits only when nothing vetted matched.
    */
   includeUnvetted?: boolean;
+
+  /**
+   * `true` returns only patterns whose current version is standalone (it
+   * works as the top of a loom on its own). Without it the index returns
+   * every pattern, parts included, as an agent building from parts needs.
+   */
+  standalone?: boolean;
 }
 
 /**
@@ -1573,6 +1580,9 @@ export class PatternIndexClient {
       ...(request.limit !== undefined ? { limit: request.limit } : {}),
       ...(request.includeUnvetted !== undefined
         ? { includeUnvetted: request.includeUnvetted }
+        : {}),
+      ...(request.standalone !== undefined
+        ? { standalone: request.standalone }
         : {}),
     });
   }

@@ -56,14 +56,16 @@ const matches = (entry: CatalogEntry, needle: string): boolean =>
 /** A catalog that answers from `entries`, for tests. */
 export const FakeCatalog = pattern<FakeCatalogInput, FakeCatalogOutput>(
   ({ entries, status, getItRequests, getItAnswers, host }) => {
-    const page = action(({ text, result }: CatalogPageRequest) => {
+    const page = action(({ text, standalone, result }: CatalogPageRequest) => {
       const current = status.get();
       if (current.state !== "ready") {
         result.set({ status: current, entries: [] });
         return;
       }
       const needle = (text ?? "").trim().toLowerCase();
-      const all = [...(entries.get() ?? [])];
+      const all = [...(entries.get() ?? [])].filter((entry) =>
+        standalone !== true || entry.standalone === true
+      );
       result.set({
         status: current,
         entries: needle ? all.filter((entry) => matches(entry, needle)) : all,

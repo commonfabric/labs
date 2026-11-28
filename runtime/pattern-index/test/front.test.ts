@@ -21,8 +21,22 @@ describe("front", () => {
 
     it("omits absent fields and fields with unsupported types", () => {
       expect(patternIndexSearchRequest({})).toEqual({});
-      expect(patternIndexSearchRequest({ text: 1, limit: "3", tags: "time" }))
+      expect(
+        patternIndexSearchRequest({
+          text: 1,
+          limit: "3",
+          tags: "time",
+          standalone: "yes",
+        }),
+      )
         .toEqual({});
+    });
+
+    it("keeps a caller's standalone choice either way", () => {
+      expect(patternIndexSearchRequest({ text: "notes", standalone: true }))
+        .toEqual({ text: "notes", standalone: true });
+      expect(patternIndexSearchRequest({ standalone: false }))
+        .toEqual({ standalone: false });
     });
 
     it("preserves empty search values and filters nonstring tags", () => {

@@ -161,6 +161,13 @@ export interface CatalogPageRequest {
   text: string;
   /** A `next` from an earlier answer to the same text. */
   after?: string;
+  /**
+   * `true` asks only for entries that are `standalone`, as a person choosing
+   * what to place wants; blank text then asks for the default listing
+   * narrowed to them. Without it a host answers with every entry, parts
+   * included.
+   */
+  standalone?: boolean;
   result: Writable<CatalogPage | null>;
 }
 
