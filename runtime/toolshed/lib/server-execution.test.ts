@@ -1058,6 +1058,27 @@ describe("startServerExecutionHost's report of its policy knobs", () => {
       ]);
   });
 
+  it("reports the currency epoch only when the environment names one other than the default", async () => {
+    const epochLines = async (knobs: Record<string, string>) =>
+      (await reportFor(knobs)).logged.filter((line) =>
+        line.includes("currency index trusts the records of epoch")
+      );
+
+    expect(
+      await epochLines({ SERVER_EXECUTION_CURRENCY_EPOCH: "release-7" }),
+    ).toEqual([
+      "Server-execution v2: currency index trusts the records of epoch " +
+      '"release-7" alone, by SERVER_EXECUTION_CURRENCY_EPOCH (default is ' +
+      `"${DEFAULT_CURRENCY_EPOCH}")`,
+    ]);
+    expect(await epochLines({})).toEqual([]);
+    expect(
+      await epochLines({
+        SERVER_EXECUTION_CURRENCY_EPOCH: DEFAULT_CURRENCY_EPOCH,
+      }),
+    ).toEqual([]);
+  });
+
   it("reports the overlapped wave commit only when it is on", async () => {
     const on = await reportFor({ SERVER_EXECUTION_OVERLAP_COMMIT: "true" });
     const off = await reportFor({});

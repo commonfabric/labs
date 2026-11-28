@@ -10,7 +10,7 @@
  * - Update notes via piece action
  * - Removing events
  * - The rendered list: date headers, the today badge, times, notes, and the
- *   remove and Add controls
+ *   Edit, remove and Add controls
  * - The new event's date: today until the user picks another, which then
  *   stays
  *
@@ -52,10 +52,13 @@ const colorOf = (root: unknown, text: string): unknown =>
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** The YYYY-MM-DD date `days` after `date`. */
-const shiftDate = (date: string, days: number): string =>
-  new Date(Date.parse(`${date}T12:00:00Z`) + days * DAY_MS).toISOString()
-    .slice(0, 10);
+/** The YYYY-MM-DD date `days` after `date`, or "" when `date` is not one. */
+const shiftDate = (date: string, days: number): string => {
+  const ms = Date.parse(`${date}T12:00:00Z`);
+  return Number.isNaN(ms)
+    ? ""
+    : new Date(ms + days * DAY_MS).toISOString().slice(0, 10);
+};
 
 /** Each event's title, date, time and notes, in stored order. */
 const fieldsOf = (
@@ -335,6 +338,9 @@ export default pattern(() => {
       { action: action_pick_future_date },
       { assertion: assert_future_date_picked },
       { press: cal[UI], control: "×", within: "Backup" },
+      { assertion: assert_backup_removed },
+      // Edit opens the event's own piece and changes nothing in the list.
+      { press: cal[UI], control: "Edit", within: "Standup" },
       { assertion: assert_backup_removed },
       // With no title typed, Add does nothing.
       { press: cal[UI], control: "Add" },

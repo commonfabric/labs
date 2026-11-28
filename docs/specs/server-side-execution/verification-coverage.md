@@ -10670,7 +10670,8 @@ supply; OW29/OW32/OW34 closed):
     the ONE seam a server-assigned ceiling reaches the run through as
     well — and the SpaceServer's `#stampRun` reads it for the run's
     `scopeKeyIdentity.sessionId` and carries it as
-    `WaveRunContext.readCeiling`. The sqlite builtin resolves ONE
+    `WaveRunContext.sessionReadCeiling` (and as `readCeiling` when
+    the run acts as that session, below). The sqlite builtin resolves ONE
     effective ceiling per run (`effectiveReadCeiling`: the serving
     runtime's option met with the carried one, `onExceed` meeting
     toward `fail`) and uses it where it used the runtime's option:
@@ -10702,8 +10703,17 @@ supply; OW29/OW32/OW34 closed):
     over the client runtime's fields stays true because the carried
     value is those fields. Shared query results retain the complete
     labels of their materialized rows and array shape; each cell read
-    enforces its runtime and carried session ceiling. The cell guard
-    is pinned in `runtime/runner/test/cfc-cell-read-ceiling.test.ts`,
+    enforces its runtime and carried session ceiling. The stamp
+    carries the resolved session's ceiling as `sessionReadCeiling`,
+    which session-scoped queries read under, and as `readCeiling`,
+    which cell reads meet, only when the run acts as that session (a
+    handler with a session actor, a session instance's derivation) or
+    the serving runtime's writes carry no labels (`derivedWritesCarryLabels`).
+    A shared instance's derivation that discovers session scope is
+    refused at the seal and reruns as the
+    session's instance under the ceiling. Pinned end to end in
+    `runtime/runner/test/executor-derivation-read-ceiling.test.ts`. The
+    cell guard is pinned in `runtime/runner/test/cfc-cell-read-ceiling.test.ts`,
     and shared result shape, aggregate and diagnostic protection in
     `runtime/runner/test/sqlite-shared-read-ceiling.test.ts`. One
     residual, fail-OPEN and therefore owed: the stamp reads the LIVE

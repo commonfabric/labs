@@ -86,6 +86,17 @@ test("flushes queued inode invalidations", async () => {
   assertEquals(queue.pendingInodeCount, 0);
 });
 
+test("an entry invalidation with no names is refused and leaves nothing pending", async () => {
+  const { queue, rec } = setup();
+  assertEquals(queue.addEntry(1n, []), false);
+  assertEquals(queue.pendingEntryCount, 0);
+  // A non-empty list for the same parent is still accepted and sent alone.
+  assert(queue.addEntry(1n, ["a"]));
+  await queue.flush();
+  assertEquals(rec.entryCalls.map((c) => `${c.parentIno}:${c.name}`), ["1:a"]);
+  assertEquals(queue.pendingEntryCount, 0);
+});
+
 test("flush with nothing queued issues no notify calls", async () => {
   const { queue, rec } = setup();
   await queue.flush();

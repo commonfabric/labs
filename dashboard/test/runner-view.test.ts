@@ -869,6 +869,24 @@ describe("runner-view", () => {
             expect(namedQueued(elements)).toBe(10);
           });
 
+          it("draws every ball its heaps hold in its run's color, and none for a job no longer queued", () => {
+            const elements = mount();
+            const { view } = viewOf(elements, true);
+            const queued = [job(1, 7, { running: false }), job(2, 7, { running: false }), job(3, 8, { running: false })];
+            const board = boardOf(queued);
+            const [seven, eight] = [runColor(board, "7"), runColor(board, "8")];
+            expect(seven).not.toBe(eight);
+            view.show(board, noOutcome, true);
+            browser.frame();
+            expect(shown(elements).map(({ color }) => color).sort()).toEqual([seven, seven, eight].sort());
+            view.show(boardOf(queued.slice(1)), noOutcome, false);
+            browser.frame();
+            expect(shown(elements).map(({ color }) => color).sort()).toEqual([seven, eight].sort());
+            view.show(boardOf(queued.slice(0, 2)), noOutcome, false);
+            browser.frame();
+            expect(shown(elements).map(({ color }) => color)).toEqual([seven, seven]);
+          });
+
           it("moves a queued job that starts running out of its heap to its runner's slot", () => {
             const elements = mount();
             const { view } = viewOf(elements);

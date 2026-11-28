@@ -11,9 +11,9 @@
  */
 import { assert, NAME, pattern, TESTS, UI } from "commonfabric";
 import { textContent } from "../tools/test-support/vnode-helpers.ts";
-import Journal from "./journal/journal.tsx";
+import Journal from "./journal/main.tsx";
 import MentionablesInspector from "./mentionables-inspector/mentionables-inspector.tsx";
-import SpaceOverview from "./space-overview/space-overview.tsx";
+import SpaceOverview from "./space-overview/main.tsx";
 
 export default pattern(() => {
   const spaceOverview = SpaceOverview({});

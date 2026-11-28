@@ -220,8 +220,8 @@ the [shared-profile roster guide](../../specs/shared-profile-rosters.md);
 canonical live-link demo:
 `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`;
 worked examples: `patterns/examples/profile-group-chat/main.tsx`,
-`patterns/showcase/scrabble/scrabble.tsx`,
-`patterns/showcase/battleship/multiplayer/lobby.tsx`,
+`patterns/showcase/scrabble/main.tsx`,
+`patterns/showcase/battleship/multiplayer/main.tsx`,
 `patterns/apps/lunch-poll/main.tsx`.
 
 **`<cf-profile-badge>` is the one idiomatic way to render an identity** — avatar +
@@ -257,7 +257,7 @@ the badge. Keep that shared state **object-wrapped** (`{ items: [...] }`, like t
 roster's `Roster` or scrabble's `PlayerRoster`) rather than a bare
 `Writable<T[]>`: a bare array with a nested live cell unwraps to a weak object and
 breaks CTS handler-state / `.get()`-snapshot output typing. Two rules make it
-work (see `scrabble.tsx`): type the **input** value-side — `PerSpace<Roster>`,
+work (see `scrabble/main.tsx`): type the **input** value-side — `PerSpace<Roster>`,
 not `PerSpace<Writable<Roster>>` (handlers still take `Writable<Roster>` state, so
 the body uses field access `players.list` while handlers use `.get()`/`.key()`);
 and type the **output** as a profile-less view (`Omit<Player, "profile">`) so the
@@ -1069,7 +1069,7 @@ See:
 - `patterns/examples/profile-roster-live-demo/profile-roster-live-demo.tsx`: the
   canonical identity presentation — `#profile` viewer resolution, join stores
   each participant's live profile cell, and **every** member renders with
-  `<cf-profile-badge $profile={p.profile}>`. `patterns/showcase/scrabble/scrabble.tsx`
+  `<cf-profile-badge $profile={p.profile}>`. `patterns/showcase/scrabble/main.tsx`
   is the worked multi-user example (object-wrapped roster, per-player live badges).
 - `patterns/examples/fair-share/`: the snapshot-fallback style — a
   `cf-profile-badge` "You" card with `cf-avatar` for other members (use only when a

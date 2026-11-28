@@ -66,6 +66,10 @@ const PROBES = [
   "a b",
   "a\tb",
   "a\nb",
+  "a\vb",
+  "a\fb",
+  "a\0b",
+  "a\bb",
   "123",
   "1a",
   "_",
@@ -91,6 +95,10 @@ const SAME: string[][] = [
   ["a?", "a{0,1}", "a??"],
   ["ab", "a{1}b", "a{1,1}b", "(?:a)(?:b)", "\\x61b", "\\u0061b"],
   ["\\.", "[.]", "\\x2e"],
+  ["\\v", "\\x0b", "\\u000B", "[\\v]"],
+  ["\\f", "\\x0c", "\\u000c"],
+  ["\\0", "\\x00", "[\\0]"],
+  ["[\\b]", "\\x08", "\\u0008"],
   ["\\d", "[0-9]", "[\\d]", "[0123456789]"],
   ["\\w", "[a-z0-9_]", "[A-Za-z0-9_]", "[\\w]"],
   ["\\D", "[^0-9]", "[^\\d]"],
@@ -114,6 +122,11 @@ const DIFFERENT: Array<[string, string]> = [
   ["^invoice", "invoice"],
   ["invoice$", "invoice"],
   ["\\binvoice", "invoice"],
+  ["\\Binvoice", "\\binvoice"],
+  ["\\Binvoice", "invoice"],
+  ["\\b", "[\\b]"],
+  ["\\v", "\\f"],
+  ["\\0", "0"],
   ["a+", "a*"],
   ["ab", "ba"],
   ["a|bc", "ab|c"],
@@ -141,6 +154,16 @@ const OUT_OF_GRAMMAR: Array<[string, RegExp]> = [
   ["\\u{61}", /u flag/],
   ["\\a", /not an escape/],
   ["\\012", /octal/],
+  ["\\x6", /2 hex digits/],
+  ["\\x6g", /2 hex digits/],
+  ["\\u00e", /4 hex digits/],
+  ["a\\", /end with a backslash/],
+  ["[a\\", /end with a backslash/],
+  ["[\\B]", /inside a character class/],
+  ["[a-\\d]", /cannot end a range/],
+  ["a{2", /quantifier is not closed/],
+  ["a{2,3x}", /quantifier is not closed/],
+  ["a)b", /never opened/],
   ["[]", /empty character class/],
   ["[abc", /not closed/],
   ["(ab", /not closed/],
@@ -246,6 +269,7 @@ describe("canonicalizePattern", () => {
     expect(canon("d{3,}")).toBe("d{3,}");
     expect(canon("x/y")).toBe("x\\/y");
     expect(canon("\\t")).toBe("\\u0009");
+    expect(canon("\\Bx\\b")).toBe("\\Bx\\b");
   });
 
   it("is idempotent", () => {
@@ -420,6 +444,10 @@ describe("checkRule", () => {
     expect(refused(null)).toBe(true);
     expect(refused("invoice")).toBe(true);
     expect(refused({ field: "", pattern: "a", predicts: true })).toBe(true);
+    expect(refused({ field: "s".repeat(64), pattern: "a", predicts: true }))
+      .toBe(false);
+    expect(refused({ field: "s".repeat(65), pattern: "a", predicts: true }))
+      .toBe(true);
     expect(refused({ field: "s", pattern: "a", predicts: "yes" })).toBe(true);
     expect(refused({ field: "s", pattern: 3, predicts: true })).toBe(true);
     expect(refused({ field: "s", pattern: "a", predicts: true, flags: "g" }))

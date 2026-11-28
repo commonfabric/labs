@@ -519,6 +519,15 @@ export interface UnhydratedEntityRootInfo {
   entityId: string;
 }
 
+/**
+ * An entity projection detached from `entities/` and waiting to be cleared:
+ * the space it was in and the entity it projected.
+ */
+export type PendingEntityRemoval = Pick<
+  UnhydratedEntityRootInfo,
+  "state" | "entityId"
+>;
+
 /** The root an entity-projection lookup pin belongs to, and its pin count. */
 export interface EntityProjectionLookupOwner {
   /** Inode of the projection root the pin holds. */
@@ -753,7 +762,7 @@ export class CellBridge {
    * Entity projections detached from `entities/` whose subtree waits for the
    * kernel to release its references before it is cleared, by root inode.
    */
-  #pendingEntityRemovals = new Map<bigint, UnhydratedEntityRootInfo>();
+  #pendingEntityRemovals = new Map<bigint, PendingEntityRemoval>();
 
   /**
    * Cancel functions of each hydrated entity root's cell subscriptions, by
@@ -910,7 +919,7 @@ export class CellBridge {
     readonly entityProjectionUseOrder: Map<bigint, number>;
     readonly entityProjectionLookupRefs: Map<bigint, bigint>;
     entityProjectionLookupOwners: Map<bigint, EntityProjectionLookupOwner>;
-    readonly pendingEntityRemovals: Map<bigint, UnhydratedEntityRootInfo>;
+    readonly pendingEntityRemovals: Map<bigint, PendingEntityRemoval>;
     readonly entitySubscriptions: Map<bigint, Cancel[]>;
     disconnected: boolean;
     reconnectTimer: ReturnType<typeof setTimeout> | null;
@@ -1623,20 +1632,6 @@ export class CellBridge {
   }
 
   /**
-   * Sends `value` to the handler cell the callable file `ino` stands for, and
-   * returns once the runtime is idle and the space is synced.
-   *
-   * @throws If `ino` does not resolve to a handler.
-   */
-  async sendToHandler(ino: bigint, value: unknown): Promise<void> {
-    const target = this.resolveHandlerTarget(ino);
-    if (!target) {
-      throw new Error("Not a handler node");
-    }
-    await this.sendToHandlerTarget(target, value);
-  }
-
-  /**
    * Resolves the callable file `ino` to the handler cell it stands for, or
    * `null` when `ino` is not a handler file, its path does not parse as one, or
    * its space or piece is not tracked.
@@ -1847,10 +1842,9 @@ export class CellBridge {
     let current = parentIno;
     while (current !== this.#tree.rootIno) {
       const name = this.#tree.getNameForIno(current);
-      if (name === undefined) return null;
-      parentSegments.unshift(name);
       const parent = this.#tree.parents.get(current);
-      if (parent === undefined) return null;
+      if (name === undefined || parent === undefined) return null;
+      parentSegments.unshift(name);
       current = parent;
     }
 
@@ -2548,15 +2542,12 @@ export class CellBridge {
    * Ensures piece root `pieceIno` has a `propName` directory and a
    * `propName.json` file holding `{}`, so that a lookup of either replies from
    * the tree while hydration runs, and registers the directory as a prop root.
-   * Returns the directory's inode, or `undefined` when `pieceIno` is not a
-   * directory.
    */
   #ensurePiecePropStub(
     pieceIno: bigint,
     propName: "input" | "result",
     annotator?: CfcProjectionAnnotator,
-  ): bigint | undefined {
-    if (this.#tree.getNode(pieceIno)?.kind !== "dir") return undefined;
+  ): void {
     let propIno = this.#tree.lookup(pieceIno, propName);
     if (propIno === undefined) {
       propIno = this.#tree.addDir(pieceIno, propName);
@@ -2572,7 +2563,6 @@ export class CellBridge {
       annotator?.annotateJsonAggregate(jsonIno, [], {});
       annotator?.annotateEntry(pieceIno, jsonName, jsonIno);
     }
-    return propIno;
   }
 
   /**
@@ -2689,9 +2679,7 @@ export class CellBridge {
     ino: bigint,
   ): void {
     const inodes = index.get(rootIno);
-    if (inodes === undefined) return;
-    inodes.delete(ino);
-    if (inodes.size === 0) index.delete(rootIno);
+    if (inodes?.delete(ino) && inodes.size === 0) index.delete(rootIno);
   }
 
   /**
@@ -3256,14 +3244,14 @@ export class CellBridge {
    * Drops `propName` of the root `rootIno` back to a stub: advances its
    * hydration epoch, clears its directory and `.json` file — and, for
    * `result`, the [FS] projection entries and `.handlers` too — then
-   * invalidates the kernel entries and every inode that held. Returns false,
-   * doing nothing, when `rootIno` is not a directory.
+   * invalidates the kernel entries and every inode that held. Does nothing
+   * when `rootIno` is not a directory.
    */
   #invalidateRootPropCache(
     rootIno: bigint,
     propName: "input" | "result",
-  ): boolean {
-    if (this.#tree.getNode(rootIno)?.kind !== "dir") return false;
+  ): void {
+    if (this.#tree.getNode(rootIno)?.kind !== "dir") return;
 
     const invalidatedNames = new Set<string>([propName, `${propName}.json`]);
     const key = `${rootIno}-${propName}`;
@@ -3320,7 +3308,6 @@ export class CellBridge {
         this.#onInvalidateInode(staleIno);
       }
     }
-    return true;
   }
 
   /**
@@ -3718,18 +3705,12 @@ export class CellBridge {
       return undefined;
     }
 
-    const info = this.#entityProjectionLru.get(entityIno) ??
-      this.#unhydratedEntityRoots.get(entityIno) ?? {
-      state,
-      spaceName: this.#pieceRoots.get(entityIno)?.spaceName ?? "",
-      entityId,
-    };
     this.#entityProjectionLru.delete(entityIno);
     this.#entityProjectionEvictionCandidates.delete(entityIno);
     this.#entityProjectionUseOrder.delete(entityIno);
     this.#unhydratedEntityRoots.delete(entityIno);
     this.#cancelEntitySubscriptions(entityIno);
-    this.#pendingEntityRemovals.set(entityIno, info);
+    this.#pendingEntityRemovals.set(entityIno, { state, entityId });
     this.#tree.detachChild(state.entitiesIno, entityName);
     state.entityIds.delete(entityId);
     if (invalidate) {
@@ -4516,14 +4497,6 @@ export class CellBridge {
           : {},
       ),
     ]);
-    if (candidateKeys.size === 0) {
-      return {
-        callables: [],
-        skipEntry: () => false,
-        classifyEntry: () => null,
-      };
-    }
-
     const callableValues = new WeakSet<object>();
     const callableKinds = new Map<string, CallableKind>();
     const callables: Array<

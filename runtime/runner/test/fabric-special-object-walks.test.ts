@@ -504,6 +504,25 @@ describe("fabric special objects through the runner's walks", () => {
       expect(read instanceof FabricError).toBe(false);
     });
 
+    it("hands a stored `FabricError` through `snapshotQueryResult()` whole when asked to", () => {
+      // The reclassified lift result copies its value with `keepInstances`,
+      // so an instance it keeps from a cell read is copied as the instance
+      // and not as the `{}` a rebuild by its keys gives.
+      const cell = runtime.getCell<unknown[]>(
+        space,
+        "walks-snapshot-keeps-error",
+        { type: "array" },
+        tx,
+      );
+      cell.set([FabricError.fromNativeError(new Error("boom"))] as never);
+
+      const kept = snapshotQueryResult(cell.get(), { keepInstances: true });
+
+      expect(kept[0] instanceof FabricError).toBe(true);
+      expect((kept[0] as FabricError).message).toBe("boom");
+      expect(snapshotQueryResult(cell.get())[0]).toEqual({});
+    });
+
     it("hands a stored `FabricError` through `mergeSchemaDefaults()` whole", () => {
       // The read hands back a view whose prototype is `Object.prototype` (the
       // identity case above), which the merge's plain-object test takes for a

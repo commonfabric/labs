@@ -238,6 +238,36 @@ describe("source-order", () => {
       expect(names).toEqual(["b", "false"]);
     });
 
+    it("reads a mapped type's key order from a reference to an alias, and not from one to an interface", async () => {
+      const { checker, sourceFile } = await createTestProgram(
+        [
+          'type Probe = { [P in "b" | "a"]: number };',
+          "interface Keys<K> { k: K }",
+          'type ByAlias = Record<"b" | "a", number>;',
+          'type ByInterface = Keys<"b" | "a">;',
+        ].join("\n"),
+      );
+      const aliasType = (name: string) =>
+        sourceFile.statements.find((
+          statement,
+        ): statement is ts.TypeAliasDeclaration =>
+          ts.isTypeAliasDeclaration(statement) && statement.name.text === name
+        )!.type;
+      const type = checker.getTypeFromTypeNode(aliasType("Probe"));
+      const namesReadAt = (node: ts.TypeNode) =>
+        propertiesInSourceOrder(
+          type,
+          checker.getPropertiesOfType(type),
+          node,
+          checker,
+        ).map((property) => property.getName());
+
+      expect(namesReadAt(aliasType("ByAlias"))).toEqual(["b", "a"]);
+      // `Keys` maps no keys, so the properties, which have no declarations,
+      // are listed by name.
+      expect(namesReadAt(aliasType("ByInterface"))).toEqual(["a", "b"]);
+    });
+
     it("lists a mapped property with a declaration before one without", async () => {
       // `Pick` maps the intersection's properties, and links each to the
       // declaration of the one it maps: `y` to its declaration, `x` to none,
@@ -363,6 +393,60 @@ describe("source-order", () => {
       expect(signs(types, "ab", "ac")).toEqual([-1, 1]);
       expect(signs(types, "abNumber", "ab")).toEqual([-1, 1]);
       expect(signs(types, "ab", "abAgain")).toEqual([0, 0]);
+    });
+
+    it("orders recursive objects no source declares by what follows the recursion", async () => {
+      // `undeep` infers its `T` by reversing a mapped type that recurses into
+      // each property, so each `LoopN` gives an object no source declares
+      // whose `a` holds another such object, without end. `r3` and `r4`
+      // differ only in `n`, which follows `a`.
+      const { types } = await memberTypes(
+        [
+          "type DeepBox<T> = { [K in keyof T]: DeepBox<T[K]> };",
+          "declare function undeep<T>(b: DeepBox<T>): T;",
+          "interface Loop1 { a: Loop1 }",
+          "interface Loop2 { a: Loop2 }",
+          "interface Loop3 { a: Loop3; n: { x: 1 } }",
+          "interface Loop4 { a: Loop4; n: { y: 1 } }",
+          "declare const l1: Loop1; declare const l2: Loop2;",
+          "declare const l3: Loop3; declare const l4: Loop4;",
+          "const r1 = undeep(l1); const r2 = undeep(l2);",
+          "const r3 = undeep(l3); const r4 = undeep(l4);",
+        ].join("\n"),
+        "r1: typeof r1; r2: typeof r2; r3: typeof r3; r4: typeof r4;",
+      );
+
+      expect(types.get("r1")).not.toBe(types.get("r2"));
+      expect(signs(types, "r1", "r2")).toEqual([0, 0]);
+      expect(signs(types, "r3", "r4")).toEqual([-1, 1]);
+    });
+
+    it("compares a structure that shares its parts once per pair of parts, however deep it nests them", async () => {
+      // Each of the 40 levels holds the level below twice, so a comparison
+      // that followed every path to the bottom would compare the innermost
+      // objects 2^40 times.
+      const nest = (leaf: string) =>
+        `${"P<".repeat(40)}${leaf}${">".repeat(40)}`;
+      const { types } = await memberTypes(
+        [
+          "type P<T> = [T, T];",
+          "interface Box<T> { v: T }",
+          "declare function unbox<T>(b: { [K in keyof T]: Box<T[K]> }): T;",
+          "declare const bs: Box<string>;",
+          "declare const bn: Box<number>;",
+          "const s = unbox({ a: bs });",
+          "const sAgain = unbox({ a: bs });",
+          "const n = unbox({ a: bn });",
+        ].join("\n"),
+        [
+          `s: ${nest("typeof s")};`,
+          `sAgain: ${nest("typeof sAgain")};`,
+          `n: ${nest("typeof n")};`,
+        ].join(" "),
+      );
+
+      expect(signs(types, "s", "sAgain")).toEqual([0, 0]);
+      expect(signs(types, "n", "s")).toEqual([-1, 1]);
     });
 
     it("orders references whose arguments are unions by the unions' members", async () => {

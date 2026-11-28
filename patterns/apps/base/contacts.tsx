@@ -11,7 +11,6 @@
  *   computed() siblings of .map() break reactive rendering)
  */
 import {
-  action,
   computed,
   type Default,
   handler,
@@ -171,13 +170,6 @@ export default pattern<Input, Output>(({ contacts, groups }) => {
   const count = computed(() => (contacts.get() || []).length);
   const selectedIndex = new Writable<number>(-1);
 
-  const openInNewView = action(() => {
-    const idx = selectedIndex.get();
-    if (idx < 0) return;
-    const piece = contacts.key(idx).get();
-    return navigateTo(piece);
-  });
-
   return {
     [NAME]: computed(() => `Contacts (${count})`),
     [UI]: (
@@ -294,7 +286,7 @@ export default pattern<Input, Output>(({ contacts, groups }) => {
                     <cf-button
                       variant="outline"
                       size="sm"
-                      onClick={openInNewView}
+                      onClick={() => navigateTo(piece)}
                     >
                       Open ↗
                     </cf-button>

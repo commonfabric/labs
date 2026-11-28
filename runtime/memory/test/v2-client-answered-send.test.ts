@@ -367,21 +367,35 @@ describe("client", () => {
 
   it("rejects a mount whose `session.open` was answered on a replaced connection with its caller's reason, when the caller cancels it just as its session's restore completes", async () => {
     // The restore completes, and the caller cancels before the mount has
-    // gone on to hand the session out. The cancellation is scheduled from
-    // the restore's own completion, which is the earliest it can follow it.
+    // gone on to hand the session out. The cancellation lands as the wait
+    // for the restore stops listening for one, once the restore has
+    // completed: after that wait has settled, and before the mount reads
+    // the signal again.
 
     const server = serverFor("cancelled-as-restored");
     const { client } = await clientReplacingConnectionUnderOpen(server);
     const cancel = new AbortController();
     const reason = new Error("test cancels the mount");
+    let restored = false;
     const whenRestored = SpaceSession.prototype.whenRestored;
     using _restored = stub(
       SpaceSession.prototype,
       "whenRestored",
       function (this: SpaceSession) {
-        const restored = whenRestored.call(this);
-        void restored.then(() => queueMicrotask(() => cancel.abort(reason)));
-        return restored;
+        const restoring = whenRestored.call(this);
+        void restoring.then(() => restored = true);
+        return restoring;
+      },
+    );
+    const removeEventListener = cancel.signal.removeEventListener.bind(
+      cancel.signal,
+    );
+    using _removed = stub(
+      cancel.signal,
+      "removeEventListener",
+      (type: string, listener: EventListenerOrEventListenerObject) => {
+        removeEventListener(type, listener);
+        if (restored && !cancel.signal.aborted) cancel.abort(reason);
       },
     );
     try {

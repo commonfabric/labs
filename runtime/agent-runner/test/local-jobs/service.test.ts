@@ -383,6 +383,41 @@ describe("startLocalJobs()", () => {
     await next.stop();
   });
 
+  it("starts when a socket file left behind is gone before it can be probed", async () => {
+    const socketPath = join(dir, "jobs.sock");
+    const listener = Deno.listen({
+      transport: "unix",
+      path: join(dir, "old.sock"),
+    });
+    await Deno.rename(join(dir, "old.sock"), socketPath);
+    listener.close();
+    const probed: string[] = [];
+
+    const running = await startLocalJobs(
+      {
+        socketPath,
+        profilesPath: join(dir, "profiles.json"),
+        maxConcurrent: 1,
+        workRoot: join(dir, "runs"),
+      },
+      () => {},
+      {
+        connect: async (options) => {
+          probed.push(options.path);
+          await Deno.remove(options.path);
+          return await Deno.connect(options);
+        },
+      },
+    );
+    try {
+      expect(probed).toEqual([socketPath]);
+      expect((await Deno.lstat(socketPath)).isSocket).toBe(true);
+      expect((await call("/health")).status).toBe(200);
+    } finally {
+      await running.stop();
+    }
+  });
+
   it("admits only one concurrent starter reclaiming a stale socket", async () => {
     const listener = Deno.listen({
       transport: "unix",

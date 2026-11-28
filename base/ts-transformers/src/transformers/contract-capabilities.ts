@@ -163,7 +163,7 @@ class ContractUses {
       summary.writePaths,
       [
         ...summary.readPaths,
-        ...summary.fullShapePaths ?? [],
+        ...summary.fullShapePaths,
         ...summary.opaquePaths ?? [],
       ],
       [

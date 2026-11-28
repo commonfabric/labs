@@ -419,8 +419,14 @@ describe("meta-seam-write-authorization", () => {
     // address naming it, a root write carrying another value, a root write
     // leaving it out, and a root delete.
 
+    // A stored `creator` names the seeding session's own principal, the one
+    // record the memory store admits from a session.
     const storedValueOf = (field: MetaField): FabricValue =>
-      field === "schema" ? { type: "object" } : { seeded: field };
+      field === "schema"
+        ? { type: "object" }
+        : field === "creator"
+        ? signer.did()
+        : { seeded: field };
 
     const withStoredField = async (
       field: MetaField,

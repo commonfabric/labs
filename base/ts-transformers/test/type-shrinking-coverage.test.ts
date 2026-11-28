@@ -11,7 +11,9 @@ import {
   applyShrinkAndWrap,
   printTypeNode,
 } from "../src/transformers/type-shrinking.ts";
-import { collect, parseModule } from "./transformed-ast.ts";
+import { COMMONFABRIC_TYPES } from "./commonfabric-test-types.ts";
+import { callSchemas, collect, parseModule } from "./transformed-ast.ts";
+import { transformSource } from "./utils.ts";
 import { test } from "@commonfabric/test-support/test";
 
 //
@@ -143,6 +145,7 @@ function createParamSummary(
     name: "input",
     capability: "opaque",
     readPaths: [],
+    fullShapePaths: [],
     writePaths: [],
     opaquePaths: [],
     passthrough: false,
@@ -1319,9 +1322,9 @@ test("applyShrinkAndWrap expands nested defaults-only fallback leaves", () => {
 });
 
 test("applyShrinkAndWrap replaces an identity-only root that has no resolvable type", () => {
-  // Identity-only root whose resolved semantic type is undefined falls back to
-  // the replacement type node (createIdentityOnlyRootTypeNode `!resolvedType`
-  // branch ~2345-2354) — driven by a synthetic node with no base type.
+  // A synthetic reference to an undeclared name resolves to the checker's
+  // error type, which is neither nullish nor a union nor a cell, so the
+  // identity-only root is replaced by `unknown`.
 
   const { sourceFile, checker } = createProgram(`type Marker = string;`);
   // A synthetic reference to a name that resolves to nothing under noLib.
@@ -1518,4 +1521,248 @@ test("applyCapabilityDefaultsToTypeNode ignores a tuple default whose nested pat
   // The nested path names no member, so no default wrapper is applied.
   const node = parseType(printTypeNode(result, sourceFile));
   assertEquals(hasQualifiedRef(node, "__cfHelpers", "Default"), false);
+});
+
+//
+// Shapes the shrink reads only partly: a union nullable through a type
+// parameter, a tuple with no element, a print with no element, a base type the
+// checker cannot print, and cell wrappers named or declared by the author
+//
+
+test("applyShrinkAndWrap adds no nullish member to a union only a type parameter makes nullable", () => {
+  // `T` may be nullish, so the union differs from its non-nullable form, but
+  // it has no nullish member to put back beside the shrunk value. A union
+  // with a written `undefined` keeps it.
+
+  const { sourceFile, checker } = createProgram(`
+    type Generic<T> = { a: string; b: number } | T;
+    type Optional = { a: string; b: number } | undefined;
+  `);
+  const shrink = (aliasName: string) =>
+    applyShrinkAndWrap(
+      createParamSummary({ readPaths: [["a"]] }),
+      ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword),
+      checker.getTypeAtLocation(findTypeAlias(sourceFile, aliasName).type),
+      false,
+      checker,
+      sourceFile,
+      ts.factory,
+    );
+
+  const generic = shrink("Generic");
+  assert(ts.isTypeLiteralNode(generic));
+  const { props: members } = shrunkProps(generic, sourceFile);
+  assertEquals([...members.keys()], ["a"]);
+
+  const optional = shrink("Optional");
+  assert(ts.isUnionTypeNode(optional));
+  assertEquals(
+    optional.types.map((member) => member.kind),
+    [ts.SyntaxKind.TypeLiteral, ts.SyntaxKind.UndefinedKeyword],
+  );
+});
+
+test("applyShrinkAndWrap reports an item read through a tuple with no elements", () => {
+  // Under `noLib` an empty tuple has neither an element type argument nor a
+  // numeric index, so an item path is checked against `unknown`. A tuple
+  // with an element checks the path against that element and finds it.
+
+  const { sourceFile, checker } = createProgram(`
+    type Empty = [];
+    type EmptyInput = Empty;
+    type Single = [{ x: string }];
+    type SingleInput = Single;
+  `);
+  const validate = (aliasName: string) => {
+    const alias = findTypeAlias(sourceFile, aliasName);
+    const { context, diagnostics } = createContext(sourceFile);
+    applyShrinkAndWrap(
+      createParamSummary({ name: "rows", readPaths: [["0", "x"]] }),
+      alias.type,
+      checker.getTypeAtLocation(alias.type),
+      false,
+      checker,
+      sourceFile,
+      ts.factory,
+      "full",
+      "opaque",
+      context,
+      alias,
+    );
+    return diagnostics;
+  };
+
+  const empty = validate("EmptyInput");
+  assertEquals(empty.map((d) => d.type), ["schema:unknown-type-access"]);
+  assertStringIncludes(empty[0]!.message, "'.x'");
+
+  assertEquals(validate("SingleInput"), []);
+});
+
+test("applyShrinkAndWrap keeps whole an array print whose type has no element", () => {
+  // A print is shrunk only as its unfolding. An array print recorded against
+  // a type with no element type has none, so it is kept whole, while the
+  // same print recorded against its array type is shrunk to the read member.
+
+  const { sourceFile, checker } = createProgram(`
+    interface List<T> { [index: number]: T; length: number }
+    type Item = { title: string; unused: number };
+    type Items = List<Item>;
+    type NoElement = { title: string };
+  `);
+  const shrink = (typeAlias: string) => {
+    const { context } = createContext(sourceFile);
+    const print = ts.factory.createArrayTypeNode(
+      ts.factory.createTypeReferenceNode("Item"),
+    );
+    context.state.recordPrintedFrom(
+      print,
+      checker.getTypeAtLocation(findTypeAlias(sourceFile, typeAlias).type),
+    );
+    const result = applyShrinkAndWrap(
+      createParamSummary({ readPaths: [["0", "title"]] }),
+      print,
+      undefined,
+      false,
+      checker,
+      sourceFile,
+      ts.factory,
+      "full",
+      "opaque",
+      context,
+    );
+    return { print, result };
+  };
+
+  const noElement = shrink("NoElement");
+  assertEquals(noElement.result, noElement.print);
+
+  const items = shrink("Items");
+  assert(ts.isArrayTypeNode(items.result));
+  const { props: members } = shrunkProps(items.result, sourceFile);
+  assertEquals([...members.keys()], ["title"]);
+});
+
+test("applyCapabilityDefaultsToTypeNode keeps the node when the base type has no print", () => {
+  // A method's polymorphic `this` inside an object type has no print outside
+  // its class, so a default the node does not hold has no fallback shape to
+  // land on. A function returning the same object with a string in place of
+  // `this` takes the default on its printed fallback shape.
+
+  const { sourceFile, checker } = createProgram(`
+    class Owner { describe() { return { self: this, name: "" }; } }
+    function describe() { return { self: "", name: "" }; }
+    type NameDefault = "Anon";
+  `);
+  const returnTypeOf = (declaration: ts.SignatureDeclaration) =>
+    checker.getReturnTypeOfSignature(
+      checker.getSignatureFromDeclaration(declaration)!,
+    );
+  const unprintable = returnTypeOf(
+    collect(sourceFile, ts.isMethodDeclaration)[0]!,
+  );
+  const printable = returnTypeOf(
+    collect(sourceFile, ts.isFunctionDeclaration)[0]!,
+  );
+  const node = ts.factory.createKeywordTypeNode(ts.SyntaxKind.UnknownKeyword);
+  const applyDefault = (baseType: ts.Type) =>
+    applyCapabilityDefaultsToTypeNode(
+      node,
+      [{
+        path: ["name"],
+        defaultType: findTypeAlias(sourceFile, "NameDefault").type,
+      }],
+      baseType,
+      [],
+      false,
+      checker,
+      sourceFile,
+      ts.factory,
+    );
+
+  assertEquals(applyDefault(unprintable), node);
+
+  const { props: members } = shrunkProps(applyDefault(printable), sourceFile);
+  assertEquals(
+    members.get("name")?.type,
+    '__cfHelpers.Default<string, "Anon">',
+  );
+});
+
+/** The input schema of the one `lift()` the transformed `source` holds. */
+async function liftInputSchema(source: string): Promise<unknown> {
+  const output = await transformSource(source, {
+    types: COMMONFABRIC_TYPES,
+    typeCheck: true,
+  });
+  const [input] = callSchemas(parseModule(output), "lift");
+  return input;
+}
+
+test("a scope wrapper around a cell wrapper imported under another name keeps scope and cell", async () => {
+  // A cell wrapper imported under another name is recognized as the wrapper
+  // through its import binding, though its spelling is not one the shrink
+  // reads through, and the schema is the one the wrapper's own name gets. An
+  // author's own type of that name is no cell.
+
+  const schemaOf = (declarations: string, cell: string) =>
+    liftInputSchema(
+      `import { computed, pattern, type PerUser, Writable } from "commonfabric";
+${declarations}
+interface Input { run: PerUser<${cell}<{ a: string; b: string }>> }
+export default pattern<Input>(({ run }) => ({ x: computed(() => run.get().a) }));`,
+    );
+  const value = {
+    type: "object",
+    properties: { a: { type: "string" }, b: { type: "string" } },
+    required: ["a", "b"],
+  };
+
+  const renamed = await schemaOf(
+    'import { Writable as W } from "commonfabric";',
+    "W",
+  );
+  assertEquals(renamed, {
+    type: "object",
+    properties: {
+      run: { ...value, asCell: [{ kind: "readonly", scope: "user" }] },
+    },
+    required: ["run"],
+  });
+  assertEquals(await schemaOf("", "Writable"), renamed);
+
+  const own = await schemaOf("interface W<T> { get(): T }", "W") as {
+    properties: { run: Record<string, unknown> };
+  };
+  assertEquals(own.properties.run.asCell, undefined);
+});
+
+test("a cell interface extending a wrapper reads alike written and printed", async () => {
+  // A cell interface extending a wrapper holds no reference to the wrapper
+  // with its argument, so its print is read through the interface itself, as
+  // the interface written out is.
+
+  const holder = "{ c: Counter; z: string }";
+  const header = `import { computed, pattern, Writable } from "commonfabric";
+interface Counter extends Writable<number> {}
+`;
+  const written = await liftInputSchema(
+    `${header}export default pattern<{ d: ${holder} }>(({ d }) => ({
+  x: computed(() => d.c.get()),
+}));`,
+  ) as { properties: { d: unknown } };
+  const printed = await liftInputSchema(
+    `${header}declare const make: () => ${holder};
+export default pattern<{ q: string }>(() => {
+  const d = make();
+  return { x: computed(() => d.c.get()) };
+});`,
+  ) as { properties: { d: unknown } };
+
+  assertEquals(printed.properties.d, written.properties.d);
+  assertEquals(printed.properties.d, {
+    type: "object",
+    properties: { c: { $ref: "#/$defs/Counter", asCell: ["readonly"] } },
+    required: ["c"],
+  });
 });

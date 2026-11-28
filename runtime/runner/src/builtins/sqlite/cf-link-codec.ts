@@ -40,8 +40,10 @@ export function encodeCellToSigilString(
  * then hydrates the sigil to a live Cell via the runtime) and the `asCell`
  * query-result read path (which stores the sigil for deferred rehydration).
  * Throws on a non-null/non-string value, malformed JSON, or JSON that is not a
- * single sigil link.
+ * single sigil link. A string therefore parses to a sigil link or throws.
  */
+export function parseCfLinkToSigil(value: string): CellLink;
+export function parseCfLinkToSigil(value: unknown): CellLink | null;
 export function parseCfLinkToSigil(value: unknown): CellLink | null {
   if (value === null || value === undefined) return null;
   if (typeof value !== "string") {

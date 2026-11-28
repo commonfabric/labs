@@ -1683,7 +1683,11 @@ const resolveSubagentModel = (
     ? { model: parentModel, source: "parent" }
     : { model: profileConfig.modelOverride, source: "profile" };
 
-const buildSubagentSystemPrompt = (
+/**
+ * The system prompt a delegated child run starts with, describing its
+ * profile's tools, skills, skill scripts, and return contract.
+ */
+export const buildSubagentSystemPrompt = (
   currentDir: string,
   profileConfig: HarnessSubagentProfileConfig,
   options: {
@@ -3130,7 +3134,7 @@ const evaluateToolPolicy = (
         allowed: false,
         reasonCodes: [writeReasonCode],
         denial: makeObservationDenied("not-authorized", {
-          detail: decision.denialDetail ?? "write_file was denied",
+          detail: decision.denialDetail,
         }),
       };
   }

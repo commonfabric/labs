@@ -177,15 +177,16 @@ export function render(rows: ChannelRow[], json: boolean): string[] {
   return out;
 }
 
-/** The whole command minus argv parsing and runtime construction. */
+/**
+ * The whole command minus argv parsing, reading the recovery record, and
+ * runtime construction. `candidates` are the ids {@link recoverIds} found.
+ */
 export async function runAudit(
   runtime: Runtime,
   serviceSpace: string,
-  flags: { json?: boolean; "repair-indexes"?: boolean; recover?: string },
+  flags: { json?: boolean; "repair-indexes"?: boolean },
+  candidates: string[] = [],
 ): Promise<string[]> {
-  const candidates = flags.recover === undefined
-    ? []
-    : recoverIds(await Deno.readTextFile(flags.recover));
   return render(
     await collectRows(
       runtime,
@@ -207,19 +208,37 @@ export const defaultRuntime = (): Runtime =>
     }),
   });
 
+/**
+ * Runs the command on `args` and returns its exit status: 2 for a recovery
+ * record it cannot read or parse, which it reports through `logError` before
+ * calling `makeRuntime`, and 0 once it has printed the audit through `log`.
+ */
 export async function main(
   args: string[],
   makeRuntime: () => Runtime = defaultRuntime,
   serviceSpace: string = ingestServiceSpace,
   log: (line: string) => void = console.log,
+  logError: (line: string) => void = console.error,
 ): Promise<number> {
   const flags = parseArgs(args, {
     boolean: ["json", "repair-indexes"],
     string: ["recover"],
   });
+  // Before `makeRuntime()`: a recovery record that cannot be read or parsed is
+  // a usage error, whatever state MEMORY_URL is in.
+  let candidates: string[] = [];
+  if (flags.recover !== undefined) {
+    try {
+      candidates = recoverIds(await Deno.readTextFile(flags.recover));
+    } catch (error) {
+      logError(String(error));
+      return 2;
+    }
+  }
   const runtime = makeRuntime();
   try {
-    for (const line of await runAudit(runtime, serviceSpace, flags)) log(line);
+    const lines = await runAudit(runtime, serviceSpace, flags, candidates);
+    for (const line of lines) log(line);
     return 0;
   } finally {
     await runtime.dispose();

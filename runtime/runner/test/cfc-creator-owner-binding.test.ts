@@ -9,8 +9,9 @@
 import { expect } from "@std/expect";
 
 import { Identity } from "@commonfabric/identity";
+import { aclDocId } from "@commonfabric/memory/acl";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
-import type { MemorySpace } from "@commonfabric/memory/interface";
+import type { MemorySpace, URI } from "@commonfabric/memory/interface";
 import {
   afterEach,
   beforeEach,
@@ -19,6 +20,7 @@ import {
 } from "@commonfabric/test-support/test";
 
 import type { Cell } from "../src/cell.ts";
+import { ExecutorHost } from "../src/executor/host.ts";
 import { readStoredCfcMetadata } from "../src/cfc/metadata.ts";
 import { getMetaLink } from "../src/link-utils.ts";
 import type { NormalizedFullLink } from "../src/link-types.ts";
@@ -153,6 +155,7 @@ describe("cfc-creator-owner-binding", () => {
   let client: Runtime;
   let member: Runtime;
   let serving: Runtime;
+  let host: ExecutorHost | undefined;
   let pieces = 0;
 
   /** A runtime on the shared server, closed when the test ends. */
@@ -234,6 +237,72 @@ describe("cfc-creator-owner-binding", () => {
     return { refusal, result: running };
   };
 
+  /**
+   * Runs the release `source` over the piece at `link` on the serving
+   * runtime of its space, as a step of a wave whose transaction is the
+   * loop's own bookkeeping, as the serving loop's source transitions are.
+   * A serving runtime's writes reach the store as the wave's `derived`
+   * commit, as in production. Returns the refusal, if any.
+   */
+  const servedUpdate = (
+    link: NormalizedFullLink,
+    source = SECOND_RELEASE,
+  ): Promise<string | undefined> => {
+    host ??= new ExecutorHost({
+      server,
+      serviceIdentity: service.did(),
+      createRuntime: () => {
+        const storageManager = EmulatedStorageManager.connectTo(server, {
+          as: service,
+        });
+        const runtime = new Runtime({
+          apiUrl: new URL("https://fabric.example/"),
+          storageManager,
+          servingPosture: true,
+          experimental: { serverExecution: true, pieceCreatorRecord: true },
+        });
+        return Promise.resolve({
+          runtime,
+          dispose: async () => {
+            await runtime.dispose();
+            await storageManager.close();
+          },
+        });
+      },
+      policy: { flushDeadlineMs: 5_000, idleParkMs: 600_000 },
+    });
+    return host.runLifecycleVerb(link.space, {
+      name: "source-transition",
+      run: async (runtime) => {
+        const compiled = await compile(runtime, source, link.space);
+        const stored = runtime.getCellFromLink<Result>(link);
+        await stored.sync();
+        await runtime.getCellFromLink(getMetaLink(stored, "argument")!).sync();
+        // What a space root's legacy evidence reads: the space cell, and the
+        // access list naming the space's owner.
+        await runtime.getSpaceCell(link.space).sync();
+        await runtime.getCellFromLink({
+          space: link.space,
+          id: aclDocId(link.space) as URI,
+          path: [],
+        }).sync();
+        const tx = runtime.edit();
+        runtime.stampServerRun(tx, {
+          actionId: "test-verb/source-transition",
+          kind: "bookkeeping",
+        });
+        const result = runtime.getCellFromLink<Result>(
+          link,
+          compiled.resultSchema,
+          tx,
+        );
+        runtime.run(tx, compiled, undefined, result);
+        runtime.prepareTxForCommit(tx);
+        return (await tx.commit().settled).error?.message;
+      },
+    });
+  };
+
   /** The principals the stored label at `items` of the piece's argument represents. */
   const ownersOfItems = async (
     link: NormalizedFullLink,
@@ -294,6 +363,8 @@ describe("cfc-creator-owner-binding", () => {
   });
 
   afterEach(async () => {
+    await host?.close();
+    host = undefined;
     for (const cancel of cancels) cancel();
     for (const runtime of runtimes) {
       await runtime.idle();
@@ -347,7 +418,8 @@ describe("cfc-creator-owner-binding", () => {
   });
 
   it("records the space's owner on a space root with no record at its next source transition, and binds the field to them", async () => {
-    // A space alice owns, whose root bob's runtime moves to the next release.
+    // A space alice owns, whose root a serving runtime moves to the next
+    // release.
     const owned = await managers[0].createSpace({ [alice.did()]: "OWNER" });
     const legacy = connect(alice, { pieceCreatorRecord: false });
     const compiled = await compile(legacy, FIRST_RELEASE, owned);
@@ -363,8 +435,8 @@ describe("cfc-creator-owner-binding", () => {
     const link = result.getAsNormalizedFullLink();
     expect(await creatorOf(link)).toBeUndefined();
 
+    expect(await servedUpdate(link)).toBeUndefined();
     const theirs = await update(member, link);
-    expect(theirs.refusal).toBeUndefined();
 
     expect(await creatorOf(link)).toBe(alice.did());
     expect(await ownersOfItems(link)).toEqual([alice.did()]);
@@ -377,12 +449,41 @@ describe("cfc-creator-owner-binding", () => {
     const link = await createPiece(legacy, LEGACY_RELEASE);
     expect(await creatorOf(link)).toBeUndefined();
 
+    expect(await servedUpdate(link, LEGACY_SECOND_RELEASE)).toBeUndefined();
     const theirs = await update(member, link, LEGACY_SECOND_RELEASE);
-    expect(theirs.refusal).toBeUndefined();
 
     expect(await creatorOf(link)).toBe(alice.did());
     expect(await ownersOfItems(link)).toEqual([alice.did()]);
     await add(member, theirs.result, "forged");
     expect(await itemsOf(link)).toEqual([]);
+  });
+
+  it("records no creator at a source transition another member's client makes, where the evidence names someone else, and binds the field to its first writer", async () => {
+    // The store admits a session's record only when it names the session's
+    // own principal, so bob's client leaves alice's piece without one, and
+    // the added field binds whoever writes it first, as on any piece that
+    // records no creator.
+
+    const legacy = connect(alice, { pieceCreatorRecord: false });
+    const link = await createPiece(legacy, LEGACY_RELEASE);
+
+    const theirs = await update(member, link, LEGACY_SECOND_RELEASE);
+    expect(theirs.refusal).toBeUndefined();
+
+    expect(await creatorOf(link)).toBeUndefined();
+    await add(member, theirs.result, "theirs");
+    expect(await itemsOf(link)).toEqual(["theirs"]);
+    expect(await ownersOfItems(link)).toEqual([bob.did()]);
+  });
+
+  it("records the creator at a source transition the evidence's own principal's client makes", async () => {
+    const legacy = connect(alice, { pieceCreatorRecord: false });
+    const link = await createPiece(legacy, LEGACY_RELEASE);
+
+    const mine = await update(client, link, LEGACY_SECOND_RELEASE);
+    expect(mine.refusal).toBeUndefined();
+
+    expect(await creatorOf(link)).toBe(alice.did());
+    expect(await ownersOfItems(link)).toEqual([alice.did()]);
   });
 });

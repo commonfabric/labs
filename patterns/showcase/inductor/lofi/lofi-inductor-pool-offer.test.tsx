@@ -31,10 +31,7 @@ import {
   INVOICE_ONLY,
   TRAINING_ITEMS,
 } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor, {
-  type PoolRule,
-  type PoolSubmission,
-} from "./lofi-inductor.tsx";
+import LofiInductor, { type PoolRule, type PoolSubmission } from "./main.tsx";
 
 const GOAL = "Is this email a bill?";
 

@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { fromFileUrl } from "@std/path";
 
 import {
   cleanupFuseChild,
@@ -8,6 +9,8 @@ import {
   runFuseSupervisor,
   supervisorMain,
 } from "../lib/fuse-supervisor.ts";
+import type { MountStateEntry } from "../lib/fuse.ts";
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
 
 const CHILD_PID = 777;
@@ -177,6 +180,25 @@ describe("fuse-supervisor", () => {
       }, { timeoutMs: 0 });
       expect(kills).toEqual(["SIGTERM", "SIGKILL"]);
     });
+
+    it("sends one signal and does not escalate when it cannot watch the child's status", async () => {
+      const kills: Deno.Signal[] = [];
+      await cleanupFuseChild(
+        { kill: (signal) => kills.push(signal) },
+        { signal: "SIGINT", timeoutMs: 0 },
+      );
+      expect(kills).toEqual(["SIGINT"]);
+    });
+
+    it("sends nothing to a child that has already exited", async () => {
+      const kills: Deno.Signal[] = [];
+      await cleanupFuseChild({
+        killed: true,
+        kill: (signal) => kills.push(signal),
+        status: new Promise(() => {}),
+      });
+      expect(kills).toEqual([]);
+    });
   });
 
   describe("recordFuseMountState", () => {
@@ -192,6 +214,64 @@ describe("fuse-supervisor", () => {
         CHILD_PID,
       );
       expect(writes).toEqual([]);
+    });
+
+    it("writes both PIDs and the mount's settings to the state path", async () => {
+      const writes: [string, MountStateEntry][] = [];
+      await recordFuseMountState(
+        supervisorOptions({
+          statePath: "/state/mount.json",
+          supervisorPid: 42,
+          apiUrl: "http://fabric.test",
+          identity: "/keys/id.key",
+          supervisorStatusPath: "/state/status.json",
+          logFile: "/logs/fuse.log",
+          writeMountStateFile: (path, entry) => {
+            writes.push([path, entry]);
+            return Promise.resolve();
+          },
+        }),
+        CHILD_PID,
+      );
+      expect(writes).toEqual([["/state/mount.json", {
+        pid: 42,
+        childPid: CHILD_PID,
+        mountpoint: "/tmp/fuse-supervisor",
+        apiUrl: "http://fabric.test",
+        identity: "/keys/id.key",
+        startedAt: expect.any(String),
+        childStatusPath: "/state/status.json",
+        logFile: "/logs/fuse.log",
+      }]]);
+    });
+
+    it("leaves the log file out of the entry when it is empty", async () => {
+      const entries: MountStateEntry[] = [];
+      await recordFuseMountState(
+        supervisorOptions({
+          statePath: "/state/mount.json",
+          logFile: "",
+          writeMountStateFile: (_path, entry) => {
+            entries.push(entry);
+            return Promise.resolve();
+          },
+        }),
+        CHILD_PID,
+      );
+      expect(entries).toHaveLength(1);
+      expect(entries[0].logFile).toBeUndefined();
+    });
+
+    it("reports a failed write as unable to record the mount state", async () => {
+      await expect(recordFuseMountState(
+        supervisorOptions({
+          statePath: "/state/mount.json",
+          writeMountStateFile: () => Promise.reject(new Error("disk full")),
+        }),
+        CHILD_PID,
+      )).rejects.toThrow(
+        "Unable to record FUSE mount state: Error: disk full",
+      );
     });
   });
 
@@ -261,6 +341,41 @@ describe("fuse-supervisor", () => {
       await supervisorMain(["/mnt/x"], h.deps);
       expect(h.errors).toEqual([expect.stringContaining("spawn failed")]);
       expect(h.exits).toEqual([1]);
+    });
+  });
+
+  describe("run as a script", () => {
+    const supervisorPath = fromFileUrl(
+      new URL("../lib/fuse-supervisor.ts", import.meta.url),
+    );
+
+    async function runScript(args: string[]) {
+      const output = await runDenoCommandWithTemporaryLock({
+        root: fromFileUrl(new URL("../../../", import.meta.url)),
+        cwd: fromFileUrl(new URL("../", import.meta.url)),
+        args: (lock) => ["run", `--lock=${lock}`, supervisorPath, ...args],
+      });
+      const decoder = new TextDecoder();
+      return {
+        code: output.code,
+        stdout: decoder.decode(output.stdout),
+        stderr: decoder.decode(output.stderr),
+      };
+    }
+
+    it("prints help on stdout and exits with status 0 for --help", async () => {
+      const result = await runScript(["--help"]);
+      expect(result.code).toBe(0);
+      expect(result.stdout).toContain("Usage: fuse-supervisor <mountpoint>");
+      expect(result.stdout).toContain("--state-path");
+      expect(result.stderr).toBe("");
+    });
+
+    it("reports an unknown option on stderr and exits with status 1", async () => {
+      const result = await runScript(["/mnt/x", "--bogus"]);
+      expect(result.code).toBe(1);
+      expect(result.stdout).toBe("");
+      expect(result.stderr).toBe("Unknown fuse supervisor option: --bogus\n");
     });
   });
 });

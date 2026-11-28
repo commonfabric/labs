@@ -774,7 +774,8 @@ async function publishSessionGraph(
   startGraphCommit: () => void,
 ): Promise<{
   prepared: PreparedSessionDescription;
-  indexEntry?: IndexEntry;
+  indexEntry: IndexEntry;
+  changed: boolean;
 }> {
   const previousManifest = previousEntry === undefined
     ? undefined
@@ -784,9 +785,7 @@ async function publishSessionGraph(
       new Map(),
       { preserveLinkFields: new Set(["link"]) },
     );
-  const previousChunkHashes = previousManifest === undefined
-    ? []
-    : sessionChunkHashes(previousManifest, header.key);
+  const previousChunkHashes = sessionChunkHashes(previousManifest, header.key);
   const previousManifestMatches = previousEntry?.manifestVersioned === true &&
     typeof previousEntry.manifestHash === "string" &&
     previousManifest !== undefined &&
@@ -848,7 +847,7 @@ async function publishSessionGraph(
     previousEntry?.contentHash === prepared.snapshotHash &&
     previousEntry.driver === driver
   ) {
-    return { prepared };
+    return { prepared, indexEntry: previousEntry, changed: false };
   }
   const manifestValue = {
     schema: AGENT_CONNECTOR_SCHEMAS.session,
@@ -892,6 +891,7 @@ async function publishSessionGraph(
   await pushStableCellGraph(conn, [graphEntry(manifest, manifestPlan)]);
   return {
     prepared,
+    changed: true,
     indexEntry: {
       ownerDid: conn.ownerDid,
       key: prepared.key,
@@ -1102,12 +1102,7 @@ export class AgentFabricTarget implements CommandTarget {
 
   beginSessionObservation(): number {
     this.#assertStorageClaimed();
-    const sequence = this.#nextObservationSequence;
-    if (!Number.isSafeInteger(sequence)) {
-      throw new Error("session observation sequence is exhausted");
-    }
-    this.#nextObservationSequence++;
-    return sequence;
+    return this.#nextObservationSequence++;
   }
 
   async validateCheckout(
@@ -1309,15 +1304,12 @@ export class AgentFabricTarget implements CommandTarget {
         if (!publicationOutcome.ok) {
           throw publicationOutcome.error;
         }
-        const publication = publicationOutcome.value;
-        const prepared = publication.prepared;
+        const { prepared, indexEntry: entry, changed } =
+          publicationOutcome.value;
         observedSessionKeys.add(prepared.key);
-        if (publication.indexEntry === undefined) {
-          if (previousEntry === undefined) {
-            throw new Error("unchanged session has no prior index entry");
-          }
+        if (!changed) {
           entriesByKey.set(prepared.key, {
-            ...refreshedRow(previousEntry, context, capabilities),
+            ...refreshedRow(entry, context, capabilities),
             recentMessages: recentSessionMessages(
               prepared.normalizedMessages,
             ),
@@ -1325,7 +1317,6 @@ export class AgentFabricTarget implements CommandTarget {
           });
           continue;
         }
-        const entry = publication.indexEntry;
         // The driver pairs a session with the desktop start that made it in
         // its own memory, which a host restart empties; the pairing the row
         // was published with is kept across that, so a session the

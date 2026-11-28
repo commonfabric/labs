@@ -197,3 +197,85 @@ export default pattern<Input, Output>(({ base }) => ({
   assert(ts.isCallExpression(result!), "expected a wrapper call expression");
   assert(result !== iife, "expected a new node, not the original IIFE");
 });
+
+/** Emits the zero-arg IIFE found in `source` and reports what came back. */
+function emitIife(source: string): {
+  iife: ts.CallExpression;
+  result: ts.Expression | undefined;
+  dataFlowCount: number;
+} {
+  const { program, sourceFile } = buildProgram(source);
+  const iife = find(
+    sourceFile,
+    ts.isCallExpression,
+    (node) =>
+      ts.isParenthesizedExpression(node.expression) &&
+      ts.isArrowFunction(node.expression.expression) &&
+      node.arguments.length === 0,
+  );
+  return withContext(program, sourceFile, (context) => {
+    const { emit, dataFlowCount } = emitterContextFor(iife, context);
+    return { iife, result: emitCallExpression(emit), dataFlowCount };
+  });
+}
+
+test("emitCallExpression leaves a zero-arg IIFE alone when the cell it reads is declared inside it", () => {
+  // `local` is declared inside the IIFE, so its `.get()` is not a read of an
+  // outer reactive value and the IIFE stays as authored for the inner
+  // machinery to decompose. Reading `base` directly is wrapped (see above).
+  const { result, dataFlowCount } = emitIife(`${HEAD}
+export default pattern<Input, Output>(({ base }) => ({
+  [UI]: <div>{(() => { const local = base; return local.get() + 1; })()}</div>,
+}));`);
+
+  assertEquals(dataFlowCount, 1);
+  assertEquals(result, undefined);
+});
+
+test("emitCallExpression leaves a zero-arg IIFE alone when its cell read sits in a nested function", () => {
+  // The IIFE refers to `base`, so it has a reactive data flow, but its only
+  // `.get()` happens inside `read`, an ordinary function nested in the IIFE,
+  // which is not a read the IIFE itself performs.
+  const { result, dataFlowCount } = emitIife(`${HEAD}
+export default pattern<Input, Output>(({ base }) => ({
+  [UI]: <div>{(() => { const read = () => base.get(); return [read, base]; })()}</div>,
+}));`);
+
+  assert(dataFlowCount > 0);
+  assertEquals(result, undefined);
+});
+
+test("emitCallExpression declines an applied builder call even when it has reactive data flows", () => {
+  // An applied `lift` already runs its callback under a reactive cause, so the
+  // emitter leaves it for the builder lowering instead of wrapping it. A plain
+  // function applied to the same cell is wrapped.
+  const source = (call: string) =>
+    `${HEAD.replace("pattern,", "lift, pattern,")}
+const inc = (n: number) => n + 1;
+const liftedInc = lift((n: number) => n + 1);
+export default pattern<Input, Output>(({ base }) => ({
+  [UI]: <div>{${call}(base)}</div>,
+}));`;
+  const emitCall = (call: string) => {
+    const { program, sourceFile } = buildProgram(source(call));
+    const node = find(
+      sourceFile,
+      ts.isCallExpression,
+      (node) =>
+        ts.isIdentifier(node.expression) && node.expression.text === call,
+    );
+    return withContext(program, sourceFile, (context) => {
+      const { emit, dataFlowCount } = emitterContextFor(node, context);
+      return { node, result: emitCallExpression(emit), dataFlowCount };
+    });
+  };
+
+  const lifted = emitCall("liftedInc");
+  assert(lifted.dataFlowCount > 0);
+  assertEquals(lifted.result, undefined);
+
+  const plain = emitCall("inc");
+  assert(plain.dataFlowCount > 0);
+  assert(plain.result !== undefined, "expected the plain call to be wrapped");
+  assert(plain.result !== plain.node);
+});

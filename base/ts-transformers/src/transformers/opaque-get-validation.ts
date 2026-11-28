@@ -55,13 +55,7 @@ export class OpaqueGetValidationTransformer extends HelpersOnlyTransformer {
 
     // Get the type of the receiver (the expression before .get())
     const receiverExpr = expr.expression;
-    let receiverType: ts.Type;
-    try {
-      receiverType = checker.getTypeAtLocation(receiverExpr);
-    } catch {
-      // Can't resolve type, skip validation
-      return;
-    }
+    const receiverType = checker.getTypeAtLocation(receiverExpr);
 
     // Check if the receiver is an "opaque" cell kind (Reactive/OpaqueCell)
     // These types don't have .get() - values are accessed directly

@@ -23,7 +23,10 @@ import {
 import type { JSONSchema } from "@commonfabric/runner/shared";
 import { isObjectOrArray } from "@commonfabric/js-values/types";
 
-import { presenceFailureCategory } from "../../core/presence-failure.ts";
+import {
+  isPresenceRefusal,
+  presenceFailureCategory,
+} from "../../core/presence-failure.ts";
 import { valueForDisplay } from "../../core/value-for-display.ts";
 
 /**
@@ -294,25 +297,18 @@ function bridgeCell(
  * message is passed on; any other cause is named by category alone.
  */
 function presenceBridgeFailure(cause: unknown): IPC.BridgeError {
-  switch (presenceFailureCategory(cause)) {
-    case "configuration":
-      return {
-        code: IPC.BRIDGE_PRESENCE_UNSUPPORTED,
-        message: "The host has no presence relay to join.",
-      };
-    case "protocol":
-      return {
-        code: IPC.BRIDGE_PRESENCE_REFUSED,
-        message: cause instanceof Error
-          ? cause.message
-          : "The presence relay refused the room.",
-      };
-    case "connection":
-      return {
-        code: IPC.BRIDGE_PRESENCE_DISCONNECTED,
-        message: "The host lost the presence room.",
-      };
+  if (isPresenceRefusal(cause)) {
+    return { code: IPC.BRIDGE_PRESENCE_REFUSED, message: cause.message };
   }
+  return presenceFailureCategory(cause) === "configuration"
+    ? {
+      code: IPC.BRIDGE_PRESENCE_UNSUPPORTED,
+      message: "The host has no presence relay to join.",
+    }
+    : {
+      code: IPC.BRIDGE_PRESENCE_DISCONNECTED,
+      message: "The host lost the presence room.",
+    };
 }
 
 function cellResource(

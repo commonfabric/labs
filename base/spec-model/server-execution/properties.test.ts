@@ -117,8 +117,7 @@ test("C1: cascade inherits the root actor; intents reach the clicking session; L
       assertEquals(entry?.seq, c.seq, "entry seq == its wave commit's seq");
     }
     // no outbox involvement for a same-space cascade (LT1)
-    assertEquals(w.servers.A.outbox.length, 0);
-    assertEquals(w.servers.A.lostAppends.length, 0);
+    assertEquals(w.spaces.A.outboundAppends, []);
     // every session write landed in the ROOT session's instance
     for (const c of derived) {
       for (const row of c.writes) {
@@ -274,16 +273,10 @@ test("C2-FP1 (CLOSED — ruled 2026-08-03): durable append rows survive every cr
   // The FORMER gap (this test was its characterization): a crash
   // between wave commit and delivery destroyed the process-local
   // append. RULED closed: appends are durable rows in the wave's
-  // own transaction, deleted on delivery-ack. Now: NO reachable
-  // state has a lost append, and every state where A's event is
-  // consequenced still has the append either pending (durable) or
-  // delivered.
+  // own transaction, deleted on delivery-ack. Now every reachable
+  // state where A's event is consequenced still has the append
+  // either pending (durable) or delivered.
   for (const w of all) {
-    assertEquals(
-      w.servers.A.lostAppends.length,
-      0,
-      `an append was lost in trace ${w.trace.join(" ")}`,
-    );
     if (
       w.spaces.A.streams.s1.entries.length > 0 &&
       w.spaces.A.streams.s1.entries.every((e) => e.consequenced)
@@ -300,7 +293,10 @@ test("C2-FP1 (CLOSED — ruled 2026-08-03): durable append rows survive every cr
   }
   // non-vacuity: crash-then-recover-then-deliver actually delivers
   let w = apply(w0, { kind: "wave", space: "A" });
+  assertEquals(w.spaces.A.outboundAppends.length, 1, "wave wrote the row");
   w = apply(w, { kind: "crash", space: "A" });
+  assertEquals(w.spaces.A.outboundAppends.length, 1, "the row survives");
+  assertEquals(w.spaces.B.streams.t1.entries.length, 0, "not yet delivered");
   w = apply(w, { kind: "recover", space: "A" });
   w = apply(w, { kind: "deliver", space: "A" });
   assertEquals(

@@ -22,9 +22,9 @@ occurrences.
 
 ## Remaining Occurrences
 
-### chatbot.tsx
+### chatbot/main.tsx
 
-**Location**: `patterns/system/chatbot/chatbot.tsx`
+**Location**: `patterns/system/chatbot/main.tsx`
 
 - `clearChat`: simple `handler()` → inline handler
 

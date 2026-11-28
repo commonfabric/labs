@@ -7,7 +7,9 @@
  * The edit form is offered only to a viewer whose `#profile` candidates hold
  * this profile, and `#profile` resolves nothing in this lane, so the form's
  * catalog-card and link-form bindings are made here over the profile's own
- * `elements`, as instances of the one writer the form binds.
+ * `elements`, as instances of the one writer the form binds, and the link the
+ * form and the presentation both show for an external link is checked on its
+ * own.
  */
 import {
   action,
@@ -19,11 +21,13 @@ import {
   Writable,
 } from "commonfabric";
 import {
+  findElement,
   findElementByText,
   hasText,
   propValue,
 } from "../../tools/test-support/vnode-helpers.ts";
 import ProfileHome, {
+  ExternalLinkAnchor,
   isCanonicalVerifiedIdentity,
   mutateElements,
 } from "./profile-home.tsx";
@@ -38,7 +42,7 @@ export default pattern(() => {
   const addCard = mutateElements({
     elements: profile.elements,
     mode: "addCard",
-    userTags: ["person"],
+    userTagsText: Writable.of("person"),
   });
   const addLink = mutateElements({
     elements: profile.elements,
@@ -46,7 +50,7 @@ export default pattern(() => {
     patternUrl: linkUrl,
     title: linkTitle,
     tag: linkTag,
-    userTags: ["work"],
+    userTagsText: Writable.of(" work, ,talks "),
   });
 
   const action_add_card = action(() => addCard.send({}));
@@ -71,6 +75,14 @@ export default pattern(() => {
       label: "GitHub",
       url: "https://github.com/ada",
     });
+  });
+  // A link whose URL is not http(s), as one stored before URLs were checked
+  // at write time may be, is shown as its label and not as a link.
+  const safeLink = ExternalLinkAnchor({
+    link: { label: "Site", url: "https://example.com/ada" },
+  });
+  const unsafeLink = ExternalLinkAnchor({
+    link: { label: "Script", url: "javascript:alert(1)" },
   });
   // A key other than Enter is a keystroke, not a send.
   const action_type_name_and_avatar = action(() => {
@@ -122,7 +134,7 @@ export default pattern(() => {
           profile.elements[1]?.title === "https://example.com/card.tsx" &&
           profile.elements[1]?.tag === "https://example.com/card.tsx" &&
           profile.elements[1]?.source === "url" &&
-          profile.elements[1]?.userTags.join() === "work"
+          profile.elements[1]?.userTags.join() === "work,talks"
         ),
       },
       { assertion: assert(() => linkUrl.get() === "") },
@@ -155,11 +167,24 @@ export default pattern(() => {
       // each external link as a link.
       { action: action_add_external_link },
       { assertion: assert(() => hasText(profile[UI], "Pinned")) },
-      { assertion: assert(() => hasText(profile[UI], "#work")) },
+      { assertion: assert(() => hasText(profile[UI], "#work #talks")) },
       {
         assertion: assert(() =>
           propValue(findElementByText(profile[UI], "a", "GitHub"), "href") ===
             "https://github.com/ada"
+        ),
+      },
+
+      {
+        assertion: assert(() =>
+          propValue(findElementByText(safeLink[UI], "a", "Site"), "href") ===
+            "https://example.com/ada"
+        ),
+      },
+      {
+        assertion: assert(() =>
+          findElement(unsafeLink[UI], "a") === undefined &&
+          findElementByText(unsafeLink[UI], "span", "Script") !== undefined
         ),
       },
 

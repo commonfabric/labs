@@ -529,8 +529,7 @@ export interface SlugTarget {
  * names, with the path returned whole, or through the collection it names to
  * the member the path's first segment selects, with the rest of the path.
  *
- * Fails as `resolveSlugReference` fails, and with `missing-piece-id` when the
- * piece reached has no id.
+ * Fails as `resolveSlugReference` fails.
  */
 export async function resolvePieceReference(
   pieces: PiecesController,
@@ -552,7 +551,7 @@ export async function resolvePieceReference(
   // landing on the space-wide instance instead.
   const { scope } = target.piece.getAsNormalizedFullLink();
   return {
-    piece: pieceIdOrThrow(token, target.piece),
+    piece: pieceId(target.piece),
     ...(scope !== undefined && scope !== DEFAULT_CELL_SCOPE && { scope }),
     pathAfter: target.pathAfter,
   };
@@ -572,8 +571,7 @@ export async function resolvePieceAddress(
 
 /**
  * Resolves a slug to the piece its target sits in and the path to the target
- * inside it. Fails with `not-piece` when that document is no piece, and with
- * `missing-piece-id` when it has no id.
+ * inside it. Fails with `not-piece` when that document is no piece.
  */
 export async function resolveSlugTarget(
   pieces: PiecesController,
@@ -585,24 +583,9 @@ export async function resolveSlugTarget(
     token,
   );
   return {
-    piece: pieceIdOrThrow(token, target.piece),
+    piece: pieceId(target.piece),
     pathInside: target.pathInside,
   };
-}
-
-/**
- * Helper for `resolvePieceReference()` and `resolveSlugTarget()`, which reads
- * a piece's id off its root cell and refuses a cell that has none.
- */
-function pieceIdOrThrow(token: string, piece: Cell<unknown>): string {
-  const id = pieceId(piece);
-  if (!id) {
-    throw new SlugResolutionError(
-      `Slug "${token}" redirects to a document without a piece id.`,
-      "missing-piece-id",
-    );
-  }
-  return id;
 }
 
 export async function resolveSlugTargetCell(

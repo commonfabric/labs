@@ -366,6 +366,37 @@ describe("dependency-graph", () => {
   });
 
   describe("setNodeProvisionalDemand()", () => {
+    it("leaves the graph as it was when a dormant node without demand is cleared", () => {
+      // The node reads a writer that an effect keeps live, and holds no
+      // reference on it, so clearing a demand it never had gives none back.
+      const { nodes, state } = createGraph();
+      const dormant = named("dormant");
+      const writer = named("writer");
+      const sink = named("sink");
+      nodes.register(dormant, "computation");
+      nodes.register(writer, "computation");
+      nodes.register(sink, "effect");
+      registerDependentEdge(state, writer, dormant);
+      registerDependentEdge(state, writer, sink);
+      expect(nodes.get(writer)?.liveRefs).toBe(1);
+
+      resetLivenessWork();
+      setNodeProvisionalDemand(state, nodes.get(dormant)!, false);
+
+      expect(livenessWork.edgeVisits).toBe(0);
+      expect(isLive(state, nodes.get(dormant)!)).toBe(false);
+      expect(nodes.get(writer)?.liveRefs).toBe(1);
+      expect(isLive(state, nodes.get(writer)!)).toBe(true);
+      expectMatchesFullRebuild(state, "dormant node cleared");
+
+      // The same node with demand gives its reference back when cleared.
+      setNodeProvisionalDemand(state, nodes.get(dormant)!, true);
+      expect(nodes.get(writer)?.liveRefs).toBe(2);
+      setNodeProvisionalDemand(state, nodes.get(dormant)!, false);
+      expect(nodes.get(writer)?.liveRefs).toBe(1);
+      expectMatchesFullRebuild(state, "demanded node cleared");
+    });
+
     it("walks the path that keeps a dying node's writers live once, however many writers share it", () => {
       // A provisional node reads `writers` writers, which a chain of `depth`
       // computations also reads on its way to an effect. Each writer reads a

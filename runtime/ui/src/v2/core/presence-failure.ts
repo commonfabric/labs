@@ -19,10 +19,21 @@ export type PresenceFailureCategory =
 export function presenceFailureCategory(
   error: unknown,
 ): PresenceFailureCategory {
-  if (!(error instanceof Error)) return "connection";
-  if (error.name === "PresenceError") return "protocol";
-  if (error.message.includes("does not support presence")) {
+  if (isPresenceRefusal(error)) return "protocol";
+  if (
+    error instanceof Error &&
+    error.message.includes("does not support presence")
+  ) {
     return "configuration";
   }
   return "connection";
+}
+
+/**
+ * Whether `error` is a relay's refusal of the caller's own publication or
+ * join, the `protocol` category, whose message speaks only of what the caller
+ * sent.
+ */
+export function isPresenceRefusal(error: unknown): error is Error {
+  return error instanceof Error && error.name === "PresenceError";
 }

@@ -518,7 +518,6 @@ export class OpenAICodexCredentialResolver {
         : undefined;
     } catch (error) {
       if (signal?.aborted) throw abortReason(signal);
-      if (error instanceof HarnessControlError) throw error;
       throw new HarnessControlError(
         "provider-unavailable",
         error instanceof OpenAICodexAuthError

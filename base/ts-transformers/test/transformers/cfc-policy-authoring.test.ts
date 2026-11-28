@@ -2,7 +2,14 @@ import { expect } from "@std/expect";
 import { assert } from "@std/assert";
 import ts from "typescript";
 
-import { compileCfcPolicyManifestsForSource } from "../../src/transformers/cfc-policy-authoring.ts";
+import {
+  TransformationContext,
+  type TransformationDiagnostic,
+} from "../../src/core/mod.ts";
+import {
+  CfcPolicyAuthoringTransformer,
+  compileCfcPolicyManifestsForSource,
+} from "../../src/transformers/cfc-policy-authoring.ts";
 import { COMMONFABRIC_TYPES } from "../commonfabric-test-types.ts";
 import { literalToValue, parseModule } from "../transformed-ast.ts";
 import { transformSource, validateSource } from "../utils.ts";
@@ -94,6 +101,69 @@ export const rules = exchangeRules([release]);
           integrity: [{ kind: "evidence", level: 2, note: null, "1": "one" }],
         },
         post: { dropClause: true },
+      });
+    });
+
+    describe("with a node factory that fails", () => {
+      const failure = new Error("node factory failure");
+
+      /**
+       * Runs the transformer over a module holding `body`, with a factory
+       * whose object literal construction throws `failure`, and returns the
+       * diagnostics it reported.
+       */
+      function transformWithFailingFactory(body: string) {
+        const sourceFile = ts.createSourceFile(
+          "/test.tsx",
+          `${IMPORTS}\n${body}`,
+          ts.ScriptTarget.ES2020,
+          true,
+        );
+        const program = ts.createProgram({ rootNames: [], options: {} });
+        const diagnostics: TransformationDiagnostic[] = [];
+        ts.transform(sourceFile, [
+          (tsContext) => (root) =>
+            new CfcPolicyAuthoringTransformer({}).transform(
+              new TransformationContext({
+                program,
+                sourceFile: root,
+                tsContext: {
+                  ...tsContext,
+                  factory: {
+                    ...tsContext.factory,
+                    createObjectLiteralExpression: () => {
+                      throw failure;
+                    },
+                  },
+                },
+                options: {
+                  diagnosticsCollector: diagnostics,
+                  moduleIdentities: OPTIONS.moduleIdentities,
+                },
+              }),
+            ),
+        ]);
+        return diagnostics;
+      }
+
+      it("propagates the failure instead of reporting it as a diagnostic", () => {
+        expect(() =>
+          transformWithFailingFactory(`${ruleDeclaration()}
+export const rules = exchangeRules([release]);`)
+        ).toThrow(failure);
+      });
+
+      it("still reports invalid declarations that never reach the factory", () => {
+        expect(
+          transformWithFailingFactory(
+            `export const release = exchangeRule({}, {});
+export const rules = exchangeRules(release);`,
+          ).map((diagnostic) => diagnostic.message),
+        ).toEqual([
+          "exchangeRule() requires one argument",
+          "exchangeRules() requires one static array of exported rule identifiers",
+          'exported rule "release" must belong to one exchangeRules() declaration',
+        ]);
       });
     });
 

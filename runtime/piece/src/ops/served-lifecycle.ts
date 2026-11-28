@@ -22,6 +22,7 @@
 import type { JSONSchema } from "@commonfabric/api";
 import {
   streamEntriesDocId,
+  type StreamEventEntry,
   type StreamEventsDocValue,
 } from "@commonfabric/memory/v2";
 import {
@@ -31,7 +32,6 @@ import {
   getPatternIdentityRef,
   getPieceSourceRevisions,
   getPieceSourceSnapshot,
-  isStream,
   type MemorySpace,
   type NormalizedFullLink,
   type Pattern,
@@ -80,7 +80,7 @@ export type ServedPatternSource =
  * act on; anything else the verbs throw is a failure of the serving side.
  */
 export type ServedLifecycleRefusalCode =
-  /** The program did not compile. */
+  /** The program did not compile, or its entry exports no pattern. */
   | "compile-failed"
   /** The named pattern is not held by the space, or cannot load. */
   | "pattern-not-found"
@@ -326,16 +326,12 @@ export type ServedFollowReceipt = {
 export async function servedUploadPattern(
   pieces: PiecesController,
   program: RuntimeProgram,
-  options: { previousEntryIdentity?: string } = {},
 ): Promise<{ pattern: Pattern; ref: ServedPatternRef }> {
   const runtime = pieces.runtime;
   let pattern: Pattern;
   try {
     pattern = await compileAndSavePattern(runtime, program, {
       space: pieces.getSpace(),
-      ...(options.previousEntryIdentity === undefined
-        ? {}
-        : { previousEntryIdentity: options.previousEntryIdentity }),
     });
   } catch (error) {
     throw new ServedLifecycleRefusal("compile-failed", describeFailure(error), {
@@ -344,7 +340,10 @@ export async function servedUploadPattern(
   }
   const ref = runtime.patternManager.getArtifactEntryRef(pattern);
   if (ref === undefined) {
-    throw new Error("the compiled source has no pattern identity");
+    throw new ServedLifecycleRefusal(
+      "compile-failed",
+      "the compiled source has no pattern identity",
+    );
   }
   return { pattern, ref };
 }
@@ -352,33 +351,23 @@ export async function servedUploadPattern(
 async function resolveServedPattern(
   pieces: PiecesController,
   source: ServedPatternSource,
-  options: { previousEntryIdentity?: string; repairCache?: boolean } = {},
+  options: { repairCache?: boolean } = {},
 ): Promise<{ pattern: Pattern; ref: ServedPatternRef }> {
   if (source.program !== undefined) {
-    return await servedUploadPattern(pieces, source.program, options);
+    return await servedUploadPattern(pieces, source.program);
   }
   const ref = source.pattern;
-  let pattern: Pattern | undefined;
-  try {
-    pattern = await pieces.runtime.patternManager.loadPatternByIdentity(
-      ref.identity,
-      ref.symbol,
-      pieces.getSpace(),
-      options.repairCache === undefined
-        ? undefined
-        : { repairCache: options.repairCache },
-    );
-  } catch (error) {
-    // A closure the space holds but cannot load is, to the caller, one it
-    // does not hold: the same refusal, with the loader's reason attached.
-    throw new ServedLifecycleRefusal(
-      "pattern-not-found",
-      describeFailure(error),
-      {
-        cause: error,
-      },
-    );
-  }
+  // The loader returns `undefined` both for a closure the space does not hold
+  // and for one it holds but cannot load. A load that throws, as a failed
+  // storage read does, is a failure of the serving side, not a refusal.
+  const pattern = await pieces.runtime.patternManager.loadPatternByIdentity(
+    ref.identity,
+    ref.symbol,
+    pieces.getSpace(),
+    options.repairCache === undefined
+      ? undefined
+      : { repairCache: options.repairCache },
+  );
   if (!pattern) {
     throw new ServedLifecycleRefusal(
       "pattern-not-found",
@@ -439,7 +428,6 @@ export async function servedInstantiatePiece(
     });
   const address = piece.getAsNormalizedFullLink().id;
   const pieceId = pieceIdOf(piece);
-  if (pieceId === undefined) throw new Error("the new piece has no entity id");
   const receipt: ServedInstantiateReceipt = {
     requestKey,
     pieceId,
@@ -802,6 +790,9 @@ export async function confirmServedRegistration(
   }
 }
 
+/** Reads a stream position as the stream's handle. */
+const streamSchema = { asCell: ["stream"] } as const satisfies JSONSchema;
+
 /** Finish registration from an authorized client; hosted callers run the phases in serving waves. */
 export async function completeServedRegistration(
   pieces: PiecesController,
@@ -833,36 +824,32 @@ export async function completeServedRegistration(
   }
   const { stream, eventId, deliveryKey } = prepared.delivery;
   const piece = runtime.getCellFromLink(prepared.delivery.piece);
-  let terminal = false;
-  let observedEntries: Cell<StreamEventsDocValue> | undefined;
-  let observedEventId: string | undefined;
-  let result: ServedRegistrationOutcome = {};
-  try {
-    const entries = runtime.getCellFromEntityId<StreamEventsDocValue>(
-      pieces.getSpace(),
-      entityIdFrom(streamEntriesDocId(stream)),
-      [],
-      {
-        type: "object",
-        properties: {
-          entries: {
-            type: "array",
-            items: {
-              type: "object",
-              properties: {
-                eventId: { type: "string" },
-                consequenced: { type: "boolean" },
-                error: { type: "string" },
-                status: { type: "string" },
-                reason: { type: "string" },
-              },
+  const entries = runtime.getCellFromEntityId<StreamEventsDocValue>(
+    pieces.getSpace(),
+    entityIdFrom(streamEntriesDocId(stream)),
+    [],
+    {
+      type: "object",
+      properties: {
+        entries: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              eventId: { type: "string" },
+              consequenced: { type: "boolean" },
+              error: { type: "string" },
+              status: { type: "string" },
+              reason: { type: "string" },
             },
           },
         },
       },
-    );
-    observedEntries = entries;
-    observedEventId = eventId;
+    },
+  );
+  let terminal = false;
+  let result: ServedRegistrationOutcome = {};
+  try {
     await entries.sync();
     if (options.append !== undefined) {
       let cancel = () => {};
@@ -873,10 +860,7 @@ export async function completeServedRegistration(
               entry.eventId === eventId
             );
             if (!entry) return;
-            if (
-              entry.status === "dropped" ||
-              entry.status === "needs-attention" || entry.error
-            ) {
+            if (isFailedEventEntry(entry)) {
               terminal = true;
               reject(new Error(entry.error ?? entry.reason ?? entry.status));
             } else if (entry.consequenced) resolve();
@@ -890,12 +874,8 @@ export async function completeServedRegistration(
         cancel();
       }
     } else {
-      const handler = await runtime.getCellFromLink(stream, {
-        asCell: ["stream"],
-      }).pull();
-      if (!isStream(handler)) {
-        throw new Error("The default pattern has no addPiece handler");
-      }
+      const handler = await runtime.getCellFromLink(stream, streamSchema)
+        .pull();
       await new Promise<void>((resolve, reject) => {
         sendEvent(handler, { piece }, (tx) => {
           const status = tx.status();
@@ -909,25 +889,37 @@ export async function completeServedRegistration(
     // A lost transport acknowledgment is not proof that the handler failed.
     // A durable failure or a completed event with verified absent membership
     // permits another delivery identity; an unreadable registry does not.
-    if (!terminal && observedEntries !== undefined) {
-      try {
-        const value = await observedEntries.pull();
-        const entry = value?.entries?.find((entry) =>
-          entry.eventId === observedEventId
-        );
-        terminal = !!entry &&
-          (entry.status === "dropped" || entry.status === "needs-attention" ||
-            !!entry.error);
-      } catch {
-        /* Keep the original attempt when the outcome cannot be read. */
-      }
-    }
+    if (!terminal) terminal = await eventFailedDurably(entries, eventId);
     result = {
       error: describeFailure(error),
       ...(terminal ? { terminal: true as const } : {}),
     };
   }
   return finishServedRegistration(pieces, prepared, actingUser, result);
+}
+
+/**
+ * Whether `entries` records the event `eventId` as failed for good
+ * ({@link isFailedEventEntry}). An outcome that cannot be read is not one, so
+ * the caller keeps the delivery attempt it has.
+ */
+export async function eventFailedDurably(
+  entries: Pick<Cell<StreamEventsDocValue>, "pull">,
+  eventId: string,
+): Promise<boolean> {
+  try {
+    const value = await entries.pull();
+    const entry = value?.entries?.find((entry) => entry.eventId === eventId);
+    return entry !== undefined && isFailedEventEntry(entry);
+  } catch {
+    return false;
+  }
+}
+
+/** Whether a stream entry ended dropped, needing attention, or in an error. */
+function isFailedEventEntry(entry: StreamEventEntry): boolean {
+  return entry.status === "dropped" || entry.status === "needs-attention" ||
+    !!entry.error;
 }
 
 /**
@@ -1228,10 +1220,9 @@ function followPins(request: ServedFollowRequest): {
 /**
  * Helper for `servedPrepareFollow()`, which names the refusal a failed
  * preparation is — the origin cannot be followed or its source could not be
- * read or compiled, the piece moved off a pin, the candidate cannot run over
- * the piece's state, or the piece's stored argument does not satisfy the
- * candidate — and hands back any other failure as it is, a failure of the
- * serving side.
+ * read or compiled, the piece moved off a pin, or the piece's stored argument
+ * does not satisfy the candidate — and hands back any other failure as it is,
+ * a failure of the serving side.
  */
 function prepareFollowRefusal(error: unknown): unknown {
   const message = describeFailure(error);
@@ -1250,11 +1241,6 @@ function prepareFollowRefusal(error: unknown): unknown {
     message.includes(PIECE_SOURCE_MOVED)
   ) {
     return new ServedLifecycleRefusal("source-moved", message, {
-      cause: error,
-    });
-  }
-  if (isPieceSourceCompatibilityRefusal(error)) {
-    return new ServedLifecycleRefusal("incompatible", message, {
       cause: error,
     });
   }

@@ -3853,6 +3853,18 @@ function deliveryToResolve(
 }
 
 /**
+ * The readers armed on one space, each with the position its pull returned
+ * and the time until which it may rest on hearing nothing, and the position
+ * of the space through which they were told of what moved.
+ */
+class ArmedCurrencyReaders
+  extends Map<string, { position: number; until?: number }> {
+  constructor(public toldThrough: number) {
+    super();
+  }
+}
+
+/**
  * The memory v2 server. An instance accepts connections and serves the
  * session protocol over them — opening sessions, admitting transactions,
  * evaluating queries and watches, and fanning out sync frames as spaces
@@ -3966,10 +3978,7 @@ export class Server {
    * memory, so after a restart every reader pulls from a source before it
    * rests on it.
    */
-  readonly #currencyArmed = new Map<
-    string,
-    Map<string, { position: number; until?: number }>
-  >();
+  readonly #currencyArmed = new Map<string, ArmedCurrencyReaders>();
 
   /**
    * The demand carried into each space, by the reading space that carries
@@ -3991,12 +4000,6 @@ export class Server {
     string,
     Map<string, Map<string, CarriedSession>>
   >();
-
-  /**
-   * The position of each space through which its armed readers were told
-   * of what moved.
-   */
-  readonly #currencyToldThrough = new Map<string, number>();
 
   /**
    * What each space holds of the change behind the latest trigger it was
@@ -6595,9 +6598,9 @@ export class Server {
     const engine = await this.#openEngine(entry.targetSpace);
     // Read-check-append runs synchronously from here (no await), so the
     // horizon check and the commit are atomic on the single-threaded
-    // co-hosted engine. The engine's event-append admission re-runs the
-    // same check inside the apply transaction (the atomic backstop);
-    // this pre-check exists for the deduped-without-error fast path.
+    // co-hosted engine: a duplicate is acked here, without a commit, and
+    // the engine's event-append admission, which re-runs the same check
+    // inside the apply transaction, never finds one.
     const doc = Engine.read(engine, { id: entry.targetStream });
     const value = (doc?.value ?? {}) as StreamEventsDocValue;
     const entries = Array.isArray(value.entries) ? value.entries : [];
@@ -6653,53 +6656,43 @@ export class Server {
         session: entry.actingSession ?? "server",
       },
     };
-    let applied: Engine.AppliedCommit;
-    try {
-      applied = Engine.applyCommit(engine, {
-        sessionId: entry.sessionId,
-        space: entry.targetSpace,
-        commit: {
-          localSeq: entry.localSeq,
-          reads: { confirmed: [], pending: [] },
-          operations: [{
-            op: "patch",
-            id: entry.targetStream as never,
-            patches: [{
-              // The tail-relative merge op (v2.ts's PatchOp): concurrent
-              // appends merge against durable state, and the array (and
-              // path) create if absent — no whole-doc set, so the
-              // engine's authored-shape guard (events.md §1) admits it.
-              op: "append",
-              path: "/value/entries",
-              values: [streamEntry as never],
-            }],
+    const applied = Engine.applyCommit(engine, {
+      sessionId: entry.sessionId,
+      space: entry.targetSpace,
+      commit: {
+        localSeq: entry.localSeq,
+        reads: { confirmed: [], pending: [] },
+        operations: [{
+          op: "patch",
+          id: entry.targetStream as never,
+          patches: [{
+            // The tail-relative merge op (v2.ts's PatchOp): concurrent
+            // appends merge against durable state, and the array (and
+            // path) create if absent — no whole-doc set, so the
+            // engine's authored-shape guard (events.md §1) admits it.
+            op: "append",
+            path: "/value/entries",
+            values: [streamEntry as never],
           }],
-          eventAppends: [{ id: entry.targetStream, eventId: entry.eventId }],
-        },
-        commitClass: "authored",
-        delegated: {
-          // OW15: the acting principal passes through as carried —
-          // ABSENT for a declared sessionless-space-scope chain (the
-          // engine's floor carve-out admits it; the old `?? ""` mapping
-          // deterministically destroyed such entries at delivery).
-          actingPrincipal: entry.actingPrincipal ?? "",
-          ...(entry.actingSession === undefined
-            ? {}
-            : { actingSession: entry.actingSession }),
-          ...(entry.sessionlessSpaceScope === true
-            ? { sessionlessSpaceScope: true }
-            : {}),
-          capabilityRef: entry.capabilityRef,
-        },
-      });
-    } catch (error) {
-      if (error instanceof EventAppendDuplicateError) {
-        // The engine's atomic horizon check caught a duplicate the
-        // fast-path pre-check raced past: delivered, ack the row.
-        return { deduped: true };
-      }
-      throw error;
-    }
+        }],
+        eventAppends: [{ id: entry.targetStream, eventId: entry.eventId }],
+      },
+      commitClass: "authored",
+      delegated: {
+        // OW15: the acting principal passes through as carried —
+        // ABSENT for a declared sessionless-space-scope chain (the
+        // engine's floor carve-out admits it; the old `?? ""` mapping
+        // deterministically destroyed such entries at delivery).
+        actingPrincipal: entry.actingPrincipal ?? "",
+        ...(entry.actingSession === undefined
+          ? {}
+          : { actingSession: entry.actingSession }),
+        ...(entry.sessionlessSpaceScope === true
+          ? { sessionlessSpaceScope: true }
+          : {}),
+        capabilityRef: entry.capabilityRef,
+      },
+    });
     // The delivered append is an ordinary authored admission for every
     // observer: push dirtiness (M4 instance keys — the stream doc is
     // space-scoped) and the plane-(b) hook fire exactly as a transact
@@ -8622,6 +8615,9 @@ export class Server {
                       // admission path — never read from the client payload
                       // (protocol.md §1).
                       commitClass: "authored",
+                      ...(session.capabilityPrincipal === undefined ? {} : {
+                        capabilityPrincipal: session.capabilityPrincipal,
+                      }),
                     });
                     // No commit other than an admitted deletion leaves a
                     // deletion tombstone, a patch in `off` mode included.
@@ -13146,9 +13142,9 @@ export class Server {
     if (armed === undefined || armed.size === 0) return;
     const moved = selectCurrencyReadersMoved(engine, {
       space,
-      since: this.#currencyToldThrough.get(space) ?? 0,
+      since: armed.toldThrough,
     });
-    this.#currencyToldThrough.set(space, moved.position);
+    armed.toldThrough = moved.position;
     let step: CurrencyTrailStep | undefined;
     for (const { reader, position } of moved.readers) {
       const pulledAt = armed.get(reader)?.position;
@@ -13461,13 +13457,11 @@ export class Server {
     this.#oweCurrencyMarks(source, pulled.marked);
     armed = this.#currencyArmed.get(source);
     if (armed === undefined) {
-      armed = new Map();
+      armed = new ArmedCurrencyReaders(pulled.position);
       this.#currencyArmed.set(source, armed);
     }
     // With no reader armed, nothing below this position is owed to anyone.
-    if (armed.size === 0) {
-      this.#currencyToldThrough.set(source, pulled.position);
-    }
+    if (armed.size === 0) armed.toldThrough = pulled.position;
     const until = this.#currencyRestsUntil(source, sourceEngine);
     armed.set(space, {
       position: pulled.position,
@@ -14017,10 +14011,10 @@ export class Server {
 
   /**
    * Queues a pull by `reader` from `source`, which has just disarmed it,
-   * where `reader` offers demand there (`#followForCarriedDemand()`).
+   * made where `reader` offers demand there when the pull runs
+   * (`#followForCarriedDemand()`).
    */
   #queueFollowForCarriedDemand(reader: string, source: string): void {
-    if (this.#carriedOffered.get(source)?.has(reader) !== true) return;
     const following = Promise.resolve().then(() =>
       this.#followForCarriedDemand(reader, source)
     ).catch((error) => {

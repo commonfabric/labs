@@ -786,7 +786,7 @@ describe("cfc schema sanitization", () => {
     // object. Walking those bodies again at each view expands the definition
     // graph as a tree rather than a DAG, so node visits grow as
     // (definition count)^(ref depth) — the shape that made
-    // patterns/product/lobby/main.tsx take over a minute to validate.
+    // patterns/product/lobby/lobby.tsx take over a minute to validate.
     // Counting reads of one definition body keeps the bound on the work
     // itself rather than on the clock.
     const depth = 8;

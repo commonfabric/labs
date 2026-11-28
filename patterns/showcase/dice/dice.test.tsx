@@ -4,7 +4,7 @@ import {
   findNodeById,
   textContent,
 } from "../../tools/test-support/vnode-helpers.ts";
-import Dice from "./dice.tsx";
+import Dice from "./main.tsx";
 
 /** What the view reports beside its "Check value" button. */
 const reportOf = (ui: unknown): string =>

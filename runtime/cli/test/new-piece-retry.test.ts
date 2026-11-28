@@ -1,7 +1,8 @@
 /**
- * Exercises CLI creation retries against an in-process memory store and a
- * client runtime. The root's registration action and creation receipts are
- * real; the dependency seams supply the already-open space and source program.
+ * Exercises CLI creation, and its retries, against an in-process memory store
+ * and a client runtime. The root's registration action and creation receipts
+ * are real; the dependency seams supply the already-open space and source
+ * program.
  */
 
 import { expect } from "@std/expect";
@@ -29,7 +30,11 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 
-import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
+import {
+  type DeployedProgram,
+  newPiece,
+  newPieceWithReceipt,
+} from "../lib/piece.ts";
 import { resetWriteReceipts } from "../lib/write-receipt.ts";
 
 const CONFIG = {
@@ -310,5 +315,42 @@ describe("newPiece()", () => {
     expect((await pieces.getRegisteredPieces()).map((entry) => entry.id))
       .toEqual([created]);
     expect(await registrationAttempts()).toEqual([created, created]);
+  });
+
+  it("tells onDeployed what a creation from local files deployed, and nothing for one from the index", async () => {
+    const deployed: DeployedProgram[] = [];
+    const onDeployed = (told: DeployedProgram) => deployed.push(told);
+
+    const created = await newPiece(
+      CONFIG,
+      { mainPath: "/notes/main.tsx" },
+      { input: { title: "Deployed note", body: "# Deployed" }, onDeployed },
+      {
+        loadPieces: () => Promise.resolve(controller),
+        getPinnedProgramFromFile: () => Promise.resolve(NOTE_PROGRAM),
+      },
+    );
+
+    expect(deployed).toHaveLength(1);
+    expect(deployed[0].piece).toEqual({
+      space: pieces.getSpace(),
+      id: created,
+    });
+    expect(deployed[0].program).toBe(NOTE_PROGRAM);
+    const ref = await (await pieces.get(created, false)).getPatternRef();
+    expect(ref?.identity).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(await deployed[0].patternId()).toBe(ref?.identity);
+
+    await newPieceWithReceipt(
+      CONFIG,
+      { patternId: "pat-note", patternIndexUrl: "https://index.example" },
+      { input: { title: "Indexed note", body: "# Indexed" }, onDeployed },
+      {
+        loadPieces: () => Promise.resolve(controller),
+        getProgramFromIndex: () => Promise.resolve({ program: NOTE_PROGRAM }),
+      },
+    );
+
+    expect(deployed).toHaveLength(1);
   });
 });

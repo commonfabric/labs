@@ -1772,12 +1772,20 @@ describe("DomApplicator", () => {
       });
 
       describe("operations on a node that cannot take them", () => {
-        it("ignores props and events aimed at a text node or a missing node", () => {
-          // Each op would reach the node if let through: `set-prop` through
-          // `setProp`, `set-event` as a listener, and removing a `data-` prop
-          // through `removeAttribute()`, which a text node lacks, so the call
-          // would throw through `onError`.
+        it("ignores props, bindings, and events aimed at a text node or a missing node", () => {
+          // Each op would reach the node if let through: `set-prop`, and
+          // `set-binding` with no runtime client, through `setProp`;
+          // `set-event` as a listener; and removing a `data-` prop through
+          // `removeAttribute()`, which a text node lacks, so the call would
+          // throw through `onError`. The element shows what `setProp` records
+          // for a binding that does reach its node.
 
+          const cellRef: CellRef = {
+            space: "did:key:test",
+            scope: "space",
+            id: "of:bound",
+            path: [],
+          };
           const set: string[] = [];
           const applicator = new DomApplicator({
             document: createMockDocument(),
@@ -1794,12 +1802,16 @@ describe("DomApplicator", () => {
               { op: "create-text", nodeId: 1, text: "plain" },
               { op: "set-prop", nodeId: 1, key: "title", value: "x" },
               { op: "remove-prop", nodeId: 1, key: "data-title" },
+              { op: "set-binding", nodeId: 1, propName: "text", cellRef },
+              { op: "set-binding", nodeId: 9, propName: "missing", cellRef },
               { op: "set-event", nodeId: 9, eventType: "click", handlerId: 1 },
               { op: "remove-event", nodeId: 9, eventType: "click" },
+              { op: "create-element", nodeId: 2, tagName: "input" },
+              { op: "set-binding", nodeId: 2, propName: "value", cellRef },
             ],
           });
 
-          expect(set).toEqual([]);
+          expect(set).toEqual(["value"]);
           expect(applicator.getDebugInfo().listenerCount).toBe(0);
         });
 
@@ -2158,6 +2170,36 @@ describe("DomApplicator", () => {
         expect(applicator.getNode(1)).toBe(undefined);
         expect(applicator.getNode(2)).toBe(undefined);
         expect(applicator.getRootNode()).toBe(null);
+      });
+
+      it("removes its listeners from the container and leaves the container in place", () => {
+        const doc = createMockDocument();
+        const events: DomEventMessage[] = [];
+        const applicator = new DomApplicator({
+          document: doc,
+          runtimeClient: createMockRuntimeClient(),
+          onEvent: (msg) => events.push(msg),
+        });
+        const host = doc.createElement("main") as any;
+        const container = doc.createElement("section") as any;
+        host.appendChild(container);
+        applicator.setContainer(container);
+
+        applicator.applyBatch({
+          batchId: 1,
+          ops: [
+            { op: "set-event", nodeId: 0, eventType: "click", handlerId: 7 },
+          ],
+        });
+        container.dispatchEvent({ type: "click", target: container });
+        expect(events.map((event) => event.handlerId)).toEqual([7]);
+
+        applicator.dispose();
+        container.dispatchEvent({ type: "click", target: container });
+
+        expect(events.length).toBe(1);
+        expect(container.parentNode).toBe(host);
+        expect(host.childNodes).toEqual([container]);
       });
     });
   });

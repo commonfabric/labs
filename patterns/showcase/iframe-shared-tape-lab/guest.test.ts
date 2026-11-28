@@ -83,6 +83,7 @@ class AudioEngine {
   currentTime = 0;
   readonly sources: BufferSource[] = [];
   readonly decoded: number[] = [];
+  startFailure: Error | undefined;
   decodeFailure: Error | undefined;
   resumeFailure: Error | undefined;
   stopFailure: Error | undefined;
@@ -100,6 +101,10 @@ class AudioEngine {
   /** The `AudioContext` class the guest constructs. */
   readonly AudioContext = ((engine: AudioEngine) =>
     class {
+      constructor() {
+        if (engine.startFailure) throw engine.startFailure;
+      }
+
       get currentTime(): number {
         return engine.currentTime;
       }
@@ -213,6 +218,11 @@ describe("iframe-shared-tape-lab/guest", () => {
 
   function recording(): HTMLAudioElement {
     return byTestId<HTMLAudioElement>("field-recording");
+  }
+
+  function cardIds(): (string | undefined)[] {
+    return [...document.querySelectorAll<HTMLElement>(".annotation-card")]
+      .map((card) => card.dataset.annotationId);
   }
 
   function timecode(): string {
@@ -354,6 +364,18 @@ describe("iframe-shared-tape-lab/guest", () => {
       );
     });
 
+    it("reports an audio engine that cannot start", async () => {
+      const engine = new AudioEngine();
+      engine.startFailure = new Error("No audio output device.");
+      await open({ engine, ready: false });
+      await page!.until(() =>
+        status().textContent === "Could not join the shared tape"
+      );
+
+      expect(alertText()).toContain("No audio output device.");
+      expect(engine.decoded).toEqual([]);
+    });
+
     it("reports a recording that cannot be decoded", async () => {
       const engine = new AudioEngine();
       engine.decodeFailure = new Error("Unsupported sample format.");
@@ -363,6 +385,59 @@ describe("iframe-shared-tape-lab/guest", () => {
       );
 
       expect(alertText()).toContain("Unsupported sample format.");
+    });
+
+    it("builds a duration that changes while the recording loads", async () => {
+      const { input, engine } = await open({ ready: false });
+      await engine.streamCreated;
+
+      input.value = { ...INPUT, durationSeconds: 30 };
+      await page!.settled();
+      recording().dispatchEvent(new Event("loadedmetadata"));
+      await page!.until(() => status().dataset.ready === "true");
+
+      expect(engine.decoded).toEqual([18, 30]);
+      expect(byTestId("local-playhead").max).toBe("30");
+      expect(byTestId<HTMLButtonElement>("add-at-playhead").disabled).toBe(
+        false,
+      );
+    });
+
+    it("stays unready when a duration that changes while the recording loads cannot be built", async () => {
+      const { input, engine } = await open({ ready: false });
+      await engine.streamCreated;
+      engine.decodeFailure = new Error("Out of memory.");
+
+      input.value = { ...INPUT, durationSeconds: 90 };
+      await page!.settled();
+      recording().dispatchEvent(new Event("loadedmetadata"));
+      await page!.until(() =>
+        status().textContent === "Recording duration update failed"
+      );
+      await page!.settled();
+
+      expect(status().textContent).toBe("Recording duration update failed");
+      expect(status().dataset.ready).toBe("false");
+      expect(alertText()).toBe(
+        "Could not update the recording duration. Out of memory.",
+      );
+      expect(byTestId<HTMLButtonElement>("add-at-playhead").disabled).toBe(
+        true,
+      );
+      expect(recording().controls).toBe(false);
+    });
+
+    it("reports shared annotations it cannot draw, and draws them once they are whole", async () => {
+      const { state } = await open();
+
+      state.value = { annotations: [{ id: "torn" }], assessments: [] };
+      await page!.until(() => alertText().includes("startSeconds"));
+
+      expect(cardIds()).toEqual(["frog", "owl"]);
+
+      state.value = { annotations: [OWL], assessments: [] };
+      await page!.until(() => cardIds().length === 1);
+      expect(cardIds()).toEqual(["owl"]);
     });
 
     it("stops the recording and closes the audio engine when unloaded", async () => {
@@ -595,6 +670,60 @@ describe("iframe-shared-tape-lab/guest", () => {
       );
     });
 
+    it("ignores Add at playhead while an annotation saves", async () => {
+      const { state } = await open();
+      byTestId<HTMLButtonElement>("add-at-playhead").click();
+      byTestId("annotation-label").value = "Heron";
+      byTestId<HTMLTextAreaElement>("annotation-note").value = "Wading.";
+
+      byTestId<HTMLButtonElement>("save-annotation").click();
+      byTestId<HTMLButtonElement>("add-at-playhead").click();
+
+      expect(byTestId("annotation-label").value).toBe("Heron");
+      expect(byTestId<HTMLButtonElement>("save-annotation").disabled).toBe(
+        true,
+      );
+      await page!.until(() =>
+        !byTestId<HTMLDialogElement>("annotation-dialog").open
+      );
+      expect(state.value).toMatchObject({
+        annotations: [FROG, OWL, { label: "Heron", note: "Wading." }],
+      });
+      await page!.settled();
+
+      byTestId<HTMLButtonElement>("add-at-playhead").click();
+      expect(byTestId<HTMLDialogElement>("annotation-dialog").open).toBe(true);
+      expect(byTestId("annotation-label").value).toBe("");
+    });
+
+    it("holds an open editor's save until the duration is ready", async () => {
+      const { input, state, engine } = await open();
+      byTestId<HTMLButtonElement>("add-at-playhead").click();
+      byTestId("annotation-label").value = "Heron";
+      byTestId<HTMLTextAreaElement>("annotation-note").value = "Wading.";
+      const held = Promise.withResolvers<void>();
+      engine.heldDecode = held.promise;
+
+      input.value = { ...INPUT, durationSeconds: 30 };
+      await page!.until(() => status().dataset.ready === "false");
+      const save = byTestId<HTMLButtonElement>("save-annotation");
+      expect(save.disabled).toBe(true);
+      save.click();
+      await page!.settled();
+      expect(state.writes).toEqual([]);
+
+      held.resolve();
+      await page!.until(() => status().dataset.ready === "true");
+      expect(save.disabled).toBe(false);
+      save.click();
+      await page!.until(() =>
+        !byTestId<HTMLDialogElement>("annotation-dialog").open
+      );
+      expect(state.value).toMatchObject({
+        annotations: [FROG, OWL, { label: "Heron" }],
+      });
+    });
+
     it("closes the editor on Cancel and stores nothing", async () => {
       const { state } = await open();
       byTestId<HTMLButtonElement>("add-at-playhead").click();
@@ -778,6 +907,31 @@ describe("iframe-shared-tape-lab/guest", () => {
 
       expect(first.stopped).toBe(true);
       expect(engine.playing?.started?.offset).toBe(7);
+    });
+
+    it("ignores an undrawn annotation's controls while the duration updates", async () => {
+      const { input, state, engine } = await open();
+      const held = Promise.withResolvers<void>();
+      engine.heldDecode = held.promise;
+      state.value = undefined;
+      input.value = { ...INPUT, durationSeconds: 30 };
+      await page!.until(() => status().dataset.ready === "false");
+
+      const frog = byTestId<HTMLElement>("annotation-frog");
+      frog.querySelector("button")!.click();
+      byTestId<HTMLButtonElement>("edit-frog").click();
+      await page!.settled();
+      expect(timecode()).toBe("00:00.0");
+      expect(byTestId<HTMLDialogElement>("annotation-dialog").open).toBe(
+        false,
+      );
+
+      held.resolve();
+      await page!.until(() => status().dataset.ready === "true");
+      frog.querySelector("button")!.click();
+      byTestId<HTMLButtonElement>("edit-frog").click();
+      expect(timecode()).toBe("00:03.0");
+      expect(byTestId<HTMLDialogElement>("annotation-dialog").open).toBe(true);
     });
 
     it("seeks a paused recording without starting it", async () => {

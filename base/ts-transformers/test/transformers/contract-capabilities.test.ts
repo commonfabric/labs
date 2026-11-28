@@ -13,6 +13,7 @@ describe("contract-capabilities", () => {
       name: "event",
       capability: "opaque",
       readPaths: [],
+      fullShapePaths: [],
       writePaths: [],
       opaquePaths: [],
       passthrough: false,

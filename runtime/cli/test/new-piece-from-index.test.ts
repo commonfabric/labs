@@ -1,4 +1,5 @@
 import { expect } from "@std/expect";
+import { join } from "@std/path";
 import { ValidationError } from "@cliffy/command";
 import { Identity } from "@commonfabric/identity";
 import { Runtime } from "@commonfabric/runner";
@@ -6,15 +7,20 @@ import { StorageManager } from "@commonfabric/runner/storage/cache.deno";
 import { FIRST_PARTY_HTTP_AUTH_HEADERS } from "@commonfabric/runner/toolshed-http-auth";
 import {
   newPieceFromCommand,
+  openIndexClient,
   piece,
   recordIndexedPiece,
 } from "../commands/piece.ts";
 import {
+  PatternIndexClient,
   PatternIndexError,
   type PatternIndexGetRequest,
   type PatternIndexPattern,
 } from "@commonfabric/pattern-index/client";
-import { PatternIndexStore } from "@commonfabric/pattern-index/store";
+import {
+  PatternIndexStore,
+  patternIndexStoreDir,
+} from "@commonfabric/pattern-index/store";
 import { DEFAULT_PATTERN_INDEX_URL } from "@commonfabric/pattern-index/access";
 import {
   afterEach,
@@ -24,6 +30,7 @@ import {
 } from "@commonfabric/test-support/test";
 import { newPiece, newPieceWithReceipt } from "../lib/piece.ts";
 import { captureStderr } from "./utils.ts";
+import { FakePatternIndex } from "../../pattern-index/test/fake-pattern-index.ts";
 
 const CONFIG = {
   apiUrl: "https://cf.dev",
@@ -682,6 +689,96 @@ describe("piece new --from-index", () => {
       expect(warnings[0]).toContain(
         "No place to keep pattern index membership",
       );
+    });
+  });
+
+  describe("openIndexClient()", () => {
+    let dir: string;
+    let keyPath: string;
+    let signer: Identity;
+    let index: FakePatternIndex;
+    let server: Deno.HttpServer<Deno.NetAddr>;
+    let baseUrl: string;
+    const env = (key: string) =>
+      key === "CF_PATTERN_INDEX_HOME" ? join(dir, "index-home") : undefined;
+
+    beforeEach(async () => {
+      dir = await Deno.makeTempDir();
+      keyPath = join(dir, "space.key");
+      const pkcs8 = await Identity.generatePkcs8();
+      await Deno.writeFile(keyPath, pkcs8);
+      signer = await Identity.fromPkcs8(pkcs8);
+      index = new FakePatternIndex();
+      server = Deno.serve(
+        { hostname: "127.0.0.1", port: 0, onListen: () => {} },
+        async (request) =>
+          await index.fetchFn(request.url, {
+            method: request.method,
+            headers: request.headers,
+            body: await request.text(),
+          }),
+      );
+      baseUrl = `http://127.0.0.1:${server.addr.port}`;
+    });
+
+    afterEach(async () => {
+      await server.shutdown();
+      await Deno.remove(dir, { recursive: true });
+    });
+
+    /** Admits a fresh root to the index and publishes `pat-1` as it. */
+    const admitRoot = async (root: Identity) => {
+      index.admit(root.did(), "p-1");
+      await new PatternIndexClient({
+        baseUrl,
+        signer: root,
+        fetchFn: index.fetchFn,
+      }).publishPattern({
+        patternId: "pat-1",
+        description: "doubles n",
+        hashtags: [],
+        program: { main: "/main.tsx", files: [] },
+      });
+    };
+
+    it("asks the index as the key file's identity, presenting the chain kept for that index", async () => {
+      const store = new PatternIndexStore(patternIndexStoreDir(baseUrl, env));
+      const root = await store.createRootKey();
+      await store.recordMembership({
+        handle: "p-1",
+        role: "user",
+        root: root.did(),
+      });
+      await admitRoot(root);
+
+      const client = await openIndexClient(baseUrl, keyPath, env);
+
+      expect(await client.getPattern({ patternId: "pat-1" })).toMatchObject({
+        patternId: "pat-1",
+        handle: "p-1",
+        mine: true,
+      });
+      expect(index.calls.at(-1)).toMatchObject({
+        fn: "getPattern",
+        signer: signer.did(),
+      });
+    });
+
+    it("is refused as a stranger when no membership is kept for that index", async () => {
+      await admitRoot(await Identity.generate());
+
+      const client = await openIndexClient(baseUrl, keyPath, env);
+      const error = await client.getPattern({ patternId: "pat-1" }).then(
+        () => undefined,
+        (e) => e,
+      );
+
+      expect(error).toBeInstanceOf(PatternIndexError);
+      expect(error.status).toBe(403);
+      expect(index.calls.at(-1)).toMatchObject({
+        fn: "getPattern",
+        signer: signer.did(),
+      });
     });
   });
 });

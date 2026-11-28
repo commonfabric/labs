@@ -30,13 +30,17 @@
  * among those is left to review.
  *
  * Usage: deno run --allow-read --allow-env --allow-run=git \
- *        ./tasks/check-test-shuffle.ts
+ *        ./tasks/check-test-shuffle.ts [root]
+ *
+ * `root` is the checkout to check, the one holding this script when it is
+ * not given.
  */
 
 import { basename, dirname, fromFileUrl, join } from "@std/path";
 import { parse as parseJsonc } from "@std/jsonc";
 import ts from "typescript";
 import { readInvocation } from "./run-member-tests.ts";
+import { runOnRoot } from "./root-argument.ts";
 
 const REPO_ROOT = dirname(dirname(fromFileUrl(import.meta.url)));
 
@@ -777,4 +781,7 @@ export async function main(root: string = REPO_ROOT): Promise<number> {
   return 1;
 }
 
-if (import.meta.main) Deno.exit(await main());
+/** What the command line may hold. */
+const USAGE = "check-test-shuffle.ts [root]";
+
+if (import.meta.main) Deno.exit(await runOnRoot(Deno.args, USAGE, main));

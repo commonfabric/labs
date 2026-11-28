@@ -5,6 +5,10 @@ import { stub } from "@std/testing/mock";
 import { createSession, Identity } from "@commonfabric/identity";
 import { waitForCellValue } from "@commonfabric/integration/wait-for-cell-value";
 import {
+  patternCoverageCollector,
+  writeProcessPatternCoverage,
+} from "@commonfabric/integration/pattern-coverage";
+import {
   sharedSpaceCollectionViewSchema,
   sharedSpaceCommandsSchema,
   sharedSpaceReceiptViewSchema,
@@ -419,6 +423,7 @@ async function withHome(
     });
     const runtime = new Runtime({
       moduleByteCache,
+      patternCoverage: patternCoverageCollector(),
       apiUrl: new URL("https://home.example"),
       storageManager: storage,
       experimental: { serverExecution: executeOnServer },
@@ -449,6 +454,7 @@ async function withHome(
           });
           const runtime = new Runtime({
             moduleByteCache,
+            patternCoverage: patternCoverageCollector(),
             apiUrl: new URL("https://home.example"),
             storageManager: storage,
             servingPosture: true,
@@ -485,6 +491,7 @@ async function withHome(
       await storage.close();
     }
     await server.close();
+    await writeProcessPatternCoverage();
   }
 }
 
@@ -1436,6 +1443,7 @@ describe("Home shared-space catalog", () => {
         const storage = EmulatedStorageManager.connectTo(server, { as: owner });
         const reader = new Runtime({
           moduleByteCache,
+          patternCoverage: patternCoverageCollector(),
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },
@@ -1497,6 +1505,7 @@ describe("Home shared-space catalog", () => {
         });
         const reader = new Runtime({
           moduleByteCache,
+          patternCoverage: patternCoverageCollector(),
           apiUrl: new URL("https://home.example"),
           storageManager: storage,
           experimental: { serverExecution: serving },

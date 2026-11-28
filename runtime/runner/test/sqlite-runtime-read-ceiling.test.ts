@@ -407,7 +407,9 @@ describe("sqliteQuery under a runtime read ceiling", () => {
         actionId: "test:read-ceiling",
         kind: "derivation",
         scopeKeyIdentity: { principal: "did:key:zAlice", sessionId: "s1" },
-        ...(readCeiling !== undefined ? { readCeiling } : {}),
+        ...(readCeiling !== undefined
+          ? { sessionReadCeiling: readCeiling }
+          : {}),
       });
       return tx;
     };

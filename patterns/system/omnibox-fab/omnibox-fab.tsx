@@ -21,7 +21,7 @@ import {
   wish,
   Writable,
 } from "commonfabric";
-import Chatbot from "../chatbot/chatbot.tsx";
+import Chatbot from "../chatbot/main.tsx";
 import {
   bash,
   calculator,

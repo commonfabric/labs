@@ -760,13 +760,15 @@ export const changeSharedSpaceMembership = handler<
  * says the space is deleted (`spaceDeleted()`), so a mark naming a space that
  * is not deleted, forged or mistaken, changes nothing. Returns `conflict`
  * without writing when the space has no entry, the observed revision is not
- * the current one, the entry is in another state, the server does not say the
- * space is deleted, or the next revision would not fit. The entry keeps its
- * title, sender, admission time and every offer receipt naming the space, and
- * `deleted` is terminal: no later command restores or saves the entry. Call
- * it only from a handler, since a new revision names the handler's event and
- * the deletion is asked of the server there. On a runtime that has not opened
- * the space, the handler is run again once the server has answered for it.
+ * the current one, the entry is in another state, the next revision would not
+ * fit, or the server does not say the space is deleted, checking in that
+ * order, so the server is asked only about a mark that could be recorded. The
+ * entry keeps its title, sender, admission time and every offer receipt naming
+ * the space, and `deleted` is terminal: no later command restores or saves the
+ * entry. Call it only from a handler, since a new revision names the
+ * handler's event and the deletion is asked of the server there. On a runtime
+ * that has not opened the space, the handler is run again once the server has
+ * answered for it.
  *
  * @throws When `mark` names no well-formed space or revision, or `catalog`
  *   holds something other than a valid catalog.
@@ -789,12 +791,12 @@ export function markSharedSpaceDeletedIn(
   if (!membership(current.state)) {
     return { status: "conflict", reason: "unsupported-state" };
   }
-  if (spaceDeleted(mark.space) !== true) {
-    return { status: "conflict", reason: "not-deleted" };
-  }
   const revision = nextRevision(current.revision);
   if (revision === undefined) {
     return { status: "conflict", reason: "unsupported-revision" };
+  }
+  if (spaceDeleted(mark.space) !== true) {
+    return { status: "conflict", reason: "not-deleted" };
   }
   catalog.key("entries", mark.space, "state").set("deleted");
   catalog.key("entries", mark.space, "revision").set(revision);

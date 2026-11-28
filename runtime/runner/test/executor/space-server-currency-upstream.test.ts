@@ -11,6 +11,7 @@ import {
   it,
 } from "@commonfabric/test-support/test";
 import { clock } from "@commonfabric/test-support/fake-clock";
+import { spy, stub } from "@std/testing/mock";
 
 import type { Cell } from "../../src/cell.ts";
 import { ExecutorHost } from "../../src/executor/host.ts";
@@ -23,6 +24,7 @@ import { Runtime } from "../../src/runtime.ts";
 import type { MemorySpace } from "../../src/storage/interface.ts";
 import { EmulatedStorageManager } from "../../src/storage/v2-emulate.ts";
 import { newSharedServer } from "../memory-v2-test-utils.ts";
+import { captureLogs } from "../support/captured-logs.ts";
 import { ArrivalLog, awaitEach } from "../support/serving-waits.ts";
 
 const space = (await Identity.fromPassphrase(
@@ -343,6 +345,172 @@ describe("SpaceServer", () => {
           true,
         ]);
         expect(host!.stats().currency.upstreamAbandoned).toBe(0);
+      });
+
+      it("ends the demand pass on what is upstream when the tenure parks while the rows for it are carried, and the next tenure brings the viewer the value derived from the change, under `start-upstream`", async () => {
+        const { input, resultSchema } = await standUpAndPark("start-upstream");
+        await changeInput(input, 20);
+        const entered = Promise.withResolvers<void>();
+        const released = Promise.withResolvers<void>();
+        const carry = server.setCarriedDemand.bind(server);
+        let held = false;
+        using _carry = stub(
+          server,
+          "setCarriedDemand",
+          async (...args: Parameters<typeof server.setCarriedDemand>) => {
+            if (!held && args[1] === space && args[2].length > 0) {
+              held = true;
+              entered.resolve();
+              await released.promise;
+            }
+            return await carry(...args);
+          },
+        );
+
+        // Alice watches the first piece's input alongside, a document a
+        // structure load starts no piece from, which the pass parks after
+        // syncing it.
+        const { alice, result } = await watchLast(resultSchema);
+        const plain = alice.getCellFromLink({
+          space,
+          id: input,
+          scope: "space",
+          path: [],
+        });
+        await plain.sync();
+        plain.sink(() => {});
+        await entered.promise;
+        const loop = host!.spaceServer(space)!;
+        const parked = servingRuntimes.at(-1)!;
+        using loads = spy(parked, "getCellFromLink");
+        const parking = loop.park("test-park");
+        released.resolve();
+        await parking;
+        await clock.settle();
+
+        // The parked tenure's pass loads nothing on its runtime.
+        expect(loads.calls.length).toBe(0);
+        await reads(alice, result, "c:b:2");
+      });
+
+      describe("with what is upstream read where no piece writes it", () => {
+        // Each judgment's reads that keep the last piece stale are rewritten
+        // to read the first piece's input, for which carrying demand starts
+        // nothing, and to name as the piece to start the one each case
+        // chooses.
+
+        /**
+         * Rewrites each judgment's reads upstream to name, as the piece to
+         * start, what `producer` returns for the judgment's number.
+         */
+        const judgeWithProducer = (
+          input: string,
+          producer: (judgment: number) => string,
+        ) => {
+          const judge = server.judgeCurrencyRoots.bind(server);
+          let judgments = 0;
+          return stub(
+            server,
+            "judgeCurrencyRoots",
+            async (...args: Parameters<typeof server.judgeCurrencyRoots>) => {
+              const judged = await judge(...args);
+              if (judged.upstream.length === 0) return judged;
+              const piece = producer(++judgments);
+              return {
+                ...judged,
+                upstream: judged.upstream.map((read) => ({
+                  ...read,
+                  piece,
+                  id: input,
+                  scopeKey: "space",
+                })),
+              };
+            },
+          );
+        };
+
+        it("gives up on it once a second judgment names it again, and starts the last piece on what the store holds, under `start-upstream`", async () => {
+          const { roots, input, resultSchema } = await standUpAndPark(
+            "start-upstream",
+          );
+          await changeInput(input, 20);
+          using _judge = judgeWithProducer(input, () => input);
+          using logs = captureLogs("space-server");
+
+          const { alice, result } = await watchLast(resultSchema);
+          await awaitEach(cycles, () => serves(roots.last));
+          await reads(alice, result, "c:b:1");
+          await host!.whenQuiescent();
+
+          expect(host!.stats().currency.upstreamAbandoned).toBe(1);
+          expect(logs.textsOf("currency-upstream-abandoned")).toEqual([
+            `space ${space}: gave up on what is upstream of ` +
+            `${roots.last.id}: ${input}`,
+          ]);
+          expect(logs.textsOf("currency-upstream-stalled")).toEqual([]);
+          expect([serves(roots.first), serves(roots.middle)]).toEqual([
+            false,
+            false,
+          ]);
+        });
+
+        it("gives up on it once the piece named, which runs here, has been recorded with the last piece stale still, and starts the last piece on what the store holds, under `start-upstream`", async () => {
+          // Alice watches the first piece too, which starts it: the piece
+          // each judgment names is that one.
+
+          const { roots, input, resultSchema } = await standUpAndPark(
+            "start-upstream",
+          );
+          await changeInput(input, 20);
+          using _judge = judgeWithProducer(input, () => roots.first.id);
+          using logs = captureLogs("space-server");
+
+          const { alice, result } = await watchLast(resultSchema);
+          const first = alice.getCellFromLink(roots.first);
+          await first.sync();
+          first.sink(() => {});
+          await awaitEach(cycles, () => serves(roots.last));
+          await reads(alice, result, "c:b:1");
+          await host!.whenQuiescent();
+
+          expect(logs.textsOf("currency-upstream-abandoned")).toEqual([
+            `space ${space}: gave up on what is upstream of ` +
+            `${roots.last.id}: ${roots.first.id}`,
+          ]);
+          expect(logs.textsOf("currency-upstream-stalled")).toEqual([]);
+          expect([serves(roots.first), serves(roots.middle)]).toEqual([
+            true,
+            false,
+          ]);
+        });
+
+        it("gives up on all of it once the loop comes to rest twice with nothing under way, and starts the last piece on what the store holds, under `start-upstream`", async () => {
+          // The piece each judgment names is the last piece itself, whose
+          // root awaits its first load, so it is not given up on by itself.
+
+          const { roots, input, resultSchema } = await standUpAndPark(
+            "start-upstream",
+          );
+          await changeInput(input, 20);
+          using _judge = judgeWithProducer(input, () => roots.last.id);
+          using logs = captureLogs("space-server");
+
+          const { alice, result } = await watchLast(resultSchema);
+          await awaitEach(cycles, () => serves(roots.last));
+          await reads(alice, result, "c:b:1");
+          await host!.whenQuiescent();
+
+          expect(logs.textsOf("currency-upstream-stalled")).toEqual([
+            `space ${space}: came to rest with something stale upstream ` +
+            "and nothing under way; gave up on it, releasing 1 held root(s)",
+          ]);
+          expect(logs.textsOf("currency-upstream-abandoned")).toEqual([]);
+          expect(host!.stats().currency.upstreamAbandoned).toBe(1);
+          expect([serves(roots.first), serves(roots.middle)]).toEqual([
+            false,
+            false,
+          ]);
+        });
       });
 
       it("starts the first piece alone, and leaves the last unstarted, when the first derives the value it held, under `start-upstream`", async () => {

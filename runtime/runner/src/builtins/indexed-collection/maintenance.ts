@@ -235,10 +235,9 @@ export function nextMaintenanceRevision(): string {
  * compare as sets, since a table returns its rows in no fixed order.
  */
 export function sameMemberRows(
-  previous: MemberRows | undefined,
+  previous: MemberRows,
   next: MemberRows,
 ): boolean {
-  if (previous === undefined) return false;
   return sameList(previous.values, next.values) &&
     previous.relations.length === next.relations.length &&
     previous.relations.every((targets, at) =>

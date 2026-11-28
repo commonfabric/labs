@@ -111,9 +111,6 @@ export class Runner {
         );
         for (const index of order) {
           const testResult = await this.browser.runTest(index);
-          if (!testResult) {
-            break;
-          }
           results.tests.push(testResult);
           this.reporter.onTestCompleted(testResult);
           if (file === undefined) continue;

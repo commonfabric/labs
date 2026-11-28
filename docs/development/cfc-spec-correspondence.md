@@ -361,6 +361,36 @@ rule ahead of the ruling and revising it after; that direction does not
 supply a ruling. The conformance statement records the gap until #110 merges
 and a reconciled pin addresses it.
 
+Pattern reclassification is a semantic gap pending
+[specs#111](https://github.com/commonfabric/specs/pull/111) (SC-58), which
+cites the creator record of
+[specs#87](https://github.com/commonfabric/specs/pull/87). With its dial on,
+a value written under an `ifc.reclassify` declaration is stored with each
+clause that is its piece's recorded creator's alone to release, and names
+them only as a `User`, widened to that clause or the declared policy. That
+holds only when one declaration covers every path the transaction writes on
+the document and every writer there is the module the piece's
+`patternIdentity` names; otherwise the join is stored as derived. §3.1.8 and
+§8.12.7 do not permit the widening today. It sits behind the
+`cfcPatternReclassification` dial, which defaults to off and has effect only
+with `pieceCreatorRecord`, so the strict default is unchanged. Its deciding
+site in `runtime/runner/src/cfc/prepare.ts` carries a `SPEC-PENDING` marker
+naming #111.
+
+The store's admission of the creator record is a semantic gap pending a
+ruling, [specs#112](https://github.com/commonfabric/specs/pull/112), stacked on
+[specs#87](https://github.com/commonfabric/specs/pull/87). The memory store
+admits a session's `creator` record only when it names a principal the session
+authenticated as, and refuses a session's change or removal of a stored one;
+every session is judged alike, and only the commits the server makes itself
+are not: `derived` ones, which carry a serving runtime's writes, `system`
+ones, and delegated ones. That refuses more than #87
+and stores nothing new, so it runs at the strict default, and its site in
+`runtime/memory/v2/cfc-creator-record.ts` carries a `SPEC-PENDING` marker
+naming #112, with #87 as the ruling it stacks on. Behind the default-off `pieceCreatorRecord` dial, a runtime on a
+client then records no creator where #87 records another principal, which
+leaves that piece's update-added owner fields to their first writer.
+
 An owner release (§8.12.7 route 2c) whose path holds a `*` segment is a
 nonconforming semantic gap pending
 [specs#86](https://github.com/commonfabric/specs/pull/86). The pinned route

@@ -2515,6 +2515,40 @@ describe("engine", () => {
       });
     });
 
+    describe("accessForTestingOnly.isHostPathWithinWorkspace()", () => {
+      it("returns true for a path inside the workspace and false for one outside it", async () => {
+        const root = await Deno.realPath(await Deno.makeTempDir());
+        try {
+          await Deno.mkdir(join(root, "workspace", "src"), { recursive: true });
+          await Deno.mkdir(join(root, "elsewhere"));
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            workspaceHostPath: join(root, "workspace"),
+          });
+          const within = engine.accessForTestingOnly.isHostPathWithinWorkspace;
+          expect(await within(join(root, "workspace", "src"))).toBe(true);
+          expect(await within(join(root, "elsewhere"))).toBe(false);
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      });
+
+      it("returns false for every path when the run has no workspace", async () => {
+        const root = await Deno.realPath(await Deno.makeTempDir());
+        try {
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+          });
+          expect(engine.workspaceHostPath).toBeUndefined();
+          expect(
+            await engine.accessForTestingOnly.isHostPathWithinWorkspace(root),
+          ).toBe(false);
+        } finally {
+          await Deno.remove(root, { recursive: true });
+        }
+      });
+    });
+
     describe("persistPolicyTrace()", () => {
       const trace = createHarnessPolicyTrace({
         generatedAt: "2026-04-17T20:00:00.000Z",
@@ -2775,6 +2809,70 @@ describe("engine", () => {
           ]);
         } finally {
           await Deno.remove(workspaceHostPath, { recursive: true });
+        }
+      });
+
+      it("refuses a host skill script when no workspace is mounted from the host", async () => {
+        const skillsRoot = await Deno.realPath(await Deno.makeTempDir());
+        try {
+          const skillDir = join(skillsRoot, "demo");
+          await Deno.mkdir(join(skillDir, "scripts"), { recursive: true });
+          await Deno.writeTextFile(
+            join(skillDir, "SKILL.md"),
+            "---\nname: demo\ndescription: Demo skill\n---\n\nRun hello.\n",
+          );
+          await Deno.writeTextFile(
+            join(skillDir, "scripts", "hello.sh"),
+            "#!/bin/bash\necho hello\n",
+            { mode: 0o755 },
+          );
+          const hostRunner = new FakeProcessRunner([
+            { stdout: "hello\n", stderr: "", exitCode: 0 },
+          ]);
+          const engine = new CfHarnessEngine({
+            sandboxRuntime: new FakeSandboxRuntime(),
+            processRunner: hostRunner,
+            skillsRoot,
+            skillScriptExecutionTarget: "host",
+            allowedSkillScripts: [{ skill: "demo", path: "scripts/hello.sh" }],
+            runId: "run-host-script-no-workspace",
+          });
+          const registry = await discoverHarnessSkills({
+            skillsRoot,
+            sandboxSkillsRoot: "/workspace/skills",
+          });
+          const [skill] = registry.skills;
+          await engine.persistSkillRegistry(registry);
+          await engine.persistSkillActivations({
+            type: "cf-harness.skill-activations",
+            version: 1,
+            generatedAt: "2026-05-01T00:00:00.000Z",
+            activations: [{
+              name: skill.name,
+              source: "cli-preload",
+              runId: "run-host-script-no-workspace",
+              skillPath: skill.skillPath,
+              skillDir: skill.skillDir,
+              sandboxSkillPath: skill.sandboxSkillPath,
+              sandboxSkillDir: skill.sandboxSkillDir,
+              digest: skill.digest,
+              activatedAt: "2026-05-01T00:00:00.000Z",
+              cfcPromptRole: "context",
+            }],
+          });
+
+          await expect(
+            engine.invokeBuiltinTool("run_skill_script", {
+              skill: "demo",
+              path: "scripts/hello.sh",
+              cwd: "/workspace",
+            }),
+          ).rejects.toThrow(
+            "host execution requires a host mount path to map sandbox paths",
+          );
+          expect(hostRunner.calls).toEqual([]);
+        } finally {
+          await Deno.remove(skillsRoot, { recursive: true });
         }
       });
 

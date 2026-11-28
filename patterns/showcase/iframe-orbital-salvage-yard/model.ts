@@ -1,4 +1,5 @@
 import {
+  type ModuleConnector,
   moduleConnectors,
   type ModuleKind,
   type ModuleSnapClaim,
@@ -11,7 +12,8 @@ import {
   findConnections,
   normalizeQuarterTurns,
   rotateVectorY,
-  worldConnectors,
+  type WorldConnector,
+  worldConnector,
 } from "./geometry.ts";
 
 export interface WritableBookmarkMap {
@@ -207,18 +209,14 @@ export function resolveSnapClaims(
 ): StationModule[] {
   const modulesById = new Map(modules.map((module) => [module.id, module]));
   const candidates = Object.entries(claims).flatMap(([moduleId, claim]) => {
-    const moving = modulesById.get(moduleId);
-    const target = claim && modulesById.get(claim.targetModuleId);
-    if (
-      !claim || !moving || !target || moving.id === target.id ||
-      !moving.connectors.some((connector) =>
-        connector.id === claim.movingConnectorId
-      ) ||
-      !target.connectors.some((connector) =>
-        connector.id === claim.targetConnectorId
-      )
-    ) return [];
-    return [{ moduleId, claim }];
+    if (!claim || moduleId === claim.targetModuleId) return [];
+    const movingConnector = modulesById.get(moduleId)?.connectors.find((
+      connector,
+    ) => connector.id === claim.movingConnectorId);
+    const targetConnector = modulesById.get(claim.targetModuleId)?.connectors
+      .find((connector) => connector.id === claim.targetConnectorId);
+    if (!movingConnector || !targetConnector) return [];
+    return [{ moduleId, claim, movingConnector, targetConnector }];
   });
   candidates.sort((left, right) => {
     const leftTarget = connectorIdentityKey(
@@ -257,7 +255,9 @@ export function resolveSnapClaims(
   let madeProgress = true;
   while (madeProgress) {
     madeProgress = false;
-    for (const { moduleId, claim } of validClaims) {
+    for (
+      const { moduleId, claim, movingConnector, targetConnector } of validClaims
+    ) {
       if (!pending.has(moduleId) || !resolved.has(claim.targetModuleId)) {
         continue;
       }
@@ -274,7 +274,11 @@ export function resolveSnapClaims(
       }
       const moving = modulesById.get(moduleId)!;
       const target = resolved.get(claim.targetModuleId)!;
-      const transform = deriveSnapTransform(moving, target, claim);
+      const transform = deriveSnapTransform(
+        movingConnector,
+        worldConnector(target, targetConnector),
+        claim.rotationQuarterTurns,
+      );
       pending.delete(moduleId);
       if (!transform) {
         resolved.set(moduleId, moving);
@@ -324,18 +328,10 @@ function occupiedConnectorKeys(modules: readonly StationModule[]): Set<string> {
 }
 
 function deriveSnapTransform(
-  moving: StationModule,
-  target: StationModule,
-  claim: ModuleSnapClaim,
+  movingConnector: ModuleConnector,
+  targetConnector: WorldConnector,
+  preferredQuarterTurns: number,
 ): StationModule["transform"] | undefined {
-  const movingConnector = moving.connectors.find((connector) =>
-    connector.id === claim.movingConnectorId
-  );
-  const targetConnector = worldConnectors(target).find((connector) =>
-    connector.id === claim.targetConnectorId
-  );
-  if (!movingConnector || !targetConnector) return undefined;
-
   const rotationQuarterTurns = [0, 1, 2, 3]
     .filter((rotation) =>
       dot(
@@ -344,8 +340,8 @@ function deriveSnapTransform(
       ) < -0.99
     )
     .sort((left, right) =>
-      quarterTurnDistance(left, claim.rotationQuarterTurns) -
-        quarterTurnDistance(right, claim.rotationQuarterTurns) || left - right
+      quarterTurnDistance(left, preferredQuarterTurns) -
+        quarterTurnDistance(right, preferredQuarterTurns) || left - right
     )[0];
   if (rotationQuarterTurns === undefined) return undefined;
   const offset = rotateVectorY(movingConnector.offset, rotationQuarterTurns);

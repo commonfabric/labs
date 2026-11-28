@@ -2280,6 +2280,46 @@ test("Codex Responses records the refusal when the caller aborts during the refr
   }
 });
 
+test("Codex Responses passes on an unexpected resolver failure during the refresh or the mark", async () => {
+  for (const during of ["refresh", "mark"]) {
+    const attempts: HarnessModelAttemptDiagnostic[] = [];
+    let requests = 0;
+    const broken = new Error("resolver broke");
+    const client = new OpenAICodexResponsesClient({
+      transportRetries: 0,
+      credentialResolver: {
+        resolve: () => Promise.resolve(credential),
+        refreshRejected: () =>
+          during === "refresh"
+            ? Promise.reject(broken)
+            : Promise.resolve({ credential: refreshedCredential, fresh: true }),
+        markRejected: () => Promise.reject(broken),
+      },
+      fetchFn: () => {
+        requests += 1;
+        return Promise.resolve(refusedToken());
+      },
+    });
+
+    const error = await assertRejects(() =>
+      client.complete({
+        ...helloRequest,
+        onAttempt: (attempt) => {
+          attempts.push(attempt);
+        },
+      })
+    );
+
+    // the failure is neither reported as the refusal nor recorded as one
+    assertEquals(error, broken);
+    assertEquals(requests, during === "refresh" ? 1 : 2);
+    assertEquals(
+      attempts.map((a) => [a.httpStatus, a.retry?.kind]),
+      during === "refresh" ? [] : [[401, "credential_refused"]],
+    );
+  }
+});
+
 test("Codex Responses keeps the whole retry schedule for the request a refused token is issued again as", async () => {
   const delays: number[] = [];
   const attempts: HarnessModelAttemptDiagnostic[] = [];

@@ -385,7 +385,6 @@ export class StoreCurrency {
     const released: string[] = [];
     for (const [key, held] of this.#held) {
       const readers = held.readers.filter((piece) => piece !== reader);
-      if (readers.length === held.readers.length) continue;
       if (readers.length > 0) {
         this.#held.set(key, { piece: held.piece, readers });
       } else {

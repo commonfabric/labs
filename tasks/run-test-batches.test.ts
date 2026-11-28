@@ -1,5 +1,7 @@
 import { expect } from "@std/expect";
+import { join } from "@std/path";
 
+import { runDenoCommandWithTemporaryLock } from "@commonfabric/test-support/isolated-deno";
 import { describe, it } from "@commonfabric/test-support/test";
 import { runMemberBatches, runTestBatches } from "./run-test-batches.ts";
 
@@ -28,6 +30,36 @@ function marking(name: string): string {
       JSON.stringify(`${name}.ran`)
     }, import.meta.url), "");\n` +
     "});\n";
+}
+
+const ROOT = join(import.meta.dirname!, "..");
+
+/**
+ * Runs `run-test-batches.ts` as its own program from `dir`, as a member's
+ * `test` task does, and returns the code it exits with.
+ */
+async function runScript(dir: string): Promise<number> {
+  const output = await runDenoCommandWithTemporaryLock({
+    root: ROOT,
+    cwd: dir,
+    args: (lockPath) => [
+      "run",
+      "--config",
+      join(ROOT, "deno.jsonc"),
+      "--lock",
+      lockPath,
+      "--allow-read",
+      "--allow-write",
+      "--allow-run",
+      join(ROOT, "tasks/run-test-batches.ts"),
+      ".",
+      "--",
+      "--no-config",
+      "--no-check",
+      `--allow-write=${dir}`,
+    ],
+  });
+  return output.code;
 }
 
 /** The tests in `dir` that left their mark, by name. */
@@ -154,6 +186,33 @@ describe("run-test-batches", () => {
       await expect(runMemberBatches(["."], ".")).rejects.toThrow(
         "Usage: run-test-batches.ts",
       );
+    });
+  });
+
+  describe("as a program", () => {
+    it("runs the member in its directory and exits zero", async () => {
+      const dir = await fixture({ "rise.test.ts": marking("rises") });
+      try {
+        expect(await runScript(dir)).toBe(0);
+        expect(await ran(dir)).toEqual(["rises"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
+    });
+
+    it("exits with the code of a failing test run", async () => {
+      const dir = await fixture({
+        "fail.test.ts": 'Deno.test("fails on purpose", () => {\n' +
+          '  throw new Error("a fixture of run-test-batches.ts failing");\n' +
+          "});\n",
+        "rise.test.ts": marking("rises"),
+      });
+      try {
+        expect(await runScript(dir)).toBe(1);
+        expect(await ran(dir)).toEqual(["rises"]);
+      } finally {
+        await Deno.remove(dir, { recursive: true });
+      }
     });
   });
 });

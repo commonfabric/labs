@@ -105,6 +105,56 @@ describe("definition", () => {
       });
     });
 
+    it("records the label of a column that declares one, and types the column by it", () => {
+      const ifc = { confidentiality: ["secret"] };
+      const { tables, index } = defineIndexedCollections({
+        donuts: {
+          columns: { name: "text", recipe: { type: "text", ifc } },
+        },
+      });
+
+      expect(index.kinds.donuts.labels).toEqual({ recipe: ifc });
+      expect(tables.donuts.properties.recipe).toEqual(
+        expect.objectContaining({ type: "string", sqlType: "text", ifc }),
+      );
+      expect(tables.donuts.properties.name.ifc).toBeUndefined();
+    });
+
+    it("throws on a kind declared by anything but an object written in the pattern", () => {
+      expect(() =>
+        // @ts-expect-error: a kind is declared by an object of options.
+        defineIndexedCollections({ donuts: [] })
+      ).toThrow("written in the pattern");
+      expect(() =>
+        // @ts-expect-error: a kind is declared by an object of options.
+        defineIndexedCollections({ donuts: "text" })
+      ).toThrow("written in the pattern");
+    });
+
+    it("throws on a column declared with no SQLite type", () => {
+      expect(() =>
+        defineIndexedCollections({
+          // @ts-expect-error: a nested column needs a `type`.
+          donuts: { columns: { bakerName: { path: ["baker", "name"] } } },
+        })
+      ).toThrow("`bakerName` needs a SQLite type");
+      expect(() =>
+        // @ts-expect-error: a column is a type or a spec, never `null`.
+        defineIndexedCollections({ donuts: { columns: { name: null } } })
+      ).toThrow("`name` needs a SQLite type");
+    });
+
+    it("throws on a column whose label is not an object", () => {
+      expect(() =>
+        defineIndexedCollections({
+          donuts: {
+            // @ts-expect-error: a label is an object.
+            columns: { recipe: { type: "text", ifc: "secret" } },
+          },
+        })
+      ).toThrow("`recipe` needs its `ifc` written as a label");
+    });
+
     it("throws on a nested column or relation given no path", () => {
       expect(() =>
         defineIndexedCollections({
@@ -226,6 +276,33 @@ describe("definition", () => {
       expect(indexedCollectionDescriptorOf({ id: "x", index })).toEqual(index);
     });
 
+    it("keeps the paths and labels a stored descriptor declares, and drops malformed ones", () => {
+      const ifc = { confidentiality: ["secret"] };
+      const { index } = defineIndexedCollections({
+        donuts: {
+          columns: {
+            recipe: { type: "text", path: ["card", "recipe"], ifc },
+          },
+        },
+      });
+
+      expect(indexedCollectionDescriptorOf({ id: "x", index })).toEqual(index);
+      expect(
+        indexedCollectionDescriptorOf({
+          id: "x",
+          index: {
+            kinds: {
+              donuts: {
+                ...index.kinds.donuts,
+                paths: { recipe: [], name: [1], price: "price" },
+                labels: { recipe: "secret" },
+              },
+            },
+          },
+        })?.kinds.donuts,
+      ).toEqual({ ...index.kinds.donuts, paths: {}, labels: {} });
+    });
+
     it("returns `undefined` for the handle of an ordinary database", () => {
       expect(indexedCollectionDescriptorOf({ id: "x", tables: {} }))
         .toBeUndefined();
@@ -253,6 +330,51 @@ describe("definition", () => {
           index: {
             kinds: {
               donuts: { ...index.kinds.donuts, table: "x; drop" },
+            },
+          },
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns `undefined` for a kind that is not an identifier or not an object", () => {
+      const { index } = defineIndexedCollections({ donuts: {} });
+
+      expect(
+        indexedCollectionDescriptorOf({
+          id: "x",
+          index: { kinds: { "x; drop": index.kinds.donuts } },
+        }),
+      ).toBeUndefined();
+      expect(
+        indexedCollectionDescriptorOf({
+          id: "x",
+          index: { kinds: { donuts: null } },
+        }),
+      ).toBeUndefined();
+    });
+
+    it("returns `undefined` for a relation whose table is missing or not an identifier", () => {
+      const { index } = defineIndexedCollections({
+        orders: { relations: ["donut"] },
+      });
+
+      expect(
+        indexedCollectionDescriptorOf({
+          id: "x",
+          index: {
+            kinds: { orders: { ...index.kinds.orders, relationTables: {} } },
+          },
+        }),
+      ).toBeUndefined();
+      expect(
+        indexedCollectionDescriptorOf({
+          id: "x",
+          index: {
+            kinds: {
+              orders: {
+                ...index.kinds.orders,
+                relationTables: { donut: "x; drop" },
+              },
             },
           },
         }),

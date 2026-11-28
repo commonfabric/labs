@@ -465,11 +465,26 @@ describe("share-intake", () => {
   }
 
   /** Appends `rows` to the offers `target` holds, the private inbox by default. */
-  async function deliver(rows: Row[], target = inbox): Promise<void> {
+  async function deliver(
+    rows: readonly unknown[],
+    target = inbox,
+  ): Promise<void> {
     await runtime.editWithRetry((tx) => {
       const offers = target.withTx(tx).key("offers" as never);
       offers.set([...(offers.get() as Row[] ?? []), ...rows] as never);
     });
+  }
+
+  /** Takes Home's chat manager away, so that Home holds none of its streams. */
+  async function removeChatManager(): Promise<void> {
+    const removed = await runtime.editWithRetry((tx) =>
+      runtime.getCellFromLink<{ chatManager?: unknown }>(
+        home.getAsNormalizedFullLink(),
+        undefined,
+        tx,
+      ).key("chatManager").setRaw(undefined)
+    );
+    expect(removed.error).toBeUndefined();
   }
 
   /** Starts the intake over Home. */
@@ -899,6 +914,25 @@ describe("share-intake", () => {
       ]);
     });
 
+    it("is registered though rows ahead of it are not records, which are passed over without being refused", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      start();
+      const before = refusalsLogged();
+      await deliver([
+        null,
+        "not a record",
+        [sender, "listed"],
+        offerOf(
+          space,
+          "after non-records",
+        ),
+      ]);
+
+      expect(registeredIds(await registeredThrough("after non-records")))
+        .toEqual(["after non-records"]);
+      expect(refusalsLogged() - before).toBe(0);
+    });
+
     it("is registered though a row ahead of it, refused for its space, names its sender and `id`", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
       const elsewhere = await offeredSpace({ [someoneElse]: "WRITE" });
@@ -1223,20 +1257,8 @@ describe("share-intake", () => {
 
     it("is registered, and not accepted, when Home has no chat manager", async () => {
       const space = await offeredSpace({ [sender]: "WRITE" });
-      // Home, but for a `chatManager` holding no `accept` stream.
-      const managerless = {
-        key: (name: string) =>
-          name === "chatManager"
-            ? { key: () => ({ getRaw: () => undefined }) }
-            : home.key(name as never),
-      };
-      const intake = startShareIntakeOf(
-        runtime,
-        managerless as never,
-        identity.did(),
-      );
-      if (intake === undefined) throw new Error("Home has no stream");
-      after = () => intake.stop();
+      await removeChatManager();
+      const intake = start();
       const before = acceptFailuresLogged();
       await deliver([offerOf(space, "managerless")]);
 
@@ -1809,6 +1831,32 @@ describe("share-intake", () => {
       ).toEqual(["notice-handled", "sent"]);
     });
 
+    it("logs the failure, and is acted on at once, with no other change to its inbox, when the host cannot tell its room's space's kind once", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      const original = runtime.spaceKind.bind(runtime);
+      let failures = 1;
+      using _unknowing = stub(
+        runtime,
+        "spaceKind",
+        (each) =>
+          failures-- > 0
+            ? Promise.reject(new Error("kind unknown"))
+            : original(each),
+      );
+      const intake = start();
+      const before = vettingFailuresLogged();
+      await deliver([noticeOf(space, SHARED_AT)]);
+
+      expect((await joinedNow(intake)).map((each) => each.space)).toEqual([
+        space,
+      ]);
+      expect(vettingFailuresLogged() - before).toBe(1);
+      expect(
+        intake.accessForTestingOnly.decisionsFor(sender, `changed:${space}`),
+      ).toEqual(["sent"]);
+    });
+
     describe("is ignored", () => {
       // Each notice is delivered ahead of an offer that passes, whose
       // registration says the notice was decided, since the intake decides an
@@ -1946,6 +1994,31 @@ describe("share-intake", () => {
           await ignoring(noticeOf(space, SHARED_AT), { [space]: "saved" }),
         ).toEqual(IGNORED);
         expect(intake?.accessForTestingOnly.followedSpaces).toBe(0);
+      });
+
+      it("when Home's chat manager has no `joinRoom`, without reading its room's space", async () => {
+        const space = await offeredSpace({ [sender]: "WRITE" });
+        await listInCatalog({ [space]: "saved" });
+        const original = runtime.spaceKind.bind(runtime);
+        const reads: string[] = [];
+        using _counting = stub(runtime, "spaceKind", (each) => {
+          reads.push(each);
+          return original(each);
+        });
+        await removeChatManager();
+        const intake = start();
+        const notice = noticeOf(space, SHARED_AT);
+        const registered = await deliverThenBarrier(notice);
+
+        expect({
+          joined: await joinedNow(intake),
+          registered: registeredIds(registered),
+          decisions: intake.accessForTestingOnly.decisionsFor(
+            sender,
+            notice.id as string,
+          ),
+        }).toEqual(IGNORED);
+        expect(reads).not.toContain(space);
       });
     });
   });
@@ -2801,6 +2874,43 @@ describe("share-intake", () => {
 
       expect(vettingFailuresLogged()).toBe(before);
       expect(await registeredNow()).toEqual([]);
+    });
+
+    it("joins no room, nor decides its notice, once stopped while vetting the room", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      const original = ACLManager.prototype.getStored;
+      using _stopping = stub(
+        ACLManager.prototype,
+        "getStored",
+        function (this: ACLManager) {
+          intake?.stop();
+          return original.call(this);
+        },
+      );
+      const started = start();
+      await deliver([noticeOf(space, 1_700_000_001_000)]);
+
+      expect(await joinedNow(started)).toEqual([]);
+      expect(
+        started.accessForTestingOnly.decisionsFor(sender, `changed:${space}`),
+      ).toEqual([]);
+    });
+
+    it("logs no failure, nor follows the room's space, when vetting a notice's room fails once it has stopped", async () => {
+      const space = await offeredSpace({ [sender]: "WRITE" });
+      await listInCatalog({ [space]: "saved" });
+      using _stopping = stub(ACLManager.prototype, "getStored", () => {
+        intake?.stop();
+        return Promise.reject(new Error("read after stopping"));
+      });
+      const before = vettingFailuresLogged();
+      const started = start();
+      await deliver([noticeOf(space, 1_700_000_001_000)]);
+
+      expect(await joinedNow(started)).toEqual([]);
+      expect(vettingFailuresLogged()).toBe(before);
+      expect(started.accessForTestingOnly.followedSpaces).toBe(0);
     });
 
     it("decides nothing once stopped while reading the inboxes Home holds", async () => {

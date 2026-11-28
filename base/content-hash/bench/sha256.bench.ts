@@ -16,7 +16,7 @@
  * a duplicate of `sha256Wasm`'s (same underlying one-shot path).
  */
 
-import { createHasherDeno, sha256Deno } from "@/sha256-deno.ts";
+import { denoImplementation } from "@/sha256-deno.ts";
 import { createHasherNoble, sha256Noble } from "@/sha256-noble.ts";
 import {
   createHasherWasm,
@@ -45,7 +45,9 @@ interface Impl {
 }
 
 const IMPLS: readonly Impl[] = [
-  { name: "sha256Deno", sha256: sha256Deno, createHasher: createHasherDeno },
+  ...(denoImplementation
+    ? [{ name: "sha256Deno", ...denoImplementation }]
+    : []),
   { name: "sha256Noble", sha256: sha256Noble, createHasher: createHasherNoble },
   { name: "sha256Wasm", sha256: sha256Wasm, createHasher: createHasherWasm },
   {

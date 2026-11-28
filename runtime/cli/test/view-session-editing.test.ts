@@ -2,8 +2,8 @@
  * Tests for `cf view`'s edit session over a diff and a CRLF file: the gates on
  * forward word and region kills, motion across a protected line ending,
  * resurrection under a policy without its own hunk lookup, moving a removed
- * first line's BOM past a removed line, and blame results that no longer
- * match.
+ * first line's BOM past a removed line, carrying the file's BOM onto a line
+ * resurrected into an emptied hunk, and blame results that no longer match.
  */
 
 import { expect } from "@std/expect";
@@ -281,6 +281,39 @@ describe("view-session-editing", () => {
         );
       } finally {
         done();
+      }
+    });
+
+    it("gives the file's BOM to a line resurrected into an emptied hunk", () => {
+      for (const bom of [BOM, ""]) {
+        const { root, ws, done } = workspace({ "value.ts": `${bom}new\n` });
+        try {
+          const diff = `diff --git a/value.ts b/value.ts
+--- a/value.ts
++++ b/value.ts
+@@ -1 +1 @@
+-${bom}old
++${bom}new
+`;
+          const session = editAt(diff, ws, 5);
+          press(session, "ctrl-k", "backspace");
+          expect(session.doc.lines.slice(3, 6).map((line) => line.text))
+            .toEqual(["@@ -1,1 +0,0 @@", `-${bom}old`, ""]);
+          press(session, "R");
+          expect(session.view().message).toBe("Resurrected the removed line.");
+          expect(session.doc.lines.slice(3, 6).map((line) => line.text))
+            .toEqual(["@@ -1,1 +1,1 @@", ` ${bom}old`, ""]);
+          press(session, "f3");
+          expect(session.view().message).toBe("Saved 1 file");
+          expect(Deno.readFileSync(join(root, "value.ts"))).toEqual(
+            new Uint8Array([
+              ...(bom ? [0xef, 0xbb, 0xbf] : []),
+              ...new TextEncoder().encode("old\n"),
+            ]),
+          );
+        } finally {
+          done();
+        }
       }
     });
   });

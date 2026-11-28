@@ -22,7 +22,7 @@ import SummaryIndex from "../../system/summary-index/summary-index.tsx";
 import KnowledgeGraph, {
   getNeighborsPattern,
   searchGraphPattern,
-} from "../../system/knowledge-graph/knowledge-graph.tsx";
+} from "../../system/knowledge-graph/main.tsx";
 
 import QuickCapture, {
   type QuickCaptureOutput,

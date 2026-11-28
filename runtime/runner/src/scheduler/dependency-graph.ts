@@ -356,11 +356,10 @@ function withdrawDemandFrom(
     }
   }
 
+  // Every region node was live, and so held a reference on each writer it
+  // reads: `origin` by the `originWasLive` check, and each other node as a
+  // registered writer of a region node that was live.
   for (const action of region) {
-    const wasLive = action === origin
-      ? originWasLive
-      : isLive(state, state.nodes.get(action)!);
-    if (!wasLive) continue;
     for (const writer of state.reverseDependencies.get(action) ?? NO_ACTIONS) {
       livenessWork.edgeVisits++;
       if (!boundary.has(writer)) continue;

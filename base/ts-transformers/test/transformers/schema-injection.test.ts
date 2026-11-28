@@ -265,6 +265,46 @@ export const h = handler<{ n: number; extra: string }, { count: Writable<number>
         },
       ]);
     });
+
+    it("drops the item schema only of a state array whose items the body compares by identity", async () => {
+      // `list` is searched with `equals()` and written back spliced, so its
+      // items are compared, never read. `other` is filtered on its items'
+      // titles, so they keep their schema. Each array carries a `Default<[]>`
+      // union member, whose item capability only the state's own node holds.
+
+      const root = await transform(`/// <cts-enable />
+import { Default, equals, handler, Writable } from "commonfabric";
+type Item = { title: string };
+export const h = handler<
+  { piece: Item },
+  {
+    list: Writable<Item[] | Default<[]>>;
+    other: Writable<Item[] | Default<[]>>;
+  }
+>(({ piece }, { list, other }) => {
+  const current = list.get();
+  const index = current.findIndex((item) => equals(item, piece));
+  if (index >= 0) list.set(current.toSpliced(index, 1));
+  other.set(other.get().filter((item) => item.title !== piece.title));
+});`);
+
+      const [, state] = argumentValues(callOf(root, "h"));
+      if (!isRecord(state) || !isRecord(state.properties)) {
+        throw new Error("h has no state schema");
+      }
+      expect(state.properties.list).toEqual({
+        type: "array",
+        items: { type: "unknown", asCell: ["comparable"] },
+        default: [],
+        asCell: ["cell"],
+      });
+      expect(state.properties.other).toEqual({
+        type: "array",
+        items: { $ref: "#/$defs/Item" },
+        default: [],
+        asCell: ["cell"],
+      });
+    });
   });
 
   describe("one-argument handlers", () => {
@@ -367,12 +407,52 @@ export const l = lift<number>(double);`);
       expect(argumentValues(callOf(root, "l"))).toEqual(["<code>"]);
     });
 
+    it("narrows an authored `toSchema()` cell argument schema to the callback's reads", async () => {
+      const root = await transform(`/// <cts-enable />
+import { Cell, lift, toSchema } from "commonfabric";
+export const l = lift(
+  toSchema<Cell<{ a: number; b: string }>>(),
+  toSchema<number>(),
+  (c) => c.get().a,
+);`);
+
+      expect(argumentValues(callOf(root, "l")).slice(0, 2)).toEqual([
+        {
+          type: "object",
+          properties: { a: { type: "number" } },
+          required: ["a"],
+          asCell: ["readonly"],
+        },
+        { type: "number" },
+      ]);
+    });
+
     it("leaves a lift with only an authored argument schema as written", async () => {
       const root = await transform(`/// <cts-enable />
 import { lift, toSchema } from "commonfabric";
 export const l = lift(toSchema<number>());`);
 
       expect(argumentValues(callOf(root, "l"))).toEqual([{ type: "number" }]);
+    });
+
+    it("narrows an authored cell argument whose value type cannot be printed to the callback's reads", async () => {
+      const root = await transform(`/// <cts-enable />
+import { Cell, lift } from "commonfabric";
+function make() { return class { count = 1; label = "x"; }; }
+const Anonymous = make();
+export const l = lift<Cell<InstanceType<typeof Anonymous>>>(
+  (c) => c.get().count,
+);`);
+
+      expect(argumentValues(callOf(root, "l")).slice(1)).toEqual([
+        {
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
+          asCell: ["readonly"],
+        },
+        { type: "number" },
+      ]);
     });
 
     describe("applied to a cell", () => {
@@ -397,6 +477,32 @@ export function make(count: Writable<number>) {
       it("emits a readonly cell input schema for a callback that reads the cell", async () => {
         expect(await inputSchema("lift((c) => c.get() + 1)")).toEqual({
           type: "number",
+          asCell: ["readonly"],
+        });
+      });
+
+      it("emits `unknown` as the input schema of a cell whose value type cannot be printed", async () => {
+        // An instance of an anonymous class has no name a type node could
+        // write, so the cell's type cannot be printed and no schema is
+        // recovered from it.
+
+        const root = await transform(`/// <cts-enable />
+import { Cell, lift } from "commonfabric";
+function make() { return class { count = 1; label = "x"; }; }
+const Anonymous = make();
+declare const anonymous: Cell<InstanceType<typeof Anonymous>>;
+interface Named { count: number; label: string }
+declare const named: Cell<Named>;
+export const fromAnonymous = lift((c) => c.get().count)(anonymous);
+export const fromNamed = lift((c) => c.get().count)(named);`);
+
+        const inputOf = (name: string) =>
+          argumentValues(callOf(root, `__cfLift_${name}`))[1];
+        expect(inputOf("1")).toEqual({ type: "unknown" });
+        expect(inputOf("2")).toEqual({
+          type: "object",
+          properties: { count: { type: "number" } },
+          required: ["count"],
           asCell: ["readonly"],
         });
       });

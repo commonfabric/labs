@@ -188,10 +188,21 @@ export default pattern(() => {
         action: alice.messages.openWindow,
         event: { requestId: "r6", windowId: "nowhere", count: 2 },
       },
+      // Nor does one naming something other than an end of its view.
+      {
+        action: alice.messages.openWindow,
+        event: {
+          requestId: "r11",
+          windowId: "elsewhere",
+          from: { before: "start", after: "end" },
+          count: 2,
+        },
+      },
       {
         assertion: assert(() =>
           shown(alice.messages.windows.get(), "reply") === "none" &&
-          shown(alice.messages.windows.get(), "nowhere") === "none"
+          shown(alice.messages.windows.get(), "nowhere") === "none" &&
+          shown(alice.messages.windows.get(), "elsewhere") === "none"
         ),
       },
 

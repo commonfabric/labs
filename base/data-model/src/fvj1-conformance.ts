@@ -1331,13 +1331,13 @@ function fixtureEntryOf(
             "module does not compute.",
         );
       }
-      const restated = textWithModsOf(value);
-      if (restated.unclaimed !== undefined || restated.patches !== undefined) {
-        throw new Error(`${name}: decodes to a value no text alone writes.`);
-      }
-      specReencoded = { text: restated.text };
-      if (restated.text !== text) {
-        canonical = restated.text;
+      // What a text alone decodes to needs no mods to write: the decoder
+      // makes only registered symbols, no cycles, and an `UnknownValue`
+      // only under a tag no class claims.
+      const restated = textWithModsOf(value).text;
+      specReencoded = { text: restated };
+      if (restated !== text) {
+        canonical = restated;
       }
     }
   }

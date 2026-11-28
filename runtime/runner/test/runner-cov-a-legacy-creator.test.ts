@@ -20,7 +20,6 @@ import {
 } from "../src/storage/v2-emulate.ts";
 
 const alice = await Identity.fromPassphrase("runner legacy creator alice");
-const bob = await Identity.fromPassphrase("runner legacy creator bob");
 const space: MemorySpace = alice.did();
 
 /**
@@ -158,9 +157,13 @@ describe("runner", () => {
       return result.getAsNormalizedFullLink();
     };
 
-    /** Runs the legacy release's successor over the piece on Bob's runtime. */
+    /**
+     * Runs the legacy release's successor over the piece on the runtime of
+     * Alice, whom its owned fields name: the store admits a client's record
+     * only when it names the client's own principal.
+     */
     const update = async (link: NormalizedFullLink) => {
-      const member = connect(bob, true);
+      const member = connect(alice, true);
       const compiled = await compile(member, LEGACY_SECOND_RELEASE);
       const before = member.getCellFromLink(link);
       await before.sync();

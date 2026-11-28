@@ -903,14 +903,20 @@ export async function serveTick(
   await Promise.all([collect(), pages.tick()]);
 }
 
-// The side effects: collect once, keep collecting, follow the GitHub webhook
-// relay, and serve. Running the file starts them; importing it does not. A
-// relay connection that cannot be opened is tried again on each tick.
+// The side effects: serve, collect once, keep collecting, and follow the
+// GitHub webhook relay. Running the file starts them; importing it does not.
+// Serving comes first, so a port that cannot be bound stops the dashboard
+// before it reaches any source. A relay connection that cannot be opened is
+// tried again on each tick.
 export function start(
   serve: typeof Deno.serve = Deno.serve,
   collect: () => void | Promise<void> = tick,
   webhooks: GitHubWebhooks = githubWebhooks,
 ) {
+  const server = serve({
+    port: PORT,
+    onListen: () => console.log(`\n  Dashboard LIVE:  http://localhost:${PORT}\n  ${TILES.length} tiles registered.\n`),
+  }, handle);
   if (webhooks !== githubWebhooks) {
     runnersFeed = new RunnersFeed(dashboardRunnersGitHub(), webhooks, SERVING_VERSION);
   }
@@ -935,10 +941,6 @@ export function start(
     return serveTick(collect);
   };
   const timer = setInterval(onTick, TICK_MS);
-  const server = serve({
-    port: PORT,
-    onListen: () => console.log(`\n  Dashboard LIVE:  http://localhost:${PORT}\n  ${TILES.length} tiles registered.\n`),
-  }, handle);
   return { timer, server, onTick };
 }
 

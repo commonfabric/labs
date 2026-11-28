@@ -799,7 +799,7 @@ function requiredValueProperties(
 /**
  * Whether the property `name` of `resolved` declares a default, read the way
  * the object traversal reads it when it fills an absent property: through
- * the property's `$ref`.
+ * the property's `$ref` (`getPropertyDefaultSchema()`).
  */
 function propertyDeclaresDefault(
   resolved: JSONSchemaObj,
@@ -810,10 +810,7 @@ function propertyDeclaresDefault(
     : undefined;
   if (!isObjectNotArray(property)) return false;
   if (!("$ref" in property)) return property.default != undefined;
-  const atPath = ContextualFlowControl.getSchemaAtPath(resolved, [name]);
-  if (!isObjectOrArray(atPath)) return false;
-  const target = ContextualFlowControl.resolveSchemaRefs(atPath);
-  return isObjectOrArray(target) && target.default != undefined;
+  return getPropertyDefaultSchema(resolved, name) !== undefined;
 }
 
 /**
@@ -6328,13 +6325,10 @@ export class SchemaObjectTraverser<V extends FabricValue>
     prepared: PreparedAnyOfBranch | undefined,
   ): boolean {
     if (!this.#narrowsReachedValues) return true;
-    if (prepared === undefined) {
-      if (typeof merged === "boolean") return merged;
-      if (
-        SchemaObjectTraverser.hasAsCell(merged) &&
-        !(this.#holdsCellsToShape && followsThroughCell(merged))
-      ) return true;
-    }
+    if (
+      prepared === undefined && SchemaObjectTraverser.hasAsCell(merged) &&
+      !(this.#holdsCellsToShape && followsThroughCell(merged))
+    ) return true;
     if (
       prepared?.capsFollowScope ?? isCellScope(schemaFollowScopeCap(merged))
     ) return true;

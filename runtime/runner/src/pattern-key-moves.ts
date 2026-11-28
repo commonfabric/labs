@@ -286,6 +286,8 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "person-workbench/": "apps/person-workbench/",
   "plain-array-callback-locals/": "dev/plain-array-callback-locals/",
   "primitives/": "product/primitives/",
+  "product/lobby/main.test.tsx": "product/lobby/lobby.test.tsx",
+  "product/lobby/main.tsx": "product/lobby/lobby.tsx",
   "profile-group-chat/": "examples/profile-group-chat/",
   "profile-roster-live-demo.tsx":
     "examples/profile-roster-live-demo/profile-roster-live-demo.tsx",
@@ -314,6 +316,12 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "shared-profile-roster/": "examples/shared-profile-roster/",
   "shopping-list.test.tsx": "apps/shopping-list/shopping-list.test.tsx",
   "shopping-list.tsx": "apps/shopping-list/shopping-list.tsx",
+  "showcase/battleship/multiplayer/lobby.tsx":
+    "showcase/battleship/multiplayer/main.tsx",
+  "showcase/dice/dice.tsx": "showcase/dice/main.tsx",
+  "showcase/inductor/lofi/lofi-inductor.tsx": "showcase/inductor/lofi/main.tsx",
+  "showcase/inductor/pool/inductor-pool.tsx": "showcase/inductor/pool/main.tsx",
+  "showcase/scrabble/scrabble.tsx": "showcase/scrabble/main.tsx",
   "simple-list/": "examples/simple-list/",
   "store-mapper.test.tsx": "apps/store-mapper/store-mapper.test.tsx",
   "store-mapper.tsx": "apps/store-mapper/store-mapper.tsx",
@@ -325,6 +333,7 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/backlinks-index.test.tsx":
     "system/backlinks-index/backlinks-index.test.tsx",
   "system/backlinks-index.tsx": "system/backlinks-index/backlinks-index.tsx",
+  "system/chatbot/chatbot.tsx": "system/chatbot/main.tsx",
   "system/common-fabric.tsx": "system/common-fabric/common-fabric.tsx",
   "system/default-app-ben.test.tsx":
     "dev/default-app-ben/default-app-ben.test.tsx",
@@ -343,7 +352,10 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/home.test.tsx": "system/home/home.test.tsx",
   "system/home.tsx": "system/home/home.tsx",
   "system/journal.tsx": "system/journal/journal.tsx",
+  "system/journal/journal.tsx": "system/journal/main.tsx",
   "system/knowledge-graph.tsx": "system/knowledge-graph/knowledge-graph.tsx",
+  "system/knowledge-graph/knowledge-graph.tsx":
+    "system/knowledge-graph/main.tsx",
   "system/link-tool.tsx": "system/link-tool/link-tool.tsx",
   "system/mentionables-inspector.tsx":
     "system/mentionables-inspector/mentionables-inspector.tsx",
@@ -393,6 +405,7 @@ export const MOVED_PATTERN_KEYS: Readonly<Record<string, string>> = {
   "system/shared-space-profiles.test.tsx":
     "system/shared-space/shared-space-profiles.test.tsx",
   "system/space-overview.tsx": "system/space-overview/space-overview.tsx",
+  "system/space-overview/space-overview.tsx": "system/space-overview/main.tsx",
   "system/suggestion-history.tsx":
     "system/suggestion-history/suggestion-history.tsx",
   "system/suggestion.tsx": "system/suggestion/suggestion.tsx",

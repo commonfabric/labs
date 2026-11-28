@@ -220,35 +220,39 @@ describe("Checker", () => {
     checker.declarationCheck();
   });
 
-  it("check() tolerates empty diagnostics and throws a CompilerError otherwise", () => {
+  it("typeCheck routes messages through the diagnostic message transformer", () => {
     const checker = new Checker(
-      programFor({ "/ok.ts": "export const x: number = 1;" }),
+      programFor({
+        "/bad.ts": [
+          "export const x: number = 'nope';",
+          "export const y: string = 1;",
+        ].join("\n"),
+      }),
+      {
+        messageTransformer: (message) =>
+          message.includes("'string' is not assignable")
+            ? `clearer: ${message}`
+            : null,
+      },
     );
-    checker.check(undefined);
-    checker.check([]);
-
     let thrown: unknown;
     try {
-      checker.check([chainDiagnostic("manufactured emit failure")]);
+      checker.typeCheck();
     } catch (error) {
       thrown = error;
     }
     expect(thrown).toBeInstanceOf(CompilerError);
-    expect((thrown as CompilerError).message).toContain(
-      "manufactured emit failure",
+    const message = (thrown as CompilerError).message;
+    expect(message).toContain(
+      "clearer: Type 'string' is not assignable to type 'number'.",
     );
-  });
-
-  it("check() routes messages through the diagnostic message transformer", () => {
-    const checker = new Checker(
-      programFor({ "/ok.ts": "export const x: number = 1;" }),
-      {
-        messageTransformer: (message) =>
-          message.includes("manufactured") ? `clearer: ${message}` : null,
-      },
+    // A message the transformer declines is reported as TypeScript wrote it.
+    expect(message).toContain(
+      "Type 'number' is not assignable to type 'string'.",
     );
-    expect(() => checker.check([chainDiagnostic("manufactured emit failure")]))
-      .toThrow("clearer: manufactured emit failure");
+    expect(message).not.toContain(
+      "clearer: Type 'number' is not assignable",
+    );
   });
 });
 

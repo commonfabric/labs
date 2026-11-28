@@ -203,5 +203,47 @@ describe(
         ),
       ).toBe(true);
     });
+
+    describe("on the arm without server execution, where each participant's worker makes its own language-model requests", () => {
+      const llmFixtures = resolve(import.meta.dirname!, "fixtures/llm-mocks");
+
+      async function runOffArm(name: string) {
+        let outcome: Awaited<ReturnType<typeof runTests>> | undefined;
+        await withEnv("EXPERIMENTAL_SERVER_EXECUTION", "false", async () => {
+          outcome = await runTests(resolve(llmFixtures, name), {
+            root: llmFixtures,
+          });
+        });
+        return outcome!;
+      }
+
+      it("answers each participant's request with the entry it fits", async () => {
+        const { passed, failed, results } = await runOffArm(
+          "multi-user.test.tsx",
+        );
+
+        expect(failed).toBe(0);
+        expect(passed).toBe(2);
+        expect(results[0].results.map((r) => r.name)).toEqual([
+          "alice/assertion_1",
+          "bob/assertion_1",
+        ]);
+      });
+
+      it("answers each entry once across the participants' workers", async () => {
+        const { passed, failed, results } = await runOffArm(
+          "multi-user-shared.test.tsx",
+        );
+
+        const errors = results[0].results.flatMap((r) =>
+          r.name === "llmMocks" ? [r.error ?? ""] : []
+        );
+        expect(passed).toBe(2);
+        expect(failed).toBe(1);
+        expect(errors.length).toBe(1);
+        expect(errors[0].match(/No llmMocks entry answers/g)?.length).toBe(1);
+        expect(errors[0]).toContain('last message: "hello"');
+      });
+    });
   },
 );

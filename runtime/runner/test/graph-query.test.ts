@@ -9,11 +9,13 @@ import {
   type BaseMemoryAddress,
   createGraphQueryWalkStats,
   createSchemaMemo,
+  crossingDocKey,
   GraphQueryWalk,
   type GraphQueryWalkOptions,
   type IAttestation,
   MapSetStringToPathSelectors,
   type ObjectStorageManager,
+  parseCrossingDocKey,
   schemaTrackerKey,
   trackedRecordKey,
 } from "../src/graph-query.ts";
@@ -1395,6 +1397,114 @@ describe("graph-query", () => {
 
         expect(first.walk.stats.schemaMemoHits).toBe(0);
         expect(second.walk.stats.schemaMemoHits).toBeGreaterThan(0);
+      });
+
+      it("reports a miss to each record once in a visit, though a position replayed for the record reaches it again", () => {
+        // `of:root` reaches `of:shared` through `f1` directly and through
+        // `of:alias`, under each branch of a recursive union, so the walk
+        // enters several records of `of:shared` and meets positions other
+        // records memoized; each of them dead-ends at `of:absent`.
+
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            { f1: linkTo("of:shared"), f2: { f0: linkTo("of:alias", ["f1"]) } },
+          ],
+          [keyFor("of:alias"), linkTo("of:shared")],
+          [keyFor("of:shared"), { f1: { f2: linkTo("of:absent", ["f0"]) } }],
+        ]);
+        const node = (properties: string[]): JSONSchema => ({
+          type: "object",
+          properties: Object.fromEntries(
+            properties.map((property) => [property, { $ref: "#/$defs/Node" }]),
+          ),
+        });
+        const misses: string[] = [];
+        const { manager, walk } = walkOver(documents, {
+          onTrackedDoc: () => {},
+          onMissedDoc: (key, selector, referrer) => {
+            misses.push(`${trackedRecordKey(key, selector)} ${referrer}`);
+          },
+        });
+
+        walk.visit(
+          documentFor(manager, "of:root"),
+          {
+            path: ["value"],
+            schema: {
+              $ref: "#/$defs/Node",
+              $defs: {
+                Node: { anyOf: [node(["f0", "f2"]), node(["f1", "f2"])] },
+              },
+            },
+          },
+        );
+
+        const referrers = new Set(misses.map((miss) => miss.split(" ")[1]));
+        expect(referrers.size).toBeGreaterThan(1);
+        for (const referrer of referrers) {
+          expect(referrer.startsWith(`${keyFor("of:shared")}\0`)).toBe(true);
+        }
+        expect(misses.every((miss) => miss.startsWith(keyFor("of:absent"))))
+          .toBe(true);
+        expect(misses).toEqual([...new Set(misses)]);
+      });
+
+      it("reports a link into another space as a crossing rather than a miss", () => {
+        const elsewhere = "did:key:graph-query-elsewhere" as MemorySpace;
+        const documents = new Map<string, FabricValue>([
+          [
+            keyFor("of:root"),
+            {
+              remote: {
+                "/": {
+                  [LINK_V1_TAG]: {
+                    id: "of:remote",
+                    path: ["inner"],
+                    space: elsewhere,
+                  },
+                },
+              },
+              local: linkTo("of:absent"),
+            },
+          ],
+        ]);
+        const manager = new StubObjectManager(documents);
+        const crossings: [string, SchemaPathSelector, string | undefined][] =
+          [];
+        const misses: string[] = [];
+        const object = { type: "object" } as const;
+        const selector = {
+          path: ["value"],
+          schema: {
+            type: "object",
+            properties: { remote: object, local: object },
+          },
+        } satisfies SchemaPathSelector;
+        const walk = new GraphQueryWalk({
+          manager,
+          space: SPACE,
+          schemaTracker: new MapSetStringToPathSelectors(true),
+          identity: TEST_SCOPE_IDENTITY,
+          onMissedDoc: (key) => misses.push(key),
+          onCrossing: (key, crossed, referrer) => {
+            crossings.push([key, crossed, referrer]);
+          },
+        });
+
+        walk.visit(documentFor(manager, "of:root"), selector);
+
+        expect(crossings).toEqual([[
+          crossingDocKey(elsewhere, "of:remote", "space"),
+          { path: ["value", "inner"], schema: object },
+          trackedRecordKey(keyFor("of:root"), selector),
+        ]]);
+        expect(parseCrossingDocKey(crossings[0][0])).toEqual({
+          space: elsewhere,
+          scope: "space",
+          id: "of:remote",
+        });
+        expect(misses).toEqual([keyFor("of:absent")]);
       });
 
       describe("over data deeper than the stack", () => {

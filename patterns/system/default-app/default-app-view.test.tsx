@@ -2,9 +2,9 @@
  * Test: the space home's view controls.
  *
  * Opening the Notes menu lays a backdrop over the page, and a click on the
- * backdrop closes the menu. A note dropped onto a notebook's row joins that
- * notebook and leaves the list of pieces. "Join this space" adds nobody while
- * the viewer has no profile.
+ * backdrop, or on either of the menu's items, closes the menu. A note dropped
+ * onto a notebook's row joins that notebook and leaves the list of pieces.
+ * "Join this space" adds nobody while the viewer has no profile.
  *
  * Run: deno task cf test patterns/system/default-app/default-app-view.test.tsx --root patterns
  */
@@ -70,6 +70,18 @@ export default pattern(() => {
       { action: action_click_backdrop },
       { assertion: assert(() => menuDisplayOf(subject[UI]) === "none") },
       { assertion: assert(() => backdropOf(subject[UI]) === undefined) },
+
+      // Choosing an item closes the menu and leaves the list of pieces as it
+      // was.
+      { action: action_open_menu },
+      { press: subject[UI], control: "📝 New Note" },
+      { assertion: assert(() => menuDisplayOf(subject[UI]) === "none") },
+      { assertion: assert(() => backdropOf(subject[UI]) === undefined) },
+      { action: action_open_menu },
+      { assertion: assert(() => menuDisplayOf(subject[UI]) === "flex") },
+      { press: subject[UI], control: "📓 New Notebook" },
+      { assertion: assert(() => menuDisplayOf(subject[UI]) === "none") },
+      { assertion: assert(() => countElements(subject[UI], "tr") === 2) },
 
       // The dropped note joins the notebook and is hidden from the list.
       { action: action_drop_note },

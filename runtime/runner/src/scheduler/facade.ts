@@ -2407,14 +2407,13 @@ export class Scheduler {
    * node for gets no run of it.
    */
   #willRunForInstance(action: Action, instance: ScopeKey): boolean {
-    const node = this.#nodes.get(action);
-    if (node === undefined) return false;
     const queued = this.#isLiveAction(action) ||
       this.#materializers.isMaterializer(action) ||
       this.#pending.has(action);
     if (!queued) return false;
-    if (node.fanOut === undefined) return this.#isInvalidAction(action);
-    if (node.fanOut.clean.has(instance)) return false;
+    const fanOut = this.#nodes.get(action)?.fanOut;
+    if (fanOut === undefined) return this.#isInvalidAction(action);
+    if (fanOut.clean.has(instance)) return false;
     const observation = (action as Partial<TelemetryAnnotations>)
       .schedulerObservationIdentity;
     const roots = observation?.demandRootIds ??
@@ -2423,7 +2422,7 @@ export class Scheduler {
         : undefined);
     if (roots === undefined) return false;
     const demanders = this.runtime.serverRunDemandersFor(roots) ?? [];
-    return fanOutInstances(node.fanOut, demanders).some((candidate) =>
+    return fanOutInstances(fanOut, demanders).some((candidate) =>
       candidate.key === instance
     );
   }
@@ -2450,8 +2449,7 @@ export class Scheduler {
       return false;
     }
     const node = this.#nodes.get(action);
-    if (node === undefined) return false;
-    if (node.fanOut === undefined) return node.produced === true;
+    if (node?.fanOut === undefined) return node?.produced === true;
     return instance !== undefined &&
       node.fanOut.instances.get(instance)?.produced === true;
   }

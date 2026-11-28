@@ -1,6 +1,6 @@
 /**
- * Type definitions for SHA-256 hashing: the incremental hasher interface, and
- * the all-at-once digest function type.
+ * Type definitions for SHA-256 hashing: the incremental hasher interface, the
+ * all-at-once digest function type, and an implementation offering both.
  */
 
 /**
@@ -36,3 +36,12 @@ export interface IncrementalHasher {
  * allocated and unshared, on the same terms as `IncrementalHasher.digest()`.
  */
 export type DigestFn = (payload: Uint8Array) => Uint8Array;
+
+/** One SHA-256 implementation's two entry points. */
+export interface Implementation {
+  /** All-at-once SHA-256 hash. */
+  sha256: DigestFn;
+
+  /** Creates a new incremental SHA-256 hasher. */
+  createHasher: () => IncrementalHasher;
+}

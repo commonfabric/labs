@@ -1,5 +1,7 @@
 import { expect } from "@std/expect";
+import { stub } from "@std/testing/mock";
 import {
+  cliPhaseTrace,
   type PhaseTrace,
   reportCliPhase,
   timeCliPhase,
@@ -51,5 +53,19 @@ describe("reportCliPhase", () => {
     const trace = capturingTrace(false);
     reportCliPhase("newPiece.create.server.instantiate.run", 12.6, trace);
     expect(trace.lines).toEqual([]);
+  });
+});
+
+describe("cliPhaseTrace", () => {
+  it("writes each phase line to stderr, not stdout", () => {
+    const stderr: unknown[][] = [];
+    const stdout: unknown[][] = [];
+    {
+      using _error = stub(console, "error", (...args) => stderr.push(args));
+      using _log = stub(console, "log", (...args) => stdout.push(args));
+      cliPhaseTrace.log("[cf-phase] 7ms :: sync.piece");
+    }
+    expect(stderr).toEqual([["[cf-phase] 7ms :: sync.piece"]]);
+    expect(stdout).toEqual([]);
   });
 });

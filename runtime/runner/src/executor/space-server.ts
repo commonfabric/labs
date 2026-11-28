@@ -139,46 +139,6 @@ type ProgramClosureGrace = {
  * creations that would have succeeded moments later. */
 const DEFAULT_ROOT_ENSURE_DEADLINE_MS = 30_000;
 
-/** `fetch`, with each request refused once it has gone `deadlineMs`
- * without its whole answer, body included: the request is aborted and the
- * call rejects. The response it returns has its body already read. A peer
- * that stops answering reports nothing, so this deadline is the only end
- * a silent host's request has. */
-function fetchWithin(fetch: RuntimeFetch, deadlineMs: number): RuntimeFetch {
-  return (input, init) => {
-    const abort = new AbortController();
-    const outer = init?.signal;
-    if (outer) {
-      if (outer.aborted) abort.abort(outer.reason);
-      else outer.addEventListener("abort", () => abort.abort(outer.reason));
-    }
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const silent = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const error = new Error(
-          `space-root ensure: a pattern-source fetch went ${deadlineMs}ms ` +
-            "without an answer (SpaceServerPolicy.rootEnsureDeadlineMs); " +
-            "the tenure proceeds serving without the root",
-        );
-        abort.abort(error);
-        reject(error);
-      }, deadlineMs);
-    });
-    // The deadline runs until the body is read, not just the headers: a
-    // host can answer the headers and then go silent mid-body.
-    const answered = fetch(input, { ...init, signal: abort.signal }).then(
-      async (response) =>
-        new Response(await response.arrayBuffer(), {
-          status: response.status,
-          statusText: response.statusText,
-          headers: response.headers,
-        }),
-    );
-    answered.catch(() => {});
-    return Promise.race([answered, silent]).finally(() => clearTimeout(timer));
-  };
-}
-
 import {
   markRuntimeInjectedEventKeys,
   sanitizeRuntimeInjectedEventKeys,
@@ -194,7 +154,7 @@ import {
 } from "@commonfabric/memory/v2/scheduler-basis";
 import { getLogger } from "@commonfabric/logger";
 import { minOf } from "@commonfabric/collections/math";
-import type { Runtime, RuntimeFetch, ServerRunInfo } from "../runtime.ts";
+import type { Runtime, ServerRunInfo } from "../runtime.ts";
 import type {
   CommitError,
   ForeignScopedReadGrant,
@@ -228,6 +188,7 @@ import { asPatternIdentityRef } from "../meta-seam.ts";
 import { entityKindOfIdString } from "../entity-kind.ts";
 import { getMetaLink } from "../link-utils.ts";
 import {
+  actsAsSession,
   stampWaveRunContext,
   WaveAccumulator,
   type WaveCommitOutcome,
@@ -240,6 +201,7 @@ import { type RunEvent, runEventKey } from "./run-beacon.ts";
 import { DemandMirror } from "./demand-mirror.ts";
 import { engineReadThrough } from "./engine-read-through.ts";
 import { EngineWaveCommitSink } from "./engine-wave-sink.ts";
+import { fetchWithin } from "./fetch-within.ts";
 import { watermarkDocLink } from "./watermark.ts";
 import { readWatermarkSeq } from "./watermark-engine.ts";
 import {
@@ -263,7 +225,10 @@ import { effectCompletionKeyOf } from "./effect-completion.ts";
 import { markRendererTrustedEvent } from "../cfc/ui-contract.ts";
 import { EVENT_DEFERRAL_DROP_THRESHOLD } from "../scheduler/constants.ts";
 import { LT1_LATE_SEAL_REFUSED } from "../scheduler/types.ts";
-import type { PostCommitSideEffect } from "../cfc/types.ts";
+import {
+  derivedWritesCarryLabels,
+  type PostCommitSideEffect,
+} from "../cfc/types.ts";
 import {
   attentionForExpiredDeliveryFailure,
   MAX_EVENT_DELIVERY_FAILURE_BUDGET,
@@ -3086,6 +3051,9 @@ export class SpaceServer implements TransactionSealDestination {
         onEarlyEmitRefusal: () => {
           this.#options.stats.earlyEmitRefusals += 1;
         },
+        onSessionCeilingRefusal: () => {
+          this.#options.stats.sessionCeilingRefusals += 1;
+        },
         onUndemandedNarrowing: () => {
           this.#options.stats.undemandedNarrowingRuns += 1;
         },
@@ -3196,9 +3164,13 @@ export class SpaceServer implements TransactionSealDestination {
     const attributionFromScope = info.kind === "derivation" &&
       info.acting === undefined && principal !== undefined;
     const sessionId = info.scopeKeyIdentity?.sessionId;
-    const readCeiling = info.kind !== "bookkeeping" && sessionId !== undefined
-      ? this.#options.server.sessionReadCeiling(this.#options.space, sessionId)
-      : undefined;
+    const sessionReadCeiling =
+      info.kind !== "bookkeeping" && sessionId !== undefined
+        ? this.#options.server.sessionReadCeiling(
+          this.#options.space,
+          sessionId,
+        )
+        : undefined;
     // The S-A carriage (OW31; protocol.md §2b): a bookkeeping run
     // sanctioned to cross — the compile-cache / program materialization
     // writeback into the piece's own space — carries the TRIGGERING
@@ -3229,6 +3201,24 @@ export class SpaceServer implements TransactionSealDestination {
           ? { session: String(info.scopeKeyIdentity.sessionId) }
           : {}),
       }
+      : undefined;
+    // A run's cell reads are bounded by the session's ceiling when it acts
+    // as that session: a handler carrying a session actor, a derivation run
+    // as the session's own instance. A shared instance resolved against
+    // the session is not bounded by it, since its result carries its
+    // inputs' labels to each reader; a runtime whose writes would not carry
+    // them reads every run under the ceiling instead.
+    const readCeiling = sessionReadCeiling !== undefined &&
+        (actsAsSession({
+          kind: info.kind,
+          acting: info.acting ?? acting,
+          actionScopeKey: info.actionScopeKey,
+        }) ||
+          !derivedWritesCarryLabels({
+            flowLabels: this.#runtime!.cfcFlowLabels,
+            enforcement: this.#runtime!.cfcEnforcementMode,
+          }))
+      ? sessionReadCeiling
       : undefined;
     // The run's trust snapshot (OW34-family; serving-loop.md §3c): the
     // acting principal the run carries — a handler's server-stamped
@@ -3263,13 +3253,16 @@ export class SpaceServer implements TransactionSealDestination {
       ...(info.scopeKeyIdentity !== undefined
         ? { scopeKeyIdentity: info.scopeKeyIdentity }
         : {}),
-      // The read ceiling of the session this run acts as, read from the
-      // memory server's session record — the seam a declared ceiling (the
-      // client's signed `session.open` descriptor) and a server-assigned
-      // one both reach the run through. Stamped with the identity, before
-      // the run's first read, so the sqlite builtin's request hash and
-      // its flush read one value. Never for bookkeeping: the loop's own
-      // writes act as no session.
+      // The read ceiling of the session the run's scoped addresses resolve
+      // to, read from the memory server's session record — the seam a
+      // declared ceiling (the client's signed `session.open` descriptor)
+      // and a server-assigned one both reach the run through — and the
+      // ceiling its cell reads are bounded by, which is that one when the
+      // run acts as the session (serving-loop.md §3c). Both are stamped with
+      // the identity, before the run's first read, so the sqlite builtin's
+      // request hash and its flush read one value. Never for bookkeeping:
+      // the loop's own writes act as no session.
+      ...(sessionReadCeiling !== undefined ? { sessionReadCeiling } : {}),
       ...(readCeiling !== undefined ? { readCeiling } : {}),
       ...(info.actionScopeKey !== undefined
         ? { actionScopeKey: info.actionScopeKey }
@@ -6408,7 +6401,7 @@ export class SpaceServer implements TransactionSealDestination {
       }
       // A reader none of whose pieces upstream can make progress is given
       // up on: its roots are loaded below, as a refused root is.
-      const released = this.#releaseStuckUpstream(runtime);
+      const released = this.#releaseStuckUpstream(runtime, this.#currency);
       if (this.#currency.skips) {
         for (
           const key of [
@@ -7814,17 +7807,20 @@ export class SpaceServer implements TransactionSealDestination {
   /**
    * Helper for `#loadDemandedStructure()`, which gives up on what is
    * upstream of each held root and each stale running piece for which no
-   * piece the judgment named can make progress.
+   * piece the judgment of `currency` named can make progress.
    *
    * @returns The demand keys that were held for a reader given up on.
    */
-  #releaseStuckUpstream(runtime: Runtime): Set<string> {
+  #releaseStuckUpstream(
+    runtime: Runtime,
+    currency: StoreCurrency,
+  ): Set<string> {
     const released = new Set<string>();
-    const currency = this.#currency;
-    if (currency === undefined) return released;
     for (const [reader, producers] of currency.upstreamProducers) {
       if (
-        [...producers].some((piece) => this.#producerProgresses(runtime, piece))
+        [...producers].some((piece) =>
+          this.#producerProgresses(runtime, currency, piece)
+        )
       ) continue;
       for (const key of currency.abandonUpstream(reader)) released.add(key);
       logger.info?.("currency-upstream-abandoned", () => [
@@ -7893,8 +7889,12 @@ export class SpaceServer implements TransactionSealDestination {
    * One whose load ended without a start, and one that ran and was
    * recorded with the reader stale still, cannot.
    */
-  #producerProgresses(runtime: Runtime, piece: string): boolean {
-    const { named, unrecorded } = this.#currency!.producerProgress(piece);
+  #producerProgresses(
+    runtime: Runtime,
+    currency: StoreCurrency,
+    piece: string,
+  ): boolean {
+    const { named, unrecorded } = currency.producerProgress(piece);
     if (named) return true;
     if (runtime.scheduler.hasNodesUnderDemandRoot(piece)) {
       return unrecorded && !this.#upstreamRecordBlocked;
