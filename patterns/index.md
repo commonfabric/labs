@@ -105,7 +105,7 @@ Capability and app demos, each a single file: `apps/annotation/annotation.tsx`,
 `apps/annotation-manager/main.tsx`, `examples/aside/main.tsx`,
 `apps/bookmarks/main.tsx`, `system/chatbot/chatbot.tsx`,
 `apps/cheeseboard/main.tsx`, `examples/compiler/main.tsx`,
-`apps/deep-research/main.tsx`, `showcase/dice/dice.tsx` (+
+`apps/deep-research/main.tsx`, `showcase/dice/main.tsx` (+
 `showcase/dice/dice-handlers.ts`), `examples/group-chat-lobby/main.tsx`,
 `examples/group-chat-room/group-chat-room.tsx`, `examples/image/main.tsx`,
 `apps/image-analysis/main.tsx`, `examples/link-preview/main.tsx`,
@@ -1961,7 +1961,7 @@ interface LobbyOutput {
 }
 ```
 
-## `product/lobby/main.tsx`
+## `product/lobby/lobby.tsx`
 
 Simple multiplayer presence lobby. Each viewer joins by contributing their live
 Fabric profile cell from `wish({ query: "#profile" })`; every participant is
@@ -2198,7 +2198,7 @@ type Output = {
 };
 ```
 
-## `showcase/inductor/lofi/lofi-inductor.tsx`
+## `showcase/inductor/lofi/main.tsx`
 
 A hi-fi model labels each item for a yes-or-no goal while a lo-fi regex rule set
 shadows it. Disagreements become graded examples; an LLM proposes a new rule
@@ -2266,7 +2266,7 @@ interface LofiInductorOutput {
 }
 ```
 
-## `showcase/inductor/pool/inductor-pool.tsx`
+## `showcase/inductor/pool/main.tsx`
 
 Lo-fi rule sets for one goal, contributed under per-goal pseudonyms and
 confidential to the pool's own CFC policy (`pool-policy.tsx`). A rule and its

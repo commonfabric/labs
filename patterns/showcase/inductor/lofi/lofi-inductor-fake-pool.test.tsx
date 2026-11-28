@@ -39,7 +39,7 @@ import {
 } from "commonfabric";
 import type { CanonicalRule } from "../shared/rule-grammar.ts";
 import { INVOICE_ONLY } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor, { type PoolRule } from "./lofi-inductor.tsx";
+import LofiInductor, { type PoolRule } from "./main.tsx";
 
 const GOAL = "Is this email a bill?";
 

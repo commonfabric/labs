@@ -76,9 +76,9 @@ const MIGRATED_OFFLINE_PATTERNS = [
   // Games — not part of the #now migration, but they read entropy/clock only in
   // handlers (move/join/reset actions), so they must stay gate-clean. Pinned here
   // as a fast check; the whole pattern set is swept in time-capability-full.test.ts.
-  "showcase/battleship/multiplayer/lobby.tsx",
+  "showcase/battleship/multiplayer/main.tsx",
   "showcase/card-piles/main.tsx",
-  "showcase/scrabble/scrabble.tsx",
+  "showcase/scrabble/main.tsx",
 ];
 
 // Deliberately excluded from the offline assertion:

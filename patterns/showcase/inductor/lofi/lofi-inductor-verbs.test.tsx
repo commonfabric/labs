@@ -18,7 +18,7 @@ import {
   typeInto,
 } from "../../../tools/test-support/vnode-helpers.ts";
 import { HIFI_MOCKS, rule } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor, { type Item } from "./lofi-inductor.tsx";
+import LofiInductor, { type Item } from "./main.tsx";
 
 const GOAL = "Is this email a bill?";
 const LUNCH_GOAL = "Is this email about lunch?";

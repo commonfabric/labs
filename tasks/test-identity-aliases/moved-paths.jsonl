@@ -1289,3 +1289,17 @@
 {"date": "2026-12-01", "from": {"p": "examples/scoped-group-chat/main-plain-inputs.tsx"}, "to": {"p": "examples/scoped-group-chat/plain-inputs/main.tsx"}}
 {"date": "2026-12-01", "from": {"p": "patterns/examples/scoped-group-chat/main.test.tsx"}, "to": {"p": "patterns/examples/scoped-group-chat/writable-inputs.test.tsx"}}
 {"date": "2026-12-01", "from": {"p": "examples/scoped-group-chat/main.test.tsx"}, "to": {"p": "examples/scoped-group-chat/writable-inputs.test.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/showcase/dice/dice.tsx"}, "to": {"p": "patterns/showcase/dice/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/showcase/scrabble/scrabble.tsx"}, "to": {"p": "patterns/showcase/scrabble/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/showcase/battleship/multiplayer/lobby.tsx"}, "to": {"p": "patterns/showcase/battleship/multiplayer/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/showcase/inductor/lofi/lofi-inductor.tsx"}, "to": {"p": "patterns/showcase/inductor/lofi/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/showcase/inductor/pool/inductor-pool.tsx"}, "to": {"p": "patterns/showcase/inductor/pool/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/product/lobby/main.tsx"}, "to": {"p": "patterns/product/lobby/lobby.tsx"}}
+{"date": "2026-12-01", "from": {"p": "patterns/product/lobby/main.test.tsx"}, "to": {"p": "patterns/product/lobby/lobby.test.tsx"}}
+{"date": "2026-12-01", "from": {"p": "showcase/dice/dice.tsx"}, "to": {"p": "showcase/dice/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "showcase/scrabble/scrabble.tsx"}, "to": {"p": "showcase/scrabble/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "showcase/battleship/multiplayer/lobby.tsx"}, "to": {"p": "showcase/battleship/multiplayer/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "showcase/inductor/lofi/lofi-inductor.tsx"}, "to": {"p": "showcase/inductor/lofi/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "showcase/inductor/pool/inductor-pool.tsx"}, "to": {"p": "showcase/inductor/pool/main.tsx"}}
+{"date": "2026-12-01", "from": {"p": "product/lobby/main.tsx"}, "to": {"p": "product/lobby/lobby.tsx"}}
+{"date": "2026-12-01", "from": {"p": "product/lobby/main.test.tsx"}, "to": {"p": "product/lobby/lobby.test.tsx"}}

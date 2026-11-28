@@ -17,9 +17,9 @@ import {
   hasText,
   propValue,
 } from "../../../tools/test-support/vnode-helpers.ts";
-import InductorPool from "../pool/inductor-pool.tsx";
+import InductorPool from "../pool/main.tsx";
 import { INVOICE_ONLY, rule } from "./lofi-inductor-test-fixture.ts";
-import LofiInductor from "./lofi-inductor.tsx";
+import LofiInductor from "./main.tsx";
 
 const GOAL = "Is this email a bill?";
 const OTHER_GOAL = "Is this email a newsletter?";

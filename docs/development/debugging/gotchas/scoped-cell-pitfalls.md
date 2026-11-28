@@ -49,7 +49,7 @@ return {
 };
 ```
 
-This mirrors what `patterns/showcase/scrabble/scrabble.tsx` does for its
+This mirrors what `patterns/showcase/scrabble/main.tsx` does for its
 `players`, `board`, `bag` etc.
 
 ## 3. Don't `.get()` a per-scope cell from JSX `onClick`
@@ -269,7 +269,7 @@ handle. `runtime/runner/test/pattern-scope.test.ts` pins these behaviors.
 
 - `docs/specs/scoped-cell-instances.md` — the underlying scope model
 - `patterns/examples/scoped-group-chat/` — canonical scope-aware pattern
-- `patterns/showcase/scrabble/scrabble.tsx` — name-as-identity idiom
+- `patterns/showcase/scrabble/main.tsx` — name-as-identity idiom
 - `patterns/apps/cozy-poll/` — applies all of the above
 - `patterns/examples/scoped-user-directory/` — verification of the link-pointer
   technique (per-user pointer into a per-space array)
