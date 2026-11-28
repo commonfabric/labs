@@ -135,6 +135,19 @@ export interface HarnessSkillScriptExecutionError {
   message: string;
 }
 
+/**
+ * What a record says of a script that ran sealed: on a runtime built for the
+ * one call with no network interface and nothing mounted that it could write.
+ *
+ * `image` names the root filesystem the runtime was configured with. It is a
+ * path, not a measurement: the harness records no digest of the image a
+ * script ran in.
+ */
+export interface HarnessSealedSkillScriptRun {
+  networkMode: "none";
+  image?: string;
+}
+
 export interface HarnessSkillScriptExecution {
   type: "cf-harness.skill-script-execution";
   outputId: string;
@@ -155,6 +168,9 @@ export interface HarnessSkillScriptExecution {
   digestMatchesRegistry?: boolean;
   registrySizeBytes?: number;
   observedSizeBytes?: number;
+
+  /** Present when the script ran sealed, which made the call `read`. */
+  sealed?: HarnessSealedSkillScriptRun;
 
   /**
    * Where an acquired script came from, absent for a registry skill's.

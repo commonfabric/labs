@@ -5530,6 +5530,11 @@ export class CfHarnessPromptLoop {
           toolId,
           input,
           signal,
+          // Asked as of a side effect whatever the call's own class, which
+          // the gate above already admitted: a tool classed `read` that can
+          // cause one only on some inputs (`read_value` starting a piece)
+          // reads this to learn whether that would be admitted, and asking it
+          // as of `read` would always say yes.
           evaluateToolPolicy(
             this.engine.getRunState().cfcEnforcementMode,
             tool.descriptor,

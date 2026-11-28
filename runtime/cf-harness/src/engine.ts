@@ -258,6 +258,7 @@ import {
   ACQUIRED_SKILL_MOUNT_PATH,
   AcquiredSkillDirectoryReadableError,
 } from "./skills/acquired-skill-mount.ts";
+import { sealedSkillScriptRunscConfig } from "./skills/sealed-script-sandbox.ts";
 import type { BashToolInput, BashToolOutput } from "./tools/bash.ts";
 import type {
   AcquireSkillToolInput,
@@ -499,6 +500,15 @@ export interface CreateHarnessEngineOptions
    * sessions too. A runtime the engine builds itself is always its own.
    */
   ownsSandboxRuntime?: boolean;
+
+  /**
+   * Builds the runtime of one sealed skill-script call (see
+   * `skills/sealed-script-sandbox.ts`). Defaults, where the engine built its
+   * own runsc runtime, to one built from that runtime's configuration with
+   * every channel out off; absent otherwise, and a run without one runs no
+   * script sealed.
+   */
+  sealedSandboxRuntime?: () => SandboxRuntime;
   artifactStore?: HarnessArtifactStore;
   processRunner?: ProcessRunner;
 
@@ -756,6 +766,7 @@ export class CfHarnessEngine {
   readonly #hostMounts: readonly HostSandboxMount[];
   /** The runsc configuration this engine built, when it built one. */
   readonly #ownedNativeConfig?: RunscSandboxConfig;
+  readonly #sealedSandboxRuntime?: () => SandboxRuntime;
   readonly #sandboxRuntimeChoice?: SandboxRuntimeChoice;
   #sandboxClosed = false;
   readonly #ownsSandbox: boolean;
@@ -1053,6 +1064,12 @@ export class CfHarnessEngine {
       this.sandbox = options.sandboxRuntime;
     }
     this.#ownedNativeConfig = runscConfig;
+    this.#sealedSandboxRuntime = options.sealedSandboxRuntime ??
+      (runscConfig === undefined ? undefined : () =>
+        new RunscSandboxRuntime(
+          sealedSkillScriptRunscConfig(runscConfig, crypto.randomUUID()),
+          options.processRunner,
+        ));
     this.#sandboxRuntimeChoice = options.sandboxRuntimeChoice;
     this.#ownsSandbox = options.sandboxRuntime === undefined ||
       options.ownsSandboxRuntime === true;
@@ -3075,6 +3092,9 @@ export class CfHarnessEngine {
       ) => this.mintSkillContextHandle(ref, acquisition),
       ...(this.#taskText !== undefined ? { taskText: this.#taskText } : {}),
       sandbox: this.sandbox,
+      ...(this.#sealedSandboxRuntime !== undefined
+        ? { sealedSandboxRuntime: this.#sealedSandboxRuntime }
+        : {}),
       hostProcessRunner: this.hostProcessRunner,
       loomAuthoring: this.config.loomAuthoring,
       loomRetrieval: this.config.loomRetrieval,

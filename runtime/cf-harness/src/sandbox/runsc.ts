@@ -344,6 +344,9 @@ export interface RunscSandboxConfig {
 
   workspaceHostPath: string;
   workspaceMountPath: string;
+
+  /** Whether the workspace is bound read-only; writable unless set. */
+  workspaceReadOnly?: boolean;
   shellPath: string;
   networkMode: RunscNetworkMode;
   additionalMounts: readonly SandboxAdditionalMount[];
@@ -1381,7 +1384,7 @@ export class RunscSandboxRuntime implements SandboxRuntime {
         kind: "workspace",
         hostPath: this.config.workspaceHostPath,
         sandboxPath: this.config.workspaceMountPath,
-        readOnly: false,
+        readOnly: this.config.workspaceReadOnly === true,
       },
       ...this.config.additionalMounts.map((m) => ({
         kind: m.kind,

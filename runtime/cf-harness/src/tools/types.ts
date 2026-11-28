@@ -265,6 +265,12 @@ export interface HarnessToolContext {
   requestClientActions?: HarnessClientActionRequester;
 
   sandbox: SandboxRuntime;
+
+  /**
+   * Builds the runtime of one sealed call, whose every channel out is off;
+   * absent where the run cannot build one. The caller closes what it gets.
+   */
+  sealedSandboxRuntime?: () => SandboxRuntime;
   hostProcessRunner: ProcessRunner;
 
   /** Host-owned Loom command routing, absent when the run has no grant. */
