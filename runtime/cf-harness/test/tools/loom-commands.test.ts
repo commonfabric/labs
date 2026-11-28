@@ -1831,6 +1831,37 @@ describe("loom-commands tools", () => {
       expect(output.cfc.reads).toHaveLength(1);
     });
 
+    it("joins an answer's own `ifc` with its reads', and withholds one whose own `ifc` cannot be read", async () => {
+      const joined = executed(
+        await run({
+          ok: true,
+          ifc: { confidentiality: [HEALTH], integrity: [VOUCHED] },
+          reads: [readOf("gmail:thread-a", "rev-a", [OWNER])],
+        }).output,
+      );
+      expect(joined.entry).toMatchObject({
+        status: "admitted",
+        value: { ok: true },
+        labelSource: "row",
+      });
+      expect(joined.cfc.observedLabel).toEqual({
+        confidentiality: [OWNER, HEALTH],
+      });
+
+      const unreadable = executed(
+        await run({
+          ok: true,
+          ifc: { confidentiality: "secret" },
+          reads: [readOf("gmail:thread-a", "rev-a", [OWNER])],
+        }).output,
+      );
+      expect(unreadable.entry).toEqual({
+        status: "withheld",
+        reasonCode: "cfc_label_read_failed",
+      });
+      expect(unreadable.cfc).toEqual({ version: 1 });
+    });
+
     it("labels an answer that declares no reads as the call's arguments", async () => {
       const labeled = executed(
         await run({ ok: true, reads: [] }, { queryLabel: [OWNER] }).output,
