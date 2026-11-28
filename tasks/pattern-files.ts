@@ -74,6 +74,8 @@ const NON_PATTERN_PREFIXES = [
   "tools/",
   // The Topics board's command-line client, a Deno program beside the pattern.
   "apps/topics/tools/",
+  // The feedback reports board's command-line client, likewise.
+  "apps/feedback-reports/tools/",
 ];
 
 /** Use repository separators for keys shared across operating systems. */

@@ -1,0 +1,404 @@
+{
+  "argumentSchema": {
+    "$defs": {
+      "JSONArray": {
+        "items": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "type": "array"
+      },
+      "JSONObject": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "JSONValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/JSONArray"
+          },
+          {
+            "$ref": "#/$defs/JSONObject"
+          }
+        ]
+      },
+      "ReportKind": {
+        "enum": [
+          "broke",
+          "wish"
+        ]
+      },
+      "ReportRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the board stored the report, in milliseconds since the epoch.",
+            "type": "number"
+          },
+          "id": {
+            "description": "The report's id, unique on the board: 32 lowercase hex characters the\nsender derives, so a resend carries the same one.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ReportKind"
+          },
+          "name": {
+            "description": "The report's name, a label for people such as `quiet-heron-41`. Two\nsenders may use the same one.",
+            "type": "string"
+          },
+          "structured": {
+            "$ref": "#/$defs/ReportStructured"
+          },
+          "words": {
+            "description": "The person's own words, as the sender scrubbed them.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "structured",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ReportStructured": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {
+          "source": {
+            "description": "Where in the sender's app the report started, such as `failure-card`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      },
+      "StoredReport": {
+        "$ref": "#/$defs/ReportRecord",
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/apps/feedback-reports/main.tsx",
+              "moduleIdentity": "YAnJbwraVAWA9SiZfask5ZgpKQtrgSqqJaXDdgEUAng",
+              "path": [
+                "addReportHandler"
+              ]
+            }
+          }
+        }
+      },
+      "TopicLink": {
+        "ifc": {
+          "addIntegrity": [
+            {
+              "kind": "authored-by",
+              "subject": {
+                "__ctCurrentPrincipal": true
+              }
+            }
+          ],
+          "writeAuthorizedBy": {
+            "__ctWriterIdentityOf": {
+              "file": "/patterns/apps/feedback-reports/main.tsx",
+              "moduleIdentity": "YAnJbwraVAWA9SiZfask5ZgpKQtrgSqqJaXDdgEUAng",
+              "path": [
+                "linkTopicHandler"
+              ]
+            }
+          }
+        },
+        "type": "string"
+      },
+      "TopicOfMap": {
+        "additionalProperties": {
+          "$ref": "#/$defs/TopicLink"
+        },
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "properties": {
+      "reports": {
+        "asCell": [
+          "cell"
+        ],
+        "default": [],
+        "description": "The reports. `addReport` appends here.",
+        "items": {
+          "$ref": "#/$defs/StoredReport"
+        },
+        "type": "array"
+      },
+      "topicOf": {
+        "$ref": "#/$defs/TopicOfMap",
+        "asCell": [
+          "cell"
+        ],
+        "default": {},
+        "description": "The Topic each linked report was filed under. `linkTopic` writes here,\none key per call."
+      }
+    },
+    "type": "object"
+  },
+  "pattern": "apps/feedback-reports/main.tsx",
+  "resultSchema": {
+    "$defs": {
+      "AddReportEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent sending the report, as Topics verbs take one. The author is\nthe principal whose key signs the call.",
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "structured": {
+            "$ref": "#/$defs/ReportStructured"
+          },
+          "words": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName",
+          "id",
+          "name",
+          "kind",
+          "structured"
+        ],
+        "type": "object"
+      },
+      "JSONArray": {
+        "items": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "type": "array"
+      },
+      "JSONObject": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {},
+        "type": "object"
+      },
+      "JSONValue": {
+        "anyOf": [
+          {
+            "type": [
+              "null",
+              "number",
+              "string"
+            ]
+          },
+          {
+            "type": "boolean"
+          },
+          {
+            "$ref": "#/$defs/JSONArray"
+          },
+          {
+            "$ref": "#/$defs/JSONObject"
+          }
+        ]
+      },
+      "LinkTopicEvent": {
+        "properties": {
+          "agentName": {
+            "description": "The agent linking the report, such as the triage command's.",
+            "type": "string"
+          },
+          "id": {
+            "description": "The report's id.",
+            "type": "string"
+          },
+          "topic": {
+            "description": "The Topic the report was filed under, as an address.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "agentName",
+          "id",
+          "topic"
+        ],
+        "type": "object"
+      },
+      "ReportKind": {
+        "enum": [
+          "broke",
+          "wish"
+        ]
+      },
+      "ReportRecord": {
+        "properties": {
+          "createdAt": {
+            "description": "When the board stored the report, in milliseconds since the epoch.",
+            "type": "number"
+          },
+          "id": {
+            "description": "The report's id, unique on the board: 32 lowercase hex characters the\nsender derives, so a resend carries the same one.",
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/$defs/ReportKind"
+          },
+          "name": {
+            "description": "The report's name, a label for people such as `quiet-heron-41`. Two\nsenders may use the same one.",
+            "type": "string"
+          },
+          "structured": {
+            "$ref": "#/$defs/ReportStructured"
+          },
+          "words": {
+            "description": "The person's own words, as the sender scrubbed them.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "structured",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ReportRow": {
+        "properties": {
+          "createdAt": {
+            "type": "number"
+          },
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "topic": {
+            "description": "The Topic the report was filed under, absent for a new report.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "source",
+          "createdAt"
+        ],
+        "type": "object"
+      },
+      "ReportStructured": {
+        "additionalProperties": {
+          "$ref": "#/$defs/JSONValue"
+        },
+        "properties": {
+          "source": {
+            "description": "Where in the sender's app the report started, such as `failure-card`.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "type": "object"
+      }
+    },
+    "properties": {
+      "$NAME": {
+        "type": "string"
+      },
+      "$UI": {
+        "$ref": "https://commonfabric.org/schemas/vnode.json"
+      },
+      "addReport": {
+        "$ref": "#/$defs/AddReportEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Store a report. Refuses a duplicate or malformed one."
+      },
+      "index": {
+        "description": "One row per report, without its words, and the Topic it is filed\nunder.",
+        "items": {
+          "$ref": "#/$defs/ReportRow"
+        },
+        "type": "array"
+      },
+      "linkTopic": {
+        "$ref": "#/$defs/LinkTopicEvent",
+        "asCell": [
+          "stream"
+        ],
+        "description": "Record the Topic a report was filed under."
+      },
+      "newCount": {
+        "description": "How many reports have no Topic yet.",
+        "type": "number"
+      },
+      "reports": {
+        "description": "The reports, in the order they arrived.",
+        "items": {
+          "$ref": "#/$defs/ReportRecord"
+        },
+        "type": "array"
+      },
+      "topicOf": {
+        "additionalProperties": {
+          "type": "string"
+        },
+        "default": {},
+        "description": "The Topic each linked report was filed under, by report id.",
+        "properties": {},
+        "type": "object"
+      }
+    },
+    "required": [
+      "reports",
+      "topicOf",
+      "index",
+      "newCount",
+      "addReport",
+      "linkTopic",
+      "$NAME",
+      "$UI"
+    ],
+    "type": "object"
+  }
+}
